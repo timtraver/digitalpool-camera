@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera Stream Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .test-section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 { color: #333; }
+        h2 { color: #666; margin-top: 0; }
+        .video-container {
+            background: #000;
+            margin: 10px 0;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .info { background: #d1ecf1; color: #0c5460; }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover { background: #0056b3; }
+        #log {
+            background: #f8f9fa;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎥 Camera Stream Diagnostic Test</h1>
+    
+    <div class="test-section">
+        <h2>Test 1: Default MJPEG Stream</h2>
+        <div class="video-container">
+            <img id="stream1" src="/video/stream" alt="Default Stream">
+        </div>
+        <div id="status1" class="status info">Loading...</div>
+    </div>
+
+    <div class="test-section">
+        <h2>Test 2: Auto-detect Format</h2>
+        <div class="video-container">
+            <img id="stream2" src="/video/stream?format=auto" alt="Auto Stream">
+        </div>
+        <div id="status2" class="status info">Loading...</div>
+    </div>
+
+    <div class="test-section">
+        <h2>Test 3: YUYV Format</h2>
+        <div class="video-container">
+            <img id="stream3" src="/video/stream?format=yuyv" alt="YUYV Stream">
+        </div>
+        <div id="status3" class="status info">Loading...</div>
+    </div>
+
+    <div class="test-section">
+        <h2>Controls</h2>
+        <button onclick="reloadAll()">Reload All Streams</button>
+        <button onclick="clearLog()">Clear Log</button>
+    </div>
+
+    <div class="test-section">
+        <h2>Event Log</h2>
+        <div id="log"></div>
+    </div>
+
+    <script>
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${timestamp}] ${message}<br>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(message);
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+
+        function setupStream(streamId, statusId) {
+            const img = document.getElementById(streamId);
+            const status = document.getElementById(statusId);
+
+            img.onload = function() {
+                status.className = 'status success';
+                status.textContent = '✓ Stream loaded successfully!';
+                log(`${streamId}: Stream loaded`);
+            };
+
+            img.onerror = function() {
+                status.className = 'status error';
+                status.textContent = '✗ Failed to load stream';
+                log(`${streamId}: Error loading stream`);
+            };
+
+            // Check if image is loading
+            setTimeout(() => {
+                if (img.complete && img.naturalHeight === 0) {
+                    status.className = 'status error';
+                    status.textContent = '✗ Stream not responding';
+                    log(`${streamId}: Stream not responding after 5 seconds`);
+                }
+            }, 5000);
+        }
+
+        function reloadAll() {
+            log('Reloading all streams...');
+            ['stream1', 'stream2', 'stream3'].forEach(id => {
+                const img = document.getElementById(id);
+                const src = img.src;
+                img.src = '';
+                setTimeout(() => { img.src = src + '&t=' + Date.now(); }, 100);
+            });
+        }
+
+        // Setup all streams
+        setupStream('stream1', 'status1');
+        setupStream('stream2', 'status2');
+        setupStream('stream3', 'status3');
+
+        log('Test page loaded');
+        log('Waiting for streams to connect...');
+    </script>
+</body>
+</html>
+
