@@ -257,11 +257,65 @@ createSliderControl("sharpness", "sharpness", "sharpnessValue");
 
 // Exposure Controls
 const exposureAuto = document.getElementById("exposureAuto");
+const exposureAbsoluteSlider = document.getElementById("exposureAbsolute");
+const gainSlider = document.getElementById("gain");
+const exposureAbsoluteValue = document.getElementById("exposureAbsoluteValue");
+const gainValue = document.getElementById("gainValue");
+
+// Function to enable/disable manual exposure controls based on auto mode
+function updateExposureControlsState() {
+  const isAuto = exposureAuto.value !== "0"; // 0 = Manual, anything else = Auto
+
+  // Disable manual controls when auto is enabled
+  if (exposureAbsoluteSlider) {
+    exposureAbsoluteSlider.disabled = isAuto;
+    exposureAbsoluteSlider.style.opacity = isAuto ? "0.5" : "1";
+    exposureAbsoluteSlider.style.cursor = isAuto ? "not-allowed" : "pointer";
+
+    // Find and dim the label
+    const exposureLabel =
+      exposureAbsoluteSlider.parentElement.querySelector("label");
+    if (exposureLabel) {
+      exposureLabel.style.opacity = isAuto ? "0.5" : "1";
+    }
+
+    // Dim the value display
+    if (exposureAbsoluteValue) {
+      exposureAbsoluteValue.style.opacity = isAuto ? "0.5" : "1";
+    }
+  }
+
+  if (gainSlider) {
+    gainSlider.disabled = isAuto;
+    gainSlider.style.opacity = isAuto ? "0.5" : "1";
+    gainSlider.style.cursor = isAuto ? "not-allowed" : "pointer";
+
+    // Find and dim the label
+    const gainLabel = gainSlider.parentElement.querySelector("label");
+    if (gainLabel) {
+      gainLabel.style.opacity = isAuto ? "0.5" : "1";
+    }
+
+    // Dim the value display
+    if (gainValue) {
+      gainValue.style.opacity = isAuto ? "0.5" : "1";
+    }
+  }
+
+  console.log(
+    `Exposure mode: ${isAuto ? "Auto" : "Manual"} - Manual controls ${isAuto ? "disabled" : "enabled"}`,
+  );
+}
+
 if (exposureAuto) {
   exposureAuto.addEventListener("change", (e) => {
     const value = parseInt(e.target.value);
     socket.emit("setControl", { control: "exposure_auto", value: value });
+    updateExposureControlsState(); // Update control states
   });
+
+  // Set initial state
+  updateExposureControlsState();
 }
 
 createSliderControl(
