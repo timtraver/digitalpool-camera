@@ -406,6 +406,8 @@ let currentOverlayConfig = {
 function updateCanvasSize() {
   const rect = videoStream.getBoundingClientRect();
 
+  console.log("updateCanvasSize called - rect:", rect.width, "x", rect.height);
+
   // Only update if we have valid dimensions
   if (rect.width > 0 && rect.height > 0) {
     // Don't use DPR scaling - just match display size exactly
@@ -413,41 +415,73 @@ function updateCanvasSize() {
     overlayCanvas.width = rect.width;
     overlayCanvas.height = rect.height;
 
-    console.log("Canvas sized:", rect.width, "x", rect.height);
+    console.log("✅ Canvas sized:", rect.width, "x", rect.height);
 
     // Update debug info
     if (canvasSizeSpan) {
       canvasSizeSpan.textContent = `${rect.width}x${rect.height}`;
     }
+
+    return true; // Success
   } else {
-    console.warn("Video has no dimensions yet, retrying...");
+    console.warn("⚠️ Video has no dimensions yet, retrying...");
     if (canvasSizeSpan) {
       canvasSizeSpan.textContent = "Waiting for video...";
     }
+
+    return false; // Failed
   }
 }
 
 // MJPEG streams don't fire 'load' events, so we need to poll
 let canvasInitialized = false;
-function initializeCanvas() {
-  updateCanvasSize();
+let initAttempts = 0;
+const MAX_INIT_ATTEMPTS = 50; // Try for 10 seconds
 
-  if (
-    overlayCanvas.width > 0 &&
-    overlayCanvas.height > 0 &&
-    !canvasInitialized
-  ) {
+function initializeCanvas() {
+  initAttempts++;
+  console.log(`🔄 Canvas init attempt ${initAttempts}/${MAX_INIT_ATTEMPTS}`);
+
+  const success = updateCanvasSize();
+
+  if (success && !canvasInitialized) {
     canvasInitialized = true;
     console.log("✅ Canvas initialized successfully!");
     drawOverlay();
-  } else if (!canvasInitialized) {
-    // Keep trying until we get valid dimensions
-    setTimeout(initializeCanvas, 200);
+  } else if (!canvasInitialized && initAttempts < MAX_INIT_ATTEMPTS) {
+    // Keep trying with increasing delays
+    const delay = initAttempts < 10 ? 200 : 500;
+    setTimeout(initializeCanvas, delay);
+  } else if (initAttempts >= MAX_INIT_ATTEMPTS) {
+    console.error(
+      "❌ Failed to initialize canvas after",
+      MAX_INIT_ATTEMPTS,
+      "attempts",
+    );
+    console.error("Video element might not be loading. Check MJPEG stream.");
   }
 }
 
 // Start initialization immediately
 initializeCanvas();
+
+// Also try again after 2 seconds (in case video loads slowly)
+setTimeout(() => {
+  if (!canvasInitialized) {
+    console.log("🔄 Retrying canvas initialization after 2s delay...");
+    initAttempts = 0; // Reset counter
+    initializeCanvas();
+  }
+}, 2000);
+
+// Try again after 5 seconds (MJPEG streams can be slow to start)
+setTimeout(() => {
+  if (!canvasInitialized) {
+    console.log("🔄 Retrying canvas initialization after 5s delay...");
+    initAttempts = 0; // Reset counter
+    initializeCanvas();
+  }
+}, 5000);
 
 // Also update on window resize
 window.addEventListener("resize", () => {
