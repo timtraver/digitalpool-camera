@@ -133,6 +133,7 @@ header h1 {
   border: 1px solid rgba(18, 199, 255, 0.2);
   position: relative;
   z-index: 1;
+  overflow: visible !important;
 }
 
 .ptz-controls h3 {
@@ -497,6 +498,9 @@ header h1 {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  overflow: visible !important;
+  position: relative;
+  z-index: 100;
 }
 
 .stream-controls .control-item-compact {
@@ -515,34 +519,40 @@ header h1 {
 .stream-controls select,
 .stream-controls input {
   flex: 1;
-  padding: 6px 10px;
-  font-size: 13px;
-  background: rgba(6, 16, 27, 0.95);
-  border: 1px solid rgba(18, 199, 255, 0.3);
-  border-radius: 4px;
-  color: rgba(255, 255, 255, 0.9);
-  position: relative;
-  z-index: 100;
-  min-height: 28px;
+  padding: 6px 10px !important;
+  font-size: 13px !important;
+  background: rgba(6, 16, 27, 0.95) !important;
+  border: 1px solid rgba(18, 199, 255, 0.3) !important;
+  border-radius: 4px !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+  position: relative !important;
+  z-index: 9999 !important;
+  min-height: 28px !important;
+  width: auto !important;
+  box-sizing: border-box !important;
 }
 
 .stream-controls select {
-  cursor: pointer;
+  cursor: pointer !important;
+  appearance: auto !important;
+  -webkit-appearance: menulist !important;
+  -moz-appearance: menulist !important;
 }
 
 .stream-controls select:focus,
 .stream-controls input:focus {
-  outline: none;
-  border-color: #1890ff;
-  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
+  outline: none !important;
+  border-color: #1890ff !important;
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2) !important;
+  z-index: 10000 !important;
 }
 
 /* Ensure dropdown options are visible */
 .stream-controls select option {
-  background: #0d1e35;
-  color: white;
-  padding: 8px;
-  font-size: 13px;
+  background: #0d1e35 !important;
+  color: white !important;
+  padding: 8px !important;
+  font-size: 13px !important;
 }
 
 .stream-buttons {
@@ -656,33 +666,39 @@ header h1 {
 .overlay-controls select,
 .overlay-controls input[type="text"] {
   flex: 1;
-  padding: 6px 10px;
-  font-size: 13px;
-  background: rgba(6, 16, 27, 0.95);
-  border: 1px solid rgba(18, 199, 255, 0.3);
-  border-radius: 4px;
-  color: rgba(255, 255, 255, 0.9);
-  position: relative;
-  z-index: 100;
-  min-height: 28px;
+  padding: 6px 10px !important;
+  font-size: 13px !important;
+  background: rgba(6, 16, 27, 0.95) !important;
+  border: 1px solid rgba(18, 199, 255, 0.3) !important;
+  border-radius: 4px !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+  position: relative !important;
+  z-index: 9999 !important;
+  min-height: 28px !important;
+  width: auto !important;
+  box-sizing: border-box !important;
 }
 
 .overlay-controls select {
-  cursor: pointer;
+  cursor: pointer !important;
+  appearance: auto !important;
+  -webkit-appearance: menulist !important;
+  -moz-appearance: menulist !important;
 }
 
 .overlay-controls select:focus,
 .overlay-controls input[type="text"]:focus {
-  outline: none;
-  border-color: #1890ff;
-  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
+  outline: none !important;
+  border-color: #1890ff !important;
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2) !important;
+  z-index: 10000 !important;
 }
 
 .overlay-controls select option {
-  background: #0d1e35;
-  color: white;
-  padding: 8px;
-  font-size: 13px;
+  background: #0d1e35 !important;
+  color: white !important;
+  padding: 8px !important;
+  font-size: 13px !important;
 }
 
 .overlay-controls input[type="checkbox"] {

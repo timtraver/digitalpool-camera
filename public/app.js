@@ -334,6 +334,11 @@ const videoStream = document.getElementById("videoStream");
 const overlayCanvas = document.getElementById("overlayCanvas");
 const ctx = overlayCanvas.getContext("2d");
 
+// Debug elements
+const canvasSizeSpan = document.getElementById("canvasSize");
+const overlayStatusSpan = document.getElementById("overlayStatus");
+const testOverlayBtn = document.getElementById("testOverlay");
+
 // Current overlay config
 let currentOverlayConfig = {
   overlayEnabled: false,
@@ -351,6 +356,12 @@ function updateCanvasSize() {
   overlayCanvas.width = rect.width;
   overlayCanvas.height = rect.height;
   console.log("Canvas sized:", overlayCanvas.width, "x", overlayCanvas.height);
+
+  // Update debug info
+  if (canvasSizeSpan) {
+    canvasSizeSpan.textContent = `${overlayCanvas.width}x${overlayCanvas.height}`;
+  }
+
   drawOverlay();
 }
 
@@ -359,6 +370,47 @@ window.addEventListener("resize", updateCanvasSize);
 
 // Initial size after a short delay
 setTimeout(updateCanvasSize, 500);
+setTimeout(updateCanvasSize, 1000);
+setTimeout(updateCanvasSize, 2000);
+
+// Test overlay button
+if (testOverlayBtn) {
+  testOverlayBtn.addEventListener("click", () => {
+    console.log("=== TEST OVERLAY CLICKED ===");
+    console.log(
+      "Canvas dimensions:",
+      overlayCanvas.width,
+      "x",
+      overlayCanvas.height,
+    );
+    console.log(
+      "Video dimensions:",
+      videoStream.width,
+      "x",
+      videoStream.height,
+    );
+    console.log("Current config:", currentOverlayConfig);
+
+    // Force enable and draw test overlay
+    currentOverlayConfig.overlayEnabled = true;
+    currentOverlayConfig.overlayText = "TEST OVERLAY";
+    currentOverlayConfig.overlayColor = "yellow";
+    overlayEnabled.checked = true;
+    overlayText.value = "TEST OVERLAY";
+
+    updateCanvasSize();
+    drawOverlay();
+
+    // Also draw a simple test rectangle
+    ctx.fillStyle = "rgba(255, 0, 0, 0.5)";
+    ctx.fillRect(10, 10, 200, 100);
+    ctx.fillStyle = "white";
+    ctx.font = "bold 24px Arial";
+    ctx.fillText("TEST", 50, 60);
+
+    console.log("Test overlay drawn");
+  });
+}
 
 // Redraw overlay every 100ms (for timestamp updates)
 setInterval(() => {
@@ -373,6 +425,16 @@ setInterval(() => {
 function drawOverlay() {
   // Clear canvas
   ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+  // Update debug status
+  if (overlayStatusSpan) {
+    overlayStatusSpan.textContent = currentOverlayConfig.overlayEnabled
+      ? "Enabled"
+      : "Disabled";
+    overlayStatusSpan.style.color = currentOverlayConfig.overlayEnabled
+      ? "#10b981"
+      : "#ef4444";
+  }
 
   if (!currentOverlayConfig.overlayEnabled) {
     console.log("Overlay disabled, clearing canvas");
@@ -479,19 +541,16 @@ function drawOverlay() {
   }
 }
 
-// Update font size display
-overlayFontSize.addEventListener("input", () => {
-  fontSizeValue.textContent = overlayFontSize.value;
-});
-
 // Live preview updates (update preview as user types/changes)
 overlayEnabled.addEventListener("change", () => {
   currentOverlayConfig.overlayEnabled = overlayEnabled.checked;
+  console.log("Overlay enabled changed:", overlayEnabled.checked);
   drawOverlay();
 });
 
 overlayText.addEventListener("input", () => {
   currentOverlayConfig.overlayText = overlayText.value;
+  console.log("Overlay text changed:", overlayText.value);
   if (currentOverlayConfig.overlayEnabled) drawOverlay();
 });
 
@@ -511,6 +570,7 @@ overlayPosition.addEventListener("change", () => {
 });
 
 overlayFontSize.addEventListener("input", () => {
+  fontSizeValue.textContent = overlayFontSize.value;
   currentOverlayConfig.overlayFontSize = parseInt(overlayFontSize.value);
   if (currentOverlayConfig.overlayEnabled) drawOverlay();
 });

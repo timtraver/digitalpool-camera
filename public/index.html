@@ -28,6 +28,37 @@
             <canvas id="overlayCanvas"></canvas>
           </div>
 
+          <!-- Debug Info -->
+          <div
+            style="
+              padding: 8px;
+              background: rgba(0, 0, 0, 0.5);
+              margin: 8px 0;
+              border-radius: 4px;
+              font-size: 11px;
+            "
+          >
+            <div id="debugInfo">
+              Canvas: <span id="canvasSize">Not initialized</span> | Overlay:
+              <span id="overlayStatus">Disabled</span>
+            </div>
+            <button
+              id="testOverlay"
+              style="
+                margin-top: 4px;
+                padding: 4px 8px;
+                font-size: 11px;
+                background: #1890ff;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+              "
+            >
+              🧪 Test Overlay
+            </button>
+          </div>
+
           <!-- Pan/Tilt Controls -->
           <div class="ptz-controls">
             <h3>PTZ</h3>
