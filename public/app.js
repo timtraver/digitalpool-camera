@@ -353,62 +353,113 @@ let currentOverlayConfig = {
 // Update canvas size when video loads or changes
 function updateCanvasSize() {
   const rect = videoStream.getBoundingClientRect();
-  overlayCanvas.width = rect.width;
-  overlayCanvas.height = rect.height;
-  console.log("Canvas sized:", overlayCanvas.width, "x", overlayCanvas.height);
 
-  // Update debug info
-  if (canvasSizeSpan) {
-    canvasSizeSpan.textContent = `${overlayCanvas.width}x${overlayCanvas.height}`;
+  // Only update if we have valid dimensions
+  if (rect.width > 0 && rect.height > 0) {
+    overlayCanvas.width = rect.width;
+    overlayCanvas.height = rect.height;
+    console.log(
+      "Canvas sized:",
+      overlayCanvas.width,
+      "x",
+      overlayCanvas.height,
+    );
+
+    // Update debug info
+    if (canvasSizeSpan) {
+      canvasSizeSpan.textContent = `${overlayCanvas.width}x${overlayCanvas.height}`;
+    }
+  } else {
+    console.warn("Video has no dimensions yet, retrying...");
+    if (canvasSizeSpan) {
+      canvasSizeSpan.textContent = "Waiting for video...";
+    }
   }
-
-  drawOverlay();
 }
 
-videoStream.addEventListener("load", updateCanvasSize);
-window.addEventListener("resize", updateCanvasSize);
+// MJPEG streams don't fire 'load' events, so we need to poll
+let canvasInitialized = false;
+function initializeCanvas() {
+  updateCanvasSize();
 
-// Initial size after a short delay
-setTimeout(updateCanvasSize, 500);
-setTimeout(updateCanvasSize, 1000);
-setTimeout(updateCanvasSize, 2000);
+  if (
+    overlayCanvas.width > 0 &&
+    overlayCanvas.height > 0 &&
+    !canvasInitialized
+  ) {
+    canvasInitialized = true;
+    console.log("✅ Canvas initialized successfully!");
+    drawOverlay();
+  } else if (!canvasInitialized) {
+    // Keep trying until we get valid dimensions
+    setTimeout(initializeCanvas, 200);
+  }
+}
+
+// Start initialization immediately
+initializeCanvas();
+
+// Also update on window resize
+window.addEventListener("resize", () => {
+  updateCanvasSize();
+  drawOverlay();
+});
 
 // Test overlay button
 if (testOverlayBtn) {
   testOverlayBtn.addEventListener("click", () => {
     console.log("=== TEST OVERLAY CLICKED ===");
+
+    // Force canvas size update
+    const rect = videoStream.getBoundingClientRect();
+    overlayCanvas.width = rect.width;
+    overlayCanvas.height = rect.height;
+
     console.log(
       "Canvas dimensions:",
       overlayCanvas.width,
       "x",
       overlayCanvas.height,
     );
+    console.log("Video rect:", rect.width, "x", rect.height);
     console.log(
-      "Video dimensions:",
-      videoStream.width,
+      "Video natural:",
+      videoStream.naturalWidth,
       "x",
-      videoStream.height,
+      videoStream.naturalHeight,
     );
     console.log("Current config:", currentOverlayConfig);
 
-    // Force enable and draw test overlay
+    // Draw a simple test pattern directly
+    console.log("Drawing test pattern...");
+
+    // Clear first
+    ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+    // Red rectangle
+    ctx.fillStyle = "rgba(255, 0, 0, 0.7)";
+    ctx.fillRect(10, 10, 200, 100);
+
+    // White text
+    ctx.fillStyle = "white";
+    ctx.font = "bold 32px Arial";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText("TEST", 50, 40);
+
+    // Yellow border around entire canvas
+    ctx.strokeStyle = "yellow";
+    ctx.lineWidth = 5;
+    ctx.strokeRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+    console.log("✅ Test pattern drawn!");
+
+    // Also try to enable the overlay system
     currentOverlayConfig.overlayEnabled = true;
     currentOverlayConfig.overlayText = "TEST OVERLAY";
     currentOverlayConfig.overlayColor = "yellow";
     overlayEnabled.checked = true;
     overlayText.value = "TEST OVERLAY";
-
-    updateCanvasSize();
-    drawOverlay();
-
-    // Also draw a simple test rectangle
-    ctx.fillStyle = "rgba(255, 0, 0, 0.5)";
-    ctx.fillRect(10, 10, 200, 100);
-    ctx.fillStyle = "white";
-    ctx.font = "bold 24px Arial";
-    ctx.fillText("TEST", 50, 60);
-
-    console.log("Test overlay drawn");
   });
 }
 
