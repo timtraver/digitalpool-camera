@@ -192,6 +192,9 @@ class CameraController {
           } else {
             console.log(`  ❌ ${controlName} failed: ${result.error}`);
           }
+
+          // Small delay between commands to avoid overwhelming the camera
+          await new Promise((resolve) => setTimeout(resolve, 50));
         } catch (error) {
           console.error(`❌ Failed to apply ${controlName}:`, error.message);
           results.push({
@@ -244,7 +247,25 @@ class CameraController {
       }
 
       const command = `v4l2-ctl -d ${this.device} --set-ctrl=${controlName}=${value}`;
+      console.log(`    🔧 Executing: ${command}`);
+
       const { stdout, stderr } = await execAsync(command);
+
+      // Check for errors in stderr
+      if (stderr && stderr.trim().length > 0) {
+        console.log(`    ⚠️  stderr: ${stderr}`);
+        // Some v4l2-ctl errors go to stderr but don't throw
+        if (
+          stderr.toLowerCase().includes("error") ||
+          stderr.toLowerCase().includes("failed")
+        ) {
+          throw new Error(stderr);
+        }
+      }
+
+      if (stdout && stdout.trim().length > 0) {
+        console.log(`    📤 stdout: ${stdout}`);
+      }
 
       // Save to config file
       if (saveToConfig) {
@@ -259,6 +280,7 @@ class CameraController {
         message: stdout || "Control set successfully",
       };
     } catch (error) {
+      console.log(`    ❌ Error executing command: ${error.message}`);
       return {
         success: false,
         control: controlName,
