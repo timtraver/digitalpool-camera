@@ -690,20 +690,16 @@ setInterval(() => {
 
 // Draw overlay on canvas
 function drawOverlay() {
-  console.log("=== drawOverlay called ===");
-  console.log(
-    "Canvas dimensions:",
-    overlayCanvas.width,
-    "x",
-    overlayCanvas.height,
-  );
-  console.log("Overlay config:", currentOverlayConfig);
+  // Removed verbose logging - was flooding console at 5fps
+  // console.log("=== drawOverlay called ===");
+  // console.log("Canvas dimensions:", overlayCanvas.width, "x", overlayCanvas.height);
+  // console.log("Overlay config:", currentOverlayConfig);
 
   // Clear canvas
   ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
   if (!currentOverlayConfig.overlayEnabled) {
-    console.log("Overlay disabled, clearing canvas");
+    // console.log("Overlay disabled, clearing canvas");
     // Hide URL overlay iframe if exists
     if (urlOverlayIframe) {
       urlOverlayIframe.style.display = "none";
@@ -730,7 +726,7 @@ function drawOverlay() {
 // Draw URL overlay using iframe
 function drawUrlOverlay() {
   if (!currentOverlayConfig.overlayUrl) {
-    console.log("No URL specified for overlay");
+    // console.log("No URL specified for overlay");
     if (urlOverlayIframe) {
       urlOverlayIframe.style.display = "none";
     }
@@ -754,7 +750,7 @@ function drawUrlOverlay() {
 
   // Update iframe src if changed
   if (urlOverlayIframe.src !== currentOverlayConfig.overlayUrl) {
-    console.log("Loading URL overlay:", currentOverlayConfig.overlayUrl);
+    console.log("Loading URL overlay:", currentOverlayConfig.overlayUrl); // Keep this one - only happens on URL change
     urlOverlayIframe.src = currentOverlayConfig.overlayUrl;
   }
 
@@ -769,7 +765,7 @@ function drawTextOverlay() {
   const smallFontSize = Math.floor(fontSize * 0.75);
   const padding = 20 * scale;
 
-  console.log("Scale:", scale, "fontSize:", fontSize, "padding:", padding);
+  // console.log("Scale:", scale, "fontSize:", fontSize, "padding:", padding); // Removed - floods console at 5fps
 
   // Get background color with opacity
   function getBackgroundColor() {
@@ -869,9 +865,7 @@ function drawTextOverlay() {
     ctx.fillStyle = currentOverlayConfig.overlayColor;
     ctx.fillText(text, xPos, yPos);
 
-    console.log(
-      `Drew text "${text}" at position ${position} (${xPos}, ${yPos})`,
-    );
+    // console.log(`Drew text "${text}" at position ${position} (${xPos}, ${yPos})`); // Removed - floods console at 5fps
   }
 
   // Draw timestamp if enabled
@@ -903,19 +897,19 @@ function drawTextOverlay() {
     );
   }
 
-  console.log("✅ Overlay drawing complete");
+  // console.log("✅ Overlay drawing complete"); // Removed - floods console at 5fps
 }
 
 // Live preview updates (update preview as user types/changes)
 overlayEnabled.addEventListener("change", () => {
   currentOverlayConfig.overlayEnabled = overlayEnabled.checked;
-  console.log("Overlay enabled changed:", overlayEnabled.checked);
+  console.log("Overlay enabled changed:", overlayEnabled.checked); // Keep this - only on user action
   drawOverlay(); // Always redraw when enabled/disabled changes
 });
 
 overlayText.addEventListener("input", () => {
   currentOverlayConfig.overlayText = overlayText.value;
-  console.log("Overlay text changed:", overlayText.value);
+  // console.log("Overlay text changed:", overlayText.value); // Removed - floods console while typing
   drawOverlay(); // Always redraw to show live preview
 });
 

@@ -208,25 +208,25 @@ header h1 {
 }
 
 .btn-top-outer {
-  top: 0;
+  top: 2px;
   left: 50%;
   transform: translateX(-50%);
 }
 
 .btn-right-outer {
-  right: 0;
+  right: 2px;
   top: 50%;
   transform: translateY(-50%);
 }
 
 .btn-bottom-outer {
-  bottom: 0;
+  bottom: 2px;
   left: 50%;
   transform: translateX(-50%);
 }
 
 .btn-left-outer {
-  left: 0;
+  left: 2px;
   top: 50%;
   transform: translateY(-50%);
 }
@@ -250,25 +250,25 @@ header h1 {
 }
 
 .btn-top-inner {
-  top: 28px;
+  top: 32px;
   left: 50%;
   transform: translateX(-50%);
 }
 
 .btn-right-inner {
-  right: 28px;
+  right: 32px;
   top: 50%;
   transform: translateY(-50%);
 }
 
 .btn-bottom-inner {
-  bottom: 28px;
+  bottom: 32px;
   left: 50%;
   transform: translateX(-50%);
 }
 
 .btn-left-inner {
-  left: 28px;
+  left: 32px;
   top: 50%;
   transform: translateY(-50%);
 }
@@ -291,49 +291,93 @@ header h1 {
   transform: translate(-50%, -50%);
 }
 
-/* Hover effects */
+/* Hover effects - Animate in arrow direction */
 .btn-control-outer:hover,
-.btn-control-inner:hover,
+.btn-control-inner:hover {
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.3);
+  filter: brightness(1.15);
+}
+
 .btn-control-center:hover {
   transform: translate(-50%, -50%) scale(1.1);
   box-shadow: 0 3px 6px rgba(0, 0, 0, 0.3);
 }
 
+/* Outer buttons - hover moves in arrow direction */
 .btn-top-outer:hover {
-  transform: translateX(-50%) translateY(-2px);
+  transform: translateX(-50%) translateY(-3px);
 }
 
 .btn-right-outer:hover {
-  transform: translateY(-50%) translateX(2px);
+  transform: translateY(-50%) translateX(3px);
 }
 
 .btn-bottom-outer:hover {
-  transform: translateX(-50%) translateY(2px);
+  transform: translateX(-50%) translateY(3px);
 }
 
 .btn-left-outer:hover {
-  transform: translateY(-50%) translateX(-2px);
+  transform: translateY(-50%) translateX(-3px);
 }
 
+/* Inner buttons - hover moves in arrow direction */
 .btn-top-inner:hover {
-  transform: translateX(-50%) translateY(-2px);
+  transform: translateX(-50%) translateY(-3px);
 }
 
 .btn-right-inner:hover {
-  transform: translateY(-50%) translateX(2px);
+  transform: translateY(-50%) translateX(3px);
 }
 
 .btn-bottom-inner:hover {
-  transform: translateX(-50%) translateY(2px);
+  transform: translateX(-50%) translateY(3px);
 }
 
 .btn-left-inner:hover {
-  transform: translateY(-50%) translateX(-2px);
+  transform: translateY(-50%) translateX(-3px);
 }
 
-/* Active state */
-.btn-control-outer:active,
-.btn-control-inner:active,
+/* Active state - Press further in arrow direction */
+.btn-top-outer:active {
+  transform: translateX(-50%) translateY(-5px);
+  filter: brightness(1.3);
+}
+
+.btn-right-outer:active {
+  transform: translateY(-50%) translateX(5px);
+  filter: brightness(1.3);
+}
+
+.btn-bottom-outer:active {
+  transform: translateX(-50%) translateY(5px);
+  filter: brightness(1.3);
+}
+
+.btn-left-outer:active {
+  transform: translateY(-50%) translateX(-5px);
+  filter: brightness(1.3);
+}
+
+.btn-top-inner:active {
+  transform: translateX(-50%) translateY(-5px);
+  filter: brightness(1.3);
+}
+
+.btn-right-inner:active {
+  transform: translateY(-50%) translateX(5px);
+  filter: brightness(1.3);
+}
+
+.btn-bottom-inner:active {
+  transform: translateX(-50%) translateY(5px);
+  filter: brightness(1.3);
+}
+
+.btn-left-inner:active {
+  transform: translateY(-50%) translateX(-5px);
+  filter: brightness(1.3);
+}
+
 .btn-control-center:active {
   transform: translate(-50%, -50%) scale(0.95);
 }
@@ -706,14 +750,14 @@ header h1 {
 }
 
 .custom-dropdown-selected {
-  padding: 14px 18px;
+  padding: 8px 14px;
   font-size: 18px !important;
   background: #1a1a1a;
   border: 2px solid #1890ff;
   border-radius: 6px;
   color: white !important;
-  min-height: 48px;
-  line-height: 1.5;
+  min-height: 38px;
+  line-height: 1.3;
   font-weight: 600 !important;
   cursor: pointer;
   display: flex;
@@ -761,7 +805,7 @@ header h1 {
 }
 
 .custom-dropdown-option {
-  padding: 14px 18px;
+  padding: 8px 14px;
   font-size: 18px !important;
   color: white !important;
   cursor: pointer;
