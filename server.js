@@ -384,7 +384,29 @@ server.listen(PORT, async () => {
   // Apply saved camera configuration on startup
   console.log("\n🚀 Initializing camera with saved configuration...");
   try {
+    // Activate the camera device first
+    await camera.activateCamera();
+
+    // Check current camera position before applying config
+    console.log("� Checking current camera position...");
+    const currentPan = await camera.getControl("pan_absolute");
+    const currentTilt = await camera.getControl("tilt_absolute");
+    const currentZoom = await camera.getControl("zoom_absolute");
+    console.log(
+      `📍 Current position: pan=${currentPan.value}, tilt=${currentTilt.value}, zoom=${currentZoom.value}`,
+    );
+
     await camera.applyConfig();
+
+    // Verify the position was actually set
+    console.log("🔍 Verifying camera position after config...");
+    const verifyPan = await camera.getControl("pan_absolute");
+    const verifyTilt = await camera.getControl("tilt_absolute");
+    const verifyZoom = await camera.getControl("zoom_absolute");
+    console.log(
+      `📍 Final position: pan=${verifyPan.value}, tilt=${verifyTilt.value}, zoom=${verifyZoom.value}`,
+    );
+
     cameraInitialized = true;
     console.log("✅ Camera initialized successfully\n");
   } catch (error) {

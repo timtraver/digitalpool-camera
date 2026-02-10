@@ -200,10 +200,31 @@ class CameraController {
   }
 
   /**
+   * Activate camera by opening the device
+   */
+  async activateCamera() {
+    console.log("📹 Activating camera device...");
+    try {
+      // Open the camera device briefly to wake it up
+      const command = `v4l2-ctl -d ${this.device} --list-formats-ext`;
+      await execAsync(command);
+      console.log("✅ Camera device activated");
+
+      // Give camera a moment to fully initialize
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      return true;
+    } catch (error) {
+      console.error("⚠️  Failed to activate camera:", error.message);
+      return false;
+    }
+  }
+
+  /**
    * Apply all saved configuration values to the camera
    */
   async applyConfig() {
     console.log("📸 Applying saved camera configuration...");
+    console.log("📋 Config in memory:", JSON.stringify(this.config, null, 2));
     const results = [];
 
     for (const [controlName, value] of Object.entries(this.config)) {
