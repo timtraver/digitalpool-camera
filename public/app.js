@@ -48,6 +48,9 @@ function createCustomDropdown(selectElement) {
 
       // Update original select element
       selectElement.value = opt.value;
+      console.log(
+        `🔄 Custom dropdown changed: ${selectElement.id} = ${opt.value}`,
+      );
 
       // Trigger change event on original select
       const event = new Event("change", { bubbles: true });
@@ -1047,6 +1050,9 @@ overlayUrl.addEventListener("input", () => {
 });
 
 // Position dropdowns
+console.log(`🔍 Initial timestampPosition value: ${timestampPosition.value}`);
+console.log(`🔍 Initial titlePosition value: ${titlePosition.value}`);
+
 timestampPosition.addEventListener("change", () => {
   currentOverlayConfig.timestampPosition = timestampPosition.value;
   console.log(`📍 Timestamp position changed to: ${timestampPosition.value}`);

@@ -133,13 +133,18 @@ class CameraController {
         const data = fs.readFileSync(this.configFile, "utf8");
         const config = JSON.parse(data);
         console.log("✅ Loaded camera config from file:", this.configFile);
+        console.log("📋 Config contents:", JSON.stringify(config, null, 2));
         return config;
+      } else {
+        console.log("⚠️  No camera config file found, using defaults");
       }
     } catch (error) {
       console.error("❌ Error loading camera config file:", error.message);
     }
     // Return defaults if no config file exists
-    return this.getDefaults();
+    const defaults = this.getDefaults();
+    console.log("📋 Using default config:", JSON.stringify(defaults, null, 2));
+    return defaults;
   }
 
   /**
@@ -170,6 +175,7 @@ class CameraController {
     for (const [controlName, value] of Object.entries(this.config)) {
       if (this.controls[controlName]) {
         try {
+          console.log(`  ⚙️  Setting ${controlName} = ${value}`);
           // Don't save to config when applying (already in config)
           const result = await this.setControl(controlName, value, false);
           results.push({ control: controlName, ...result });
@@ -180,6 +186,12 @@ class CameraController {
           } else if (controlName === "tilt_absolute") {
             this.currentTilt = value;
           }
+
+          if (result.success) {
+            console.log(`  ✅ ${controlName} set successfully`);
+          } else {
+            console.log(`  ❌ ${controlName} failed: ${result.error}`);
+          }
         } catch (error) {
           console.error(`❌ Failed to apply ${controlName}:`, error.message);
           results.push({
@@ -188,6 +200,8 @@ class CameraController {
             error: error.message,
           });
         }
+      } else {
+        console.log(`  ⚠️  Skipping unknown control: ${controlName}`);
       }
     }
 
