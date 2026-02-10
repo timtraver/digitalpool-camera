@@ -227,11 +227,61 @@ class CameraController {
     console.log("📋 Config in memory:", JSON.stringify(this.config, null, 2));
     const results = [];
 
+    // Separate PTZ controls from other controls
+    const ptzControls = [
+      "pan_absolute",
+      "tilt_absolute",
+      "zoom_absolute",
+      "pan_speed",
+      "tilt_speed",
+    ];
+    const otherControls = [];
+    const ptzSettings = [];
+
+    // Categorize controls
     for (const [controlName, value] of Object.entries(this.config)) {
+      if (ptzControls.includes(controlName)) {
+        ptzSettings.push([controlName, value]);
+      } else {
+        otherControls.push([controlName, value]);
+      }
+    }
+
+    // Apply non-PTZ controls first
+    console.log("  📷 Applying image quality and exposure settings...");
+    for (const [controlName, value] of otherControls) {
       if (this.controls[controlName]) {
         try {
           console.log(`  ⚙️  Setting ${controlName} = ${value}`);
-          // Don't save to config when applying (already in config)
+          const result = await this.setControl(controlName, value, false);
+          results.push({ control: controlName, ...result });
+
+          if (result.success) {
+            console.log(`  ✅ ${controlName} set successfully`);
+          } else {
+            console.log(`  ❌ ${controlName} failed: ${result.error}`);
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        } catch (error) {
+          console.error(`❌ Failed to apply ${controlName}:`, error.message);
+          results.push({
+            control: controlName,
+            success: false,
+            error: error.message,
+          });
+        }
+      } else {
+        console.log(`  ⚠️  Skipping unknown control: ${controlName}`);
+      }
+    }
+
+    // Apply PTZ controls last
+    console.log("  🎥 Applying PTZ (Pan/Tilt/Zoom) settings...");
+    for (const [controlName, value] of ptzSettings) {
+      if (this.controls[controlName]) {
+        try {
+          console.log(`  ⚙️  Setting ${controlName} = ${value}`);
           const result = await this.setControl(controlName, value, false);
           results.push({ control: controlName, ...result });
 
@@ -248,8 +298,8 @@ class CameraController {
             console.log(`  ❌ ${controlName} failed: ${result.error}`);
           }
 
-          // Small delay between commands to avoid overwhelming the camera
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          // Longer delay for PTZ commands to allow camera to move
+          await new Promise((resolve) => setTimeout(resolve, 200));
         } catch (error) {
           console.error(`❌ Failed to apply ${controlName}:`, error.message);
           results.push({

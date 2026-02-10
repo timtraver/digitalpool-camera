@@ -398,6 +398,10 @@ server.listen(PORT, async () => {
 
     await camera.applyConfig();
 
+    // Wait for camera to finish moving
+    console.log("⏳ Waiting for camera to finish moving...");
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+
     // Verify the position was actually set
     console.log("🔍 Verifying camera position after config...");
     const verifyPan = await camera.getControl("pan_absolute");
@@ -406,6 +410,23 @@ server.listen(PORT, async () => {
     console.log(
       `📍 Final position: pan=${verifyPan.value}, tilt=${verifyTilt.value}, zoom=${verifyZoom.value}`,
     );
+
+    // Check if position matches config
+    const panMatch =
+      Math.abs(verifyPan.value - camera.config.pan_absolute) < 3600; // Within 1 degree
+    const tiltMatch =
+      Math.abs(verifyTilt.value - camera.config.tilt_absolute) < 3600;
+    const zoomMatch = verifyZoom.value === camera.config.zoom_absolute;
+
+    if (!panMatch || !tiltMatch || !zoomMatch) {
+      console.log("⚠️  Camera position does not match config!");
+      console.log(
+        `   Expected: pan=${camera.config.pan_absolute}, tilt=${camera.config.tilt_absolute}, zoom=${camera.config.zoom_absolute}`,
+      );
+      console.log(
+        `   Actual:   pan=${verifyPan.value}, tilt=${verifyTilt.value}, zoom=${verifyZoom.value}`,
+      );
+    }
 
     cameraInitialized = true;
     console.log("✅ Camera initialized successfully\n");
