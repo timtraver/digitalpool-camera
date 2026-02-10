@@ -24,25 +24,37 @@ socket.on("controlResult", (result) => {
 });
 
 // Pan/Tilt/Zoom Controls
-// Using smaller increments for smoother control (5 degrees per click)
+// Get movement speed from slider (default 1 degree)
+function getPanTiltSpeed() {
+  const speedSlider = document.getElementById("ptzSpeed");
+  return speedSlider ? parseFloat(speedSlider.value) : 1;
+}
+
 document.getElementById("panLeft").addEventListener("click", () => {
-  socket.emit("pan", { degrees: -5 });
+  socket.emit("pan", { degrees: getPanTiltSpeed() }); // Reversed: left = positive
 });
 
 document.getElementById("panRight").addEventListener("click", () => {
-  socket.emit("pan", { degrees: 5 });
+  socket.emit("pan", { degrees: -getPanTiltSpeed() }); // Reversed: right = negative
 });
 
 document.getElementById("tiltUp").addEventListener("click", () => {
-  socket.emit("tilt", { degrees: 5 });
+  socket.emit("tilt", { degrees: getPanTiltSpeed() });
 });
 
 document.getElementById("tiltDown").addEventListener("click", () => {
-  socket.emit("tilt", { degrees: -5 });
+  socket.emit("tilt", { degrees: -getPanTiltSpeed() });
 });
 
 document.getElementById("resetPos").addEventListener("click", () => {
   socket.emit("resetPosition");
+});
+
+// PTZ Speed slider
+document.getElementById("ptzSpeed").addEventListener("input", (e) => {
+  document.getElementById("ptzSpeedValue").textContent = parseFloat(
+    e.target.value,
+  ).toFixed(1);
 });
 
 // Zoom controls
@@ -178,22 +190,23 @@ document.getElementById("resetAll").addEventListener("click", async () => {
 
 // Keyboard controls
 document.addEventListener("keydown", (e) => {
+  const speed = getPanTiltSpeed();
   switch (e.key) {
     case "ArrowLeft":
       e.preventDefault();
-      socket.emit("pan", { degrees: -5 });
+      socket.emit("pan", { degrees: speed }); // Reversed
       break;
     case "ArrowRight":
       e.preventDefault();
-      socket.emit("pan", { degrees: 5 });
+      socket.emit("pan", { degrees: -speed }); // Reversed
       break;
     case "ArrowUp":
       e.preventDefault();
-      socket.emit("tilt", { degrees: 5 });
+      socket.emit("tilt", { degrees: speed });
       break;
     case "ArrowDown":
       e.preventDefault();
-      socket.emit("tilt", { degrees: -5 });
+      socket.emit("tilt", { degrees: -speed });
       break;
   }
 });
