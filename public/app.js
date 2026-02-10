@@ -588,12 +588,10 @@ const overlayType = document.getElementById("overlayType");
 const textOverlayOptions = document.getElementById("textOverlayOptions");
 const urlOverlayOptions = document.getElementById("urlOverlayOptions");
 const overlayText = document.getElementById("overlayText");
-const customText2 = document.getElementById("customText2");
 const showTimestamp = document.getElementById("showTimestamp");
 const overlayUrl = document.getElementById("overlayUrl");
 const timestampPosition = document.getElementById("timestampPosition");
 const titlePosition = document.getElementById("titlePosition");
-const subtitlePosition = document.getElementById("subtitlePosition");
 const overlayFontSize = document.getElementById("overlayFontSize");
 const fontSizeValue = document.getElementById("fontSizeValue");
 const overlayColor = document.getElementById("overlayColor");
@@ -613,7 +611,6 @@ console.log("🎨 Initializing custom dropdowns...");
 // Overlay position dropdowns
 createCustomDropdown(timestampPosition);
 createCustomDropdown(titlePosition);
-createCustomDropdown(subtitlePosition);
 
 // Overlay style dropdowns
 createCustomDropdown(overlayType);
@@ -645,11 +642,9 @@ console.log("🖌️ Canvas context:", ctx);
 
 // Debug elements
 const canvasSizeSpan = document.getElementById("canvasSize");
-const resizeCanvasBtn = document.getElementById("resizeCanvas");
 
 console.log("🔧 Debug elements:", {
   canvasSizeSpan,
-  resizeCanvasBtn,
 });
 
 // Current overlay config
@@ -657,12 +652,10 @@ let currentOverlayConfig = {
   overlayEnabled: false,
   overlayType: "text",
   overlayText: "",
-  customText2: "",
   showTimestamp: false,
   overlayUrl: "",
   timestampPosition: "bottom-right",
   titlePosition: "top-left",
-  subtitlePosition: "top-left",
   overlayFontSize: 32,
   overlayColor: "white",
   overlayBackground: "transparent",
@@ -758,30 +751,6 @@ window.addEventListener("resize", () => {
   updateCanvasSize();
   drawOverlay();
 });
-
-// Manual resize button
-if (resizeCanvasBtn) {
-  resizeCanvasBtn.addEventListener("click", () => {
-    console.log("🔄 Manual canvas resize triggered");
-    const rect = videoStream.getBoundingClientRect();
-    console.log("Video element rect:", rect);
-    console.log(
-      "Video natural size:",
-      videoStream.naturalWidth,
-      "x",
-      videoStream.naturalHeight,
-    );
-    console.log(
-      "Video client size:",
-      videoStream.clientWidth,
-      "x",
-      videoStream.clientHeight,
-    );
-
-    updateCanvasSize();
-    drawOverlay();
-  });
-}
 
 // Toggle overlay type options
 overlayType.addEventListener("change", () => {
@@ -939,6 +908,9 @@ function drawTextOverlay() {
       textAlign = "center";
     }
 
+    console.log(
+      `📐 Position "${position}" → x:${xPos}, y:${yPos}, align:${textAlign}, baseline:${textBaseline}`,
+    );
     return { xPos, yPos, textAlign, textBaseline };
   }
 
@@ -996,6 +968,9 @@ function drawTextOverlay() {
   if (currentOverlayConfig.showTimestamp) {
     const now = new Date();
     const timestamp = now.toLocaleString();
+    console.log(
+      `🕐 Drawing timestamp at position: ${currentOverlayConfig.timestampPosition}`,
+    );
     drawSingleText(
       timestamp,
       `bold ${smallFontSize}px Sans-serif`,
@@ -1005,19 +980,13 @@ function drawTextOverlay() {
 
   // Draw main text (title)
   if (currentOverlayConfig.overlayText) {
+    console.log(
+      `📝 Drawing title at position: ${currentOverlayConfig.titlePosition}`,
+    );
     drawSingleText(
       currentOverlayConfig.overlayText,
       `bold ${fontSize}px Sans-serif`,
       currentOverlayConfig.titlePosition,
-    );
-  }
-
-  // Draw subtitle
-  if (currentOverlayConfig.customText2) {
-    drawSingleText(
-      currentOverlayConfig.customText2,
-      `${smallFontSize}px Sans-serif`,
-      currentOverlayConfig.subtitlePosition,
     );
   }
 
@@ -1034,11 +1003,6 @@ overlayEnabled.addEventListener("change", () => {
 overlayText.addEventListener("input", () => {
   currentOverlayConfig.overlayText = overlayText.value;
   // console.log("Overlay text changed:", overlayText.value); // Removed - floods console while typing
-  drawOverlay(); // Always redraw to show live preview
-});
-
-customText2.addEventListener("input", () => {
-  currentOverlayConfig.customText2 = customText2.value;
   drawOverlay(); // Always redraw to show live preview
 });
 
@@ -1085,16 +1049,13 @@ overlayUrl.addEventListener("input", () => {
 // Position dropdowns
 timestampPosition.addEventListener("change", () => {
   currentOverlayConfig.timestampPosition = timestampPosition.value;
+  console.log(`📍 Timestamp position changed to: ${timestampPosition.value}`);
   drawOverlay();
 });
 
 titlePosition.addEventListener("change", () => {
   currentOverlayConfig.titlePosition = titlePosition.value;
-  drawOverlay();
-});
-
-subtitlePosition.addEventListener("change", () => {
-  currentOverlayConfig.subtitlePosition = subtitlePosition.value;
+  console.log(`📍 Title position changed to: ${titlePosition.value}`);
   drawOverlay();
 });
 
@@ -1116,11 +1077,9 @@ testOverlayBtn.addEventListener("click", () => {
   currentOverlayConfig.overlayEnabled = true;
   currentOverlayConfig.overlayType = "text";
   currentOverlayConfig.overlayText = "TEST TITLE";
-  currentOverlayConfig.customText2 = "TEST SUBTITLE";
   currentOverlayConfig.showTimestamp = true;
   currentOverlayConfig.timestampPosition = "bottom-right";
   currentOverlayConfig.titlePosition = "top-left";
-  currentOverlayConfig.subtitlePosition = "top-left";
   currentOverlayConfig.overlayColor = "white";
   currentOverlayConfig.overlayFontSize = 32;
 
@@ -1136,12 +1095,10 @@ applyOverlayBtn.addEventListener("click", () => {
     overlayEnabled: overlayEnabled.checked,
     overlayType: overlayType.value,
     overlayText: overlayText.value,
-    customText2: customText2.value,
     showTimestamp: showTimestamp.checked,
     overlayUrl: overlayUrl.value,
     timestampPosition: timestampPosition.value,
     titlePosition: titlePosition.value,
-    subtitlePosition: subtitlePosition.value,
     overlayFontSize: parseInt(overlayFontSize.value),
     overlayColor: overlayColor.value,
     overlayBackground: overlayBackground.value,
@@ -1174,12 +1131,10 @@ socket.on("streamStatus", (status) => {
     overlayEnabled.checked = status.config.overlayEnabled || false;
     overlayType.value = status.config.overlayType || "text";
     overlayText.value = status.config.overlayText || "";
-    customText2.value = status.config.customText2 || "";
     showTimestamp.checked = status.config.showTimestamp || false;
     overlayUrl.value = status.config.overlayUrl || "";
     timestampPosition.value = status.config.timestampPosition || "bottom-right";
     titlePosition.value = status.config.titlePosition || "top-left";
-    subtitlePosition.value = status.config.subtitlePosition || "top-left";
     overlayFontSize.value = status.config.overlayFontSize || 32;
     fontSizeValue.textContent = overlayFontSize.value;
     overlayColor.value = status.config.overlayColor || "white";
@@ -1198,12 +1153,10 @@ socket.on("streamStatus", (status) => {
       overlayEnabled: status.config.overlayEnabled || false,
       overlayType: status.config.overlayType || "text",
       overlayText: status.config.overlayText || "",
-      customText2: status.config.customText2 || "",
       showTimestamp: status.config.showTimestamp || false,
       overlayUrl: status.config.overlayUrl || "",
       timestampPosition: status.config.timestampPosition || "bottom-right",
       titlePosition: status.config.titlePosition || "top-left",
-      subtitlePosition: status.config.subtitlePosition || "top-left",
       overlayFontSize: status.config.overlayFontSize || 32,
       overlayColor: status.config.overlayColor || "white",
       overlayBackground: status.config.overlayBackground || "transparent",
