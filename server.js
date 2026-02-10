@@ -22,6 +22,9 @@ const CAMERA_DEVICE = process.env.CAMERA_DEVICE || "/dev/video0";
 // Initialize camera controller
 const camera = new CameraController(CAMERA_DEVICE);
 
+// Flag to track if camera is fully initialized
+let cameraInitialized = false;
+
 // Initialize stream controller
 const streamController = new StreamController(CAMERA_DEVICE);
 
@@ -284,6 +287,13 @@ io.on("connection", (socket) => {
     console.log(
       `📡 Client ${socket.id} sent setControl: ${control} = ${value}`,
     );
+
+    // Ignore commands if camera is still initializing
+    if (!cameraInitialized) {
+      console.log(`⚠️  Ignoring command - camera still initializing`);
+      return;
+    }
+
     const result = await camera.setControl(control, value);
     socket.emit("controlResult", result);
   });
@@ -375,8 +385,10 @@ server.listen(PORT, async () => {
   console.log("\n🚀 Initializing camera with saved configuration...");
   try {
     await camera.applyConfig();
+    cameraInitialized = true;
     console.log("✅ Camera initialized successfully\n");
   } catch (error) {
     console.error("❌ Error initializing camera:", error.message);
+    cameraInitialized = true; // Allow commands even if init failed
   }
 });
