@@ -345,11 +345,20 @@ let currentOverlayConfig = {
   overlayColor: "white",
 };
 
-// Update canvas size when video loads
-videoStream.addEventListener("load", () => {
-  overlayCanvas.width = videoStream.naturalWidth || videoStream.width;
-  overlayCanvas.height = videoStream.naturalHeight || videoStream.height;
-});
+// Update canvas size when video loads or changes
+function updateCanvasSize() {
+  const rect = videoStream.getBoundingClientRect();
+  overlayCanvas.width = rect.width;
+  overlayCanvas.height = rect.height;
+  console.log("Canvas sized:", overlayCanvas.width, "x", overlayCanvas.height);
+  drawOverlay();
+}
+
+videoStream.addEventListener("load", updateCanvasSize);
+window.addEventListener("resize", updateCanvasSize);
+
+// Initial size after a short delay
+setTimeout(updateCanvasSize, 500);
 
 // Redraw overlay every 100ms (for timestamp updates)
 setInterval(() => {
@@ -365,7 +374,18 @@ function drawOverlay() {
   // Clear canvas
   ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
-  if (!currentOverlayConfig.overlayEnabled) return;
+  if (!currentOverlayConfig.overlayEnabled) {
+    console.log("Overlay disabled, clearing canvas");
+    return;
+  }
+
+  console.log("Drawing overlay:", currentOverlayConfig);
+
+  // Check if canvas has valid dimensions
+  if (overlayCanvas.width === 0 || overlayCanvas.height === 0) {
+    console.warn("Canvas has no dimensions, skipping draw");
+    return;
+  }
 
   // Scale font size based on canvas width (assuming 1920px base)
   const scale = overlayCanvas.width / 1920 || 1;
@@ -462,6 +482,42 @@ function drawOverlay() {
 // Update font size display
 overlayFontSize.addEventListener("input", () => {
   fontSizeValue.textContent = overlayFontSize.value;
+});
+
+// Live preview updates (update preview as user types/changes)
+overlayEnabled.addEventListener("change", () => {
+  currentOverlayConfig.overlayEnabled = overlayEnabled.checked;
+  drawOverlay();
+});
+
+overlayText.addEventListener("input", () => {
+  currentOverlayConfig.overlayText = overlayText.value;
+  if (currentOverlayConfig.overlayEnabled) drawOverlay();
+});
+
+customText2.addEventListener("input", () => {
+  currentOverlayConfig.customText2 = customText2.value;
+  if (currentOverlayConfig.overlayEnabled) drawOverlay();
+});
+
+showTimestamp.addEventListener("change", () => {
+  currentOverlayConfig.showTimestamp = showTimestamp.checked;
+  if (currentOverlayConfig.overlayEnabled) drawOverlay();
+});
+
+overlayPosition.addEventListener("change", () => {
+  currentOverlayConfig.overlayPosition = overlayPosition.value;
+  if (currentOverlayConfig.overlayEnabled) drawOverlay();
+});
+
+overlayFontSize.addEventListener("input", () => {
+  currentOverlayConfig.overlayFontSize = parseInt(overlayFontSize.value);
+  if (currentOverlayConfig.overlayEnabled) drawOverlay();
+});
+
+overlayColor.addEventListener("change", () => {
+  currentOverlayConfig.overlayColor = overlayColor.value;
+  if (currentOverlayConfig.overlayEnabled) drawOverlay();
 });
 
 // Apply overlay settings
