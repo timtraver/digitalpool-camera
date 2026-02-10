@@ -217,28 +217,57 @@
                 </div>
 
                 <div class="control-item-compact">
-                  <label>Main Text:</label>
-                  <input
-                    type="text"
-                    id="overlayText"
-                    placeholder="Stream Title"
-                  />
+                  <label>Overlay Type:</label>
+                  <select id="overlayType">
+                    <option value="text">Text Overlay</option>
+                    <option value="url">URL Overlay (Dynamic)</option>
+                  </select>
                 </div>
 
-                <div class="control-item-compact">
-                  <label>Subtitle:</label>
-                  <input
-                    type="text"
-                    id="customText2"
-                    placeholder="Secondary text"
-                  />
+                <!-- Text Overlay Options -->
+                <div id="textOverlayOptions">
+                  <div class="control-item-compact">
+                    <label>Main Text:</label>
+                    <input
+                      type="text"
+                      id="overlayText"
+                      placeholder="Stream Title"
+                    />
+                  </div>
+
+                  <div class="control-item-compact">
+                    <label>Subtitle:</label>
+                    <input
+                      type="text"
+                      id="customText2"
+                      placeholder="Secondary text"
+                    />
+                  </div>
+
+                  <div class="control-item-compact">
+                    <label>
+                      <input type="checkbox" id="showTimestamp" />
+                      Show Timestamp
+                    </label>
+                  </div>
                 </div>
 
-                <div class="control-item-compact">
-                  <label>
-                    <input type="checkbox" id="showTimestamp" />
-                    Show Timestamp
-                  </label>
+                <!-- URL Overlay Options -->
+                <div id="urlOverlayOptions" style="display: none">
+                  <div class="control-item-compact">
+                    <label>Overlay URL:</label>
+                    <input
+                      type="text"
+                      id="overlayUrl"
+                      placeholder="https://example.com/overlay.html"
+                    />
+                  </div>
+                  <div class="control-item-compact">
+                    <small style="color: rgba(255, 255, 255, 0.6)"
+                      >URL will be rendered as a browser window with JavaScript
+                      support</small
+                    >
+                  </div>
                 </div>
 
                 <div class="control-item-compact">
@@ -303,9 +332,27 @@
                   <span id="backgroundOpacityValue">70</span>%
                 </div>
 
-                <button id="applyOverlay" class="btn-stream btn-start">
-                  Apply Overlay
-                </button>
+                <div style="display: flex; gap: 8px">
+                  <button
+                    id="applyOverlay"
+                    class="btn-stream btn-start"
+                    style="flex: 1"
+                  >
+                    Apply Overlay
+                  </button>
+                  <button
+                    id="testOverlay"
+                    class="btn-stream"
+                    style="
+                      flex: 0;
+                      background: #722ed1;
+                      padding: 8px 12px;
+                      font-size: 11px;
+                    "
+                  >
+                    🧪 Test
+                  </button>
+                </div>
               </div>
             </details>
           </div>

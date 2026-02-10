@@ -353,9 +353,13 @@ socket.on("connect", () => {
 // ============ OVERLAY CONTROLS ============
 
 const overlayEnabled = document.getElementById("overlayEnabled");
+const overlayType = document.getElementById("overlayType");
+const textOverlayOptions = document.getElementById("textOverlayOptions");
+const urlOverlayOptions = document.getElementById("urlOverlayOptions");
 const overlayText = document.getElementById("overlayText");
 const customText2 = document.getElementById("customText2");
 const showTimestamp = document.getElementById("showTimestamp");
+const overlayUrl = document.getElementById("overlayUrl");
 const overlayPosition = document.getElementById("overlayPosition");
 const overlayFontSize = document.getElementById("overlayFontSize");
 const fontSizeValue = document.getElementById("fontSizeValue");
@@ -368,6 +372,7 @@ const backgroundOpacityValue = document.getElementById(
   "backgroundOpacityValue",
 );
 const applyOverlayBtn = document.getElementById("applyOverlay");
+const testOverlayBtn = document.getElementById("testOverlay");
 
 console.log("🚀 app.js loaded!");
 
@@ -392,15 +397,20 @@ console.log("🔧 Debug elements:", {
 // Current overlay config
 let currentOverlayConfig = {
   overlayEnabled: false,
+  overlayType: "text",
   overlayText: "",
   customText2: "",
   showTimestamp: false,
+  overlayUrl: "",
   overlayPosition: "top-left",
   overlayFontSize: 32,
   overlayColor: "white",
   overlayBackground: "transparent",
   overlayBackgroundOpacity: 70,
 };
+
+// URL overlay iframe
+let urlOverlayIframe = null;
 
 // Update canvas size when video loads or changes
 function updateCanvasSize() {
@@ -513,12 +523,32 @@ if (resizeCanvasBtn) {
   });
 }
 
-// Redraw overlay every 100ms (for timestamp updates)
+// Toggle overlay type options
+overlayType.addEventListener("change", () => {
+  const type = overlayType.value;
+  currentOverlayConfig.overlayType = type;
+
+  if (type === "text") {
+    textOverlayOptions.style.display = "block";
+    urlOverlayOptions.style.display = "none";
+  } else if (type === "url") {
+    textOverlayOptions.style.display = "none";
+    urlOverlayOptions.style.display = "block";
+  }
+
+  drawOverlay();
+});
+
+// Redraw overlay every 100ms (for timestamp updates and URL overlay)
 setInterval(() => {
   if (currentOverlayConfig.overlayEnabled) {
     drawOverlay();
   } else {
     ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+    // Hide URL overlay iframe if exists
+    if (urlOverlayIframe) {
+      urlOverlayIframe.style.display = "none";
+    }
   }
 }, 100);
 
@@ -538,6 +568,10 @@ function drawOverlay() {
 
   if (!currentOverlayConfig.overlayEnabled) {
     console.log("Overlay disabled, clearing canvas");
+    // Hide URL overlay iframe if exists
+    if (urlOverlayIframe) {
+      urlOverlayIframe.style.display = "none";
+    }
     return;
   }
 
@@ -547,6 +581,52 @@ function drawOverlay() {
     return;
   }
 
+  // Handle URL overlay
+  if (currentOverlayConfig.overlayType === "url") {
+    drawUrlOverlay();
+    return;
+  }
+
+  // Handle text overlay (existing code)
+  drawTextOverlay();
+}
+
+// Draw URL overlay using iframe
+function drawUrlOverlay() {
+  if (!currentOverlayConfig.overlayUrl) {
+    console.log("No URL specified for overlay");
+    if (urlOverlayIframe) {
+      urlOverlayIframe.style.display = "none";
+    }
+    return;
+  }
+
+  // Create iframe if it doesn't exist
+  if (!urlOverlayIframe) {
+    urlOverlayIframe = document.createElement("iframe");
+    urlOverlayIframe.id = "urlOverlayIframe";
+    urlOverlayIframe.style.position = "absolute";
+    urlOverlayIframe.style.top = "0";
+    urlOverlayIframe.style.left = "0";
+    urlOverlayIframe.style.width = "100%";
+    urlOverlayIframe.style.height = "100%";
+    urlOverlayIframe.style.border = "none";
+    urlOverlayIframe.style.pointerEvents = "none"; // Don't capture mouse events
+    urlOverlayIframe.style.zIndex = "10"; // Above canvas
+    overlayCanvas.parentElement.appendChild(urlOverlayIframe);
+  }
+
+  // Update iframe src if changed
+  if (urlOverlayIframe.src !== currentOverlayConfig.overlayUrl) {
+    console.log("Loading URL overlay:", currentOverlayConfig.overlayUrl);
+    urlOverlayIframe.src = currentOverlayConfig.overlayUrl;
+  }
+
+  urlOverlayIframe.style.display = "block";
+}
+
+// Draw text overlay on canvas
+function drawTextOverlay() {
   // Scale font size based on canvas width (assuming 1920px base)
   const scale = overlayCanvas.width / 1920 || 1;
   const fontSize = Math.floor(currentOverlayConfig.overlayFontSize * scale);
@@ -755,13 +835,48 @@ overlayBackgroundOpacity.addEventListener("input", () => {
   drawOverlay(); // Always redraw to show live preview
 });
 
+// URL overlay input
+overlayUrl.addEventListener("input", () => {
+  currentOverlayConfig.overlayUrl = overlayUrl.value;
+  drawOverlay(); // Always redraw to show live preview
+});
+
+// Test overlay button - for debugging
+testOverlayBtn.addEventListener("click", () => {
+  console.log("🧪 TEST OVERLAY BUTTON CLICKED");
+  console.log("Current overlay config:", currentOverlayConfig);
+  console.log(
+    "Canvas dimensions:",
+    overlayCanvas.width,
+    "x",
+    overlayCanvas.height,
+  );
+  console.log("Overlay enabled checkbox:", overlayEnabled.checked);
+  console.log("Overlay text input:", overlayText.value);
+  console.log("Custom text 2 input:", customText2.value);
+
+  // Force enable and set test values
+  currentOverlayConfig.overlayEnabled = true;
+  currentOverlayConfig.overlayType = "text";
+  currentOverlayConfig.overlayText = "TEST TITLE";
+  currentOverlayConfig.customText2 = "TEST SUBTITLE";
+  currentOverlayConfig.showTimestamp = true;
+
+  console.log("Updated config for test:", currentOverlayConfig);
+  drawOverlay();
+
+  alert("Test overlay drawn! Check console for details.");
+});
+
 // Apply overlay settings
 applyOverlayBtn.addEventListener("click", () => {
   const overlayConfig = {
     overlayEnabled: overlayEnabled.checked,
+    overlayType: overlayType.value,
     overlayText: overlayText.value,
     customText2: customText2.value,
     showTimestamp: showTimestamp.checked,
+    overlayUrl: overlayUrl.value,
     overlayPosition: overlayPosition.value,
     overlayFontSize: parseInt(overlayFontSize.value),
     overlayColor: overlayColor.value,
@@ -793,20 +908,33 @@ socket.on("overlayResult", (result) => {
 socket.on("streamStatus", (status) => {
   if (status.config) {
     overlayEnabled.checked = status.config.overlayEnabled || false;
+    overlayType.value = status.config.overlayType || "text";
     overlayText.value = status.config.overlayText || "";
     customText2.value = status.config.customText2 || "";
     showTimestamp.checked = status.config.showTimestamp || false;
+    overlayUrl.value = status.config.overlayUrl || "";
     overlayPosition.value = status.config.overlayPosition || "top";
     overlayFontSize.value = status.config.overlayFontSize || 32;
     fontSizeValue.textContent = overlayFontSize.value;
     overlayColor.value = status.config.overlayColor || "white";
 
+    // Toggle overlay type options
+    if (overlayType.value === "text") {
+      textOverlayOptions.style.display = "block";
+      urlOverlayOptions.style.display = "none";
+    } else {
+      textOverlayOptions.style.display = "none";
+      urlOverlayOptions.style.display = "block";
+    }
+
     // Update preview overlay
     currentOverlayConfig = {
       overlayEnabled: status.config.overlayEnabled || false,
+      overlayType: status.config.overlayType || "text",
       overlayText: status.config.overlayText || "",
       customText2: status.config.customText2 || "",
       showTimestamp: status.config.showTimestamp || false,
+      overlayUrl: status.config.overlayUrl || "",
       overlayPosition: status.config.overlayPosition || "top",
       overlayFontSize: status.config.overlayFontSize || 32,
       overlayColor: status.config.overlayColor || "white",
