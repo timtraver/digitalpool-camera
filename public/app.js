@@ -659,15 +659,20 @@ function drawTextOverlay() {
   let xPos, yPos, textAlign, textBaseline;
   const position = currentOverlayConfig.overlayPosition;
 
+  console.log("Position setting:", position);
+
   if (position.includes("top")) {
     yPos = padding;
     textBaseline = "top";
+    console.log("Using TOP position, yPos:", yPos);
   } else if (position.includes("bottom")) {
     yPos = overlayCanvas.height - padding;
     textBaseline = "bottom";
+    console.log("Using BOTTOM position, yPos:", yPos);
   } else {
     yPos = overlayCanvas.height / 2;
     textBaseline = "middle";
+    console.log("Using MIDDLE position, yPos:", yPos);
   }
 
   if (position.includes("left")) {
@@ -686,6 +691,8 @@ function drawTextOverlay() {
 
   const bgColor = getBackgroundColor();
   let currentY = yPos;
+
+  console.log("Final currentY starting position:", currentY);
 
   // Helper function to draw text with background
   function drawTextWithBackground(text, font, yOffset = 0) {
@@ -861,6 +868,9 @@ testOverlayBtn.addEventListener("click", () => {
   currentOverlayConfig.overlayText = "TEST TITLE";
   currentOverlayConfig.customText2 = "TEST SUBTITLE";
   currentOverlayConfig.showTimestamp = true;
+  currentOverlayConfig.overlayPosition = "top-left"; // Force top-left position
+  currentOverlayConfig.overlayColor = "white"; // Force white color
+  currentOverlayConfig.overlayFontSize = 32; // Force readable size
 
   console.log("Updated config for test:", currentOverlayConfig);
   drawOverlay();
