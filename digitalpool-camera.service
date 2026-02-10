@@ -1,0 +1,23 @@
+[Unit]
+Description=Digital Pool Camera Control Service
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/path/to/digitalpool-camera
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=digitalpool-camera
+
+# Environment variables
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=CAMERA_DEVICE=/dev/video0
+
+[Install]
+WantedBy=multi-user.target
+
