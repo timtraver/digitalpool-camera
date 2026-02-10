@@ -44,7 +44,7 @@ class CameraController {
         type: "menu",
         min: 0,
         max: 2,
-        default: 3,
+        default: 2, // 0=Disabled, 1=50Hz, 2=60Hz
       },
       white_balance_temperature: {
         id: "0x0098091a",

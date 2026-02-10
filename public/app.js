@@ -268,6 +268,7 @@ function createSliderControl(controlName, elementId, valueDisplayId) {
 
   slider.addEventListener("change", (e) => {
     const value = parseInt(e.target.value);
+    console.log(`🎚️  Slider changed: ${controlName} = ${value}`);
     socket.emit("setControl", { control: controlName, value: value });
   });
 }

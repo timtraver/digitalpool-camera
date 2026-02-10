@@ -281,6 +281,9 @@ io.on("connection", (socket) => {
   // Handle camera control commands
   socket.on("setControl", async (data) => {
     const { control, value } = data;
+    console.log(
+      `📡 Client ${socket.id} sent setControl: ${control} = ${value}`,
+    );
     const result = await camera.setControl(control, value);
     socket.emit("controlResult", result);
   });
@@ -293,12 +296,14 @@ io.on("connection", (socket) => {
 
   socket.on("pan", async (data) => {
     const { degrees } = data;
+    console.log(`📡 Client ${socket.id} sent pan: ${degrees} degrees`);
     const result = await camera.pan(degrees);
     socket.emit("controlResult", result);
   });
 
   socket.on("tilt", async (data) => {
     const { degrees } = data;
+    console.log(`📡 Client ${socket.id} sent tilt: ${degrees} degrees`);
     const result = await camera.tilt(degrees);
     socket.emit("controlResult", result);
   });
