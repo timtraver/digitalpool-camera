@@ -26,44 +26,79 @@
 
           <!-- Pan/Tilt Controls -->
           <div class="ptz-controls">
-            <h3>PTZ Controls</h3>
+            <h3>PTZ</h3>
             <div class="control-grid">
-              <div class="directional-pad">
-                <button class="btn-control" id="tiltUp" title="Tilt Up">
+              <div class="directional-pad-container">
+                <!-- Outer ring - Large movements -->
+                <button
+                  class="btn-control-outer btn-top-outer"
+                  id="tiltUpLarge"
+                  title="Tilt Up (Large)"
+                >
                   ▲
                 </button>
-                <div class="middle-row">
-                  <button class="btn-control" id="panLeft" title="Pan Left">
-                    ◄
-                  </button>
-                  <button
-                    class="btn-control"
-                    id="resetPos"
-                    title="Reset Position"
-                  >
-                    ⌂
-                  </button>
-                  <button class="btn-control" id="panRight" title="Pan Right">
-                    ►
-                  </button>
-                </div>
-                <button class="btn-control" id="tiltDown" title="Tilt Down">
+                <button
+                  class="btn-control-outer btn-right-outer"
+                  id="panRightLarge"
+                  title="Pan Right (Large)"
+                >
+                  ►
+                </button>
+                <button
+                  class="btn-control-outer btn-bottom-outer"
+                  id="tiltDownLarge"
+                  title="Tilt Down (Large)"
+                >
                   ▼
+                </button>
+                <button
+                  class="btn-control-outer btn-left-outer"
+                  id="panLeftLarge"
+                  title="Pan Left (Large)"
+                >
+                  ◄
+                </button>
+
+                <!-- Inner ring - Small movements -->
+                <button
+                  class="btn-control-inner btn-top-inner"
+                  id="tiltUpSmall"
+                  title="Tilt Up (Small)"
+                >
+                  ▲
+                </button>
+                <button
+                  class="btn-control-inner btn-right-inner"
+                  id="panRightSmall"
+                  title="Pan Right (Small)"
+                >
+                  ►
+                </button>
+                <button
+                  class="btn-control-inner btn-bottom-inner"
+                  id="tiltDownSmall"
+                  title="Tilt Down (Small)"
+                >
+                  ▼
+                </button>
+                <button
+                  class="btn-control-inner btn-left-inner"
+                  id="panLeftSmall"
+                  title="Pan Left (Small)"
+                >
+                  ◄
+                </button>
+
+                <!-- Center reset button -->
+                <button
+                  class="btn-control-center"
+                  id="resetPos"
+                  title="Reset Position"
+                >
+                  ⌂
                 </button>
               </div>
               <div class="ptz-settings">
-                <div class="control-item-compact">
-                  <label for="ptzSpeed">Speed (deg)</label>
-                  <input
-                    type="range"
-                    id="ptzSpeed"
-                    min="0.1"
-                    max="10"
-                    value="1"
-                    step="0.1"
-                  />
-                  <span class="value-display" id="ptzSpeedValue">1.0</span>
-                </div>
                 <div class="control-item-compact">
                   <label for="zoomSlider">Zoom</label>
                   <input
@@ -75,6 +110,9 @@
                     step="1"
                   />
                   <span class="value-display" id="zoomValue">0</span>
+                </div>
+                <div class="speed-info">
+                  <small>Inner: 0.5° | Outer: 5°</small>
                 </div>
               </div>
             </div>

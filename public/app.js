@@ -24,37 +24,47 @@ socket.on("controlResult", (result) => {
 });
 
 // Pan/Tilt/Zoom Controls
-// Get movement speed from slider (default 1 degree)
-function getPanTiltSpeed() {
-  const speedSlider = document.getElementById("ptzSpeed");
-  return speedSlider ? parseFloat(speedSlider.value) : 1;
-}
+// Define movement speeds
+const SMALL_MOVE = 0.5; // degrees for inner buttons
+const LARGE_MOVE = 5.0; // degrees for outer buttons
 
-document.getElementById("panLeft").addEventListener("click", () => {
-  socket.emit("pan", { degrees: getPanTiltSpeed() }); // Reversed: left = positive
+// Inner ring - Small movements
+document.getElementById("panLeftSmall").addEventListener("click", () => {
+  socket.emit("pan", { degrees: SMALL_MOVE });
 });
 
-document.getElementById("panRight").addEventListener("click", () => {
-  socket.emit("pan", { degrees: -getPanTiltSpeed() }); // Reversed: right = negative
+document.getElementById("panRightSmall").addEventListener("click", () => {
+  socket.emit("pan", { degrees: -SMALL_MOVE });
 });
 
-document.getElementById("tiltUp").addEventListener("click", () => {
-  socket.emit("tilt", { degrees: getPanTiltSpeed() });
+document.getElementById("tiltUpSmall").addEventListener("click", () => {
+  socket.emit("tilt", { degrees: SMALL_MOVE });
 });
 
-document.getElementById("tiltDown").addEventListener("click", () => {
-  socket.emit("tilt", { degrees: -getPanTiltSpeed() });
+document.getElementById("tiltDownSmall").addEventListener("click", () => {
+  socket.emit("tilt", { degrees: -SMALL_MOVE });
 });
 
+// Outer ring - Large movements
+document.getElementById("panLeftLarge").addEventListener("click", () => {
+  socket.emit("pan", { degrees: LARGE_MOVE });
+});
+
+document.getElementById("panRightLarge").addEventListener("click", () => {
+  socket.emit("pan", { degrees: -LARGE_MOVE });
+});
+
+document.getElementById("tiltUpLarge").addEventListener("click", () => {
+  socket.emit("tilt", { degrees: LARGE_MOVE });
+});
+
+document.getElementById("tiltDownLarge").addEventListener("click", () => {
+  socket.emit("tilt", { degrees: -LARGE_MOVE });
+});
+
+// Center reset button
 document.getElementById("resetPos").addEventListener("click", () => {
   socket.emit("resetPosition");
-});
-
-// PTZ Speed slider
-document.getElementById("ptzSpeed").addEventListener("input", (e) => {
-  document.getElementById("ptzSpeedValue").textContent = parseFloat(
-    e.target.value,
-  ).toFixed(1);
 });
 
 // Zoom controls
@@ -189,16 +199,17 @@ document.getElementById("resetAll").addEventListener("click", async () => {
 });
 
 // Keyboard controls
+// Hold Shift for large movements, otherwise small movements
 document.addEventListener("keydown", (e) => {
-  const speed = getPanTiltSpeed();
+  const speed = e.shiftKey ? LARGE_MOVE : SMALL_MOVE;
   switch (e.key) {
     case "ArrowLeft":
       e.preventDefault();
-      socket.emit("pan", { degrees: speed }); // Reversed
+      socket.emit("pan", { degrees: speed });
       break;
     case "ArrowRight":
       e.preventDefault();
-      socket.emit("pan", { degrees: -speed }); // Reversed
+      socket.emit("pan", { degrees: -speed });
       break;
     case "ArrowUp":
       e.preventDefault();
