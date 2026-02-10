@@ -387,6 +387,29 @@ server.listen(PORT, async () => {
     // Activate the camera device first
     await camera.activateCamera();
 
+    // Start a temporary stream to wake up the camera for PTZ commands
+    console.log("📹 Starting temporary stream to activate camera PTZ...");
+    const { spawn } = require("child_process");
+    const tempStream = spawn("ffmpeg", [
+      "-f",
+      "v4l2",
+      "-input_format",
+      "mjpeg",
+      "-video_size",
+      "1280x720",
+      "-framerate",
+      "30",
+      "-i",
+      CAMERA_DEVICE,
+      "-f",
+      "null",
+      "-",
+    ]);
+
+    // Wait for stream to start
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    console.log("✅ Temporary stream started");
+
     // Check current camera position before applying config
     console.log("� Checking current camera position...");
     const currentPan = await camera.getControl("pan_absolute");
@@ -426,7 +449,15 @@ server.listen(PORT, async () => {
       console.log(
         `   Actual:   pan=${verifyPan.value}, tilt=${verifyTilt.value}, zoom=${verifyZoom.value}`,
       );
+    } else {
+      console.log("✅ Camera position matches config!");
     }
+
+    // Stop the temporary stream
+    console.log("🛑 Stopping temporary stream...");
+    tempStream.kill("SIGTERM");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    console.log("✅ Temporary stream stopped");
 
     cameraInitialized = true;
     console.log("✅ Camera initialized successfully\n");

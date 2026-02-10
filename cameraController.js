@@ -276,9 +276,28 @@ class CameraController {
       }
     }
 
-    // Apply PTZ controls last
+    // Apply PTZ controls last, in specific order
     console.log("  🎥 Applying PTZ (Pan/Tilt/Zoom) settings...");
-    for (const [controlName, value] of ptzSettings) {
+
+    // Sort PTZ settings: speeds first, then zoom, then pan/tilt
+    const orderedPtzControls = [
+      "pan_speed",
+      "tilt_speed",
+      "zoom_absolute",
+      "pan_absolute",
+      "tilt_absolute",
+    ];
+    const sortedPtzSettings = [];
+
+    // Add controls in the specified order
+    for (const controlName of orderedPtzControls) {
+      const setting = ptzSettings.find(([name]) => name === controlName);
+      if (setting) {
+        sortedPtzSettings.push(setting);
+      }
+    }
+
+    for (const [controlName, value] of sortedPtzSettings) {
       if (this.controls[controlName]) {
         try {
           console.log(`  ⚙️  Setting ${controlName} = ${value}`);
@@ -299,7 +318,7 @@ class CameraController {
           }
 
           // Longer delay for PTZ commands to allow camera to move
-          await new Promise((resolve) => setTimeout(resolve, 200));
+          await new Promise((resolve) => setTimeout(resolve, 500));
         } catch (error) {
           console.error(`❌ Failed to apply ${controlName}:`, error.message);
           results.push({
