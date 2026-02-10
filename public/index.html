@@ -27,6 +27,133 @@
             <img id="videoStream" src="/video/stream" alt="Camera Stream" />
           </div>
 
+          <!-- Streaming Controls -->
+          <div class="ptz-controls">
+            <h3>🎥 Stream Output</h3>
+            <div class="stream-controls">
+              <div class="control-item-compact">
+                <label>Protocol:</label>
+                <select id="streamProtocol">
+                  <option value="srt">SRT</option>
+                  <option value="rtmp">RTMP</option>
+                </select>
+              </div>
+
+              <div class="control-item-compact">
+                <label>Destination:</label>
+                <input
+                  type="text"
+                  id="streamDestination"
+                  placeholder="srt://server:port"
+                  style="width: 100%; padding: 4px; font-size: 11px"
+                />
+              </div>
+
+              <div class="control-item-compact">
+                <label>Bitrate:</label>
+                <select id="streamBitrate">
+                  <option value="2000000">2 Mbps</option>
+                  <option value="5000000" selected>5 Mbps</option>
+                  <option value="8000000">8 Mbps</option>
+                  <option value="10000000">10 Mbps</option>
+                </select>
+              </div>
+
+              <div class="stream-buttons">
+                <button id="startStream" class="btn-stream btn-start">
+                  ▶ Start Stream
+                </button>
+                <button id="stopStream" class="btn-stream btn-stop" disabled>
+                  ⏹ Stop Stream
+                </button>
+              </div>
+
+              <div id="streamStatus" class="stream-status">
+                <small
+                  >Status:
+                  <span id="streamStatusText">Not streaming</span></small
+                >
+              </div>
+
+              <!-- Overlay Settings (collapsible) -->
+              <details class="overlay-settings">
+                <summary>📝 Overlay Settings</summary>
+                <div class="overlay-controls">
+                  <div class="control-item-compact">
+                    <label>
+                      <input type="checkbox" id="overlayEnabled" />
+                      Enable Overlays
+                    </label>
+                  </div>
+
+                  <div class="control-item-compact">
+                    <label>Main Text:</label>
+                    <input
+                      type="text"
+                      id="overlayText"
+                      placeholder="Stream Title"
+                      style="width: 100%; padding: 4px; font-size: 11px"
+                    />
+                  </div>
+
+                  <div class="control-item-compact">
+                    <label>Subtitle:</label>
+                    <input
+                      type="text"
+                      id="customText2"
+                      placeholder="Secondary text"
+                      style="width: 100%; padding: 4px; font-size: 11px"
+                    />
+                  </div>
+
+                  <div class="control-item-compact">
+                    <label>
+                      <input type="checkbox" id="showTimestamp" />
+                      Show Timestamp
+                    </label>
+                  </div>
+
+                  <div class="control-item-compact">
+                    <label>Position:</label>
+                    <select id="overlayPosition">
+                      <option value="top">Top</option>
+                      <option value="center">Center</option>
+                      <option value="bottom">Bottom</option>
+                    </select>
+                  </div>
+
+                  <div class="control-item-compact">
+                    <label>Font Size:</label>
+                    <input
+                      type="range"
+                      id="overlayFontSize"
+                      min="16"
+                      max="72"
+                      value="32"
+                    />
+                    <span id="fontSizeValue">32</span>
+                  </div>
+
+                  <div class="control-item-compact">
+                    <label>Color:</label>
+                    <select id="overlayColor">
+                      <option value="white">White</option>
+                      <option value="black">Black</option>
+                      <option value="red">Red</option>
+                      <option value="green">Green</option>
+                      <option value="blue">Blue</option>
+                      <option value="yellow">Yellow</option>
+                    </select>
+                  </div>
+
+                  <button id="applyOverlay" class="btn-stream btn-start">
+                    Apply Overlay
+                  </button>
+                </div>
+              </details>
+            </div>
+          </div>
+
           <!-- Pan/Tilt Controls -->
           <div class="ptz-controls">
             <h3>PTZ</h3>

@@ -5,6 +5,7 @@ const socketIO = require("socket.io");
 const { spawn } = require("child_process");
 const path = require("path");
 const CameraController = require("./cameraController");
+const StreamController = require("./streamController");
 
 const app = express();
 const server = http.createServer(app);
@@ -20,6 +21,26 @@ const CAMERA_DEVICE = process.env.CAMERA_DEVICE || "/dev/video0";
 
 // Initialize camera controller
 const camera = new CameraController(CAMERA_DEVICE);
+
+// Initialize stream controller
+const streamController = new StreamController(CAMERA_DEVICE);
+
+// Stream controller event handlers
+streamController.on("started", () => {
+  io.emit("streamStatus", { isStreaming: true, status: "started" });
+});
+
+streamController.on("stopped", (code) => {
+  io.emit("streamStatus", { isStreaming: false, status: "stopped", code });
+});
+
+streamController.on("error", (error) => {
+  io.emit("streamError", { error });
+});
+
+streamController.on("log", (log) => {
+  console.log("Stream log:", log);
+});
 
 // Serve static files from public directory
 app.use(express.static("public"));
@@ -62,6 +83,48 @@ app.post("/api/control/:name", async (req, res) => {
   const result = await camera.setControl(req.params.name, value);
   res.json(result);
 });
+
+// ============ STREAMING API ENDPOINTS ============
+
+// Get stream status
+app.get("/api/stream/status", (req, res) => {
+  res.json(streamController.getStatus());
+});
+
+// Start stream
+app.post("/api/stream/start", async (req, res) => {
+  const config = req.body;
+  const result = await streamController.startStream(config);
+  res.json(result);
+});
+
+// Stop stream
+app.post("/api/stream/stop", async (req, res) => {
+  const result = await streamController.stopStream();
+  res.json(result);
+});
+
+// Update stream configuration
+app.post("/api/stream/config", (req, res) => {
+  const config = req.body;
+  const result = streamController.updateConfig(config);
+  res.json(result);
+});
+
+// Test GStreamer availability
+app.get("/api/stream/test", async (req, res) => {
+  const result = await StreamController.testGStreamer();
+  res.json(result);
+});
+
+// Update overlay configuration
+app.post("/api/stream/overlay", (req, res) => {
+  const overlayConfig = req.body;
+  const result = streamController.updateOverlay(overlayConfig);
+  res.json(result);
+});
+
+// ============ END STREAMING API ============
 
 // Video stream endpoint using MJPEG
 app.get("/video/stream", (req, res) => {
@@ -108,6 +171,8 @@ app.get("/video/stream", (req, res) => {
       "30",
       "-i",
       CAMERA_DEVICE,
+      "-r",
+      "5", // Output 5fps for preview (saves CPU/bandwidth)
       "-f",
       "mjpeg",
       "-q:v",
@@ -125,6 +190,8 @@ app.get("/video/stream", (req, res) => {
       "30",
       "-i",
       CAMERA_DEVICE,
+      "-r",
+      "5", // Output 5fps for preview (saves CPU/bandwidth)
       "-f",
       "mjpeg",
       "-q:v",
@@ -235,6 +302,35 @@ io.on("connection", (socket) => {
     const result = await camera.resetPosition();
     socket.emit("controlResult", result);
   });
+
+  // ============ STREAMING SOCKET EVENTS ============
+
+  socket.on("startStream", async (config) => {
+    const result = await streamController.startStream(config);
+    socket.emit("streamResult", result);
+  });
+
+  socket.on("stopStream", async () => {
+    const result = await streamController.stopStream();
+    socket.emit("streamResult", result);
+  });
+
+  socket.on("getStreamStatus", () => {
+    const status = streamController.getStatus();
+    socket.emit("streamStatus", status);
+  });
+
+  socket.on("updateStreamConfig", (config) => {
+    const result = streamController.updateConfig(config);
+    socket.emit("streamResult", result);
+  });
+
+  socket.on("updateOverlay", (overlayConfig) => {
+    const result = streamController.updateOverlay(overlayConfig);
+    socket.emit("overlayResult", result);
+  });
+
+  // ============ END STREAMING SOCKET EVENTS ============
 
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);

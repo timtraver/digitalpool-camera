@@ -221,3 +221,158 @@ document.addEventListener("keydown", (e) => {
       break;
   }
 });
+
+// ============ STREAMING CONTROLS ============
+
+const streamProtocol = document.getElementById("streamProtocol");
+const streamDestination = document.getElementById("streamDestination");
+const streamBitrate = document.getElementById("streamBitrate");
+const startStreamBtn = document.getElementById("startStream");
+const stopStreamBtn = document.getElementById("stopStream");
+const streamStatusText = document.getElementById("streamStatusText");
+
+// Update placeholder based on protocol
+streamProtocol.addEventListener("change", () => {
+  const protocol = streamProtocol.value;
+  if (protocol === "srt") {
+    streamDestination.placeholder = "srt://server:port";
+  } else if (protocol === "rtmp") {
+    streamDestination.placeholder = "rtmp://server/live/stream";
+  }
+});
+
+// Start stream
+startStreamBtn.addEventListener("click", async () => {
+  const config = {
+    protocol: streamProtocol.value,
+    destination: streamDestination.value,
+    bitrate: parseInt(streamBitrate.value),
+    width: 1920,
+    height: 1080,
+    framerate: 30,
+    encoder: "nvv4l2h264enc",
+  };
+
+  if (!config.destination) {
+    alert("Please enter a destination URL");
+    return;
+  }
+
+  console.log("Starting stream with config:", config);
+  socket.emit("startStream", config);
+
+  // Disable start, enable stop
+  startStreamBtn.disabled = true;
+  streamStatusText.textContent = "Starting...";
+  streamStatusText.style.color = "#f59e0b";
+});
+
+// Stop stream
+stopStreamBtn.addEventListener("click", () => {
+  console.log("Stopping stream");
+  socket.emit("stopStream");
+
+  streamStatusText.textContent = "Stopping...";
+  streamStatusText.style.color = "#f59e0b";
+});
+
+// Stream result handler
+socket.on("streamResult", (result) => {
+  console.log("Stream result:", result);
+  if (!result.success) {
+    alert(`Stream error: ${result.error}`);
+    startStreamBtn.disabled = false;
+    stopStreamBtn.disabled = true;
+    streamStatusText.textContent = "Error";
+    streamStatusText.style.color = "#ef4444";
+  }
+});
+
+// Stream status updates
+socket.on("streamStatus", (status) => {
+  console.log("Stream status:", status);
+
+  if (status.isStreaming) {
+    startStreamBtn.disabled = true;
+    stopStreamBtn.disabled = false;
+    streamStatusText.textContent = `Streaming (${status.config?.protocol?.toUpperCase()})`;
+    streamStatusText.style.color = "#10b981";
+  } else {
+    startStreamBtn.disabled = false;
+    stopStreamBtn.disabled = true;
+    streamStatusText.textContent = "Not streaming";
+    streamStatusText.style.color = "rgba(255, 255, 255, 0.7)";
+  }
+});
+
+// Stream error handler
+socket.on("streamError", (data) => {
+  console.error("Stream error:", data.error);
+  streamStatusText.textContent = "Stream error";
+  streamStatusText.style.color = "#ef4444";
+});
+
+// Get initial stream status on connect
+socket.on("connect", () => {
+  socket.emit("getStreamStatus");
+});
+
+// ============ OVERLAY CONTROLS ============
+
+const overlayEnabled = document.getElementById("overlayEnabled");
+const overlayText = document.getElementById("overlayText");
+const customText2 = document.getElementById("customText2");
+const showTimestamp = document.getElementById("showTimestamp");
+const overlayPosition = document.getElementById("overlayPosition");
+const overlayFontSize = document.getElementById("overlayFontSize");
+const fontSizeValue = document.getElementById("fontSizeValue");
+const overlayColor = document.getElementById("overlayColor");
+const applyOverlayBtn = document.getElementById("applyOverlay");
+
+// Update font size display
+overlayFontSize.addEventListener("input", () => {
+  fontSizeValue.textContent = overlayFontSize.value;
+});
+
+// Apply overlay settings
+applyOverlayBtn.addEventListener("click", () => {
+  const overlayConfig = {
+    overlayEnabled: overlayEnabled.checked,
+    overlayText: overlayText.value,
+    customText2: customText2.value,
+    showTimestamp: showTimestamp.checked,
+    overlayPosition: overlayPosition.value,
+    overlayFontSize: parseInt(overlayFontSize.value),
+    overlayColor: overlayColor.value,
+    overlayBackground: true,
+  };
+
+  console.log("Applying overlay config:", overlayConfig);
+  socket.emit("updateOverlay", overlayConfig);
+});
+
+// Overlay result handler
+socket.on("overlayResult", (result) => {
+  console.log("Overlay result:", result);
+  if (result.success) {
+    alert(
+      result.message || "Overlay settings updated. Restart stream to apply.",
+    );
+  } else {
+    alert(`Overlay error: ${result.error}`);
+  }
+});
+
+// Load overlay settings from stream status
+socket.on("streamStatus", (status) => {
+  if (status.config) {
+    overlayEnabled.checked = status.config.overlayEnabled || false;
+    overlayText.value = status.config.overlayText || "";
+    customText2.value = status.config.customText2 || "";
+    showTimestamp.checked = status.config.showTimestamp || false;
+    overlayPosition.value = status.config.overlayPosition || "top";
+    overlayFontSize.value = status.config.overlayFontSize || 32;
+    fontSizeValue.textContent = overlayFontSize.value;
+    overlayColor.value = status.config.overlayColor || "white";
+  }
+});
