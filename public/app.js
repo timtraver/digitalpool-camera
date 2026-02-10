@@ -2,6 +2,113 @@ console.log("=".repeat(60));
 console.log("🎬 DIGITALPOOL CAMERA APP.JS STARTING");
 console.log("=".repeat(60));
 
+// Custom Dropdown Helper Function
+function createCustomDropdown(selectElement) {
+  const options = Array.from(selectElement.options).map((opt) => ({
+    value: opt.value,
+    text: opt.text,
+    selected: opt.selected,
+  }));
+
+  const selectedOption = options.find((opt) => opt.selected) || options[0];
+
+  // Create custom dropdown structure
+  const container = document.createElement("div");
+  container.className = "custom-dropdown";
+
+  const selected = document.createElement("div");
+  selected.className = "custom-dropdown-selected";
+  selected.textContent = selectedOption.text;
+  selected.dataset.value = selectedOption.value;
+
+  const optionsContainer = document.createElement("div");
+  optionsContainer.className = "custom-dropdown-options";
+
+  options.forEach((opt) => {
+    const optionDiv = document.createElement("div");
+    optionDiv.className = "custom-dropdown-option";
+    if (opt.value === selectedOption.value) {
+      optionDiv.classList.add("selected");
+    }
+    optionDiv.textContent = opt.text;
+    optionDiv.dataset.value = opt.value;
+
+    optionDiv.addEventListener("click", () => {
+      // Update selected display
+      selected.textContent = opt.text;
+      selected.dataset.value = opt.value;
+
+      // Update selected class
+      optionsContainer
+        .querySelectorAll(".custom-dropdown-option")
+        .forEach((o) => {
+          o.classList.remove("selected");
+        });
+      optionDiv.classList.add("selected");
+
+      // Update original select element
+      selectElement.value = opt.value;
+
+      // Trigger change event on original select
+      const event = new Event("change", { bubbles: true });
+      selectElement.dispatchEvent(event);
+
+      // Close dropdown
+      optionsContainer.classList.remove("open");
+      selected.classList.remove("open");
+    });
+
+    optionsContainer.appendChild(optionDiv);
+  });
+
+  // Toggle dropdown
+  selected.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const isOpen = optionsContainer.classList.contains("open");
+
+    // Close all other dropdowns
+    document
+      .querySelectorAll(".custom-dropdown-options.open")
+      .forEach((dropdown) => {
+        dropdown.classList.remove("open");
+      });
+    document
+      .querySelectorAll(".custom-dropdown-selected.open")
+      .forEach((sel) => {
+        sel.classList.remove("open");
+      });
+
+    // Toggle this dropdown
+    if (!isOpen) {
+      optionsContainer.classList.add("open");
+      selected.classList.add("open");
+    }
+  });
+
+  container.appendChild(selected);
+  container.appendChild(optionsContainer);
+
+  // Hide original select
+  selectElement.style.display = "none";
+
+  // Insert custom dropdown after original select
+  selectElement.parentNode.insertBefore(container, selectElement.nextSibling);
+
+  return container;
+}
+
+// Close dropdowns when clicking outside
+document.addEventListener("click", () => {
+  document
+    .querySelectorAll(".custom-dropdown-options.open")
+    .forEach((dropdown) => {
+      dropdown.classList.remove("open");
+    });
+  document.querySelectorAll(".custom-dropdown-selected.open").forEach((sel) => {
+    sel.classList.remove("open");
+  });
+});
+
 // Initialize Socket.IO connection
 const socket = io();
 console.log("🔌 Socket.IO initialized:", socket);
@@ -375,6 +482,15 @@ const backgroundOpacityValue = document.getElementById(
 );
 const applyOverlayBtn = document.getElementById("applyOverlay");
 const testOverlayBtn = document.getElementById("testOverlay");
+
+// Initialize custom dropdowns for position selects
+console.log("🎨 Initializing custom dropdowns...");
+createCustomDropdown(timestampPosition);
+createCustomDropdown(titlePosition);
+createCustomDropdown(subtitlePosition);
+createCustomDropdown(overlayType);
+createCustomDropdown(overlayBackground);
+console.log("✅ Custom dropdowns initialized");
 
 console.log("🚀 app.js loaded!");
 
