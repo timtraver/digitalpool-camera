@@ -127,6 +127,18 @@ header h1 {
 }
 
 /* PTZ Controls */
+/* Controls row - side by side layout */
+.controls-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.controls-row > .ptz-controls {
+  flex: 1;
+  min-width: 300px;
+}
+
 .ptz-controls {
   background: rgba(11, 30, 52, 0.8);
   padding: 8px;
@@ -174,6 +186,7 @@ header h1 {
   font-size: 16px;
   border-radius: 6px;
   cursor: pointer;
+  z-index: 1;
   transition: all 0.15s;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
   border: 1px solid rgba(18, 199, 255, 0.3);
@@ -215,6 +228,7 @@ header h1 {
   font-size: 12px;
   border-radius: 4px;
   cursor: pointer;
+  z-index: 2;
   transition: all 0.15s;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   border: 1px solid rgba(18, 199, 255, 0.4);

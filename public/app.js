@@ -360,6 +360,13 @@ const overlayPosition = document.getElementById("overlayPosition");
 const overlayFontSize = document.getElementById("overlayFontSize");
 const fontSizeValue = document.getElementById("fontSizeValue");
 const overlayColor = document.getElementById("overlayColor");
+const overlayBackground = document.getElementById("overlayBackground");
+const overlayBackgroundOpacity = document.getElementById(
+  "overlayBackgroundOpacity",
+);
+const backgroundOpacityValue = document.getElementById(
+  "backgroundOpacityValue",
+);
 const applyOverlayBtn = document.getElementById("applyOverlay");
 
 console.log("🚀 app.js loaded!");
@@ -376,12 +383,10 @@ console.log("🖌️ Canvas context:", ctx);
 // Debug elements
 const canvasSizeSpan = document.getElementById("canvasSize");
 const overlayStatusSpan = document.getElementById("overlayStatus");
-const testOverlayBtn = document.getElementById("testOverlay");
 
 console.log("🔧 Debug elements:", {
   canvasSizeSpan,
   overlayStatusSpan,
-  testOverlayBtn,
 });
 
 // Current overlay config
@@ -390,9 +395,11 @@ let currentOverlayConfig = {
   overlayText: "",
   customText2: "",
   showTimestamp: false,
-  overlayPosition: "top",
+  overlayPosition: "top-left",
   overlayFontSize: 32,
   overlayColor: "white",
+  overlayBackground: "transparent",
+  overlayBackgroundOpacity: 70,
 };
 
 // Update canvas size when video loads or changes
@@ -401,18 +408,25 @@ function updateCanvasSize() {
 
   // Only update if we have valid dimensions
   if (rect.width > 0 && rect.height > 0) {
-    overlayCanvas.width = rect.width;
-    overlayCanvas.height = rect.height;
-    console.log(
-      "Canvas sized:",
-      overlayCanvas.width,
-      "x",
-      overlayCanvas.height,
-    );
+    // Use device pixel ratio for sharp rendering
+    const dpr = window.devicePixelRatio || 1;
+
+    // Set canvas internal resolution (high-res)
+    overlayCanvas.width = rect.width * dpr;
+    overlayCanvas.height = rect.height * dpr;
+
+    // Set canvas display size (CSS pixels)
+    overlayCanvas.style.width = rect.width + "px";
+    overlayCanvas.style.height = rect.height + "px";
+
+    // Scale context to match device pixel ratio
+    ctx.scale(dpr, dpr);
+
+    console.log("Canvas sized:", rect.width, "x", rect.height, "@ DPR", dpr);
 
     // Update debug info
     if (canvasSizeSpan) {
-      canvasSizeSpan.textContent = `${overlayCanvas.width}x${overlayCanvas.height}`;
+      canvasSizeSpan.textContent = `${rect.width}x${rect.height} @ ${dpr}x`;
     }
   } else {
     console.warn("Video has no dimensions yet, retrying...");
@@ -450,64 +464,6 @@ window.addEventListener("resize", () => {
   drawOverlay();
 });
 
-// Test overlay button
-if (testOverlayBtn) {
-  testOverlayBtn.addEventListener("click", () => {
-    console.log("=== TEST OVERLAY CLICKED ===");
-
-    // Force canvas size update
-    const rect = videoStream.getBoundingClientRect();
-    overlayCanvas.width = rect.width;
-    overlayCanvas.height = rect.height;
-
-    console.log(
-      "Canvas dimensions:",
-      overlayCanvas.width,
-      "x",
-      overlayCanvas.height,
-    );
-    console.log("Video rect:", rect.width, "x", rect.height);
-    console.log(
-      "Video natural:",
-      videoStream.naturalWidth,
-      "x",
-      videoStream.naturalHeight,
-    );
-    console.log("Current config:", currentOverlayConfig);
-
-    // Draw a simple test pattern directly
-    console.log("Drawing test pattern...");
-
-    // Clear first
-    ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-
-    // Red rectangle
-    ctx.fillStyle = "rgba(255, 0, 0, 0.7)";
-    ctx.fillRect(10, 10, 200, 100);
-
-    // White text
-    ctx.fillStyle = "white";
-    ctx.font = "bold 32px Arial";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "top";
-    ctx.fillText("TEST", 50, 40);
-
-    // Yellow border around entire canvas
-    ctx.strokeStyle = "yellow";
-    ctx.lineWidth = 5;
-    ctx.strokeRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-
-    console.log("✅ Test pattern drawn!");
-
-    // Also try to enable the overlay system
-    currentOverlayConfig.overlayEnabled = true;
-    currentOverlayConfig.overlayText = "TEST OVERLAY";
-    currentOverlayConfig.overlayColor = "yellow";
-    overlayEnabled.checked = true;
-    overlayText.value = "TEST OVERLAY";
-  });
-}
-
 // Redraw overlay every 100ms (for timestamp updates)
 setInterval(() => {
   if (currentOverlayConfig.overlayEnabled) {
@@ -519,8 +475,14 @@ setInterval(() => {
 
 // Draw overlay on canvas
 function drawOverlay() {
+  // Get display dimensions (CSS pixels, not canvas internal resolution)
+  const displayWidth =
+    parseFloat(overlayCanvas.style.width) || overlayCanvas.width;
+  const displayHeight =
+    parseFloat(overlayCanvas.style.height) || overlayCanvas.height;
+
   // Clear canvas
-  ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+  ctx.clearRect(0, 0, displayWidth, displayHeight);
 
   // Update debug status
   if (overlayStatusSpan) {
@@ -540,99 +502,144 @@ function drawOverlay() {
   console.log("Drawing overlay:", currentOverlayConfig);
 
   // Check if canvas has valid dimensions
-  if (overlayCanvas.width === 0 || overlayCanvas.height === 0) {
+  if (displayWidth === 0 || displayHeight === 0) {
     console.warn("Canvas has no dimensions, skipping draw");
     return;
   }
 
-  // Scale font size based on canvas width (assuming 1920px base)
-  const scale = overlayCanvas.width / 1920 || 1;
+  // Scale font size based on display width (assuming 1920px base)
+  const scale = displayWidth / 1920 || 1;
   const fontSize = Math.floor(currentOverlayConfig.overlayFontSize * scale);
   const smallFontSize = Math.floor(fontSize * 0.75);
+  const padding = 20 * scale;
 
-  // Set text properties
-  ctx.fillStyle = currentOverlayConfig.overlayColor;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
+  // Get background color with opacity
+  function getBackgroundColor() {
+    const opacity = currentOverlayConfig.overlayBackgroundOpacity / 100;
 
-  let yPos = 20 * scale;
+    switch (currentOverlayConfig.overlayBackground) {
+      case "transparent":
+        return "rgba(0, 0, 0, 0)";
+      case "semi-black":
+        return `rgba(0, 0, 0, ${opacity})`;
+      case "semi-white":
+        return `rgba(255, 255, 255, ${opacity})`;
+      case "black":
+        return "rgba(0, 0, 0, 1)";
+      case "white":
+        return "rgba(255, 255, 255, 1)";
+      default:
+        return `rgba(0, 0, 0, ${opacity})`;
+    }
+  }
 
-  // Position based on setting
-  if (currentOverlayConfig.overlayPosition === "bottom") {
-    yPos = overlayCanvas.height - 80 * scale;
-    ctx.textBaseline = "bottom";
-  } else if (currentOverlayConfig.overlayPosition === "center") {
-    yPos = overlayCanvas.height / 2 - 40 * scale;
-    ctx.textBaseline = "middle";
+  // Determine position and alignment
+  let xPos, yPos, textAlign, textBaseline;
+  const position = currentOverlayConfig.overlayPosition;
+
+  if (position.includes("top")) {
+    yPos = padding;
+    textBaseline = "top";
+  } else if (position.includes("bottom")) {
+    yPos = displayHeight - padding;
+    textBaseline = "bottom";
+  } else {
+    yPos = displayHeight / 2;
+    textBaseline = "middle";
+  }
+
+  if (position.includes("left")) {
+    xPos = padding;
+    textAlign = "left";
+  } else if (position.includes("right")) {
+    xPos = displayWidth - padding;
+    textAlign = "right";
+  } else {
+    xPos = displayWidth / 2;
+    textAlign = "center";
+  }
+
+  ctx.textAlign = textAlign;
+  ctx.textBaseline = textBaseline;
+
+  const bgColor = getBackgroundColor();
+  let currentY = yPos;
+
+  // Helper function to draw text with background
+  function drawTextWithBackground(text, font, yOffset = 0) {
+    ctx.font = font;
+    const metrics = ctx.measureText(text);
+    const textWidth = metrics.width;
+    const textHeight = fontSize; // Approximate height
+
+    const actualY = currentY + yOffset;
+
+    // Calculate background rectangle based on alignment
+    let bgX, bgY, bgWidth, bgHeight;
+
+    if (textAlign === "left") {
+      bgX = xPos - padding / 2;
+      bgWidth = textWidth + padding;
+    } else if (textAlign === "right") {
+      bgX = xPos - textWidth - padding / 2;
+      bgWidth = textWidth + padding;
+    } else {
+      bgX = xPos - textWidth / 2 - padding / 2;
+      bgWidth = textWidth + padding;
+    }
+
+    if (textBaseline === "top") {
+      bgY = actualY - padding / 4;
+      bgHeight = textHeight + padding / 2;
+    } else if (textBaseline === "bottom") {
+      bgY = actualY - textHeight - padding / 4;
+      bgHeight = textHeight + padding / 2;
+    } else {
+      bgY = actualY - textHeight / 2 - padding / 4;
+      bgHeight = textHeight + padding / 2;
+    }
+
+    // Draw background if not transparent
+    if (bgColor !== "rgba(0, 0, 0, 0)") {
+      ctx.fillStyle = bgColor;
+      ctx.fillRect(bgX, bgY, bgWidth, bgHeight);
+    }
+
+    // Draw text
+    ctx.fillStyle = currentOverlayConfig.overlayColor;
+    ctx.fillText(text, xPos, actualY);
+
+    return bgHeight;
   }
 
   // Draw timestamp if enabled
   if (currentOverlayConfig.showTimestamp) {
     const now = new Date();
     const timestamp = now.toLocaleString();
-    ctx.font = `bold ${smallFontSize}px Sans-serif`;
-    ctx.textAlign = "right";
-
-    // Background
-    const timestampWidth = ctx.measureText(timestamp).width;
-    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-    ctx.fillRect(
-      overlayCanvas.width - timestampWidth - 30 * scale,
-      10 * scale,
-      timestampWidth + 20 * scale,
-      smallFontSize + 10 * scale,
+    const height = drawTextWithBackground(
+      timestamp,
+      `bold ${smallFontSize}px Sans-serif`,
+      0,
     );
-
-    // Text
-    ctx.fillStyle = currentOverlayConfig.overlayColor;
-    ctx.fillText(timestamp, overlayCanvas.width - 20 * scale, 15 * scale);
-    ctx.textAlign = "center";
+    currentY += height + padding / 2;
   }
 
   // Draw main text
   if (currentOverlayConfig.overlayText) {
-    ctx.font = `bold ${fontSize}px Sans-serif`;
-
-    // Background
-    const textWidth = ctx.measureText(currentOverlayConfig.overlayText).width;
-    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-    ctx.fillRect(
-      overlayCanvas.width / 2 - textWidth / 2 - 20 * scale,
-      yPos - 10 * scale,
-      textWidth + 40 * scale,
-      fontSize + 20 * scale,
-    );
-
-    // Text
-    ctx.fillStyle = currentOverlayConfig.overlayColor;
-    ctx.fillText(
+    const height = drawTextWithBackground(
       currentOverlayConfig.overlayText,
-      overlayCanvas.width / 2,
-      yPos,
+      `bold ${fontSize}px Sans-serif`,
+      currentOverlayConfig.showTimestamp ? 0 : 0,
     );
+    currentY += height + padding / 2;
   }
 
   // Draw subtitle
   if (currentOverlayConfig.customText2) {
-    const subtitleYPos = yPos + fontSize + 10 * scale;
-    ctx.font = `${smallFontSize}px Sans-serif`;
-
-    // Background
-    const textWidth = ctx.measureText(currentOverlayConfig.customText2).width;
-    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-    ctx.fillRect(
-      overlayCanvas.width / 2 - textWidth / 2 - 15 * scale,
-      subtitleYPos - 5 * scale,
-      textWidth + 30 * scale,
-      smallFontSize + 10 * scale,
-    );
-
-    // Text
-    ctx.fillStyle = currentOverlayConfig.overlayColor;
-    ctx.fillText(
+    drawTextWithBackground(
       currentOverlayConfig.customText2,
-      overlayCanvas.width / 2,
-      subtitleYPos,
+      `${smallFontSize}px Sans-serif`,
+      0,
     );
   }
 }
@@ -676,6 +683,19 @@ overlayColor.addEventListener("change", () => {
   if (currentOverlayConfig.overlayEnabled) drawOverlay();
 });
 
+overlayBackground.addEventListener("change", () => {
+  currentOverlayConfig.overlayBackground = overlayBackground.value;
+  if (currentOverlayConfig.overlayEnabled) drawOverlay();
+});
+
+overlayBackgroundOpacity.addEventListener("input", () => {
+  backgroundOpacityValue.textContent = overlayBackgroundOpacity.value;
+  currentOverlayConfig.overlayBackgroundOpacity = parseInt(
+    overlayBackgroundOpacity.value,
+  );
+  if (currentOverlayConfig.overlayEnabled) drawOverlay();
+});
+
 // Apply overlay settings
 applyOverlayBtn.addEventListener("click", () => {
   const overlayConfig = {
@@ -686,7 +706,8 @@ applyOverlayBtn.addEventListener("click", () => {
     overlayPosition: overlayPosition.value,
     overlayFontSize: parseInt(overlayFontSize.value),
     overlayColor: overlayColor.value,
-    overlayBackground: true,
+    overlayBackground: overlayBackground.value,
+    overlayBackgroundOpacity: parseInt(overlayBackgroundOpacity.value),
   };
 
   // Update local preview immediately

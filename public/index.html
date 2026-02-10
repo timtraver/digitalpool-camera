@@ -42,238 +42,259 @@
               Canvas: <span id="canvasSize">Not initialized</span> | Overlay:
               <span id="overlayStatus">Disabled</span>
             </div>
-            <button
-              id="testOverlay"
-              style="
-                margin-top: 4px;
-                padding: 4px 8px;
-                font-size: 11px;
-                background: #1890ff;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                cursor: pointer;
-              "
-            >
-              🧪 Test Overlay
-            </button>
           </div>
 
-          <!-- Pan/Tilt Controls -->
-          <div class="ptz-controls">
-            <h3>PTZ</h3>
-            <div class="control-grid">
-              <div class="directional-pad-container">
-                <!-- Outer ring - Large movements -->
-                <button
-                  class="btn-control-outer btn-top-outer"
-                  id="tiltUpLarge"
-                  title="Tilt Up (Large)"
-                >
-                  ▲
-                </button>
-                <button
-                  class="btn-control-outer btn-right-outer"
-                  id="panRightLarge"
-                  title="Pan Right (Large)"
-                >
-                  ►
-                </button>
-                <button
-                  class="btn-control-outer btn-bottom-outer"
-                  id="tiltDownLarge"
-                  title="Tilt Down (Large)"
-                >
-                  ▼
-                </button>
-                <button
-                  class="btn-control-outer btn-left-outer"
-                  id="panLeftLarge"
-                  title="Pan Left (Large)"
-                >
-                  ◄
-                </button>
+          <!-- PTZ and Stream Controls Container -->
+          <div class="controls-row">
+            <!-- Pan/Tilt Controls -->
+            <div class="ptz-controls">
+              <h3>PTZ</h3>
+              <div class="control-grid">
+                <div class="directional-pad-container">
+                  <!-- Outer ring - Large movements -->
+                  <button
+                    class="btn-control-outer btn-top-outer"
+                    id="tiltUpLarge"
+                    title="Tilt Up (Large)"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    class="btn-control-outer btn-right-outer"
+                    id="panRightLarge"
+                    title="Pan Right (Large)"
+                  >
+                    ►
+                  </button>
+                  <button
+                    class="btn-control-outer btn-bottom-outer"
+                    id="tiltDownLarge"
+                    title="Tilt Down (Large)"
+                  >
+                    ▼
+                  </button>
+                  <button
+                    class="btn-control-outer btn-left-outer"
+                    id="panLeftLarge"
+                    title="Pan Left (Large)"
+                  >
+                    ◄
+                  </button>
 
-                <!-- Inner ring - Small movements -->
-                <button
-                  class="btn-control-inner btn-top-inner"
-                  id="tiltUpSmall"
-                  title="Tilt Up (Small)"
-                >
-                  ▲
-                </button>
-                <button
-                  class="btn-control-inner btn-right-inner"
-                  id="panRightSmall"
-                  title="Pan Right (Small)"
-                >
-                  ►
-                </button>
-                <button
-                  class="btn-control-inner btn-bottom-inner"
-                  id="tiltDownSmall"
-                  title="Tilt Down (Small)"
-                >
-                  ▼
-                </button>
-                <button
-                  class="btn-control-inner btn-left-inner"
-                  id="panLeftSmall"
-                  title="Pan Left (Small)"
-                >
-                  ◄
-                </button>
+                  <!-- Inner ring - Small movements -->
+                  <button
+                    class="btn-control-inner btn-top-inner"
+                    id="tiltUpSmall"
+                    title="Tilt Up (Small)"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    class="btn-control-inner btn-right-inner"
+                    id="panRightSmall"
+                    title="Pan Right (Small)"
+                  >
+                    ►
+                  </button>
+                  <button
+                    class="btn-control-inner btn-bottom-inner"
+                    id="tiltDownSmall"
+                    title="Tilt Down (Small)"
+                  >
+                    ▼
+                  </button>
+                  <button
+                    class="btn-control-inner btn-left-inner"
+                    id="panLeftSmall"
+                    title="Pan Left (Small)"
+                  >
+                    ◄
+                  </button>
 
-                <!-- Center reset button -->
-                <button
-                  class="btn-control-center"
-                  id="resetPos"
-                  title="Reset Position"
-                >
-                  ⌂
-                </button>
-              </div>
-              <div class="ptz-settings">
-                <div class="control-item-compact">
-                  <label for="zoomSlider">Zoom</label>
-                  <input
-                    type="range"
-                    id="zoomSlider"
-                    min="0"
-                    max="12"
-                    value="0"
-                    step="1"
-                  />
-                  <span class="value-display" id="zoomValue">0</span>
+                  <!-- Center reset button -->
+                  <button
+                    class="btn-control-center"
+                    id="resetPos"
+                    title="Reset Position"
+                  >
+                    ⌂
+                  </button>
                 </div>
-                <div class="speed-info">
-                  <small>Inner: 0.5° | Outer: 5°</small>
+                <div class="ptz-settings">
+                  <div class="control-item-compact">
+                    <label for="zoomSlider">Zoom</label>
+                    <input
+                      type="range"
+                      id="zoomSlider"
+                      min="0"
+                      max="12"
+                      value="0"
+                      step="1"
+                    />
+                    <span class="value-display" id="zoomValue">0</span>
+                  </div>
+                  <div class="speed-info">
+                    <small>Inner: 0.5° | Outer: 5°</small>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
 
-          <!-- Streaming Controls -->
-          <div class="ptz-controls">
-            <h3>🎥 Stream Output</h3>
-            <div class="stream-controls">
-              <div class="control-item-compact">
-                <label>Protocol:</label>
-                <select id="streamProtocol">
-                  <option value="srt">SRT</option>
-                  <option value="rtmp">RTMP</option>
-                </select>
-              </div>
+            <!-- Streaming Controls -->
+            <div class="ptz-controls">
+              <h3>🎥 Stream Output</h3>
+              <div class="stream-controls">
+                <div class="control-item-compact">
+                  <label>Protocol:</label>
+                  <select id="streamProtocol">
+                    <option value="srt">SRT</option>
+                    <option value="rtmp">RTMP</option>
+                  </select>
+                </div>
 
-              <div class="control-item-compact">
-                <label>Destination:</label>
-                <input
-                  type="text"
-                  id="streamDestination"
-                  placeholder="srt://server:port"
-                />
-              </div>
+                <div class="control-item-compact">
+                  <label>Destination:</label>
+                  <input
+                    type="text"
+                    id="streamDestination"
+                    placeholder="srt://server:port"
+                  />
+                </div>
 
-              <div class="control-item-compact">
-                <label>Bitrate:</label>
-                <select id="streamBitrate">
-                  <option value="2000000">2 Mbps</option>
-                  <option value="5000000" selected>5 Mbps</option>
-                  <option value="8000000">8 Mbps</option>
-                  <option value="10000000">10 Mbps</option>
-                </select>
-              </div>
+                <div class="control-item-compact">
+                  <label>Bitrate:</label>
+                  <select id="streamBitrate">
+                    <option value="2000000">2 Mbps</option>
+                    <option value="5000000" selected>5 Mbps</option>
+                    <option value="8000000">8 Mbps</option>
+                    <option value="10000000">10 Mbps</option>
+                  </select>
+                </div>
 
-              <div class="stream-buttons">
-                <button id="startStream" class="btn-stream btn-start">
-                  ▶ Start Stream
-                </button>
-                <button id="stopStream" class="btn-stream btn-stop" disabled>
-                  ⏹ Stop Stream
-                </button>
-              </div>
-
-              <div id="streamStatus" class="stream-status">
-                <small
-                  >Status:
-                  <span id="streamStatusText">Not streaming</span></small
-                >
-              </div>
-
-              <!-- Overlay Settings (collapsible) -->
-              <details class="overlay-settings">
-                <summary>📝 Overlay Settings</summary>
-                <div class="overlay-controls">
-                  <div class="control-item-compact">
-                    <label>
-                      <input type="checkbox" id="overlayEnabled" />
-                      Enable Overlays
-                    </label>
-                  </div>
-
-                  <div class="control-item-compact">
-                    <label>Main Text:</label>
-                    <input
-                      type="text"
-                      id="overlayText"
-                      placeholder="Stream Title"
-                    />
-                  </div>
-
-                  <div class="control-item-compact">
-                    <label>Subtitle:</label>
-                    <input
-                      type="text"
-                      id="customText2"
-                      placeholder="Secondary text"
-                    />
-                  </div>
-
-                  <div class="control-item-compact">
-                    <label>
-                      <input type="checkbox" id="showTimestamp" />
-                      Show Timestamp
-                    </label>
-                  </div>
-
-                  <div class="control-item-compact">
-                    <label>Position:</label>
-                    <select id="overlayPosition">
-                      <option value="top">Top</option>
-                      <option value="center">Center</option>
-                      <option value="bottom">Bottom</option>
-                    </select>
-                  </div>
-
-                  <div class="control-item-compact">
-                    <label>Font Size:</label>
-                    <input
-                      type="range"
-                      id="overlayFontSize"
-                      min="16"
-                      max="72"
-                      value="32"
-                    />
-                    <span id="fontSizeValue">32</span>
-                  </div>
-
-                  <div class="control-item-compact">
-                    <label>Color:</label>
-                    <select id="overlayColor">
-                      <option value="white">White</option>
-                      <option value="black">Black</option>
-                      <option value="red">Red</option>
-                      <option value="green">Green</option>
-                      <option value="blue">Blue</option>
-                      <option value="yellow">Yellow</option>
-                    </select>
-                  </div>
-
-                  <button id="applyOverlay" class="btn-stream btn-start">
-                    Apply Overlay
+                <div class="stream-buttons">
+                  <button id="startStream" class="btn-stream btn-start">
+                    ▶ Start Stream
+                  </button>
+                  <button id="stopStream" class="btn-stream btn-stop" disabled>
+                    ⏹ Stop Stream
                   </button>
                 </div>
-              </details>
+
+                <div id="streamStatus" class="stream-status">
+                  <small
+                    >Status:
+                    <span id="streamStatusText">Not streaming</span></small
+                  >
+                </div>
+
+                <!-- Overlay Settings (collapsible) -->
+                <details class="overlay-settings">
+                  <summary>📝 Overlay Settings</summary>
+                  <div class="overlay-controls">
+                    <div class="control-item-compact">
+                      <label>
+                        <input type="checkbox" id="overlayEnabled" />
+                        Enable Overlays
+                      </label>
+                    </div>
+
+                    <div class="control-item-compact">
+                      <label>Main Text:</label>
+                      <input
+                        type="text"
+                        id="overlayText"
+                        placeholder="Stream Title"
+                      />
+                    </div>
+
+                    <div class="control-item-compact">
+                      <label>Subtitle:</label>
+                      <input
+                        type="text"
+                        id="customText2"
+                        placeholder="Secondary text"
+                      />
+                    </div>
+
+                    <div class="control-item-compact">
+                      <label>
+                        <input type="checkbox" id="showTimestamp" />
+                        Show Timestamp
+                      </label>
+                    </div>
+
+                    <div class="control-item-compact">
+                      <label>Position:</label>
+                      <select id="overlayPosition">
+                        <option value="top-left">Top Left</option>
+                        <option value="top-center">Top Center</option>
+                        <option value="top-right">Top Right</option>
+                        <option value="center">Center</option>
+                        <option value="bottom-left">Bottom Left</option>
+                        <option value="bottom-center">Bottom Center</option>
+                        <option value="bottom-right">Bottom Right</option>
+                      </select>
+                    </div>
+
+                    <div class="control-item-compact">
+                      <label>Font Size:</label>
+                      <input
+                        type="range"
+                        id="overlayFontSize"
+                        min="16"
+                        max="72"
+                        value="32"
+                      />
+                      <span id="fontSizeValue">32</span>
+                    </div>
+
+                    <div class="control-item-compact">
+                      <label>Text Color:</label>
+                      <select id="overlayColor">
+                        <option value="white">White</option>
+                        <option value="black">Black</option>
+                        <option value="red">Red</option>
+                        <option value="green">Green</option>
+                        <option value="blue">Blue</option>
+                        <option value="yellow">Yellow</option>
+                        <option value="cyan">Cyan</option>
+                        <option value="orange">Orange</option>
+                      </select>
+                    </div>
+
+                    <div class="control-item-compact">
+                      <label>Background:</label>
+                      <select id="overlayBackground">
+                        <option value="transparent">Transparent</option>
+                        <option value="semi-black">
+                          Semi-transparent Black
+                        </option>
+                        <option value="semi-white">
+                          Semi-transparent White
+                        </option>
+                        <option value="black">Solid Black</option>
+                        <option value="white">Solid White</option>
+                      </select>
+                    </div>
+
+                    <div class="control-item-compact">
+                      <label>Background Opacity:</label>
+                      <input
+                        type="range"
+                        id="overlayBackgroundOpacity"
+                        min="0"
+                        max="100"
+                        value="70"
+                      />
+                      <span id="backgroundOpacityValue">70</span>%
+                    </div>
+
+                    <button id="applyOverlay" class="btn-stream btn-start">
+                      Apply Overlay
+                    </button>
+                  </div>
+                </details>
+              </div>
             </div>
           </div>
         </div>
