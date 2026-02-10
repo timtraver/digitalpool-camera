@@ -70,10 +70,10 @@ header h1 {
 }
 
 .status {
-  padding: 10px 20px;
-  border-radius: 24px;
+  padding: 6px 14px;
+  border-radius: 18px;
   font-weight: 600;
-  font-size: 14px;
+  font-size: 11px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   border: 2px solid rgba(255, 255, 255, 0.2);
   transition: all 0.3s ease;
