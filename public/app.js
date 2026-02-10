@@ -382,9 +382,11 @@ console.log("🖌️ Canvas context:", ctx);
 
 // Debug elements
 const canvasSizeSpan = document.getElementById("canvasSize");
+const resizeCanvasBtn = document.getElementById("resizeCanvas");
 
 console.log("🔧 Debug elements:", {
   canvasSizeSpan,
+  resizeCanvasBtn,
 });
 
 // Current overlay config
@@ -452,6 +454,30 @@ window.addEventListener("resize", () => {
   updateCanvasSize();
   drawOverlay();
 });
+
+// Manual resize button
+if (resizeCanvasBtn) {
+  resizeCanvasBtn.addEventListener("click", () => {
+    console.log("🔄 Manual canvas resize triggered");
+    const rect = videoStream.getBoundingClientRect();
+    console.log("Video element rect:", rect);
+    console.log(
+      "Video natural size:",
+      videoStream.naturalWidth,
+      "x",
+      videoStream.naturalHeight,
+    );
+    console.log(
+      "Video client size:",
+      videoStream.clientWidth,
+      "x",
+      videoStream.clientHeight,
+    );
+
+    updateCanvasSize();
+    drawOverlay();
+  });
+}
 
 // Redraw overlay every 100ms (for timestamp updates)
 setInterval(() => {
