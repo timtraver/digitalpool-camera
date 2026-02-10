@@ -483,13 +483,29 @@ const backgroundOpacityValue = document.getElementById(
 const applyOverlayBtn = document.getElementById("applyOverlay");
 const testOverlayBtn = document.getElementById("testOverlay");
 
-// Initialize custom dropdowns for position selects
+// Initialize custom dropdowns for ALL select elements
 console.log("🎨 Initializing custom dropdowns...");
+
+// Overlay position dropdowns
 createCustomDropdown(timestampPosition);
 createCustomDropdown(titlePosition);
 createCustomDropdown(subtitlePosition);
+
+// Overlay style dropdowns
 createCustomDropdown(overlayType);
+createCustomDropdown(overlayColor);
 createCustomDropdown(overlayBackground);
+
+// Stream control dropdowns
+createCustomDropdown(streamProtocol);
+createCustomDropdown(streamBitrate);
+
+// Camera control dropdowns
+const exposureAutoSelect = document.getElementById("exposureAuto");
+if (exposureAutoSelect) {
+  createCustomDropdown(exposureAutoSelect);
+}
+
 console.log("✅ Custom dropdowns initialized");
 
 console.log("🚀 app.js loaded!");

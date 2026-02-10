@@ -706,15 +706,15 @@ header h1 {
 }
 
 .custom-dropdown-selected {
-  padding: 12px 16px;
-  font-size: 16px;
+  padding: 14px 18px;
+  font-size: 18px !important;
   background: #1a1a1a;
   border: 2px solid #1890ff;
   border-radius: 6px;
-  color: white;
-  min-height: 44px;
+  color: white !important;
+  min-height: 48px;
   line-height: 1.5;
-  font-weight: 500;
+  font-weight: 600 !important;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -761,12 +761,12 @@ header h1 {
 }
 
 .custom-dropdown-option {
-  padding: 12px 16px;
-  font-size: 16px;
-  color: white;
+  padding: 14px 18px;
+  font-size: 18px !important;
+  color: white !important;
   cursor: pointer;
   transition: background 0.2s ease;
-  font-weight: 500;
+  font-weight: 600 !important;
 }
 
 .custom-dropdown-option:hover {
