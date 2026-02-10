@@ -131,9 +131,43 @@ class CameraController {
     try {
       if (fs.existsSync(this.configFile)) {
         const data = fs.readFileSync(this.configFile, "utf8");
-        const config = JSON.parse(data);
+        let config = JSON.parse(data);
         console.log("✅ Loaded camera config from file:", this.configFile);
         console.log("📋 Config contents:", JSON.stringify(config, null, 2));
+
+        // Validate and fix invalid values
+        let needsSave = false;
+        for (const [controlName, value] of Object.entries(config)) {
+          if (this.controls[controlName]) {
+            const control = this.controls[controlName];
+            // Check if value is out of range
+            if (control.type !== "bool" && control.type !== "menu") {
+              if (value < control.min || value > control.max) {
+                console.log(
+                  `⚠️  Invalid value for ${controlName}: ${value} (range: ${control.min}-${control.max}), using default: ${control.default}`,
+                );
+                config[controlName] = control.default;
+                needsSave = true;
+              }
+            } else if (control.type === "menu") {
+              if (value < control.min || value > control.max) {
+                console.log(
+                  `⚠️  Invalid value for ${controlName}: ${value} (range: ${control.min}-${control.max}), using default: ${control.default}`,
+                );
+                config[controlName] = control.default;
+                needsSave = true;
+              }
+            }
+          }
+        }
+
+        // Save corrected config if needed
+        if (needsSave) {
+          console.log("💾 Saving corrected config...");
+          this.config = config;
+          this.saveConfig();
+        }
+
         return config;
       } else {
         console.log("⚠️  No camera config file found, using defaults");

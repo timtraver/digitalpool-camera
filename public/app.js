@@ -407,10 +407,20 @@ function loadCameraConfigToUI(config) {
 
   // Exposure controls
   if (config.exposure_auto !== undefined) {
-    document.getElementById("exposureAuto").value = config.exposure_auto;
-    // Trigger change event to update custom dropdown
-    const event = new Event("change", { bubbles: true });
-    document.getElementById("exposureAuto").dispatchEvent(event);
+    const exposureAutoSelect = document.getElementById("exposureAuto");
+    exposureAutoSelect.value = config.exposure_auto;
+
+    // Update custom dropdown display without triggering change event
+    const customDropdown = exposureAutoSelect.parentElement.querySelector(
+      ".custom-dropdown-selected",
+    );
+    if (customDropdown) {
+      const selectedOption =
+        exposureAutoSelect.options[exposureAutoSelect.selectedIndex];
+      customDropdown.textContent = selectedOption.text;
+      customDropdown.dataset.value = selectedOption.value;
+    }
+
     updateExposureControlsState();
   }
   if (config.exposure_absolute !== undefined) {
