@@ -1,5 +1,10 @@
+console.log("=".repeat(60));
+console.log("🎬 DIGITALPOOL CAMERA APP.JS STARTING");
+console.log("=".repeat(60));
+
 // Initialize Socket.IO connection
 const socket = io();
+console.log("🔌 Socket.IO initialized:", socket);
 
 // Connection status
 const statusElement = document.getElementById("connectionStatus");
@@ -72,35 +77,51 @@ const zoomSlider = document.getElementById("zoomSlider");
 const zoomValue = document.getElementById("zoomValue");
 let currentZoom = 0;
 
-zoomSlider.addEventListener("input", (e) => {
-  const value = parseInt(e.target.value);
-  zoomValue.textContent = value;
-  currentZoom = value;
-  socket.emit("zoom", { level: value });
-});
+if (zoomSlider && zoomValue) {
+  zoomSlider.addEventListener("input", (e) => {
+    const value = parseInt(e.target.value);
+    zoomValue.textContent = value;
+    currentZoom = value;
+    socket.emit("zoom", { level: value });
+  });
+}
 
-document.getElementById("zoomIn").addEventListener("click", () => {
-  if (currentZoom < 12) {
-    currentZoom++;
-    zoomSlider.value = currentZoom;
-    zoomValue.textContent = currentZoom;
-    socket.emit("zoom", { level: currentZoom });
-  }
-});
+const zoomInBtn = document.getElementById("zoomIn");
+const zoomOutBtn = document.getElementById("zoomOut");
 
-document.getElementById("zoomOut").addEventListener("click", () => {
-  if (currentZoom > 0) {
-    currentZoom--;
-    zoomSlider.value = currentZoom;
-    zoomValue.textContent = currentZoom;
-    socket.emit("zoom", { level: currentZoom });
-  }
-});
+if (zoomInBtn) {
+  zoomInBtn.addEventListener("click", () => {
+    if (currentZoom < 12) {
+      currentZoom++;
+      if (zoomSlider) zoomSlider.value = currentZoom;
+      if (zoomValue) zoomValue.textContent = currentZoom;
+      socket.emit("zoom", { level: currentZoom });
+    }
+  });
+}
+
+if (zoomOutBtn) {
+  zoomOutBtn.addEventListener("click", () => {
+    if (currentZoom > 0) {
+      currentZoom--;
+      if (zoomSlider) zoomSlider.value = currentZoom;
+      if (zoomValue) zoomValue.textContent = currentZoom;
+      socket.emit("zoom", { level: currentZoom });
+    }
+  });
+}
 
 // Helper function to create control handlers
 function createSliderControl(controlName, elementId, valueDisplayId) {
   const slider = document.getElementById(elementId);
   const valueDisplay = document.getElementById(valueDisplayId);
+
+  if (!slider || !valueDisplay) {
+    console.warn(
+      `⚠️ Missing elements for ${controlName}: slider=${!!slider}, display=${!!valueDisplay}`,
+    );
+    return;
+  }
 
   slider.addEventListener("input", (e) => {
     const value = parseInt(e.target.value);
@@ -120,10 +141,13 @@ createSliderControl("saturation", "saturation", "saturationValue");
 createSliderControl("sharpness", "sharpness", "sharpnessValue");
 
 // Exposure Controls
-document.getElementById("exposureAuto").addEventListener("change", (e) => {
-  const value = parseInt(e.target.value);
-  socket.emit("setControl", { control: "exposure_auto", value: value });
-});
+const exposureAuto = document.getElementById("exposureAuto");
+if (exposureAuto) {
+  exposureAuto.addEventListener("change", (e) => {
+    const value = parseInt(e.target.value);
+    socket.emit("setControl", { control: "exposure_auto", value: value });
+  });
+}
 
 createSliderControl(
   "exposure_absolute",
@@ -138,13 +162,16 @@ createSliderControl(
 );
 
 // White Balance Controls
-document.getElementById("whiteBalanceAuto").addEventListener("change", (e) => {
-  const value = e.target.checked ? 1 : 0;
-  socket.emit("setControl", {
-    control: "white_balance_temperature_auto",
-    value: value,
+const whiteBalanceAuto = document.getElementById("whiteBalanceAuto");
+if (whiteBalanceAuto) {
+  whiteBalanceAuto.addEventListener("change", (e) => {
+    const value = e.target.checked ? 1 : 0;
+    socket.emit("setControl", {
+      control: "white_balance_temperature_auto",
+      value: value,
+    });
   });
-});
+}
 
 createSliderControl(
   "white_balance_temperature",
@@ -153,50 +180,56 @@ createSliderControl(
 );
 
 // Focus Controls
-document.getElementById("focusAuto").addEventListener("change", (e) => {
-  const value = e.target.checked ? 1 : 0;
-  socket.emit("setControl", { control: "focus_auto", value: value });
-});
+const focusAuto = document.getElementById("focusAuto");
+if (focusAuto) {
+  focusAuto.addEventListener("change", (e) => {
+    const value = e.target.checked ? 1 : 0;
+    socket.emit("setControl", { control: "focus_auto", value: value });
+  });
+}
 
 createSliderControl("focus_absolute", "focusAbsolute", "focusAbsoluteValue");
 
 // Reset all settings
-document.getElementById("resetAll").addEventListener("click", async () => {
-  if (confirm("Reset all camera settings to defaults?")) {
-    // Reset to default values
-    const defaults = {
-      brightness: 50,
-      contrast: 50,
-      saturation: 50,
-      sharpness: 50,
-      exposure_auto: 0,
-      exposure_absolute: 330,
-      gain: 1,
-      backlight_compensation: 9,
-      white_balance_temperature_auto: 1,
-      white_balance_temperature: 5000,
-      focus_auto: 1,
-      focus_absolute: 0,
-    };
+const resetAllBtn = document.getElementById("resetAll");
+if (resetAllBtn) {
+  resetAllBtn.addEventListener("click", async () => {
+    if (confirm("Reset all camera settings to defaults?")) {
+      // Reset to default values
+      const defaults = {
+        brightness: 50,
+        contrast: 50,
+        saturation: 50,
+        sharpness: 50,
+        exposure_auto: 0,
+        exposure_absolute: 330,
+        gain: 1,
+        backlight_compensation: 9,
+        white_balance_temperature_auto: 1,
+        white_balance_temperature: 5000,
+        focus_auto: 1,
+        focus_absolute: 0,
+      };
 
-    for (const [control, value] of Object.entries(defaults)) {
-      socket.emit("setControl", { control: control, value: value });
+      for (const [control, value] of Object.entries(defaults)) {
+        socket.emit("setControl", { control: control, value: value });
+      }
+
+      // Reset UI
+      document.getElementById("brightness").value = 50;
+      document.getElementById("brightnessValue").textContent = 50;
+      document.getElementById("contrast").value = 50;
+      document.getElementById("contrastValue").textContent = 50;
+      document.getElementById("saturation").value = 50;
+      document.getElementById("saturationValue").textContent = 50;
+      document.getElementById("sharpness").value = 50;
+      document.getElementById("sharpnessValue").textContent = 50;
+
+      // Reset position
+      socket.emit("resetPosition");
     }
-
-    // Reset UI
-    document.getElementById("brightness").value = 50;
-    document.getElementById("brightnessValue").textContent = 50;
-    document.getElementById("contrast").value = 50;
-    document.getElementById("contrastValue").textContent = 50;
-    document.getElementById("saturation").value = 50;
-    document.getElementById("saturationValue").textContent = 50;
-    document.getElementById("sharpness").value = 50;
-    document.getElementById("sharpnessValue").textContent = 50;
-
-    // Reset position
-    socket.emit("resetPosition");
-  }
-});
+  });
+}
 
 // Keyboard controls
 // Hold Shift for large movements, otherwise small movements
@@ -329,15 +362,27 @@ const fontSizeValue = document.getElementById("fontSizeValue");
 const overlayColor = document.getElementById("overlayColor");
 const applyOverlayBtn = document.getElementById("applyOverlay");
 
+console.log("🚀 app.js loaded!");
+
 // Canvas overlay for preview
 const videoStream = document.getElementById("videoStream");
 const overlayCanvas = document.getElementById("overlayCanvas");
 const ctx = overlayCanvas.getContext("2d");
 
+console.log("📺 Video element:", videoStream);
+console.log("🎨 Canvas element:", overlayCanvas);
+console.log("🖌️ Canvas context:", ctx);
+
 // Debug elements
 const canvasSizeSpan = document.getElementById("canvasSize");
 const overlayStatusSpan = document.getElementById("overlayStatus");
 const testOverlayBtn = document.getElementById("testOverlay");
+
+console.log("🔧 Debug elements:", {
+  canvasSizeSpan,
+  overlayStatusSpan,
+  testOverlayBtn,
+});
 
 // Current overlay config
 let currentOverlayConfig = {
