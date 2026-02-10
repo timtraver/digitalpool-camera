@@ -264,7 +264,7 @@ const gainValue = document.getElementById("gainValue");
 
 // Function to enable/disable manual exposure controls based on auto mode
 function updateExposureControlsState() {
-  const isAuto = exposureAuto.value !== "0"; // 0 = Manual, anything else = Auto
+  const isAuto = exposureAuto.value !== "1"; // 1 = Manual, anything else = Auto
 
   // Disable manual controls when auto is enabled
   if (exposureAbsoluteSlider) {
