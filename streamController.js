@@ -1,5 +1,7 @@
 const { spawn } = require("child_process");
 const EventEmitter = require("events");
+const fs = require("fs");
+const path = require("path");
 
 class StreamController extends EventEmitter {
   constructor(cameraDevice = "/dev/video0") {
@@ -7,7 +9,10 @@ class StreamController extends EventEmitter {
     this.cameraDevice = cameraDevice;
     this.gstProcess = null;
     this.isStreaming = false;
-    this.streamConfig = {
+    this.configFile = path.join(__dirname, "stream-config.json");
+
+    // Default configuration
+    const defaultConfig = {
       protocol: "srt", // 'srt' or 'rtmp'
       destination: "",
       width: 1920,
@@ -17,18 +22,60 @@ class StreamController extends EventEmitter {
       encoder: "nvv4l2h264enc", // Hardware encoder
       // Overlay settings
       overlayEnabled: false,
+      overlayType: "text",
       overlayText: "",
-      overlayPosition: "top", // 'top', 'bottom', 'center'
+      customText2: "",
+      showTimestamp: false,
+      overlayUrl: "",
+      timestampPosition: "bottom-right",
+      titlePosition: "top-left",
+      subtitlePosition: "top-left",
       overlayFontSize: 32,
       overlayColor: "white",
-      overlayBackground: true, // Add semi-transparent background
-      // Additional overlay options
-      showTimestamp: false,
+      overlayBackground: "transparent",
+      overlayBackgroundOpacity: 70,
+      // Legacy fields
       timestampFormat: "%Y-%m-%d %H:%M:%S",
-      customText1: "",
-      customText2: "",
       logoPath: "", // Path to logo image overlay
     };
+
+    // Load config from file or use defaults
+    this.streamConfig = this.loadConfig() || defaultConfig;
+  }
+
+  /**
+   * Load configuration from JSON file
+   */
+  loadConfig() {
+    try {
+      if (fs.existsSync(this.configFile)) {
+        const data = fs.readFileSync(this.configFile, "utf8");
+        const config = JSON.parse(data);
+        console.log("✅ Loaded stream config from file:", this.configFile);
+        return config;
+      }
+    } catch (error) {
+      console.error("❌ Error loading config file:", error.message);
+    }
+    return null;
+  }
+
+  /**
+   * Save configuration to JSON file
+   */
+  saveConfig() {
+    try {
+      fs.writeFileSync(
+        this.configFile,
+        JSON.stringify(this.streamConfig, null, 2),
+        "utf8",
+      );
+      console.log("✅ Saved stream config to file:", this.configFile);
+      return true;
+    } catch (error) {
+      console.error("❌ Error saving config file:", error.message);
+      return false;
+    }
   }
 
   /**
@@ -110,6 +157,7 @@ class StreamController extends EventEmitter {
    */
   updateConfig(config) {
     this.streamConfig = { ...this.streamConfig, ...config };
+    this.saveConfig(); // Save to file
     return { success: true, config: this.streamConfig };
   }
 
@@ -273,9 +321,10 @@ class StreamController extends EventEmitter {
    */
   updateOverlay(overlayConfig) {
     this.streamConfig = { ...this.streamConfig, ...overlayConfig };
+    this.saveConfig(); // Save to file
     return {
       success: true,
-      message: "Overlay updated. Restart stream to apply changes.",
+      message: "Overlay updated and saved. Restart stream to apply changes.",
       config: this.streamConfig,
     };
   }

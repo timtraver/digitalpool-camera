@@ -360,7 +360,9 @@ const overlayText = document.getElementById("overlayText");
 const customText2 = document.getElementById("customText2");
 const showTimestamp = document.getElementById("showTimestamp");
 const overlayUrl = document.getElementById("overlayUrl");
-const overlayPosition = document.getElementById("overlayPosition");
+const timestampPosition = document.getElementById("timestampPosition");
+const titlePosition = document.getElementById("titlePosition");
+const subtitlePosition = document.getElementById("subtitlePosition");
 const overlayFontSize = document.getElementById("overlayFontSize");
 const fontSizeValue = document.getElementById("fontSizeValue");
 const overlayColor = document.getElementById("overlayColor");
@@ -402,7 +404,9 @@ let currentOverlayConfig = {
   customText2: "",
   showTimestamp: false,
   overlayUrl: "",
-  overlayPosition: "top-left",
+  timestampPosition: "bottom-right",
+  titlePosition: "top-left",
+  subtitlePosition: "top-left",
   overlayFontSize: 32,
   overlayColor: "white",
   overlayBackground: "transparent",
@@ -655,55 +659,50 @@ function drawTextOverlay() {
     }
   }
 
-  // Determine position and alignment
-  let xPos, yPos, textAlign, textBaseline;
-  const position = currentOverlayConfig.overlayPosition;
-
-  console.log("Position setting:", position);
-
-  if (position.includes("top")) {
-    yPos = padding;
-    textBaseline = "top";
-    console.log("Using TOP position, yPos:", yPos);
-  } else if (position.includes("bottom")) {
-    yPos = overlayCanvas.height - padding;
-    textBaseline = "bottom";
-    console.log("Using BOTTOM position, yPos:", yPos);
-  } else {
-    yPos = overlayCanvas.height / 2;
-    textBaseline = "middle";
-    console.log("Using MIDDLE position, yPos:", yPos);
-  }
-
-  if (position.includes("left")) {
-    xPos = padding;
-    textAlign = "left";
-  } else if (position.includes("right")) {
-    xPos = overlayCanvas.width - padding;
-    textAlign = "right";
-  } else {
-    xPos = overlayCanvas.width / 2;
-    textAlign = "center";
-  }
-
-  ctx.textAlign = textAlign;
-  ctx.textBaseline = textBaseline;
-
   const bgColor = getBackgroundColor();
-  let currentY = yPos;
 
-  console.log("Final currentY starting position:", currentY);
+  // Helper function to calculate position from position string
+  function getPositionCoords(position) {
+    let xPos, yPos, textAlign, textBaseline;
 
-  // Helper function to draw text with background
-  function drawTextWithBackground(text, font, yOffset = 0) {
+    if (position.includes("top")) {
+      yPos = padding;
+      textBaseline = "top";
+    } else if (position.includes("bottom")) {
+      yPos = overlayCanvas.height - padding;
+      textBaseline = "bottom";
+    } else {
+      yPos = overlayCanvas.height / 2;
+      textBaseline = "middle";
+    }
+
+    if (position.includes("left")) {
+      xPos = padding;
+      textAlign = "left";
+    } else if (position.includes("right")) {
+      xPos = overlayCanvas.width - padding;
+      textAlign = "right";
+    } else {
+      xPos = overlayCanvas.width / 2;
+      textAlign = "center";
+    }
+
+    return { xPos, yPos, textAlign, textBaseline };
+  }
+
+  // Helper function to draw single text element
+  function drawSingleText(text, font, position) {
+    const { xPos, yPos, textAlign, textBaseline } = getPositionCoords(position);
+
+    ctx.textAlign = textAlign;
+    ctx.textBaseline = textBaseline;
     ctx.font = font;
+
     const metrics = ctx.measureText(text);
     const textWidth = metrics.width;
-    const textHeight = fontSize; // Approximate height
+    const textHeight = fontSize;
 
-    const actualY = currentY + yOffset;
-
-    // Calculate background rectangle based on alignment
+    // Calculate background rectangle
     let bgX, bgY, bgWidth, bgHeight;
 
     if (textAlign === "left") {
@@ -718,13 +717,13 @@ function drawTextOverlay() {
     }
 
     if (textBaseline === "top") {
-      bgY = actualY - padding / 4;
+      bgY = yPos - padding / 4;
       bgHeight = textHeight + padding / 2;
     } else if (textBaseline === "bottom") {
-      bgY = actualY - textHeight - padding / 4;
+      bgY = yPos - textHeight - padding / 4;
       bgHeight = textHeight + padding / 2;
     } else {
-      bgY = actualY - textHeight / 2 - padding / 4;
+      bgY = yPos - textHeight / 2 - padding / 4;
       bgHeight = textHeight + padding / 2;
     }
 
@@ -736,54 +735,39 @@ function drawTextOverlay() {
 
     // Draw text
     ctx.fillStyle = currentOverlayConfig.overlayColor;
-    ctx.fillText(text, xPos, actualY);
+    ctx.fillText(text, xPos, yPos);
 
-    return bgHeight;
+    console.log(
+      `Drew text "${text}" at position ${position} (${xPos}, ${yPos})`,
+    );
   }
 
   // Draw timestamp if enabled
   if (currentOverlayConfig.showTimestamp) {
     const now = new Date();
     const timestamp = now.toLocaleString();
-    console.log("Drawing timestamp:", timestamp, "at", currentY);
-    const height = drawTextWithBackground(
+    drawSingleText(
       timestamp,
       `bold ${smallFontSize}px Sans-serif`,
-      0,
+      currentOverlayConfig.timestampPosition,
     );
-    currentY += height + padding / 2;
   }
 
-  // Draw main text
+  // Draw main text (title)
   if (currentOverlayConfig.overlayText) {
-    console.log(
-      "Drawing main text:",
-      currentOverlayConfig.overlayText,
-      "at",
-      currentY,
-      "fontSize:",
-      fontSize,
-    );
-    const height = drawTextWithBackground(
+    drawSingleText(
       currentOverlayConfig.overlayText,
       `bold ${fontSize}px Sans-serif`,
-      currentOverlayConfig.showTimestamp ? 0 : 0,
+      currentOverlayConfig.titlePosition,
     );
-    currentY += height + padding / 2;
   }
 
   // Draw subtitle
   if (currentOverlayConfig.customText2) {
-    console.log(
-      "Drawing subtitle:",
-      currentOverlayConfig.customText2,
-      "at",
-      currentY,
-    );
-    drawTextWithBackground(
+    drawSingleText(
       currentOverlayConfig.customText2,
       `${smallFontSize}px Sans-serif`,
-      0,
+      currentOverlayConfig.subtitlePosition,
     );
   }
 
@@ -848,6 +832,22 @@ overlayUrl.addEventListener("input", () => {
   drawOverlay(); // Always redraw to show live preview
 });
 
+// Position dropdowns
+timestampPosition.addEventListener("change", () => {
+  currentOverlayConfig.timestampPosition = timestampPosition.value;
+  drawOverlay();
+});
+
+titlePosition.addEventListener("change", () => {
+  currentOverlayConfig.titlePosition = titlePosition.value;
+  drawOverlay();
+});
+
+subtitlePosition.addEventListener("change", () => {
+  currentOverlayConfig.subtitlePosition = subtitlePosition.value;
+  drawOverlay();
+});
+
 // Test overlay button - for debugging
 testOverlayBtn.addEventListener("click", () => {
   console.log("🧪 TEST OVERLAY BUTTON CLICKED");
@@ -868,9 +868,11 @@ testOverlayBtn.addEventListener("click", () => {
   currentOverlayConfig.overlayText = "TEST TITLE";
   currentOverlayConfig.customText2 = "TEST SUBTITLE";
   currentOverlayConfig.showTimestamp = true;
-  currentOverlayConfig.overlayPosition = "top-left"; // Force top-left position
-  currentOverlayConfig.overlayColor = "white"; // Force white color
-  currentOverlayConfig.overlayFontSize = 32; // Force readable size
+  currentOverlayConfig.timestampPosition = "bottom-right";
+  currentOverlayConfig.titlePosition = "top-left";
+  currentOverlayConfig.subtitlePosition = "top-left";
+  currentOverlayConfig.overlayColor = "white";
+  currentOverlayConfig.overlayFontSize = 32;
 
   console.log("Updated config for test:", currentOverlayConfig);
   drawOverlay();
@@ -887,7 +889,9 @@ applyOverlayBtn.addEventListener("click", () => {
     customText2: customText2.value,
     showTimestamp: showTimestamp.checked,
     overlayUrl: overlayUrl.value,
-    overlayPosition: overlayPosition.value,
+    timestampPosition: timestampPosition.value,
+    titlePosition: titlePosition.value,
+    subtitlePosition: subtitlePosition.value,
     overlayFontSize: parseInt(overlayFontSize.value),
     overlayColor: overlayColor.value,
     overlayBackground: overlayBackground.value,
@@ -923,7 +927,9 @@ socket.on("streamStatus", (status) => {
     customText2.value = status.config.customText2 || "";
     showTimestamp.checked = status.config.showTimestamp || false;
     overlayUrl.value = status.config.overlayUrl || "";
-    overlayPosition.value = status.config.overlayPosition || "top";
+    timestampPosition.value = status.config.timestampPosition || "bottom-right";
+    titlePosition.value = status.config.titlePosition || "top-left";
+    subtitlePosition.value = status.config.subtitlePosition || "top-left";
     overlayFontSize.value = status.config.overlayFontSize || 32;
     fontSizeValue.textContent = overlayFontSize.value;
     overlayColor.value = status.config.overlayColor || "white";
@@ -945,9 +951,13 @@ socket.on("streamStatus", (status) => {
       customText2: status.config.customText2 || "",
       showTimestamp: status.config.showTimestamp || false,
       overlayUrl: status.config.overlayUrl || "",
-      overlayPosition: status.config.overlayPosition || "top",
+      timestampPosition: status.config.timestampPosition || "bottom-right",
+      titlePosition: status.config.titlePosition || "top-left",
+      subtitlePosition: status.config.subtitlePosition || "top-left",
       overlayFontSize: status.config.overlayFontSize || 32,
       overlayColor: status.config.overlayColor || "white",
+      overlayBackground: status.config.overlayBackground || "transparent",
+      overlayBackgroundOpacity: status.config.overlayBackgroundOpacity || 70,
     };
     drawOverlay();
   }

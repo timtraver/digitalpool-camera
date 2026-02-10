@@ -226,40 +226,253 @@
 
                 <!-- Text Overlay Options -->
                 <div id="textOverlayOptions">
-                  <div class="control-item-compact">
-                    <label>Main Text:</label>
-                    <input
-                      type="text"
-                      id="overlayText"
-                      placeholder="Stream Title"
-                    />
+                  <!-- Timestamp Settings -->
+                  <div
+                    style="
+                      border: 1px solid #555;
+                      padding: 10px;
+                      margin-bottom: 10px;
+                      border-radius: 4px;
+                      background: rgba(0, 0, 0, 0.2);
+                    "
+                  >
+                    <div class="control-item-compact">
+                      <label style="display: flex; align-items: center">
+                        <input
+                          type="checkbox"
+                          id="showTimestamp"
+                          style="margin-right: 8px"
+                        />
+                        <strong>Show Timestamp</strong>
+                      </label>
+                    </div>
+                    <div class="control-item-compact">
+                      <label style="min-width: 80px; font-size: 14px"
+                        >Position:</label
+                      >
+                      <select
+                        id="timestampPosition"
+                        style="
+                          flex: 1;
+                          padding: 8px;
+                          font-size: 14px;
+                          min-height: 32px;
+                        "
+                      >
+                        <option value="top-left">Top Left</option>
+                        <option value="top-center">Top Center</option>
+                        <option value="top-right">Top Right</option>
+                        <option value="center">Center</option>
+                        <option value="bottom-left">Bottom Left</option>
+                        <option value="bottom-center">Bottom Center</option>
+                        <option value="bottom-right">Bottom Right</option>
+                      </select>
+                    </div>
                   </div>
 
-                  <div class="control-item-compact">
-                    <label>Subtitle:</label>
-                    <input
-                      type="text"
-                      id="customText2"
-                      placeholder="Secondary text"
-                    />
+                  <!-- Title Text Settings -->
+                  <div
+                    style="
+                      border: 1px solid #555;
+                      padding: 10px;
+                      margin-bottom: 10px;
+                      border-radius: 4px;
+                      background: rgba(0, 0, 0, 0.2);
+                    "
+                  >
+                    <div class="control-item-compact">
+                      <label style="min-width: 80px; font-size: 14px"
+                        ><strong>Title:</strong></label
+                      >
+                      <input
+                        type="text"
+                        id="overlayText"
+                        placeholder="Stream Title"
+                        style="flex: 1; padding: 8px; font-size: 14px"
+                      />
+                    </div>
+                    <div class="control-item-compact">
+                      <label style="min-width: 80px; font-size: 14px"
+                        >Position:</label
+                      >
+                      <select
+                        id="titlePosition"
+                        style="
+                          flex: 1;
+                          padding: 8px;
+                          font-size: 14px;
+                          min-height: 32px;
+                        "
+                      >
+                        <option value="top-left">Top Left</option>
+                        <option value="top-center">Top Center</option>
+                        <option value="top-right">Top Right</option>
+                        <option value="center">Center</option>
+                        <option value="bottom-left">Bottom Left</option>
+                        <option value="bottom-center">Bottom Center</option>
+                        <option value="bottom-right">Bottom Right</option>
+                      </select>
+                    </div>
                   </div>
 
-                  <div class="control-item-compact">
-                    <label>
-                      <input type="checkbox" id="showTimestamp" />
-                      Show Timestamp
-                    </label>
+                  <!-- Subtitle Text Settings -->
+                  <div
+                    style="
+                      border: 1px solid #555;
+                      padding: 10px;
+                      margin-bottom: 10px;
+                      border-radius: 4px;
+                      background: rgba(0, 0, 0, 0.2);
+                    "
+                  >
+                    <div class="control-item-compact">
+                      <label style="min-width: 80px; font-size: 14px"
+                        ><strong>Subtitle:</strong></label
+                      >
+                      <input
+                        type="text"
+                        id="customText2"
+                        placeholder="Secondary text"
+                        style="flex: 1; padding: 8px; font-size: 14px"
+                      />
+                    </div>
+                    <div class="control-item-compact">
+                      <label style="min-width: 80px; font-size: 14px"
+                        >Position:</label
+                      >
+                      <select
+                        id="subtitlePosition"
+                        style="
+                          flex: 1;
+                          padding: 8px;
+                          font-size: 14px;
+                          min-height: 32px;
+                        "
+                      >
+                        <option value="top-left">Top Left</option>
+                        <option value="top-center">Top Center</option>
+                        <option value="top-right">Top Right</option>
+                        <option value="center">Center</option>
+                        <option value="bottom-left">Bottom Left</option>
+                        <option value="bottom-center">Bottom Center</option>
+                        <option value="bottom-right">Bottom Right</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <!-- Global Style Settings -->
+                  <div
+                    style="
+                      border: 1px solid #555;
+                      padding: 10px;
+                      border-radius: 4px;
+                      background: rgba(0, 0, 0, 0.2);
+                    "
+                  >
+                    <h4 style="margin: 0 0 8px 0; font-size: 13px; color: #aaa">
+                      Global Style Settings
+                    </h4>
+
+                    <div class="control-item-compact">
+                      <label style="min-width: 80px; font-size: 14px"
+                        >Font Size:</label
+                      >
+                      <input
+                        type="range"
+                        id="overlayFontSize"
+                        min="16"
+                        max="72"
+                        value="32"
+                        style="flex: 1"
+                      />
+                      <span
+                        id="fontSizeValue"
+                        style="min-width: 50px; text-align: right"
+                        >32px</span
+                      >
+                    </div>
+
+                    <div class="control-item-compact">
+                      <label style="min-width: 80px; font-size: 14px"
+                        >Text Color:</label
+                      >
+                      <select
+                        id="overlayColor"
+                        style="
+                          flex: 1;
+                          padding: 8px;
+                          font-size: 14px;
+                          min-height: 32px;
+                        "
+                      >
+                        <option value="white">White</option>
+                        <option value="black">Black</option>
+                        <option value="red">Red</option>
+                        <option value="green">Green</option>
+                        <option value="blue">Blue</option>
+                        <option value="yellow">Yellow</option>
+                        <option value="cyan">Cyan</option>
+                        <option value="orange">Orange</option>
+                      </select>
+                    </div>
+
+                    <div class="control-item-compact">
+                      <label style="min-width: 80px; font-size: 14px"
+                        >Background:</label
+                      >
+                      <select
+                        id="overlayBackground"
+                        style="
+                          flex: 1;
+                          padding: 8px;
+                          font-size: 14px;
+                          min-height: 32px;
+                        "
+                      >
+                        <option value="transparent">Transparent</option>
+                        <option value="semi-black">
+                          Semi-transparent Black
+                        </option>
+                        <option value="semi-white">
+                          Semi-transparent White
+                        </option>
+                        <option value="black">Solid Black</option>
+                        <option value="white">Solid White</option>
+                      </select>
+                    </div>
+
+                    <div class="control-item-compact">
+                      <label style="min-width: 80px; font-size: 14px"
+                        >BG Opacity:</label
+                      >
+                      <input
+                        type="range"
+                        id="overlayBackgroundOpacity"
+                        min="0"
+                        max="100"
+                        value="70"
+                        style="flex: 1"
+                      />
+                      <span
+                        id="backgroundOpacityValue"
+                        style="min-width: 50px; text-align: right"
+                        >70%</span
+                      >
+                    </div>
                   </div>
                 </div>
 
                 <!-- URL Overlay Options -->
                 <div id="urlOverlayOptions" style="display: none">
                   <div class="control-item-compact">
-                    <label>Overlay URL:</label>
+                    <label style="min-width: 80px; font-size: 14px"
+                      >Overlay URL:</label
+                    >
                     <input
                       type="text"
                       id="overlayUrl"
                       placeholder="https://example.com/overlay.html"
+                      style="flex: 1; padding: 8px; font-size: 14px"
                     />
                   </div>
                   <div class="control-item-compact">
@@ -268,68 +481,6 @@
                       support</small
                     >
                   </div>
-                </div>
-
-                <div class="control-item-compact">
-                  <label>Position:</label>
-                  <select id="overlayPosition">
-                    <option value="top-left">Top Left</option>
-                    <option value="top-center">Top Center</option>
-                    <option value="top-right">Top Right</option>
-                    <option value="center">Center</option>
-                    <option value="bottom-left">Bottom Left</option>
-                    <option value="bottom-center">Bottom Center</option>
-                    <option value="bottom-right">Bottom Right</option>
-                  </select>
-                </div>
-
-                <div class="control-item-compact">
-                  <label>Font Size:</label>
-                  <input
-                    type="range"
-                    id="overlayFontSize"
-                    min="16"
-                    max="72"
-                    value="32"
-                  />
-                  <span id="fontSizeValue">32</span>
-                </div>
-
-                <div class="control-item-compact">
-                  <label>Text Color:</label>
-                  <select id="overlayColor">
-                    <option value="white">White</option>
-                    <option value="black">Black</option>
-                    <option value="red">Red</option>
-                    <option value="green">Green</option>
-                    <option value="blue">Blue</option>
-                    <option value="yellow">Yellow</option>
-                    <option value="cyan">Cyan</option>
-                    <option value="orange">Orange</option>
-                  </select>
-                </div>
-
-                <div class="control-item-compact">
-                  <label>Background:</label>
-                  <select id="overlayBackground">
-                    <option value="transparent">Transparent</option>
-                    <option value="semi-black">Semi-transparent Black</option>
-                    <option value="semi-white">Semi-transparent White</option>
-                    <option value="black">Solid Black</option>
-                    <option value="white">Solid White</option>
-                  </select>
-                </div>
-
-                <div class="control-item-compact">
-                  <label>Background Opacity:</label>
-                  <input
-                    type="range"
-                    id="overlayBackgroundOpacity"
-                    min="0"
-                    max="100"
-                    value="70"
-                  />
-                  <span id="backgroundOpacityValue">70</span>%
                 </div>
 
                 <div style="display: flex; gap: 8px">
