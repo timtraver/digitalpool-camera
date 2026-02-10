@@ -329,6 +329,136 @@ const fontSizeValue = document.getElementById("fontSizeValue");
 const overlayColor = document.getElementById("overlayColor");
 const applyOverlayBtn = document.getElementById("applyOverlay");
 
+// Canvas overlay for preview
+const videoStream = document.getElementById("videoStream");
+const overlayCanvas = document.getElementById("overlayCanvas");
+const ctx = overlayCanvas.getContext("2d");
+
+// Current overlay config
+let currentOverlayConfig = {
+  overlayEnabled: false,
+  overlayText: "",
+  customText2: "",
+  showTimestamp: false,
+  overlayPosition: "top",
+  overlayFontSize: 32,
+  overlayColor: "white",
+};
+
+// Update canvas size when video loads
+videoStream.addEventListener("load", () => {
+  overlayCanvas.width = videoStream.naturalWidth || videoStream.width;
+  overlayCanvas.height = videoStream.naturalHeight || videoStream.height;
+});
+
+// Redraw overlay every 100ms (for timestamp updates)
+setInterval(() => {
+  if (currentOverlayConfig.overlayEnabled) {
+    drawOverlay();
+  } else {
+    ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+  }
+}, 100);
+
+// Draw overlay on canvas
+function drawOverlay() {
+  // Clear canvas
+  ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+  if (!currentOverlayConfig.overlayEnabled) return;
+
+  // Scale font size based on canvas width (assuming 1920px base)
+  const scale = overlayCanvas.width / 1920 || 1;
+  const fontSize = Math.floor(currentOverlayConfig.overlayFontSize * scale);
+  const smallFontSize = Math.floor(fontSize * 0.75);
+
+  // Set text properties
+  ctx.fillStyle = currentOverlayConfig.overlayColor;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+
+  let yPos = 20 * scale;
+
+  // Position based on setting
+  if (currentOverlayConfig.overlayPosition === "bottom") {
+    yPos = overlayCanvas.height - 80 * scale;
+    ctx.textBaseline = "bottom";
+  } else if (currentOverlayConfig.overlayPosition === "center") {
+    yPos = overlayCanvas.height / 2 - 40 * scale;
+    ctx.textBaseline = "middle";
+  }
+
+  // Draw timestamp if enabled
+  if (currentOverlayConfig.showTimestamp) {
+    const now = new Date();
+    const timestamp = now.toLocaleString();
+    ctx.font = `bold ${smallFontSize}px Sans-serif`;
+    ctx.textAlign = "right";
+
+    // Background
+    const timestampWidth = ctx.measureText(timestamp).width;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.fillRect(
+      overlayCanvas.width - timestampWidth - 30 * scale,
+      10 * scale,
+      timestampWidth + 20 * scale,
+      smallFontSize + 10 * scale,
+    );
+
+    // Text
+    ctx.fillStyle = currentOverlayConfig.overlayColor;
+    ctx.fillText(timestamp, overlayCanvas.width - 20 * scale, 15 * scale);
+    ctx.textAlign = "center";
+  }
+
+  // Draw main text
+  if (currentOverlayConfig.overlayText) {
+    ctx.font = `bold ${fontSize}px Sans-serif`;
+
+    // Background
+    const textWidth = ctx.measureText(currentOverlayConfig.overlayText).width;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.fillRect(
+      overlayCanvas.width / 2 - textWidth / 2 - 20 * scale,
+      yPos - 10 * scale,
+      textWidth + 40 * scale,
+      fontSize + 20 * scale,
+    );
+
+    // Text
+    ctx.fillStyle = currentOverlayConfig.overlayColor;
+    ctx.fillText(
+      currentOverlayConfig.overlayText,
+      overlayCanvas.width / 2,
+      yPos,
+    );
+  }
+
+  // Draw subtitle
+  if (currentOverlayConfig.customText2) {
+    const subtitleYPos = yPos + fontSize + 10 * scale;
+    ctx.font = `${smallFontSize}px Sans-serif`;
+
+    // Background
+    const textWidth = ctx.measureText(currentOverlayConfig.customText2).width;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.fillRect(
+      overlayCanvas.width / 2 - textWidth / 2 - 15 * scale,
+      subtitleYPos - 5 * scale,
+      textWidth + 30 * scale,
+      smallFontSize + 10 * scale,
+    );
+
+    // Text
+    ctx.fillStyle = currentOverlayConfig.overlayColor;
+    ctx.fillText(
+      currentOverlayConfig.customText2,
+      overlayCanvas.width / 2,
+      subtitleYPos,
+    );
+  }
+}
+
 // Update font size display
 overlayFontSize.addEventListener("input", () => {
   fontSizeValue.textContent = overlayFontSize.value;
@@ -346,6 +476,10 @@ applyOverlayBtn.addEventListener("click", () => {
     overlayColor: overlayColor.value,
     overlayBackground: true,
   };
+
+  // Update local preview immediately
+  currentOverlayConfig = { ...overlayConfig };
+  drawOverlay();
 
   console.log("Applying overlay config:", overlayConfig);
   socket.emit("updateOverlay", overlayConfig);
@@ -374,5 +508,17 @@ socket.on("streamStatus", (status) => {
     overlayFontSize.value = status.config.overlayFontSize || 32;
     fontSizeValue.textContent = overlayFontSize.value;
     overlayColor.value = status.config.overlayColor || "white";
+
+    // Update preview overlay
+    currentOverlayConfig = {
+      overlayEnabled: status.config.overlayEnabled || false,
+      overlayText: status.config.overlayText || "",
+      customText2: status.config.customText2 || "",
+      showTimestamp: status.config.showTimestamp || false,
+      overlayPosition: status.config.overlayPosition || "top",
+      overlayFontSize: status.config.overlayFontSize || 32,
+      overlayColor: status.config.overlayColor || "white",
+    };
+    drawOverlay();
   }
 });

@@ -25,6 +25,101 @@
         <div class="video-section">
           <div class="video-container">
             <img id="videoStream" src="/video/stream" alt="Camera Stream" />
+            <canvas id="overlayCanvas"></canvas>
+          </div>
+
+          <!-- Pan/Tilt Controls -->
+          <div class="ptz-controls">
+            <h3>PTZ</h3>
+            <div class="control-grid">
+              <div class="directional-pad-container">
+                <!-- Outer ring - Large movements -->
+                <button
+                  class="btn-control-outer btn-top-outer"
+                  id="tiltUpLarge"
+                  title="Tilt Up (Large)"
+                >
+                  ▲
+                </button>
+                <button
+                  class="btn-control-outer btn-right-outer"
+                  id="panRightLarge"
+                  title="Pan Right (Large)"
+                >
+                  ►
+                </button>
+                <button
+                  class="btn-control-outer btn-bottom-outer"
+                  id="tiltDownLarge"
+                  title="Tilt Down (Large)"
+                >
+                  ▼
+                </button>
+                <button
+                  class="btn-control-outer btn-left-outer"
+                  id="panLeftLarge"
+                  title="Pan Left (Large)"
+                >
+                  ◄
+                </button>
+
+                <!-- Inner ring - Small movements -->
+                <button
+                  class="btn-control-inner btn-top-inner"
+                  id="tiltUpSmall"
+                  title="Tilt Up (Small)"
+                >
+                  ▲
+                </button>
+                <button
+                  class="btn-control-inner btn-right-inner"
+                  id="panRightSmall"
+                  title="Pan Right (Small)"
+                >
+                  ►
+                </button>
+                <button
+                  class="btn-control-inner btn-bottom-inner"
+                  id="tiltDownSmall"
+                  title="Tilt Down (Small)"
+                >
+                  ▼
+                </button>
+                <button
+                  class="btn-control-inner btn-left-inner"
+                  id="panLeftSmall"
+                  title="Pan Left (Small)"
+                >
+                  ◄
+                </button>
+
+                <!-- Center reset button -->
+                <button
+                  class="btn-control-center"
+                  id="resetPos"
+                  title="Reset Position"
+                >
+                  ⌂
+                </button>
+              </div>
+              <div class="ptz-settings">
+                <div class="control-item-compact">
+                  <label for="zoomSlider">Zoom</label>
+                  <input
+                    type="range"
+                    id="zoomSlider"
+                    min="0"
+                    max="12"
+                    value="0"
+                    step="1"
+                  />
+                  <span class="value-display" id="zoomValue">0</span>
+                </div>
+                <div class="speed-info">
+                  <small>Inner: 0.5° | Outer: 5°</small>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Streaming Controls -->
@@ -151,100 +246,6 @@
                   </button>
                 </div>
               </details>
-            </div>
-          </div>
-
-          <!-- Pan/Tilt Controls -->
-          <div class="ptz-controls">
-            <h3>PTZ</h3>
-            <div class="control-grid">
-              <div class="directional-pad-container">
-                <!-- Outer ring - Large movements -->
-                <button
-                  class="btn-control-outer btn-top-outer"
-                  id="tiltUpLarge"
-                  title="Tilt Up (Large)"
-                >
-                  ▲
-                </button>
-                <button
-                  class="btn-control-outer btn-right-outer"
-                  id="panRightLarge"
-                  title="Pan Right (Large)"
-                >
-                  ►
-                </button>
-                <button
-                  class="btn-control-outer btn-bottom-outer"
-                  id="tiltDownLarge"
-                  title="Tilt Down (Large)"
-                >
-                  ▼
-                </button>
-                <button
-                  class="btn-control-outer btn-left-outer"
-                  id="panLeftLarge"
-                  title="Pan Left (Large)"
-                >
-                  ◄
-                </button>
-
-                <!-- Inner ring - Small movements -->
-                <button
-                  class="btn-control-inner btn-top-inner"
-                  id="tiltUpSmall"
-                  title="Tilt Up (Small)"
-                >
-                  ▲
-                </button>
-                <button
-                  class="btn-control-inner btn-right-inner"
-                  id="panRightSmall"
-                  title="Pan Right (Small)"
-                >
-                  ►
-                </button>
-                <button
-                  class="btn-control-inner btn-bottom-inner"
-                  id="tiltDownSmall"
-                  title="Tilt Down (Small)"
-                >
-                  ▼
-                </button>
-                <button
-                  class="btn-control-inner btn-left-inner"
-                  id="panLeftSmall"
-                  title="Pan Left (Small)"
-                >
-                  ◄
-                </button>
-
-                <!-- Center reset button -->
-                <button
-                  class="btn-control-center"
-                  id="resetPos"
-                  title="Reset Position"
-                >
-                  ⌂
-                </button>
-              </div>
-              <div class="ptz-settings">
-                <div class="control-item-compact">
-                  <label for="zoomSlider">Zoom</label>
-                  <input
-                    type="range"
-                    id="zoomSlider"
-                    min="0"
-                    max="12"
-                    value="0"
-                    step="1"
-                  />
-                  <span class="value-display" id="zoomValue">0</span>
-                </div>
-                <div class="speed-info">
-                  <small>Inner: 0.5° | Outer: 5°</small>
-                </div>
-              </div>
             </div>
           </div>
         </div>
