@@ -707,44 +707,44 @@ function drawOverlay() {
 overlayEnabled.addEventListener("change", () => {
   currentOverlayConfig.overlayEnabled = overlayEnabled.checked;
   console.log("Overlay enabled changed:", overlayEnabled.checked);
-  drawOverlay();
+  drawOverlay(); // Always redraw when enabled/disabled changes
 });
 
 overlayText.addEventListener("input", () => {
   currentOverlayConfig.overlayText = overlayText.value;
   console.log("Overlay text changed:", overlayText.value);
-  if (currentOverlayConfig.overlayEnabled) drawOverlay();
+  drawOverlay(); // Always redraw to show live preview
 });
 
 customText2.addEventListener("input", () => {
   currentOverlayConfig.customText2 = customText2.value;
-  if (currentOverlayConfig.overlayEnabled) drawOverlay();
+  drawOverlay(); // Always redraw to show live preview
 });
 
 showTimestamp.addEventListener("change", () => {
   currentOverlayConfig.showTimestamp = showTimestamp.checked;
-  if (currentOverlayConfig.overlayEnabled) drawOverlay();
+  drawOverlay(); // Always redraw to show live preview
 });
 
 overlayPosition.addEventListener("change", () => {
   currentOverlayConfig.overlayPosition = overlayPosition.value;
-  if (currentOverlayConfig.overlayEnabled) drawOverlay();
+  drawOverlay(); // Always redraw to show live preview
 });
 
 overlayFontSize.addEventListener("input", () => {
   fontSizeValue.textContent = overlayFontSize.value;
   currentOverlayConfig.overlayFontSize = parseInt(overlayFontSize.value);
-  if (currentOverlayConfig.overlayEnabled) drawOverlay();
+  drawOverlay(); // Always redraw to show live preview
 });
 
 overlayColor.addEventListener("change", () => {
   currentOverlayConfig.overlayColor = overlayColor.value;
-  if (currentOverlayConfig.overlayEnabled) drawOverlay();
+  drawOverlay(); // Always redraw to show live preview
 });
 
 overlayBackground.addEventListener("change", () => {
   currentOverlayConfig.overlayBackground = overlayBackground.value;
-  if (currentOverlayConfig.overlayEnabled) drawOverlay();
+  drawOverlay(); // Always redraw to show live preview
 });
 
 overlayBackgroundOpacity.addEventListener("input", () => {
@@ -752,7 +752,7 @@ overlayBackgroundOpacity.addEventListener("input", () => {
   currentOverlayConfig.overlayBackgroundOpacity = parseInt(
     overlayBackgroundOpacity.value,
   );
-  if (currentOverlayConfig.overlayEnabled) drawOverlay();
+  drawOverlay(); // Always redraw to show live preview
 });
 
 // Apply overlay settings

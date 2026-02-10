@@ -632,9 +632,14 @@ header h1 {
   color: rgba(255, 255, 255, 0.9);
 }
 
+/* Overlay Settings Section - Full width below PTZ and Stream */
+.overlay-settings-section {
+  width: 100%;
+  margin-top: 12px;
+}
+
 /* Overlay Settings */
 .overlay-settings {
-  margin-top: 12px;
   background: rgba(6, 16, 27, 0.6);
   border: 1px solid rgba(18, 199, 255, 0.2);
   border-radius: 6px;

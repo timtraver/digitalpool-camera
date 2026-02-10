@@ -200,116 +200,114 @@
                     <span id="streamStatusText">Not streaming</span></small
                   >
                 </div>
-
-                <!-- Overlay Settings (collapsible) -->
-                <details class="overlay-settings">
-                  <summary>📝 Overlay Settings</summary>
-                  <div class="overlay-controls">
-                    <div class="control-item-compact">
-                      <label>
-                        <input type="checkbox" id="overlayEnabled" />
-                        Enable Overlays
-                      </label>
-                    </div>
-
-                    <div class="control-item-compact">
-                      <label>Main Text:</label>
-                      <input
-                        type="text"
-                        id="overlayText"
-                        placeholder="Stream Title"
-                      />
-                    </div>
-
-                    <div class="control-item-compact">
-                      <label>Subtitle:</label>
-                      <input
-                        type="text"
-                        id="customText2"
-                        placeholder="Secondary text"
-                      />
-                    </div>
-
-                    <div class="control-item-compact">
-                      <label>
-                        <input type="checkbox" id="showTimestamp" />
-                        Show Timestamp
-                      </label>
-                    </div>
-
-                    <div class="control-item-compact">
-                      <label>Position:</label>
-                      <select id="overlayPosition">
-                        <option value="top-left">Top Left</option>
-                        <option value="top-center">Top Center</option>
-                        <option value="top-right">Top Right</option>
-                        <option value="center">Center</option>
-                        <option value="bottom-left">Bottom Left</option>
-                        <option value="bottom-center">Bottom Center</option>
-                        <option value="bottom-right">Bottom Right</option>
-                      </select>
-                    </div>
-
-                    <div class="control-item-compact">
-                      <label>Font Size:</label>
-                      <input
-                        type="range"
-                        id="overlayFontSize"
-                        min="16"
-                        max="72"
-                        value="32"
-                      />
-                      <span id="fontSizeValue">32</span>
-                    </div>
-
-                    <div class="control-item-compact">
-                      <label>Text Color:</label>
-                      <select id="overlayColor">
-                        <option value="white">White</option>
-                        <option value="black">Black</option>
-                        <option value="red">Red</option>
-                        <option value="green">Green</option>
-                        <option value="blue">Blue</option>
-                        <option value="yellow">Yellow</option>
-                        <option value="cyan">Cyan</option>
-                        <option value="orange">Orange</option>
-                      </select>
-                    </div>
-
-                    <div class="control-item-compact">
-                      <label>Background:</label>
-                      <select id="overlayBackground">
-                        <option value="transparent">Transparent</option>
-                        <option value="semi-black">
-                          Semi-transparent Black
-                        </option>
-                        <option value="semi-white">
-                          Semi-transparent White
-                        </option>
-                        <option value="black">Solid Black</option>
-                        <option value="white">Solid White</option>
-                      </select>
-                    </div>
-
-                    <div class="control-item-compact">
-                      <label>Background Opacity:</label>
-                      <input
-                        type="range"
-                        id="overlayBackgroundOpacity"
-                        min="0"
-                        max="100"
-                        value="70"
-                      />
-                      <span id="backgroundOpacityValue">70</span>%
-                    </div>
-
-                    <button id="applyOverlay" class="btn-stream btn-start">
-                      Apply Overlay
-                    </button>
-                  </div>
-                </details>
               </div>
             </div>
+          </div>
+
+          <!-- Overlay Settings (full width below PTZ and Stream) -->
+          <div class="overlay-settings-section">
+            <details class="overlay-settings" open>
+              <summary>📝 Overlay Settings</summary>
+              <div class="overlay-controls">
+                <div class="control-item-compact">
+                  <label>
+                    <input type="checkbox" id="overlayEnabled" />
+                    Enable Overlays
+                  </label>
+                </div>
+
+                <div class="control-item-compact">
+                  <label>Main Text:</label>
+                  <input
+                    type="text"
+                    id="overlayText"
+                    placeholder="Stream Title"
+                  />
+                </div>
+
+                <div class="control-item-compact">
+                  <label>Subtitle:</label>
+                  <input
+                    type="text"
+                    id="customText2"
+                    placeholder="Secondary text"
+                  />
+                </div>
+
+                <div class="control-item-compact">
+                  <label>
+                    <input type="checkbox" id="showTimestamp" />
+                    Show Timestamp
+                  </label>
+                </div>
+
+                <div class="control-item-compact">
+                  <label>Position:</label>
+                  <select id="overlayPosition">
+                    <option value="top-left">Top Left</option>
+                    <option value="top-center">Top Center</option>
+                    <option value="top-right">Top Right</option>
+                    <option value="center">Center</option>
+                    <option value="bottom-left">Bottom Left</option>
+                    <option value="bottom-center">Bottom Center</option>
+                    <option value="bottom-right">Bottom Right</option>
+                  </select>
+                </div>
+
+                <div class="control-item-compact">
+                  <label>Font Size:</label>
+                  <input
+                    type="range"
+                    id="overlayFontSize"
+                    min="16"
+                    max="72"
+                    value="32"
+                  />
+                  <span id="fontSizeValue">32</span>
+                </div>
+
+                <div class="control-item-compact">
+                  <label>Text Color:</label>
+                  <select id="overlayColor">
+                    <option value="white">White</option>
+                    <option value="black">Black</option>
+                    <option value="red">Red</option>
+                    <option value="green">Green</option>
+                    <option value="blue">Blue</option>
+                    <option value="yellow">Yellow</option>
+                    <option value="cyan">Cyan</option>
+                    <option value="orange">Orange</option>
+                  </select>
+                </div>
+
+                <div class="control-item-compact">
+                  <label>Background:</label>
+                  <select id="overlayBackground">
+                    <option value="transparent">Transparent</option>
+                    <option value="semi-black">Semi-transparent Black</option>
+                    <option value="semi-white">Semi-transparent White</option>
+                    <option value="black">Solid Black</option>
+                    <option value="white">Solid White</option>
+                  </select>
+                </div>
+
+                <div class="control-item-compact">
+                  <label>Background Opacity:</label>
+                  <input
+                    type="range"
+                    id="overlayBackgroundOpacity"
+                    min="0"
+                    max="100"
+                    value="70"
+                  />
+                  <span id="backgroundOpacityValue">70</span>%
+                </div>
+
+                <button id="applyOverlay" class="btn-stream btn-start">
+                  Apply Overlay
+                </button>
+              </div>
+            </details>
           </div>
         </div>
 
