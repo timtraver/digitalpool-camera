@@ -142,35 +142,43 @@ const LARGE_MOVE = 5.0; // degrees for outer buttons
 
 // Inner ring - Small movements
 document.getElementById("panLeftSmall").addEventListener("click", () => {
+  console.log("🔵 Pan Left (Small):", SMALL_MOVE);
   socket.emit("pan", { degrees: SMALL_MOVE });
 });
 
 document.getElementById("panRightSmall").addEventListener("click", () => {
+  console.log("🔵 Pan Right (Small):", -SMALL_MOVE);
   socket.emit("pan", { degrees: -SMALL_MOVE });
 });
 
 document.getElementById("tiltUpSmall").addEventListener("click", () => {
+  console.log("🔵 Tilt Up (Small):", SMALL_MOVE);
   socket.emit("tilt", { degrees: SMALL_MOVE });
 });
 
 document.getElementById("tiltDownSmall").addEventListener("click", () => {
+  console.log("🔵 Tilt Down (Small):", -SMALL_MOVE);
   socket.emit("tilt", { degrees: -SMALL_MOVE });
 });
 
 // Outer ring - Large movements
 document.getElementById("panLeftLarge").addEventListener("click", () => {
+  console.log("🔷 Pan Left (Large):", LARGE_MOVE);
   socket.emit("pan", { degrees: LARGE_MOVE });
 });
 
 document.getElementById("panRightLarge").addEventListener("click", () => {
+  console.log("🔷 Pan Right (Large):", -LARGE_MOVE);
   socket.emit("pan", { degrees: -LARGE_MOVE });
 });
 
 document.getElementById("tiltUpLarge").addEventListener("click", () => {
+  console.log("🔷 Tilt Up (Large):", LARGE_MOVE);
   socket.emit("tilt", { degrees: LARGE_MOVE });
 });
 
 document.getElementById("tiltDownLarge").addEventListener("click", () => {
+  console.log("🔷 Tilt Down (Large):", -LARGE_MOVE);
   socket.emit("tilt", { degrees: -LARGE_MOVE });
 });
 
