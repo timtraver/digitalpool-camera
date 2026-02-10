@@ -10,14 +10,14 @@ console.log("🔌 Socket.IO initialized:", socket);
 const statusElement = document.getElementById("connectionStatus");
 
 socket.on("connect", () => {
-  statusElement.textContent = "Connected";
-  statusElement.className = "status-connected";
+  statusElement.textContent = "Camera Connected";
+  statusElement.className = "status status-connected";
   console.log("Connected to server");
 });
 
 socket.on("disconnect", () => {
-  statusElement.textContent = "Disconnected";
-  statusElement.className = "status-disconnected";
+  statusElement.textContent = "Camera Disconnected";
+  statusElement.className = "status status-disconnected";
   console.log("Disconnected from server");
 });
 
