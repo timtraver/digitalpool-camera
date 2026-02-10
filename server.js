@@ -84,6 +84,17 @@ app.post("/api/control/:name", async (req, res) => {
   res.json(result);
 });
 
+// API endpoint to get camera configuration
+app.get("/api/camera/config", (req, res) => {
+  res.json({ success: true, config: camera.config });
+});
+
+// API endpoint to reset camera to defaults
+app.post("/api/camera/reset", async (req, res) => {
+  const result = await camera.resetToDefaults();
+  res.json({ success: true, results: result, config: camera.config });
+});
+
 // ============ STREAMING API ENDPOINTS ============
 
 // Get stream status
@@ -303,6 +314,19 @@ io.on("connection", (socket) => {
     socket.emit("controlResult", result);
   });
 
+  socket.on("getCameraConfig", () => {
+    socket.emit("cameraConfig", { success: true, config: camera.config });
+  });
+
+  socket.on("resetCameraSettings", async () => {
+    const results = await camera.resetToDefaults();
+    socket.emit("cameraConfigReset", {
+      success: true,
+      results: results,
+      config: camera.config,
+    });
+  });
+
   // ============ STREAMING SOCKET EVENTS ============
 
   socket.on("startStream", async (config) => {
@@ -337,8 +361,17 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`Camera control server running on port ${PORT}`);
   console.log(`Camera device: ${CAMERA_DEVICE}`);
   console.log(`Access the interface at http://localhost:${PORT}`);
+
+  // Apply saved camera configuration on startup
+  console.log("\n🚀 Initializing camera with saved configuration...");
+  try {
+    await camera.applyConfig();
+    console.log("✅ Camera initialized successfully\n");
+  } catch (error) {
+    console.error("❌ Error initializing camera:", error.message);
+  }
 });

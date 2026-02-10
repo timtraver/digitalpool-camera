@@ -1,10 +1,13 @@
 const { exec } = require("child_process");
 const { promisify } = require("util");
+const fs = require("fs");
+const path = require("path");
 const execAsync = promisify(exec);
 
 class CameraController {
   constructor(device = "/dev/video0") {
     this.device = device;
+    this.configFile = path.join(__dirname, "camera-config.json");
 
     // Track pan/tilt positions since camera doesn't report them reliably
     this.currentPan = 0;
@@ -105,15 +108,111 @@ class CameraController {
       pan_speed: { id: "0x009a0920", min: -1, max: 160, step: 1, default: 20 },
       tilt_speed: { id: "0x009a0921", min: -1, max: 120, step: 1, default: 20 },
     };
+
+    // Load saved configuration
+    this.config = this.loadConfig();
+  }
+
+  /**
+   * Get default values for all controls
+   */
+  getDefaults() {
+    const defaults = {};
+    for (const [name, control] of Object.entries(this.controls)) {
+      defaults[name] = control.default;
+    }
+    return defaults;
+  }
+
+  /**
+   * Load configuration from JSON file
+   */
+  loadConfig() {
+    try {
+      if (fs.existsSync(this.configFile)) {
+        const data = fs.readFileSync(this.configFile, "utf8");
+        const config = JSON.parse(data);
+        console.log("✅ Loaded camera config from file:", this.configFile);
+        return config;
+      }
+    } catch (error) {
+      console.error("❌ Error loading camera config file:", error.message);
+    }
+    // Return defaults if no config file exists
+    return this.getDefaults();
+  }
+
+  /**
+   * Save configuration to JSON file
+   */
+  saveConfig() {
+    try {
+      fs.writeFileSync(
+        this.configFile,
+        JSON.stringify(this.config, null, 2),
+        "utf8",
+      );
+      console.log("✅ Saved camera config to file:", this.configFile);
+      return true;
+    } catch (error) {
+      console.error("❌ Error saving camera config file:", error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Apply all saved configuration values to the camera
+   */
+  async applyConfig() {
+    console.log("📸 Applying saved camera configuration...");
+    const results = [];
+
+    for (const [controlName, value] of Object.entries(this.config)) {
+      if (this.controls[controlName]) {
+        try {
+          // Don't save to config when applying (already in config)
+          const result = await this.setControl(controlName, value, false);
+          results.push({ control: controlName, ...result });
+
+          // Update tracked positions for pan/tilt
+          if (controlName === "pan_absolute") {
+            this.currentPan = value;
+          } else if (controlName === "tilt_absolute") {
+            this.currentTilt = value;
+          }
+        } catch (error) {
+          console.error(`❌ Failed to apply ${controlName}:`, error.message);
+          results.push({
+            control: controlName,
+            success: false,
+            error: error.message,
+          });
+        }
+      }
+    }
+
+    console.log("✅ Camera configuration applied");
+    return results;
+  }
+
+  /**
+   * Reset all controls to defaults and save
+   */
+  async resetToDefaults() {
+    console.log("🔄 Resetting camera to default values...");
+    this.config = this.getDefaults();
+    this.saveConfig();
+    return await this.applyConfig();
   }
 
   /**
    * Set a camera control value
    * @param {string} controlName - Name of the control (e.g., 'brightness', 'pan_absolute')
    * @param {number} value - Value to set
+   * @param {boolean} saveToConfig - Whether to save to config file (default: true)
    * @returns {Promise<object>} Result of the operation
    */
-  async setControl(controlName, value) {
+  async setControl(controlName, value, saveToConfig = true) {
     try {
       if (!this.controls[controlName]) {
         throw new Error(`Unknown control: ${controlName}`);
@@ -132,6 +231,12 @@ class CameraController {
 
       const command = `v4l2-ctl -d ${this.device} --set-ctrl=${controlName}=${value}`;
       const { stdout, stderr } = await execAsync(command);
+
+      // Save to config file
+      if (saveToConfig) {
+        this.config[controlName] = value;
+        this.saveConfig();
+      }
 
       return {
         success: true,

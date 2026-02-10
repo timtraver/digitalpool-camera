@@ -120,6 +120,9 @@ socket.on("connect", () => {
   statusElement.textContent = "Camera Connected";
   statusElement.className = "status status-connected";
   console.log("Connected to server");
+
+  // Request camera configuration on connect
+  socket.emit("getCameraConfig");
 });
 
 socket.on("disconnect", () => {
@@ -132,6 +135,23 @@ socket.on("controlResult", (result) => {
   console.log("Control result:", result);
   if (!result.success) {
     console.error("Control error:", result.error);
+  }
+});
+
+// Handle camera configuration from server
+socket.on("cameraConfig", (data) => {
+  if (data.success && data.config) {
+    console.log("📸 Received camera configuration:", data.config);
+    loadCameraConfigToUI(data.config);
+  }
+});
+
+// Handle camera reset response
+socket.on("cameraConfigReset", (data) => {
+  if (data.success && data.config) {
+    console.log("🔄 Camera reset to defaults:", data.config);
+    loadCameraConfigToUI(data.config);
+    alert("All camera settings have been reset to defaults!");
   }
 });
 
@@ -359,43 +379,85 @@ if (focusAuto) {
 
 createSliderControl("focus_absolute", "focusAbsolute", "focusAbsoluteValue");
 
+// Function to load camera configuration into UI
+function loadCameraConfigToUI(config) {
+  console.log("🔧 Loading camera config to UI...");
+
+  // Image Quality controls
+  if (config.brightness !== undefined) {
+    document.getElementById("brightness").value = config.brightness;
+    document.getElementById("brightnessValue").textContent = config.brightness;
+  }
+  if (config.contrast !== undefined) {
+    document.getElementById("contrast").value = config.contrast;
+    document.getElementById("contrastValue").textContent = config.contrast;
+  }
+  if (config.saturation !== undefined) {
+    document.getElementById("saturation").value = config.saturation;
+    document.getElementById("saturationValue").textContent = config.saturation;
+  }
+  if (config.sharpness !== undefined) {
+    document.getElementById("sharpness").value = config.sharpness;
+    document.getElementById("sharpnessValue").textContent = config.sharpness;
+  }
+
+  // Exposure controls
+  if (config.exposure_auto !== undefined) {
+    document.getElementById("exposureAuto").value = config.exposure_auto;
+    // Trigger change event to update custom dropdown
+    const event = new Event("change", { bubbles: true });
+    document.getElementById("exposureAuto").dispatchEvent(event);
+    updateExposureControlsState();
+  }
+  if (config.exposure_absolute !== undefined) {
+    document.getElementById("exposureAbsolute").value =
+      config.exposure_absolute;
+    document.getElementById("exposureAbsoluteValue").textContent =
+      config.exposure_absolute;
+  }
+  if (config.gain !== undefined) {
+    document.getElementById("gain").value = config.gain;
+    document.getElementById("gainValue").textContent = config.gain;
+  }
+  if (config.backlight_compensation !== undefined) {
+    document.getElementById("backlightCompensation").value =
+      config.backlight_compensation;
+    document.getElementById("backlightCompensationValue").textContent =
+      config.backlight_compensation;
+  }
+
+  // White Balance controls
+  if (config.white_balance_temperature_auto !== undefined) {
+    document.getElementById("whiteBalanceAuto").checked =
+      config.white_balance_temperature_auto === 1;
+  }
+  if (config.white_balance_temperature !== undefined) {
+    document.getElementById("whiteBalanceTemp").value =
+      config.white_balance_temperature;
+    document.getElementById("whiteBalanceTempValue").textContent =
+      config.white_balance_temperature;
+  }
+
+  // Focus controls
+  if (config.focus_auto !== undefined) {
+    document.getElementById("focusAuto").checked = config.focus_auto === 1;
+  }
+  if (config.focus_absolute !== undefined) {
+    document.getElementById("focusAbsolute").value = config.focus_absolute;
+    document.getElementById("focusAbsoluteValue").textContent =
+      config.focus_absolute;
+  }
+
+  console.log("✅ Camera config loaded to UI");
+}
+
 // Reset all settings
 const resetAllBtn = document.getElementById("resetAll");
 if (resetAllBtn) {
   resetAllBtn.addEventListener("click", async () => {
     if (confirm("Reset all camera settings to defaults?")) {
-      // Reset to default values
-      const defaults = {
-        brightness: 50,
-        contrast: 50,
-        saturation: 50,
-        sharpness: 50,
-        exposure_auto: 0,
-        exposure_absolute: 330,
-        gain: 1,
-        backlight_compensation: 9,
-        white_balance_temperature_auto: 1,
-        white_balance_temperature: 5000,
-        focus_auto: 1,
-        focus_absolute: 0,
-      };
-
-      for (const [control, value] of Object.entries(defaults)) {
-        socket.emit("setControl", { control: control, value: value });
-      }
-
-      // Reset UI
-      document.getElementById("brightness").value = 50;
-      document.getElementById("brightnessValue").textContent = 50;
-      document.getElementById("contrast").value = 50;
-      document.getElementById("contrastValue").textContent = 50;
-      document.getElementById("saturation").value = 50;
-      document.getElementById("saturationValue").textContent = 50;
-      document.getElementById("sharpness").value = 50;
-      document.getElementById("sharpnessValue").textContent = 50;
-
-      // Reset position
-      socket.emit("resetPosition");
+      // Send reset command to server
+      socket.emit("resetCameraSettings");
     }
   });
 }
