@@ -119,16 +119,19 @@
                 </div>
                 <div class="ptz-settings">
                   <div class="control-item-compact">
-                    <label for="zoomSlider">Zoom</label>
+                    <label for="zoomLevel">Zoom Level</label>
                     <input
-                      type="range"
-                      id="zoomSlider"
+                      type="number"
+                      id="zoomLevel"
                       min="0"
                       max="12"
                       value="0"
                       step="1"
+                      style="width: 80px; padding: 4px; font-size: 14px"
                     />
-                    <span class="value-display" id="zoomValue">0</span>
+                    <span style="margin-left: 8px; color: #888; font-size: 12px"
+                      >(0-12)</span
+                    >
                   </div>
                   <div class="speed-info">
                     <small>Inner: 0.5° | Outer: 5°</small>
@@ -594,6 +597,6 @@
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script src="app.js?v=2"></script>
+    <script src="app.js?v=3"></script>
   </body>
 </html>

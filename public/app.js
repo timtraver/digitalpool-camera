@@ -211,16 +211,20 @@ document.getElementById("resetPos").addEventListener("click", () => {
 });
 
 // Zoom controls
-const zoomSlider = document.getElementById("zoomSlider");
-const zoomValue = document.getElementById("zoomValue");
+const zoomLevel = document.getElementById("zoomLevel");
 let currentZoom = 0;
 
-if (zoomSlider && zoomValue) {
-  zoomSlider.addEventListener("input", (e) => {
+if (zoomLevel) {
+  zoomLevel.addEventListener("change", (e) => {
     const value = parseInt(e.target.value);
-    zoomValue.textContent = value;
-    currentZoom = value;
-    socket.emit("zoom", { level: value });
+    // Clamp value between 0 and 12
+    const clampedValue = Math.max(0, Math.min(12, value));
+    if (value !== clampedValue) {
+      e.target.value = clampedValue;
+    }
+    currentZoom = clampedValue;
+    console.log(`🔍 Zoom level changed to: ${clampedValue}`);
+    socket.emit("zoom", { level: clampedValue });
   });
 }
 
@@ -231,8 +235,7 @@ if (zoomInBtn) {
   zoomInBtn.addEventListener("click", () => {
     if (currentZoom < 12) {
       currentZoom++;
-      if (zoomSlider) zoomSlider.value = currentZoom;
-      if (zoomValue) zoomValue.textContent = currentZoom;
+      if (zoomLevel) zoomLevel.value = currentZoom;
       socket.emit("zoom", { level: currentZoom });
     }
   });
@@ -242,8 +245,7 @@ if (zoomOutBtn) {
   zoomOutBtn.addEventListener("click", () => {
     if (currentZoom > 0) {
       currentZoom--;
-      if (zoomSlider) zoomSlider.value = currentZoom;
-      if (zoomValue) zoomValue.textContent = currentZoom;
+      if (zoomLevel) zoomLevel.value = currentZoom;
       socket.emit("zoom", { level: currentZoom });
     }
   });
@@ -460,6 +462,16 @@ function loadCameraConfigToUI(config) {
     document.getElementById("focusAbsolute").value = config.focus_absolute;
     document.getElementById("focusAbsoluteValue").textContent =
       config.focus_absolute;
+  }
+
+  // Zoom control
+  if (config.zoom_absolute !== undefined) {
+    const zoomLevelInput = document.getElementById("zoomLevel");
+    if (zoomLevelInput) {
+      zoomLevelInput.value = config.zoom_absolute;
+      currentZoom = config.zoom_absolute;
+      console.log(`🔍 Loaded zoom level: ${config.zoom_absolute}`);
+    }
   }
 
   console.log("✅ Camera config loaded to UI");
