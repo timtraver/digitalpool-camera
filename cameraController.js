@@ -6,6 +6,10 @@ class CameraController {
   constructor(device = "/dev/video0") {
     this.device = device;
 
+    // Track pan/tilt positions since camera doesn't report them reliably
+    this.currentPan = 0;
+    this.currentTilt = 0;
+
     // Camera control definitions based on v4l2-ctl
     this.controls = {
       brightness: { id: "0x00980900", min: 0, max: 100, step: 1, default: 50 },
@@ -203,23 +207,25 @@ class CameraController {
    * @param {number} degrees - Degrees to pan (positive = right, negative = left)
    */
   async pan(degrees) {
-    const current = await this.getControl("pan_absolute");
-    if (current.success) {
-      // Camera uses step of 3600 units. Based on range (-468000 to 468000),
-      // this represents 260 degrees total range (130 degrees each direction).
-      // So 3600 units per degree
-      const newValue = current.value + degrees * 3600;
-      // Clamp to valid range
-      const clampedValue = Math.max(
-        this.controls.pan_absolute.min,
-        Math.min(this.controls.pan_absolute.max, newValue),
-      );
-      console.log(
-        `Pan: current=${current.value}, degrees=${degrees}, new=${newValue}, clamped=${clampedValue}`,
-      );
-      return await this.setControl("pan_absolute", clampedValue);
+    // Use tracked position instead of querying camera (camera doesn't report reliably)
+    // Camera uses step of 3600 units. Based on range (-468000 to 468000),
+    // this represents 260 degrees total range (130 degrees each direction).
+    // So 3600 units per degree
+    const newValue = this.currentPan + degrees * 3600;
+    // Clamp to valid range
+    const clampedValue = Math.max(
+      this.controls.pan_absolute.min,
+      Math.min(this.controls.pan_absolute.max, newValue),
+    );
+    console.log(
+      `Pan: current=${this.currentPan}, degrees=${degrees}, new=${newValue}, clamped=${clampedValue}`,
+    );
+
+    const result = await this.setControl("pan_absolute", clampedValue);
+    if (result.success) {
+      this.currentPan = clampedValue;
     }
-    return current;
+    return result;
   }
 
   /**
@@ -227,23 +233,25 @@ class CameraController {
    * @param {number} degrees - Degrees to tilt (positive = up, negative = down)
    */
   async tilt(degrees) {
-    const current = await this.getControl("tilt_absolute");
-    if (current.success) {
-      // Camera uses step of 3600 units. Based on range (-324000 to 324000),
-      // this represents 180 degrees total range (90 degrees each direction).
-      // So 3600 units per degree
-      const newValue = current.value + degrees * 3600;
-      // Clamp to valid range
-      const clampedValue = Math.max(
-        this.controls.tilt_absolute.min,
-        Math.min(this.controls.tilt_absolute.max, newValue),
-      );
-      console.log(
-        `Tilt: current=${current.value}, degrees=${degrees}, new=${newValue}, clamped=${clampedValue}`,
-      );
-      return await this.setControl("tilt_absolute", clampedValue);
+    // Use tracked position instead of querying camera (camera doesn't report reliably)
+    // Camera uses step of 3600 units. Based on range (-324000 to 324000),
+    // this represents 180 degrees total range (90 degrees each direction).
+    // So 3600 units per degree
+    const newValue = this.currentTilt + degrees * 3600;
+    // Clamp to valid range
+    const clampedValue = Math.max(
+      this.controls.tilt_absolute.min,
+      Math.min(this.controls.tilt_absolute.max, newValue),
+    );
+    console.log(
+      `Tilt: current=${this.currentTilt}, degrees=${degrees}, new=${newValue}, clamped=${clampedValue}`,
+    );
+
+    const result = await this.setControl("tilt_absolute", clampedValue);
+    if (result.success) {
+      this.currentTilt = clampedValue;
     }
-    return current;
+    return result;
   }
 
   /**
@@ -260,6 +268,9 @@ class CameraController {
   async resetPosition() {
     await this.setControl("pan_absolute", 0);
     await this.setControl("tilt_absolute", 0);
+    // Reset tracked positions
+    this.currentPan = 0;
+    this.currentTilt = 0;
     return { success: true, message: "Camera reset to home position" };
   }
 }

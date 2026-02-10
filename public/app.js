@@ -382,11 +382,9 @@ console.log("🖌️ Canvas context:", ctx);
 
 // Debug elements
 const canvasSizeSpan = document.getElementById("canvasSize");
-const overlayStatusSpan = document.getElementById("overlayStatus");
 
 console.log("🔧 Debug elements:", {
   canvasSizeSpan,
-  overlayStatusSpan,
 });
 
 // Current overlay config
@@ -408,25 +406,16 @@ function updateCanvasSize() {
 
   // Only update if we have valid dimensions
   if (rect.width > 0 && rect.height > 0) {
-    // Use device pixel ratio for sharp rendering
-    const dpr = window.devicePixelRatio || 1;
+    // Don't use DPR scaling - just match display size exactly
+    // This gives us crystal clear rendering like the test button did
+    overlayCanvas.width = rect.width;
+    overlayCanvas.height = rect.height;
 
-    // Set canvas internal resolution (high-res)
-    overlayCanvas.width = rect.width * dpr;
-    overlayCanvas.height = rect.height * dpr;
-
-    // Set canvas display size (CSS pixels)
-    overlayCanvas.style.width = rect.width + "px";
-    overlayCanvas.style.height = rect.height + "px";
-
-    // Scale context to match device pixel ratio
-    ctx.scale(dpr, dpr);
-
-    console.log("Canvas sized:", rect.width, "x", rect.height, "@ DPR", dpr);
+    console.log("Canvas sized:", rect.width, "x", rect.height);
 
     // Update debug info
     if (canvasSizeSpan) {
-      canvasSizeSpan.textContent = `${rect.width}x${rect.height} @ ${dpr}x`;
+      canvasSizeSpan.textContent = `${rect.width}x${rect.height}`;
     }
   } else {
     console.warn("Video has no dimensions yet, retrying...");
@@ -475,43 +464,36 @@ setInterval(() => {
 
 // Draw overlay on canvas
 function drawOverlay() {
-  // Get display dimensions (CSS pixels, not canvas internal resolution)
-  const displayWidth =
-    parseFloat(overlayCanvas.style.width) || overlayCanvas.width;
-  const displayHeight =
-    parseFloat(overlayCanvas.style.height) || overlayCanvas.height;
+  console.log("=== drawOverlay called ===");
+  console.log(
+    "Canvas dimensions:",
+    overlayCanvas.width,
+    "x",
+    overlayCanvas.height,
+  );
+  console.log("Overlay config:", currentOverlayConfig);
 
   // Clear canvas
-  ctx.clearRect(0, 0, displayWidth, displayHeight);
-
-  // Update debug status
-  if (overlayStatusSpan) {
-    overlayStatusSpan.textContent = currentOverlayConfig.overlayEnabled
-      ? "Enabled"
-      : "Disabled";
-    overlayStatusSpan.style.color = currentOverlayConfig.overlayEnabled
-      ? "#10b981"
-      : "#ef4444";
-  }
+  ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
   if (!currentOverlayConfig.overlayEnabled) {
     console.log("Overlay disabled, clearing canvas");
     return;
   }
 
-  console.log("Drawing overlay:", currentOverlayConfig);
-
   // Check if canvas has valid dimensions
-  if (displayWidth === 0 || displayHeight === 0) {
+  if (overlayCanvas.width === 0 || overlayCanvas.height === 0) {
     console.warn("Canvas has no dimensions, skipping draw");
     return;
   }
 
-  // Scale font size based on display width (assuming 1920px base)
-  const scale = displayWidth / 1920 || 1;
+  // Scale font size based on canvas width (assuming 1920px base)
+  const scale = overlayCanvas.width / 1920 || 1;
   const fontSize = Math.floor(currentOverlayConfig.overlayFontSize * scale);
   const smallFontSize = Math.floor(fontSize * 0.75);
   const padding = 20 * scale;
+
+  console.log("Scale:", scale, "fontSize:", fontSize, "padding:", padding);
 
   // Get background color with opacity
   function getBackgroundColor() {
@@ -541,10 +523,10 @@ function drawOverlay() {
     yPos = padding;
     textBaseline = "top";
   } else if (position.includes("bottom")) {
-    yPos = displayHeight - padding;
+    yPos = overlayCanvas.height - padding;
     textBaseline = "bottom";
   } else {
-    yPos = displayHeight / 2;
+    yPos = overlayCanvas.height / 2;
     textBaseline = "middle";
   }
 
@@ -552,10 +534,10 @@ function drawOverlay() {
     xPos = padding;
     textAlign = "left";
   } else if (position.includes("right")) {
-    xPos = displayWidth - padding;
+    xPos = overlayCanvas.width - padding;
     textAlign = "right";
   } else {
-    xPos = displayWidth / 2;
+    xPos = overlayCanvas.width / 2;
     textAlign = "center";
   }
 
@@ -616,6 +598,7 @@ function drawOverlay() {
   if (currentOverlayConfig.showTimestamp) {
     const now = new Date();
     const timestamp = now.toLocaleString();
+    console.log("Drawing timestamp:", timestamp, "at", currentY);
     const height = drawTextWithBackground(
       timestamp,
       `bold ${smallFontSize}px Sans-serif`,
@@ -626,6 +609,14 @@ function drawOverlay() {
 
   // Draw main text
   if (currentOverlayConfig.overlayText) {
+    console.log(
+      "Drawing main text:",
+      currentOverlayConfig.overlayText,
+      "at",
+      currentY,
+      "fontSize:",
+      fontSize,
+    );
     const height = drawTextWithBackground(
       currentOverlayConfig.overlayText,
       `bold ${fontSize}px Sans-serif`,
@@ -636,12 +627,20 @@ function drawOverlay() {
 
   // Draw subtitle
   if (currentOverlayConfig.customText2) {
+    console.log(
+      "Drawing subtitle:",
+      currentOverlayConfig.customText2,
+      "at",
+      currentY,
+    );
     drawTextWithBackground(
       currentOverlayConfig.customText2,
       `${smallFontSize}px Sans-serif`,
       0,
     );
   }
+
+  console.log("✅ Overlay drawing complete");
 }
 
 // Live preview updates (update preview as user types/changes)
