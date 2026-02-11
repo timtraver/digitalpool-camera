@@ -58,7 +58,12 @@ function proxyUrl(targetUrl, res, req = null) {
   const parsedUrl = urlModule.parse(targetUrl);
   const protocol = parsedUrl.protocol === "https:" ? https : http;
 
-  console.log("Proxying URL:", targetUrl, req ? `(${req.method})` : "(GET)");
+  const requestId = Math.random().toString(36).substring(7);
+  console.log(
+    `[${requestId}] Proxying URL:`,
+    targetUrl,
+    req ? `(${req.method})` : "(GET)",
+  );
 
   // For GET requests or when no req object is provided
   if (!req || req.method === "GET") {
@@ -152,15 +157,18 @@ function proxyUrl(targetUrl, res, req = null) {
     };
 
     console.log(
-      `Making ${req.method} request with body:`,
+      `[${requestId}] Making ${req.method} request with body:`,
       req.body ? JSON.stringify(req.body).substring(0, 200) : "no body",
     );
-    console.log("Request headers:", JSON.stringify(headers, null, 2));
+    console.log(
+      `[${requestId}] Request headers:`,
+      JSON.stringify(headers, null, 2),
+    );
 
     const proxyReq = protocol.request(options, (proxyRes) => {
       const responseContentType = proxyRes.headers["content-type"] || "";
       console.log(
-        `Response status: ${proxyRes.statusCode}, Content-Type: ${responseContentType}`,
+        `[${requestId}] Response status: ${proxyRes.statusCode}, Content-Type: ${responseContentType}`,
       );
 
       // Remove X-Frame-Options and CSP headers
@@ -178,13 +186,20 @@ function proxyUrl(targetUrl, res, req = null) {
       proxyRes.setEncoding("utf8");
       proxyRes.on("data", (chunk) => {
         body += chunk;
+        console.log(`[${requestId}] Received ${chunk.length} bytes`);
       });
       proxyRes.on("end", () => {
+        console.log(
+          `[${requestId}] Response complete, total body length: ${body.length}`,
+        );
         if (responseContentType.includes("application/json")) {
-          console.log("✅ GraphQL Response (JSON):", body.substring(0, 500));
+          console.log(
+            `[${requestId}] ✅ GraphQL Response (JSON):`,
+            body.substring(0, 500),
+          );
         } else {
           console.log(
-            "❌ GraphQL Response (HTML - ERROR):",
+            `[${requestId}] ❌ GraphQL Response (HTML - ERROR):`,
             body.substring(0, 200),
           );
         }
@@ -194,14 +209,17 @@ function proxyUrl(targetUrl, res, req = null) {
     });
 
     proxyReq.on("error", (err) => {
-      console.error("Proxy error:", err);
+      console.error(`[${requestId}] Proxy error:`, err);
       res.status(500).send("Failed to fetch URL: " + err.message);
     });
 
     // Forward the request body
     if (req.body) {
       const bodyStr = JSON.stringify(req.body);
-      console.log("Writing body to proxy request:", bodyStr.substring(0, 200));
+      console.log(
+        `[${requestId}] Writing body to proxy request:`,
+        bodyStr.substring(0, 200),
+      );
       proxyReq.write(bodyStr);
     }
     proxyReq.end();
