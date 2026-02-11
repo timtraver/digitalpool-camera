@@ -124,12 +124,12 @@ function proxyUrl(targetUrl, res, req = null) {
       });
   } else {
     // For POST/PUT/etc requests, we need to forward the body
+    // Only forward safe headers, not browser-specific ones
     const headers = {
-      ...req.headers,
+      "content-type": req.headers["content-type"] || "application/json",
+      "user-agent": req.headers["user-agent"] || "Mozilla/5.0",
       host: parsedUrl.hostname,
     };
-    // Remove accept-encoding to prevent compression
-    delete headers["accept-encoding"];
 
     const options = {
       hostname: parsedUrl.hostname,
