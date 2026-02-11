@@ -98,12 +98,12 @@ app.get("/proxy", async (req, res) => {
 });
 
 // Proxy for digitalpool.com resources (catch-all for fonts, static files, etc.)
-app.get("/fonts/*", async (req, res) => {
+app.use("/fonts", (req, res) => {
   const targetUrl = `https://digitalpool.com${req.path}`;
   proxyUrl(targetUrl, res);
 });
 
-app.get("/static/*", async (req, res) => {
+app.use("/static", (req, res) => {
   const targetUrl = `https://digitalpool.com${req.path}`;
   proxyUrl(targetUrl, res);
 });
