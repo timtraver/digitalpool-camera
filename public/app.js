@@ -521,6 +521,9 @@ const startStreamBtn = document.getElementById("startStream");
 const stopStreamBtn = document.getElementById("stopStream");
 const streamStatusText = document.getElementById("streamStatusText");
 
+// Track streaming state
+let isCurrentlyStreaming = false;
+
 // Update placeholder based on protocol
 streamProtocol.addEventListener("change", () => {
   const protocol = streamProtocol.value;
@@ -582,6 +585,8 @@ socket.on("streamResult", (result) => {
 socket.on("streamStatus", (status) => {
   console.log("Stream status:", status);
 
+  isCurrentlyStreaming = status.isStreaming;
+
   if (status.isStreaming) {
     startStreamBtn.disabled = true;
     stopStreamBtn.disabled = false;
@@ -628,6 +633,9 @@ const overlayBackgroundOpacity = document.getElementById(
 const backgroundOpacityValue = document.getElementById(
   "backgroundOpacityValue",
 );
+
+console.log("Opacity slider element:", overlayBackgroundOpacity);
+console.log("Opacity value display element:", backgroundOpacityValue);
 
 // Initialize custom dropdowns for ALL select elements
 console.log("🎨 Initializing custom dropdowns...");
@@ -1089,9 +1097,14 @@ overlayBackground.addEventListener("change", () => {
 // Apply opacity changes after user stops dragging (debounce)
 let opacityTimeout;
 overlayBackgroundOpacity.addEventListener("input", () => {
+  console.log("Opacity slider changed:", overlayBackgroundOpacity.value);
   backgroundOpacityValue.textContent = overlayBackgroundOpacity.value + "%";
   currentOverlayConfig.overlayBackgroundOpacity = parseInt(
     overlayBackgroundOpacity.value,
+  );
+  console.log(
+    "Updated config opacity:",
+    currentOverlayConfig.overlayBackgroundOpacity,
   );
   drawOverlay();
   clearTimeout(opacityTimeout);
@@ -1133,9 +1146,12 @@ titlePosition.addEventListener("change", () => {
 socket.on("overlayResult", (result) => {
   console.log("Overlay result:", result);
   if (result.success) {
-    alert(
-      result.message || "Overlay settings updated. Restart stream to apply.",
-    );
+    // Only show restart message if stream is currently running
+    if (isCurrentlyStreaming) {
+      alert(
+        result.message || "Overlay settings updated. Restart stream to apply.",
+      );
+    }
   } else {
     alert(`Overlay error: ${result.error}`);
   }
