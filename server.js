@@ -62,6 +62,10 @@ function proxyUrl(targetUrl, res) {
 
   protocol
     .get(targetUrl, (proxyRes) => {
+      console.log(
+        `Response status: ${proxyRes.statusCode}, Content-Type: ${proxyRes.headers["content-type"]}`,
+      );
+
       // Remove X-Frame-Options and CSP headers that would block iframe embedding
       const headers = { ...proxyRes.headers };
       delete headers["x-frame-options"];
@@ -71,9 +75,29 @@ function proxyUrl(targetUrl, res) {
       // Set CORS headers to allow embedding
       headers["access-control-allow-origin"] = "*";
 
-      // Just pipe through - don't modify content
-      res.writeHead(proxyRes.statusCode, headers);
-      proxyRes.pipe(res);
+      // For HTML content, collect and log it
+      const contentType = headers["content-type"] || "";
+      if (contentType.includes("text/html")) {
+        let body = "";
+        proxyRes.setEncoding("utf8");
+        proxyRes.on("data", (chunk) => {
+          body += chunk;
+        });
+        proxyRes.on("end", () => {
+          console.log("HTML content length:", body.length);
+          console.log(
+            "HTML preview (first 500 chars):",
+            body.substring(0, 500),
+          );
+
+          res.writeHead(proxyRes.statusCode, headers);
+          res.end(body);
+        });
+      } else {
+        // Just pipe through - don't modify content
+        res.writeHead(proxyRes.statusCode, headers);
+        proxyRes.pipe(res);
+      }
     })
     .on("error", (err) => {
       console.error("Proxy error:", err);
@@ -95,17 +119,6 @@ app.get("/proxy", async (req, res) => {
     console.error("Proxy error:", err);
     res.status(500).send("Failed to fetch URL: " + err.message);
   }
-});
-
-// Proxy for digitalpool.com resources (catch-all for fonts, static files, etc.)
-app.use("/fonts", (req, res) => {
-  const targetUrl = `https://digitalpool.com${req.path}`;
-  proxyUrl(targetUrl, res);
-});
-
-app.use("/static", (req, res) => {
-  const targetUrl = `https://digitalpool.com${req.path}`;
-  proxyUrl(targetUrl, res);
 });
 
 // Main page
@@ -524,4 +537,20 @@ server.listen(PORT, async () => {
     console.error("❌ Error initializing camera:", error.message);
     cameraInitialized = true; // Allow commands even if init failed
   }
+});
+
+// Proxy routes for digitalpool.com (MUST be last to not interfere with our API routes)
+app.use("/fonts", (req, res) => {
+  const targetUrl = `https://digitalpool.com${req.originalUrl}`;
+  proxyUrl(targetUrl, res);
+});
+
+app.use("/static", (req, res) => {
+  const targetUrl = `https://digitalpool.com${req.originalUrl}`;
+  proxyUrl(targetUrl, res);
+});
+
+app.use("/tournaments", (req, res) => {
+  const targetUrl = `https://digitalpool.com${req.originalUrl}`;
+  proxyUrl(targetUrl, res);
 });
