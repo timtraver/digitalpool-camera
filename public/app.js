@@ -866,8 +866,10 @@ function drawOverlay() {
 
 // Draw URL overlay using iframe
 function drawUrlOverlay() {
+  console.log("drawUrlOverlay called, URL:", currentOverlayConfig.overlayUrl);
+
   if (!currentOverlayConfig.overlayUrl) {
-    // console.log("No URL specified for overlay");
+    console.log("No URL specified for overlay");
     if (urlOverlayIframe) {
       urlOverlayIframe.style.display = "none";
     }
@@ -876,6 +878,7 @@ function drawUrlOverlay() {
 
   // Create iframe if it doesn't exist
   if (!urlOverlayIframe) {
+    console.log("Creating new iframe for URL overlay");
     urlOverlayIframe = document.createElement("iframe");
     urlOverlayIframe.id = "urlOverlayIframe";
     urlOverlayIframe.style.position = "absolute";
@@ -888,18 +891,21 @@ function drawUrlOverlay() {
     urlOverlayIframe.style.zIndex = "10"; // Above canvas
     urlOverlayIframe.style.background = "transparent";
 
+    // Add load handler
+    urlOverlayIframe.addEventListener("load", () => {
+      console.log("✅ URL overlay loaded successfully");
+    });
+
     // Add error handler
-    urlOverlayIframe.addEventListener("error", (e) => {
+    urlOverlayIframe.addEventListener("error", () => {
       console.error(
-        "Failed to load URL overlay:",
+        "❌ Failed to load URL overlay:",
         currentOverlayConfig.overlayUrl,
-      );
-      console.error(
-        "This may be due to X-Frame-Options or CSP headers preventing iframe embedding",
       );
     });
 
     overlayCanvas.parentElement.appendChild(urlOverlayIframe);
+    console.log("Iframe appended to parent:", overlayCanvas.parentElement);
   }
 
   // Update iframe src if changed
@@ -908,11 +914,16 @@ function drawUrlOverlay() {
 
   if (urlOverlayIframe.src !== window.location.origin + proxyUrl) {
     console.log("Loading URL overlay:", currentOverlayConfig.overlayUrl);
+    console.log("Proxy URL:", proxyUrl);
     console.log("Using proxy to bypass X-Frame-Options restrictions");
     urlOverlayIframe.src = proxyUrl;
   }
 
   urlOverlayIframe.style.display = "block";
+  console.log(
+    "Iframe display set to block, zIndex:",
+    urlOverlayIframe.style.zIndex,
+  );
 }
 
 // Draw text overlay on canvas

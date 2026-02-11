@@ -78,8 +78,39 @@ app.get("/proxy", async (req, res) => {
         // Set CORS headers to allow embedding
         headers["access-control-allow-origin"] = "*";
 
-        res.writeHead(proxyRes.statusCode, headers);
-        proxyRes.pipe(res);
+        // If it's HTML, we need to rewrite URLs to go through the proxy
+        const contentType = headers["content-type"] || "";
+        if (contentType.includes("text/html")) {
+          let body = "";
+          proxyRes.setEncoding("utf8");
+          proxyRes.on("data", (chunk) => {
+            body += chunk;
+          });
+          proxyRes.on("end", () => {
+            // Get the base URL (origin) of the target
+            const targetOrigin = `${parsedUrl.protocol}//${parsedUrl.host}`;
+
+            // Rewrite relative URLs to absolute URLs pointing to the original server
+            body = body.replace(
+              /href=["']\/([^"']*)["']/g,
+              `href="${targetOrigin}/$1"`,
+            );
+            body = body.replace(
+              /src=["']\/([^"']*)["']/g,
+              `src="${targetOrigin}/$1"`,
+            );
+
+            // Update content-length header
+            headers["content-length"] = Buffer.byteLength(body);
+
+            res.writeHead(proxyRes.statusCode, headers);
+            res.end(body);
+          });
+        } else {
+          // For non-HTML content, just pipe it through
+          res.writeHead(proxyRes.statusCode, headers);
+          proxyRes.pipe(res);
+        }
       })
       .on("error", (err) => {
         console.error("Proxy error:", err);
