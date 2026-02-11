@@ -601,12 +601,18 @@ server.listen(PORT, async () => {
 
 // Proxy routes for digitalpool.com (MUST be last to not interfere with our API routes)
 
-// Handle CORS preflight for all proxy routes
-app.options("*", (req, res) => {
+// Add CORS headers to all responses
+app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.sendStatus(200);
+
+  // Handle preflight
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+
+  next();
 });
 
 app.use("/fonts", (req, res) => {
