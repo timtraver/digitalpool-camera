@@ -927,10 +927,6 @@ function drawUrlOverlay() {
   }
 
   urlOverlayIframe.style.display = "block";
-  console.log(
-    "Iframe display set to block, zIndex:",
-    urlOverlayIframe.style.zIndex,
-  );
 }
 
 // Draw text overlay on canvas

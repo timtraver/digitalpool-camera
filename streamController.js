@@ -193,7 +193,6 @@ class StreamController extends EventEmitter {
           this.streamConfig.overlayPosition === "bottom" ? "bottom" : "top";
         pipeline.push(
           "timeoverlay",
-          `time-format="${this.streamConfig.timestampFormat}"`,
           `valignment=${valign}`,
           "halignment=right",
           `font-desc=Sans Bold ${this.streamConfig.overlayFontSize}`,
