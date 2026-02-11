@@ -447,8 +447,6 @@ header h1 {
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(18, 199, 255, 0.2);
-  max-height: 85vh;
-  overflow-y: auto;
   /* Remove transform to prevent dropdown positioning issues */
   transform: none;
   will-change: auto;
@@ -531,16 +529,20 @@ header h1 {
 }
 
 .control-item select {
-  padding: 5px;
+  padding: 3px 5px;
   border: 1px solid rgba(18, 199, 255, 0.3);
-  border-radius: 5px;
+  border-radius: 4px;
   background: rgba(6, 16, 27, 0.8);
   color: rgba(255, 255, 255, 0.85);
-  font-size: 12px;
+  font-size: 11px;
+  min-height: 24px;
+  height: 24px;
+  line-height: 1.2;
 }
 
 .control-item select option {
-  font-size: 12px;
+  font-size: 11px;
+  padding: 2px 4px;
 }
 
 .value-display {
@@ -804,13 +806,20 @@ header h1 {
 .overlay-controls input[type="text"],
 .overlay-controls select {
   flex: 1;
-  padding: 6px 8px;
-  font-size: 12px;
+  padding: 3px 6px;
+  font-size: 11px;
   background: rgba(6, 16, 27, 0.8);
   border: 1px solid rgba(18, 199, 255, 0.3);
   border-radius: 4px;
   color: rgba(255, 255, 255, 0.85);
-  min-height: 28px;
+  min-height: 24px;
+  height: 24px;
+  line-height: 1.2;
+}
+
+.overlay-controls select option {
+  font-size: 11px;
+  padding: 2px 4px;
 }
 
 .overlay-controls input[type="text"]:focus,
@@ -829,11 +838,13 @@ header h1 {
 
 .overlay-controls input[type="range"] {
   flex: 1;
+  min-width: 80px;
   height: 4px;
   background: rgba(18, 199, 255, 0.2);
   border-radius: 5px;
   outline: none;
   -webkit-appearance: none;
+  cursor: pointer;
 }
 
 .overlay-controls input[type="range"]::-webkit-slider-thumb {
@@ -851,6 +862,13 @@ header h1 {
   border-radius: 50%;
   background: #1890ff;
   cursor: pointer;
+  border: none;
+}
+
+.overlay-controls input[type="range"]::-moz-range-track {
+  background: rgba(18, 199, 255, 0.2);
+  border-radius: 5px;
+  height: 4px;
   border: none;
 }
 

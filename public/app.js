@@ -634,9 +634,6 @@ const backgroundOpacityValue = document.getElementById(
   "backgroundOpacityValue",
 );
 
-console.log("Opacity slider element:", overlayBackgroundOpacity);
-console.log("Opacity value display element:", backgroundOpacityValue);
-
 // Initialize custom dropdowns for ALL select elements
 console.log("🎨 Initializing custom dropdowns...");
 
@@ -1073,7 +1070,7 @@ showTimestamp.addEventListener("change", () => {
 // Apply font size changes after user stops dragging (debounce)
 let fontSizeTimeout;
 overlayFontSize.addEventListener("input", () => {
-  fontSizeValue.textContent = overlayFontSize.value;
+  fontSizeValue.textContent = overlayFontSize.value + "px";
   currentOverlayConfig.overlayFontSize = parseInt(overlayFontSize.value);
   drawOverlay();
   clearTimeout(fontSizeTimeout);
@@ -1097,14 +1094,9 @@ overlayBackground.addEventListener("change", () => {
 // Apply opacity changes after user stops dragging (debounce)
 let opacityTimeout;
 overlayBackgroundOpacity.addEventListener("input", () => {
-  console.log("Opacity slider changed:", overlayBackgroundOpacity.value);
   backgroundOpacityValue.textContent = overlayBackgroundOpacity.value + "%";
   currentOverlayConfig.overlayBackgroundOpacity = parseInt(
     overlayBackgroundOpacity.value,
-  );
-  console.log(
-    "Updated config opacity:",
-    currentOverlayConfig.overlayBackgroundOpacity,
   );
   drawOverlay();
   clearTimeout(opacityTimeout);
@@ -1168,8 +1160,12 @@ socket.on("streamStatus", (status) => {
     timestampPosition.value = status.config.timestampPosition || "bottom-right";
     titlePosition.value = status.config.titlePosition || "top-left";
     overlayFontSize.value = status.config.overlayFontSize || 32;
-    fontSizeValue.textContent = overlayFontSize.value;
+    fontSizeValue.textContent = overlayFontSize.value + "px";
     overlayColor.value = status.config.overlayColor || "white";
+    overlayBackground.value = status.config.overlayBackground || "transparent";
+    overlayBackgroundOpacity.value =
+      status.config.overlayBackgroundOpacity || 70;
+    backgroundOpacityValue.textContent = overlayBackgroundOpacity.value + "%";
 
     // Toggle overlay type options
     if (overlayType.value === "text") {
