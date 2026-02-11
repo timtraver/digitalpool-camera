@@ -77,20 +77,36 @@ function proxyUrl(targetUrl, res, req = null) {
         // Set CORS headers to allow embedding
         headers["access-control-allow-origin"] = "*";
 
-        // For HTML content, collect and log it
+        // For HTML or JavaScript content, collect and potentially modify it
         const contentType = headers["content-type"] || "";
-        if (contentType.includes("text/html")) {
+        if (
+          contentType.includes("text/html") ||
+          contentType.includes("javascript")
+        ) {
           let body = "";
           proxyRes.setEncoding("utf8");
           proxyRes.on("data", (chunk) => {
             body += chunk;
           });
           proxyRes.on("end", () => {
-            console.log("HTML content length:", body.length);
-            console.log(
-              "HTML preview (first 500 chars):",
-              body.substring(0, 500),
-            );
+            if (contentType.includes("text/html")) {
+              console.log("HTML content length:", body.length);
+              console.log(
+                "HTML preview (first 500 chars):",
+                body.substring(0, 500),
+              );
+            }
+
+            // Rewrite hardcoded GraphQL URLs to use our proxy
+            if (contentType.includes("javascript")) {
+              // Replace https://proxy.digitalpool.com with our local server
+              const originalLength = body.length;
+              body = body.replace(/https:\/\/proxy\.digitalpool\.com/g, "");
+              if (body.length !== originalLength) {
+                console.log("Rewrote GraphQL URLs in JavaScript bundle");
+                headers["content-length"] = Buffer.byteLength(body);
+              }
+            }
 
             res.writeHead(proxyRes.statusCode, headers);
             res.end(body);
@@ -584,6 +600,15 @@ server.listen(PORT, async () => {
 });
 
 // Proxy routes for digitalpool.com (MUST be last to not interfere with our API routes)
+
+// Handle CORS preflight for all proxy routes
+app.options("*", (req, res) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.sendStatus(200);
+});
+
 app.use("/fonts", (req, res) => {
   const targetUrl = `https://digitalpool.com${req.originalUrl}`;
   console.log("Proxying /fonts request:", req.originalUrl, "->", targetUrl);
@@ -604,6 +629,20 @@ app.use("/tournaments", (req, res) => {
     "->",
     targetUrl,
   );
+  proxyUrl(targetUrl, res, req);
+});
+
+// Proxy for version.json
+app.get("/version.json", (req, res) => {
+  const targetUrl = `https://digitalpool.com/version.json`;
+  console.log("Proxying /version.json request");
+  proxyUrl(targetUrl, res, req);
+});
+
+// Proxy for favicon
+app.get("/favicon.ico", (req, res) => {
+  const targetUrl = `https://digitalpool.com/favicon.ico`;
+  console.log("Proxying /favicon.ico request");
   proxyUrl(targetUrl, res, req);
 });
 
