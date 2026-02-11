@@ -92,6 +92,13 @@ class StreamController extends EventEmitter {
     }
 
     try {
+      // Kill any ffmpeg processes using the camera device
+      console.log("Checking for processes using camera device...");
+      await this._killCameraProcesses();
+
+      // Wait a moment for the device to be released
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
       const gstArgs = this._buildGStreamerPipeline();
       console.log("Starting GStreamer with pipeline:", gstArgs.join(" "));
 
@@ -157,6 +164,45 @@ class StreamController extends EventEmitter {
     this.streamConfig = { ...this.streamConfig, ...config };
     this.saveConfig(); // Save to file
     return { success: true, config: this.streamConfig };
+  }
+
+  /**
+   * Kill any processes using the camera device
+   */
+  async _killCameraProcesses() {
+    const { exec } = require("child_process");
+    const util = require("util");
+    const execPromise = util.promisify(exec);
+
+    try {
+      // Find processes using the camera device
+      const { stdout } = await execPromise(
+        `lsof ${this.cameraDevice} 2>/dev/null || true`,
+      );
+
+      if (stdout.trim()) {
+        console.log("Found processes using camera:", stdout);
+
+        // Extract PIDs and kill them
+        const lines = stdout.trim().split("\n").slice(1); // Skip header
+        for (const line of lines) {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length > 1) {
+            const pid = parts[1];
+            console.log(`Killing process ${pid}...`);
+            try {
+              process.kill(pid, "SIGTERM");
+            } catch (err) {
+              console.log(`Could not kill process ${pid}:`, err.message);
+            }
+          }
+        }
+      } else {
+        console.log("No processes found using camera device");
+      }
+    } catch (error) {
+      console.log("Error checking for camera processes:", error.message);
+    }
   }
 
   /**
