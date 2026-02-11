@@ -730,14 +730,14 @@ header h1 {
 }
 
 .custom-dropdown-selected {
-  padding: 6px 6px;
+  padding: 4px 4px;
   font-size: 10px !important;
   background: #1a1a1a;
   border: 1px solid #1890ff;
   border-radius: 6px;
   color: white !important;
-  min-height: 38px;
-  line-height: 1.2;
+  min-height: 28px;
+  line-height: 1.1;
   font-weight: 600 !important;
   cursor: pointer;
   display: flex;
@@ -786,7 +786,7 @@ header h1 {
 
 .custom-dropdown-option {
   padding: 6px 10px;
-  font-size: 12px !important;
+  font-size: 10px !important;
   color: white !important;
   cursor: pointer;
   transition: background 0.2s ease;
