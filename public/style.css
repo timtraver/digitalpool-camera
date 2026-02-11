@@ -383,7 +383,6 @@ header h1 {
 }
 
 .ptz-settings {
-  text-align: center;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -530,15 +529,15 @@ header h1 {
 }
 
 .control-item select {
-  padding: 2px 3px;
+  padding: 2px 2px;
   border: 1px solid rgba(18, 199, 255, 0.3);
   border-radius: 4px;
   background: rgba(6, 16, 27, 0.8);
   color: rgba(255, 255, 255, 0.85);
   font-size: 8px;
-  min-height: 18px;
-  height: 18px;
-  line-height: 1.2;
+  min-height: 16px;
+  height: 16px;
+  line-height: 1.1;
 }
 
 .control-item select option {
@@ -731,14 +730,14 @@ header h1 {
 }
 
 .custom-dropdown-selected {
-  padding: 8px 8px;
-  font-size: 12px !important;
+  padding: 6px 6px;
+  font-size: 10px !important;
   background: #1a1a1a;
-  border: 2px solid #1890ff;
+  border: 1px solid #1890ff;
   border-radius: 6px;
   color: white !important;
   min-height: 38px;
-  line-height: 1.3;
+  line-height: 1.2;
   font-weight: 600 !important;
   cursor: pointer;
   display: flex;
@@ -786,8 +785,8 @@ header h1 {
 }
 
 .custom-dropdown-option {
-  padding: 8px 14px;
-  font-size: 18px !important;
+  padding: 6px 10px;
+  font-size: 12px !important;
   color: white !important;
   cursor: pointer;
   transition: background 0.2s ease;
