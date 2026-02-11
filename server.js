@@ -90,15 +90,18 @@ app.get("/proxy", async (req, res) => {
             // Get the base URL (origin) of the target
             const targetOrigin = `${parsedUrl.protocol}//${parsedUrl.host}`;
 
-            // Rewrite relative URLs to absolute URLs pointing to the original server
-            body = body.replace(
-              /href=["']\/([^"']*)["']/g,
-              `href="${targetOrigin}/$1"`,
-            );
-            body = body.replace(
-              /src=["']\/([^"']*)["']/g,
-              `src="${targetOrigin}/$1"`,
-            );
+            // Add a base tag to make all relative URLs resolve to the original server
+            const baseTag = `<base href="${targetOrigin}/">`;
+
+            // Insert base tag after <head> tag
+            if (body.includes("<head>")) {
+              body = body.replace("<head>", `<head>${baseTag}`);
+            } else if (body.includes("<HEAD>")) {
+              body = body.replace("<HEAD>", `<HEAD>${baseTag}`);
+            } else {
+              // If no head tag, add it at the beginning
+              body = `<!DOCTYPE html><html><head>${baseTag}</head><body>${body}</body></html>`;
+            }
 
             // Update content-length header
             headers["content-length"] = Buffer.byteLength(body);
