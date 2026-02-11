@@ -215,11 +215,25 @@ function proxyUrl(targetUrl, res, req = null) {
         res.writeHead(proxyRes.statusCode, headers);
         res.end(body);
       });
+      proxyRes.on("error", (err) => {
+        console.error(`[${requestId}] Response stream error:`, err);
+      });
     });
 
     proxyReq.on("error", (err) => {
       console.error(`[${requestId}] Proxy error:`, err);
-      res.status(500).send("Failed to fetch URL: " + err.message);
+      if (!res.headersSent) {
+        res.status(500).send("Failed to fetch URL: " + err.message);
+      }
+    });
+
+    // Set a timeout for the request (30 seconds)
+    proxyReq.setTimeout(30000, () => {
+      console.error(`[${requestId}] Request timeout after 30 seconds`);
+      proxyReq.destroy();
+      if (!res.headersSent) {
+        res.status(504).send("Gateway timeout");
+      }
     });
 
     // Forward the request body
