@@ -70,7 +70,7 @@ function proxyUrl(targetUrl, res, req = null) {
     protocol
       .get(targetUrl, (proxyRes) => {
         console.log(
-          `Response status: ${proxyRes.statusCode}, Content-Type: ${proxyRes.headers["content-type"]}`,
+          `[${requestId}] Response status: ${proxyRes.statusCode}, Content-Type: ${proxyRes.headers["content-type"]}`,
         );
 
         // Remove X-Frame-Options and CSP headers that would block iframe embedding
@@ -96,9 +96,9 @@ function proxyUrl(targetUrl, res, req = null) {
           });
           proxyRes.on("end", () => {
             if (contentType.includes("text/html")) {
-              console.log("HTML content length:", body.length);
+              console.log(`[${requestId}] HTML content length:`, body.length);
               console.log(
-                "HTML preview (first 500 chars):",
+                `[${requestId}] HTML preview (first 500 chars):`,
                 body.substring(0, 500),
               );
             }
@@ -109,7 +109,9 @@ function proxyUrl(targetUrl, res, req = null) {
               const originalLength = body.length;
               body = body.replace(/https:\/\/proxy\.digitalpool\.com/g, "");
               if (body.length !== originalLength) {
-                console.log("Rewrote GraphQL URLs in JavaScript bundle");
+                console.log(
+                  `[${requestId}] Rewrote GraphQL URLs in JavaScript bundle`,
+                );
                 headers["content-length"] = Buffer.byteLength(body);
               }
             }
@@ -119,6 +121,9 @@ function proxyUrl(targetUrl, res, req = null) {
           });
         } else {
           // Just pipe through - don't modify content
+          console.log(
+            `[${requestId}] Piping ${contentType} response directly to client`,
+          );
           res.writeHead(proxyRes.statusCode, headers);
           proxyRes.pipe(res);
         }
