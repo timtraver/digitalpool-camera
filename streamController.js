@@ -175,31 +175,61 @@ class StreamController extends EventEmitter {
     const execPromise = util.promisify(exec);
 
     try {
-      // Find processes using the camera device
-      const { stdout } = await execPromise(
-        `lsof ${this.cameraDevice} 2>/dev/null || true`,
-      );
+      // Try multiple methods to find and kill processes using the camera
 
-      if (stdout.trim()) {
-        console.log("Found processes using camera:", stdout);
-
-        // Extract PIDs and kill them
-        const lines = stdout.trim().split("\n").slice(1); // Skip header
-        for (const line of lines) {
-          const parts = line.trim().split(/\s+/);
-          if (parts.length > 1) {
-            const pid = parts[1];
-            console.log(`Killing process ${pid}...`);
-            try {
-              process.kill(pid, "SIGTERM");
-            } catch (err) {
-              console.log(`Could not kill process ${pid}:`, err.message);
+      // Method 1: Use fuser (most reliable for device files)
+      try {
+        const { stdout: fuserOut } = await execPromise(
+          `fuser ${this.cameraDevice} 2>&1 || true`,
+        );
+        if (fuserOut.trim()) {
+          console.log("fuser output:", fuserOut);
+          // Extract PIDs (fuser outputs like "/dev/video0: 1234 5678")
+          const match = fuserOut.match(/:\s*(.+)/);
+          if (match) {
+            const pids = match[1].trim().split(/\s+/);
+            for (const pid of pids) {
+              if (pid && !isNaN(pid)) {
+                console.log(`Killing process ${pid} (found by fuser)...`);
+                try {
+                  process.kill(parseInt(pid), "SIGTERM");
+                } catch (err) {
+                  console.log(`Could not kill process ${pid}:`, err.message);
+                }
+              }
             }
           }
         }
-      } else {
-        console.log("No processes found using camera device");
+      } catch (err) {
+        console.log("fuser not available or failed:", err.message);
       }
+
+      // Method 2: Kill all ffmpeg processes (fallback)
+      try {
+        const { stdout: psOut } = await execPromise(
+          `ps aux | grep ffmpeg | grep -v grep || true`,
+        );
+        if (psOut.trim()) {
+          console.log("Found ffmpeg processes:", psOut);
+          const lines = psOut.trim().split("\n");
+          for (const line of lines) {
+            const parts = line.trim().split(/\s+/);
+            if (parts.length > 1) {
+              const pid = parts[1];
+              console.log(`Killing ffmpeg process ${pid}...`);
+              try {
+                process.kill(parseInt(pid), "SIGTERM");
+              } catch (err) {
+                console.log(`Could not kill process ${pid}:`, err.message);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.log("Could not find ffmpeg processes:", err.message);
+      }
+
+      console.log("Finished checking for camera processes");
     } catch (error) {
       console.log("Error checking for camera processes:", error.message);
     }
