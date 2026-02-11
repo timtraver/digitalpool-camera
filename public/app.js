@@ -628,8 +628,6 @@ const overlayBackgroundOpacity = document.getElementById(
 const backgroundOpacityValue = document.getElementById(
   "backgroundOpacityValue",
 );
-const applyOverlayBtn = document.getElementById("applyOverlay");
-const testOverlayBtn = document.getElementById("testOverlay");
 
 // Initialize custom dropdowns for ALL select elements
 console.log("🎨 Initializing custom dropdowns...");
@@ -1019,107 +1017,8 @@ function drawTextOverlay() {
   // console.log("✅ Overlay drawing complete"); // Removed - floods console at 5fps
 }
 
-// Live preview updates (update preview as user types/changes)
-overlayEnabled.addEventListener("change", () => {
-  currentOverlayConfig.overlayEnabled = overlayEnabled.checked;
-  console.log("Overlay enabled changed:", overlayEnabled.checked); // Keep this - only on user action
-  drawOverlay(); // Always redraw when enabled/disabled changes
-});
-
-overlayText.addEventListener("input", () => {
-  currentOverlayConfig.overlayText = overlayText.value;
-  // console.log("Overlay text changed:", overlayText.value); // Removed - floods console while typing
-  drawOverlay(); // Always redraw to show live preview
-});
-
-showTimestamp.addEventListener("change", () => {
-  currentOverlayConfig.showTimestamp = showTimestamp.checked;
-  drawOverlay(); // Always redraw to show live preview
-});
-
-overlayPosition.addEventListener("change", () => {
-  currentOverlayConfig.overlayPosition = overlayPosition.value;
-  drawOverlay(); // Always redraw to show live preview
-});
-
-overlayFontSize.addEventListener("input", () => {
-  fontSizeValue.textContent = overlayFontSize.value;
-  currentOverlayConfig.overlayFontSize = parseInt(overlayFontSize.value);
-  drawOverlay(); // Always redraw to show live preview
-});
-
-overlayColor.addEventListener("change", () => {
-  currentOverlayConfig.overlayColor = overlayColor.value;
-  drawOverlay(); // Always redraw to show live preview
-});
-
-overlayBackground.addEventListener("change", () => {
-  currentOverlayConfig.overlayBackground = overlayBackground.value;
-  drawOverlay(); // Always redraw to show live preview
-});
-
-overlayBackgroundOpacity.addEventListener("input", () => {
-  backgroundOpacityValue.textContent = overlayBackgroundOpacity.value;
-  currentOverlayConfig.overlayBackgroundOpacity = parseInt(
-    overlayBackgroundOpacity.value,
-  );
-  drawOverlay(); // Always redraw to show live preview
-});
-
-// URL overlay input
-overlayUrl.addEventListener("input", () => {
-  currentOverlayConfig.overlayUrl = overlayUrl.value;
-  drawOverlay(); // Always redraw to show live preview
-});
-
-// Position dropdowns
-console.log(`🔍 Initial timestampPosition value: ${timestampPosition.value}`);
-console.log(`🔍 Initial titlePosition value: ${titlePosition.value}`);
-
-timestampPosition.addEventListener("change", () => {
-  currentOverlayConfig.timestampPosition = timestampPosition.value;
-  console.log(`📍 Timestamp position changed to: ${timestampPosition.value}`);
-  drawOverlay();
-});
-
-titlePosition.addEventListener("change", () => {
-  currentOverlayConfig.titlePosition = titlePosition.value;
-  console.log(`📍 Title position changed to: ${titlePosition.value}`);
-  drawOverlay();
-});
-
-// Test overlay button - for debugging
-testOverlayBtn.addEventListener("click", () => {
-  console.log("🧪 TEST OVERLAY BUTTON CLICKED");
-  console.log("Current overlay config:", currentOverlayConfig);
-  console.log(
-    "Canvas dimensions:",
-    overlayCanvas.width,
-    "x",
-    overlayCanvas.height,
-  );
-  console.log("Overlay enabled checkbox:", overlayEnabled.checked);
-  console.log("Overlay text input:", overlayText.value);
-  console.log("Custom text 2 input:", customText2.value);
-
-  // Force enable and set test values
-  currentOverlayConfig.overlayEnabled = true;
-  currentOverlayConfig.overlayType = "text";
-  currentOverlayConfig.overlayText = "TEST TITLE";
-  currentOverlayConfig.showTimestamp = true;
-  currentOverlayConfig.timestampPosition = "bottom-right";
-  currentOverlayConfig.titlePosition = "top-left";
-  currentOverlayConfig.overlayColor = "white";
-  currentOverlayConfig.overlayFontSize = 32;
-
-  console.log("Updated config for test:", currentOverlayConfig);
-  drawOverlay();
-
-  alert("Test overlay drawn! Check console for details.");
-});
-
-// Apply overlay settings
-applyOverlayBtn.addEventListener("click", () => {
+// Helper function to apply overlay settings to server
+function applyOverlaySettings() {
   const overlayConfig = {
     overlayEnabled: overlayEnabled.checked,
     overlayType: overlayType.value,
@@ -1134,12 +1033,100 @@ applyOverlayBtn.addEventListener("click", () => {
     overlayBackgroundOpacity: parseInt(overlayBackgroundOpacity.value),
   };
 
-  // Update local preview immediately
-  currentOverlayConfig = { ...overlayConfig };
-  drawOverlay();
-
-  console.log("Applying overlay config:", overlayConfig);
+  console.log("Auto-applying overlay config:", overlayConfig);
   socket.emit("updateOverlay", overlayConfig);
+}
+
+// Live preview updates (update preview as user types/changes)
+overlayEnabled.addEventListener("change", () => {
+  currentOverlayConfig.overlayEnabled = overlayEnabled.checked;
+  console.log("Overlay enabled changed:", overlayEnabled.checked);
+  drawOverlay();
+  applyOverlaySettings();
+});
+
+// Apply text changes after user stops typing (debounce)
+let textInputTimeout;
+overlayText.addEventListener("input", () => {
+  currentOverlayConfig.overlayText = overlayText.value;
+  drawOverlay();
+  clearTimeout(textInputTimeout);
+  textInputTimeout = setTimeout(() => {
+    applyOverlaySettings();
+  }, 1000);
+});
+
+showTimestamp.addEventListener("change", () => {
+  currentOverlayConfig.showTimestamp = showTimestamp.checked;
+  drawOverlay();
+  applyOverlaySettings();
+});
+
+// Apply font size changes after user stops dragging (debounce)
+let fontSizeTimeout;
+overlayFontSize.addEventListener("input", () => {
+  fontSizeValue.textContent = overlayFontSize.value;
+  currentOverlayConfig.overlayFontSize = parseInt(overlayFontSize.value);
+  drawOverlay();
+  clearTimeout(fontSizeTimeout);
+  fontSizeTimeout = setTimeout(() => {
+    applyOverlaySettings();
+  }, 500);
+});
+
+overlayColor.addEventListener("change", () => {
+  currentOverlayConfig.overlayColor = overlayColor.value;
+  drawOverlay();
+  applyOverlaySettings();
+});
+
+overlayBackground.addEventListener("change", () => {
+  currentOverlayConfig.overlayBackground = overlayBackground.value;
+  drawOverlay();
+  applyOverlaySettings();
+});
+
+// Apply opacity changes after user stops dragging (debounce)
+let opacityTimeout;
+overlayBackgroundOpacity.addEventListener("input", () => {
+  backgroundOpacityValue.textContent = overlayBackgroundOpacity.value + "%";
+  currentOverlayConfig.overlayBackgroundOpacity = parseInt(
+    overlayBackgroundOpacity.value,
+  );
+  drawOverlay();
+  clearTimeout(opacityTimeout);
+  opacityTimeout = setTimeout(() => {
+    applyOverlaySettings();
+  }, 500);
+});
+
+// Apply URL changes after user stops typing (debounce)
+let urlInputTimeout;
+overlayUrl.addEventListener("input", () => {
+  currentOverlayConfig.overlayUrl = overlayUrl.value;
+  drawOverlay();
+  clearTimeout(urlInputTimeout);
+  urlInputTimeout = setTimeout(() => {
+    applyOverlaySettings();
+  }, 1000);
+});
+
+// Position dropdowns
+console.log(`🔍 Initial timestampPosition value: ${timestampPosition.value}`);
+console.log(`🔍 Initial titlePosition value: ${titlePosition.value}`);
+
+timestampPosition.addEventListener("change", () => {
+  currentOverlayConfig.timestampPosition = timestampPosition.value;
+  console.log(`📍 Timestamp position changed to: ${timestampPosition.value}`);
+  drawOverlay();
+  applyOverlaySettings();
+});
+
+titlePosition.addEventListener("change", () => {
+  currentOverlayConfig.titlePosition = titlePosition.value;
+  console.log(`📍 Title position changed to: ${titlePosition.value}`);
+  drawOverlay();
+  applyOverlaySettings();
 });
 
 // Overlay result handler
