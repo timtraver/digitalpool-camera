@@ -158,8 +158,9 @@ function proxyUrl(targetUrl, res, req = null) {
     console.log("Request headers:", JSON.stringify(headers, null, 2));
 
     const proxyReq = protocol.request(options, (proxyRes) => {
+      const responseContentType = proxyRes.headers["content-type"] || "";
       console.log(
-        `Response status: ${proxyRes.statusCode}, Content-Type: ${proxyRes.headers["content-type"]}`,
+        `Response status: ${proxyRes.statusCode}, Content-Type: ${responseContentType}`,
       );
 
       // Remove X-Frame-Options and CSP headers
@@ -179,8 +180,7 @@ function proxyUrl(targetUrl, res, req = null) {
         body += chunk;
       });
       proxyRes.on("end", () => {
-        const contentType = headers["content-type"] || "";
-        if (contentType.includes("application/json")) {
+        if (responseContentType.includes("application/json")) {
           console.log("✅ GraphQL Response (JSON):", body.substring(0, 500));
         } else {
           console.log(
