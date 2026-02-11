@@ -909,13 +909,20 @@ function drawUrlOverlay() {
   }
 
   // Update iframe src if changed
-  // Use proxy to bypass X-Frame-Options restrictions
-  const proxyUrl = `/proxy?url=${encodeURIComponent(currentOverlayConfig.overlayUrl)}`;
+  // Extract the path from the URL and use it directly (server proxies /tournaments)
+  let proxyUrl;
+  try {
+    const url = new URL(currentOverlayConfig.overlayUrl);
+    proxyUrl = url.pathname; // e.g., /tournaments/2026-wpba-classics-players-championship/overlay/table-1
+  } catch (e) {
+    console.error("Invalid overlay URL:", currentOverlayConfig.overlayUrl);
+    return;
+  }
 
   if (urlOverlayIframe.src !== window.location.origin + proxyUrl) {
     console.log("Loading URL overlay:", currentOverlayConfig.overlayUrl);
     console.log("Proxy URL:", proxyUrl);
-    console.log("Using proxy to bypass X-Frame-Options restrictions");
+    console.log("Using direct path (server proxies /tournaments)");
     urlOverlayIframe.src = proxyUrl;
   }
 
