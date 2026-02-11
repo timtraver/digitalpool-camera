@@ -73,6 +73,7 @@ function proxyUrl(targetUrl, res, req = null) {
         delete headers["x-frame-options"];
         delete headers["content-security-policy"];
         delete headers["content-security-policy-report-only"];
+        delete headers["content-encoding"]; // Remove encoding header since we're decompressing
 
         // Set CORS headers to allow embedding
         headers["access-control-allow-origin"] = "*";
@@ -149,6 +150,7 @@ function proxyUrl(targetUrl, res, req = null) {
       delete headers["x-frame-options"];
       delete headers["content-security-policy"];
       delete headers["content-security-policy-report-only"];
+      delete headers["content-encoding"]; // Remove encoding header since we're decompressing
 
       // Set CORS headers
       headers["access-control-allow-origin"] = "*";
