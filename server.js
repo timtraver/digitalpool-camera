@@ -124,12 +124,22 @@ function proxyUrl(targetUrl, res, req = null) {
       });
   } else {
     // For POST/PUT/etc requests, we need to forward the body
-    // Only forward safe headers, not browser-specific ones
+    // Forward important headers including cookies for authentication
     const headers = {
       "content-type": req.headers["content-type"] || "application/json",
       "user-agent": req.headers["user-agent"] || "Mozilla/5.0",
       host: parsedUrl.hostname,
     };
+
+    // Forward cookies if present (needed for authentication)
+    if (req.headers.cookie) {
+      headers.cookie = req.headers.cookie;
+    }
+
+    // Forward authorization header if present
+    if (req.headers.authorization) {
+      headers.authorization = req.headers.authorization;
+    }
 
     const options = {
       hostname: parsedUrl.hostname,
@@ -143,6 +153,7 @@ function proxyUrl(targetUrl, res, req = null) {
       `Making ${req.method} request with body:`,
       req.body ? JSON.stringify(req.body).substring(0, 200) : "no body",
     );
+    console.log("Request headers:", JSON.stringify(headers, null, 2));
 
     const proxyReq = protocol.request(options, (proxyRes) => {
       console.log(
