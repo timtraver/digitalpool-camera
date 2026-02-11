@@ -50,7 +50,7 @@ app.use(express.static("public"));
 app.use(express.json());
 
 // Helper function to proxy any URL
-function proxyUrl(targetUrl, res) {
+function proxyUrl(targetUrl, res, req = null) {
   const https = require("https");
   const http = require("http");
   const urlModule = require("url");
@@ -58,51 +58,95 @@ function proxyUrl(targetUrl, res) {
   const parsedUrl = urlModule.parse(targetUrl);
   const protocol = parsedUrl.protocol === "https:" ? https : http;
 
-  console.log("Proxying URL:", targetUrl);
+  console.log("Proxying URL:", targetUrl, req ? `(${req.method})` : "(GET)");
 
-  protocol
-    .get(targetUrl, (proxyRes) => {
+  // For GET requests or when no req object is provided
+  if (!req || req.method === "GET") {
+    protocol
+      .get(targetUrl, (proxyRes) => {
+        console.log(
+          `Response status: ${proxyRes.statusCode}, Content-Type: ${proxyRes.headers["content-type"]}`,
+        );
+
+        // Remove X-Frame-Options and CSP headers that would block iframe embedding
+        const headers = { ...proxyRes.headers };
+        delete headers["x-frame-options"];
+        delete headers["content-security-policy"];
+        delete headers["content-security-policy-report-only"];
+
+        // Set CORS headers to allow embedding
+        headers["access-control-allow-origin"] = "*";
+
+        // For HTML content, collect and log it
+        const contentType = headers["content-type"] || "";
+        if (contentType.includes("text/html")) {
+          let body = "";
+          proxyRes.setEncoding("utf8");
+          proxyRes.on("data", (chunk) => {
+            body += chunk;
+          });
+          proxyRes.on("end", () => {
+            console.log("HTML content length:", body.length);
+            console.log(
+              "HTML preview (first 500 chars):",
+              body.substring(0, 500),
+            );
+
+            res.writeHead(proxyRes.statusCode, headers);
+            res.end(body);
+          });
+        } else {
+          // Just pipe through - don't modify content
+          res.writeHead(proxyRes.statusCode, headers);
+          proxyRes.pipe(res);
+        }
+      })
+      .on("error", (err) => {
+        console.error("Proxy error:", err);
+        res.status(500).send("Failed to fetch URL: " + err.message);
+      });
+  } else {
+    // For POST/PUT/etc requests, we need to forward the body
+    const options = {
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || (parsedUrl.protocol === "https:" ? 443 : 80),
+      path: parsedUrl.path,
+      method: req.method,
+      headers: {
+        ...req.headers,
+        host: parsedUrl.hostname,
+      },
+    };
+
+    const proxyReq = protocol.request(options, (proxyRes) => {
       console.log(
         `Response status: ${proxyRes.statusCode}, Content-Type: ${proxyRes.headers["content-type"]}`,
       );
 
-      // Remove X-Frame-Options and CSP headers that would block iframe embedding
+      // Remove X-Frame-Options and CSP headers
       const headers = { ...proxyRes.headers };
       delete headers["x-frame-options"];
       delete headers["content-security-policy"];
       delete headers["content-security-policy-report-only"];
 
-      // Set CORS headers to allow embedding
+      // Set CORS headers
       headers["access-control-allow-origin"] = "*";
 
-      // For HTML content, collect and log it
-      const contentType = headers["content-type"] || "";
-      if (contentType.includes("text/html")) {
-        let body = "";
-        proxyRes.setEncoding("utf8");
-        proxyRes.on("data", (chunk) => {
-          body += chunk;
-        });
-        proxyRes.on("end", () => {
-          console.log("HTML content length:", body.length);
-          console.log(
-            "HTML preview (first 500 chars):",
-            body.substring(0, 500),
-          );
+      res.writeHead(proxyRes.statusCode, headers);
+      proxyRes.pipe(res);
+    });
 
-          res.writeHead(proxyRes.statusCode, headers);
-          res.end(body);
-        });
-      } else {
-        // Just pipe through - don't modify content
-        res.writeHead(proxyRes.statusCode, headers);
-        proxyRes.pipe(res);
-      }
-    })
-    .on("error", (err) => {
+    proxyReq.on("error", (err) => {
       console.error("Proxy error:", err);
       res.status(500).send("Failed to fetch URL: " + err.message);
     });
+
+    // Forward the request body
+    if (req.body) {
+      proxyReq.write(JSON.stringify(req.body));
+    }
+    proxyReq.end();
+  }
 }
 
 // Proxy endpoint for loading external URLs (bypasses X-Frame-Options)
@@ -543,13 +587,13 @@ server.listen(PORT, async () => {
 app.use("/fonts", (req, res) => {
   const targetUrl = `https://digitalpool.com${req.originalUrl}`;
   console.log("Proxying /fonts request:", req.originalUrl, "->", targetUrl);
-  proxyUrl(targetUrl, res);
+  proxyUrl(targetUrl, res, req);
 });
 
 app.use("/static", (req, res) => {
   const targetUrl = `https://digitalpool.com${req.originalUrl}`;
   console.log("Proxying /static request:", req.originalUrl, "->", targetUrl);
-  proxyUrl(targetUrl, res);
+  proxyUrl(targetUrl, res, req);
 });
 
 app.use("/tournaments", (req, res) => {
@@ -560,5 +604,12 @@ app.use("/tournaments", (req, res) => {
     "->",
     targetUrl,
   );
-  proxyUrl(targetUrl, res);
+  proxyUrl(targetUrl, res, req);
+});
+
+// Proxy for GraphQL and other API endpoints
+app.use("/graphql", (req, res) => {
+  const targetUrl = `https://digitalpool.com${req.originalUrl}`;
+  console.log("Proxying /graphql request:", req.originalUrl, "->", targetUrl);
+  proxyUrl(targetUrl, res, req);
 });
