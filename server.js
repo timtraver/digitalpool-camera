@@ -134,6 +134,11 @@ function proxyUrl(targetUrl, res, req = null) {
       },
     };
 
+    console.log(
+      `Making ${req.method} request with body:`,
+      req.body ? JSON.stringify(req.body).substring(0, 200) : "no body",
+    );
+
     const proxyReq = protocol.request(options, (proxyRes) => {
       console.log(
         `Response status: ${proxyRes.statusCode}, Content-Type: ${proxyRes.headers["content-type"]}`,
@@ -148,8 +153,17 @@ function proxyUrl(targetUrl, res, req = null) {
       // Set CORS headers
       headers["access-control-allow-origin"] = "*";
 
-      res.writeHead(proxyRes.statusCode, headers);
-      proxyRes.pipe(res);
+      // Collect response body for logging
+      let body = "";
+      proxyRes.setEncoding("utf8");
+      proxyRes.on("data", (chunk) => {
+        body += chunk;
+      });
+      proxyRes.on("end", () => {
+        console.log("Response body preview:", body.substring(0, 200));
+        res.writeHead(proxyRes.statusCode, headers);
+        res.end(body);
+      });
     });
 
     proxyReq.on("error", (err) => {
@@ -159,7 +173,9 @@ function proxyUrl(targetUrl, res, req = null) {
 
     // Forward the request body
     if (req.body) {
-      proxyReq.write(JSON.stringify(req.body));
+      const bodyStr = JSON.stringify(req.body);
+      console.log("Writing body to proxy request:", bodyStr.substring(0, 200));
+      proxyReq.write(bodyStr);
     }
     proxyReq.end();
   }
