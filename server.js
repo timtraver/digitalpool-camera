@@ -717,8 +717,9 @@ app.get("/favicon.ico", (req, res) => {
 });
 
 // Proxy for GraphQL and other API endpoints
+// Try proxy.digitalpool.com instead of digitalpool.com
 app.use("/graphql", (req, res) => {
-  const targetUrl = `https://digitalpool.com${req.originalUrl}`;
+  const targetUrl = `https://proxy.digitalpool.com${req.originalUrl}`;
   console.log("Proxying /graphql request:", req.originalUrl, "->", targetUrl);
   proxyUrl(targetUrl, res, req);
 });
