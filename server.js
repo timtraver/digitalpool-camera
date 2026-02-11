@@ -129,6 +129,8 @@ function proxyUrl(targetUrl, res, req = null) {
       "content-type": req.headers["content-type"] || "application/json",
       "user-agent": req.headers["user-agent"] || "Mozilla/5.0",
       host: parsedUrl.hostname,
+      origin: `${parsedUrl.protocol}//${parsedUrl.hostname}`,
+      referer: targetUrl,
     };
 
     // Forward cookies if present (needed for authentication)
@@ -177,7 +179,15 @@ function proxyUrl(targetUrl, res, req = null) {
         body += chunk;
       });
       proxyRes.on("end", () => {
-        console.log("Response body preview:", body.substring(0, 200));
+        const contentType = headers["content-type"] || "";
+        if (contentType.includes("application/json")) {
+          console.log("✅ GraphQL Response (JSON):", body.substring(0, 500));
+        } else {
+          console.log(
+            "❌ GraphQL Response (HTML - ERROR):",
+            body.substring(0, 200),
+          );
+        }
         res.writeHead(proxyRes.statusCode, headers);
         res.end(body);
       });
