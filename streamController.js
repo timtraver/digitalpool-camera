@@ -87,8 +87,13 @@ class StreamController extends EventEmitter {
     // Merge config
     this.streamConfig = { ...this.streamConfig, ...config };
 
-    if (!this.streamConfig.destination) {
-      return { success: false, error: "No destination URL specified" };
+    // For RTMP, destination is optional (defaults to local nginx)
+    // For SRT, destination is required
+    if (
+      this.streamConfig.protocol === "srt" &&
+      !this.streamConfig.destination
+    ) {
+      return { success: false, error: "No destination URL specified for SRT" };
     }
 
     try {
@@ -359,12 +364,15 @@ class StreamController extends EventEmitter {
         "latency=125",
       );
     } else if (protocol === "rtmp") {
+      // For RTMP, push to local nginx server
+      // If destination is empty or localhost, use local nginx
+      const rtmpUrl = destination || "rtmp://localhost:1935/live/stream";
       pipeline.push(
         "flvmux",
         "streamable=true",
         "!",
         "rtmpsink",
-        `location=${destination}`,
+        `location=${rtmpUrl}`,
       );
     } else {
       throw new Error(`Unsupported protocol: ${protocol}`);
