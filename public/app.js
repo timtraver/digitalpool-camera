@@ -886,13 +886,30 @@ function drawUrlOverlay() {
     urlOverlayIframe.style.border = "none";
     urlOverlayIframe.style.pointerEvents = "none"; // Don't capture mouse events
     urlOverlayIframe.style.zIndex = "10"; // Above canvas
+    urlOverlayIframe.style.background = "transparent";
+
+    // Add error handler
+    urlOverlayIframe.addEventListener("error", (e) => {
+      console.error(
+        "Failed to load URL overlay:",
+        currentOverlayConfig.overlayUrl,
+      );
+      console.error(
+        "This may be due to X-Frame-Options or CSP headers preventing iframe embedding",
+      );
+    });
+
     overlayCanvas.parentElement.appendChild(urlOverlayIframe);
   }
 
   // Update iframe src if changed
-  if (urlOverlayIframe.src !== currentOverlayConfig.overlayUrl) {
-    console.log("Loading URL overlay:", currentOverlayConfig.overlayUrl); // Keep this one - only happens on URL change
-    urlOverlayIframe.src = currentOverlayConfig.overlayUrl;
+  // Use proxy to bypass X-Frame-Options restrictions
+  const proxyUrl = `/proxy?url=${encodeURIComponent(currentOverlayConfig.overlayUrl)}`;
+
+  if (urlOverlayIframe.src !== window.location.origin + proxyUrl) {
+    console.log("Loading URL overlay:", currentOverlayConfig.overlayUrl);
+    console.log("Using proxy to bypass X-Frame-Options restrictions");
+    urlOverlayIframe.src = proxyUrl;
   }
 
   urlOverlayIframe.style.display = "block";

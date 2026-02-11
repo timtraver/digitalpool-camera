@@ -182,23 +182,24 @@ header h1 {
 /* Dual-ring directional pad */
 .directional-pad-container {
   position: relative;
-  width: 120px;
-  height: 120px;
+  width: 160px;
+  height: 160px;
   display: flex;
   align-items: center;
   justify-content: center;
+  margin: 0 auto;
 }
 
 /* Outer ring buttons - Large movements */
 .btn-control-outer {
   position: absolute;
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
   border: none;
   /* DigitalPool blue gradient */
   background: linear-gradient(135deg, #1890ff 0%, #0d5a9e 100%);
   color: white;
-  font-size: 16px;
+  font-size: 18px;
   border-radius: 6px;
   cursor: pointer;
   z-index: 1;
@@ -234,13 +235,13 @@ header h1 {
 /* Inner ring buttons - Small movements */
 .btn-control-inner {
   position: absolute;
-  width: 24px;
-  height: 24px;
+  width: 30px;
+  height: 30px;
   border: none;
   /* Lighter DigitalPool blue for inner ring */
   background: linear-gradient(135deg, #40a9ff 0%, #1890ff 100%);
   color: white;
-  font-size: 12px;
+  font-size: 14px;
   border-radius: 4px;
   cursor: pointer;
   z-index: 2;
@@ -250,25 +251,25 @@ header h1 {
 }
 
 .btn-top-inner {
-  top: 32px;
+  top: 42px;
   left: 50%;
   transform: translateX(-50%);
 }
 
 .btn-right-inner {
-  right: 32px;
+  right: 42px;
   top: 50%;
   transform: translateY(-50%);
 }
 
 .btn-bottom-inner {
-  bottom: 32px;
+  bottom: 42px;
   left: 50%;
   transform: translateX(-50%);
 }
 
 .btn-left-inner {
-  left: 32px;
+  left: 42px;
   top: 50%;
   transform: translateY(-50%);
 }
@@ -276,12 +277,12 @@ header h1 {
 /* Center reset button */
 .btn-control-center {
   position: absolute;
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   border: none;
   background: #ef4444;
   color: white;
-  font-size: 16px;
+  font-size: 20px;
   border-radius: 50%;
   cursor: pointer;
   transition: all 0.15s;
@@ -289,6 +290,7 @@ header h1 {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
+  z-index: 3;
 }
 
 /* Hover effects - Animate in arrow direction */
@@ -387,6 +389,8 @@ header h1 {
   flex-direction: column;
   gap: 8px;
   min-width: 140px;
+  align-items: center;
+  justify-content: center;
 }
 
 .control-item-compact {

@@ -49,6 +49,48 @@ streamController.on("log", (log) => {
 app.use(express.static("public"));
 app.use(express.json());
 
+// Proxy endpoint for loading external URLs (bypasses X-Frame-Options)
+app.get("/proxy", async (req, res) => {
+  const targetUrl = req.query.url;
+
+  if (!targetUrl) {
+    return res.status(400).send("Missing 'url' query parameter");
+  }
+
+  try {
+    const https = require("https");
+    const http = require("http");
+    const urlModule = require("url");
+
+    const parsedUrl = urlModule.parse(targetUrl);
+    const protocol = parsedUrl.protocol === "https:" ? https : http;
+
+    console.log("Proxying URL:", targetUrl);
+
+    protocol
+      .get(targetUrl, (proxyRes) => {
+        // Remove X-Frame-Options and CSP headers that would block iframe embedding
+        const headers = { ...proxyRes.headers };
+        delete headers["x-frame-options"];
+        delete headers["content-security-policy"];
+        delete headers["content-security-policy-report-only"];
+
+        // Set CORS headers to allow embedding
+        headers["access-control-allow-origin"] = "*";
+
+        res.writeHead(proxyRes.statusCode, headers);
+        proxyRes.pipe(res);
+      })
+      .on("error", (err) => {
+        console.error("Proxy error:", err);
+        res.status(500).send("Failed to fetch URL: " + err.message);
+      });
+  } catch (err) {
+    console.error("Proxy error:", err);
+    res.status(500).send("Failed to fetch URL: " + err.message);
+  }
+});
+
 // Main page
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
