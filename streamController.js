@@ -174,11 +174,13 @@ class StreamController extends EventEmitter {
     } = this.streamConfig;
 
     let pipeline = [
-      // Video source
+      // Video source - use MJPEG format which most USB cameras support at high resolution
       "v4l2src",
       `device=${this.cameraDevice}`,
       "!",
-      `video/x-raw,width=${width},height=${height},framerate=${framerate}/1`,
+      `image/jpeg,width=${width},height=${height},framerate=${framerate}/1`,
+      "!",
+      "jpegdec",
       "!",
     ];
 
