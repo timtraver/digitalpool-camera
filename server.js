@@ -129,9 +129,13 @@ function proxyUrl(targetUrl, res, req = null) {
       });
   } else {
     // For POST/PUT/etc requests, we need to forward the body
+    // Prepare the body first to calculate content-length
+    const bodyStr = req.body ? JSON.stringify(req.body) : "";
+
     // Forward important headers including cookies for authentication
     const headers = {
       "content-type": req.headers["content-type"] || "application/json",
+      "content-length": Buffer.byteLength(bodyStr),
       "user-agent": req.headers["user-agent"] || "Mozilla/5.0",
       host: parsedUrl.hostname,
       origin: `${parsedUrl.protocol}//${parsedUrl.hostname}`,
@@ -157,8 +161,8 @@ function proxyUrl(targetUrl, res, req = null) {
     };
 
     console.log(
-      `[${requestId}] Making ${req.method} request with body:`,
-      req.body ? JSON.stringify(req.body).substring(0, 200) : "no body",
+      `[${requestId}] Making ${req.method} request with body (${bodyStr.length} bytes):`,
+      bodyStr.substring(0, 200),
     );
     console.log(
       `[${requestId}] Request headers:`,
@@ -214,15 +218,14 @@ function proxyUrl(targetUrl, res, req = null) {
     });
 
     // Forward the request body
-    if (req.body) {
-      const bodyStr = JSON.stringify(req.body);
+    if (bodyStr) {
       console.log(
-        `[${requestId}] Writing body to proxy request:`,
-        bodyStr.substring(0, 200),
+        `[${requestId}] Writing ${bodyStr.length} bytes to proxy request`,
       );
       proxyReq.write(bodyStr);
     }
     proxyReq.end();
+    console.log(`[${requestId}] Request sent, waiting for response...`);
   }
 }
 
