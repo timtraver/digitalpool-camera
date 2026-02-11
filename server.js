@@ -105,9 +105,33 @@ function proxyUrl(targetUrl, res, req = null) {
 
             // Rewrite hardcoded GraphQL URLs to use our proxy
             if (contentType.includes("javascript")) {
-              // Replace https://proxy.digitalpool.com with our local server
+              // Look for any GraphQL endpoint URLs and log them
+              const graphqlUrlMatch = body.match(
+                /https:\/\/[^"'\s]+graphql[^"'\s]*/gi,
+              );
+              if (graphqlUrlMatch) {
+                console.log(
+                  `[${requestId}] Found GraphQL URLs in JavaScript:`,
+                  graphqlUrlMatch,
+                );
+              }
+
+              // Replace the actual production API URLs with our local proxy
               const originalLength = body.length;
+
+              // Replace both HTTP and WebSocket URLs
+              body = body.replace(
+                /https:\/\/api-prod\.digitalpool\.com\/v1\/graphql/g,
+                "/graphql",
+              );
+              body = body.replace(
+                /wss:\/\/api-prod\.digitalpool\.com\/v1\/graphql/g,
+                "ws://192.168.1.114:3000/graphql",
+              );
+
+              // Also replace the old proxy URL if it exists
               body = body.replace(/https:\/\/proxy\.digitalpool\.com/g, "");
+
               if (body.length !== originalLength) {
                 console.log(
                   `[${requestId}] Rewrote GraphQL URLs in JavaScript bundle`,
@@ -736,10 +760,9 @@ app.get("/favicon.ico", (req, res) => {
 });
 
 // Proxy for GraphQL and other API endpoints
-// proxy.digitalpool.com doesn't work, try the Hasura endpoint directly
+// Use the actual production API endpoint
 app.use("/graphql", (req, res) => {
-  // Try the Hasura cloud endpoint
-  const targetUrl = `https://digitalpool.hasura.app/v1/graphql`;
+  const targetUrl = `https://api-prod.digitalpool.com/v1/graphql`;
   console.log("Proxying /graphql request:", req.originalUrl, "->", targetUrl);
   proxyUrl(targetUrl, res, req);
 });
