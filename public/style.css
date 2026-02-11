@@ -383,6 +383,7 @@ header h1 {
 }
 
 .ptz-settings {
+  text-align: center;
   display: flex;
   flex-direction: column;
   gap: 8px;
