@@ -124,15 +124,19 @@ function proxyUrl(targetUrl, res, req = null) {
       });
   } else {
     // For POST/PUT/etc requests, we need to forward the body
+    const headers = {
+      ...req.headers,
+      host: parsedUrl.hostname,
+    };
+    // Remove accept-encoding to prevent compression
+    delete headers["accept-encoding"];
+
     const options = {
       hostname: parsedUrl.hostname,
       port: parsedUrl.port || (parsedUrl.protocol === "https:" ? 443 : 80),
       path: parsedUrl.path,
       method: req.method,
-      headers: {
-        ...req.headers,
-        host: parsedUrl.hostname,
-      },
+      headers: headers,
     };
 
     console.log(
