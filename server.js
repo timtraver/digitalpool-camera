@@ -49,6 +49,38 @@ streamController.on("log", (log) => {
 app.use(express.static("public"));
 app.use(express.json());
 
+// Helper function to proxy any URL
+function proxyUrl(targetUrl, res) {
+  const https = require("https");
+  const http = require("http");
+  const urlModule = require("url");
+
+  const parsedUrl = urlModule.parse(targetUrl);
+  const protocol = parsedUrl.protocol === "https:" ? https : http;
+
+  console.log("Proxying URL:", targetUrl);
+
+  protocol
+    .get(targetUrl, (proxyRes) => {
+      // Remove X-Frame-Options and CSP headers that would block iframe embedding
+      const headers = { ...proxyRes.headers };
+      delete headers["x-frame-options"];
+      delete headers["content-security-policy"];
+      delete headers["content-security-policy-report-only"];
+
+      // Set CORS headers to allow embedding
+      headers["access-control-allow-origin"] = "*";
+
+      // Just pipe through - don't modify content
+      res.writeHead(proxyRes.statusCode, headers);
+      proxyRes.pipe(res);
+    })
+    .on("error", (err) => {
+      console.error("Proxy error:", err);
+      res.status(500).send("Failed to fetch URL: " + err.message);
+    });
+}
+
 // Proxy endpoint for loading external URLs (bypasses X-Frame-Options)
 app.get("/proxy", async (req, res) => {
   const targetUrl = req.query.url;
@@ -58,71 +90,22 @@ app.get("/proxy", async (req, res) => {
   }
 
   try {
-    const https = require("https");
-    const http = require("http");
-    const urlModule = require("url");
-
-    const parsedUrl = urlModule.parse(targetUrl);
-    const protocol = parsedUrl.protocol === "https:" ? https : http;
-
-    console.log("Proxying URL:", targetUrl);
-
-    protocol
-      .get(targetUrl, (proxyRes) => {
-        // Remove X-Frame-Options and CSP headers that would block iframe embedding
-        const headers = { ...proxyRes.headers };
-        delete headers["x-frame-options"];
-        delete headers["content-security-policy"];
-        delete headers["content-security-policy-report-only"];
-
-        // Set CORS headers to allow embedding
-        headers["access-control-allow-origin"] = "*";
-
-        // If it's HTML, we need to rewrite URLs to go through the proxy
-        const contentType = headers["content-type"] || "";
-        if (contentType.includes("text/html")) {
-          let body = "";
-          proxyRes.setEncoding("utf8");
-          proxyRes.on("data", (chunk) => {
-            body += chunk;
-          });
-          proxyRes.on("end", () => {
-            // Get the base URL (origin) of the target
-            const targetOrigin = `${parsedUrl.protocol}//${parsedUrl.host}`;
-
-            // Add a base tag to make all relative URLs resolve to the original server
-            const baseTag = `<base href="${targetOrigin}/">`;
-
-            // Insert base tag after <head> tag
-            if (body.includes("<head>")) {
-              body = body.replace("<head>", `<head>${baseTag}`);
-            } else if (body.includes("<HEAD>")) {
-              body = body.replace("<HEAD>", `<HEAD>${baseTag}`);
-            } else {
-              // If no head tag, add it at the beginning
-              body = `<!DOCTYPE html><html><head>${baseTag}</head><body>${body}</body></html>`;
-            }
-
-            // Update content-length header
-            headers["content-length"] = Buffer.byteLength(body);
-
-            res.writeHead(proxyRes.statusCode, headers);
-            res.end(body);
-          });
-        } else {
-          // For non-HTML content, just pipe it through
-          res.writeHead(proxyRes.statusCode, headers);
-          proxyRes.pipe(res);
-        }
-      })
-      .on("error", (err) => {
-        console.error("Proxy error:", err);
-        res.status(500).send("Failed to fetch URL: " + err.message);
-      });
+    proxyUrl(targetUrl, res);
   } catch (err) {
     console.error("Proxy error:", err);
     res.status(500).send("Failed to fetch URL: " + err.message);
   }
+});
+
+// Proxy for digitalpool.com resources (catch-all for fonts, static files, etc.)
+app.get("/fonts/*", async (req, res) => {
+  const targetUrl = `https://digitalpool.com${req.path}`;
+  proxyUrl(targetUrl, res);
+});
+
+app.get("/static/*", async (req, res) => {
+  const targetUrl = `https://digitalpool.com${req.path}`;
+  proxyUrl(targetUrl, res);
 });
 
 // Main page
