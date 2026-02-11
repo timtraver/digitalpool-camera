@@ -112,6 +112,36 @@ document.addEventListener("click", () => {
   });
 });
 
+// Helper function to update custom dropdown display when value is set programmatically
+function updateCustomDropdownDisplay(selectElement) {
+  const customDropdown = selectElement.parentElement.querySelector(
+    ".custom-dropdown-selected",
+  );
+  if (customDropdown) {
+    const selectedOption = selectElement.options[selectElement.selectedIndex];
+    if (selectedOption) {
+      customDropdown.textContent = selectedOption.text;
+      customDropdown.dataset.value = selectedOption.value;
+
+      // Update selected class in options
+      const optionsContainer = selectElement.parentElement.querySelector(
+        ".custom-dropdown-options",
+      );
+      if (optionsContainer) {
+        optionsContainer
+          .querySelectorAll(".custom-dropdown-option")
+          .forEach((opt) => {
+            if (opt.dataset.value === selectedOption.value) {
+              opt.classList.add("selected");
+            } else {
+              opt.classList.remove("selected");
+            }
+          });
+      }
+    }
+  }
+}
+
 // Initialize Socket.IO connection
 const socket = io();
 console.log("🔌 Socket.IO initialized:", socket);
@@ -411,18 +441,7 @@ function loadCameraConfigToUI(config) {
   if (config.exposure_auto !== undefined) {
     const exposureAutoSelect = document.getElementById("exposureAuto");
     exposureAutoSelect.value = config.exposure_auto;
-
-    // Update custom dropdown display without triggering change event
-    const customDropdown = exposureAutoSelect.parentElement.querySelector(
-      ".custom-dropdown-selected",
-    );
-    if (customDropdown) {
-      const selectedOption =
-        exposureAutoSelect.options[exposureAutoSelect.selectedIndex];
-      customDropdown.textContent = selectedOption.text;
-      customDropdown.dataset.value = selectedOption.value;
-    }
-
+    updateCustomDropdownDisplay(exposureAutoSelect);
     updateExposureControlsState();
   }
   if (config.exposure_absolute !== undefined) {
@@ -1157,15 +1176,28 @@ socket.on("streamStatus", (status) => {
     overlayText.value = status.config.overlayText || "";
     showTimestamp.checked = status.config.showTimestamp || false;
     overlayUrl.value = status.config.overlayUrl || "";
+
+    // Set position dropdowns and update custom dropdown displays
     timestampPosition.value = status.config.timestampPosition || "bottom-right";
     titlePosition.value = status.config.titlePosition || "top-left";
+    updateCustomDropdownDisplay(timestampPosition);
+    updateCustomDropdownDisplay(titlePosition);
+
     overlayFontSize.value = status.config.overlayFontSize || 32;
     fontSizeValue.textContent = overlayFontSize.value + "px";
+
     overlayColor.value = status.config.overlayColor || "white";
+    updateCustomDropdownDisplay(overlayColor);
+
     overlayBackground.value = status.config.overlayBackground || "transparent";
+    updateCustomDropdownDisplay(overlayBackground);
+
     overlayBackgroundOpacity.value =
       status.config.overlayBackgroundOpacity || 70;
     backgroundOpacityValue.textContent = overlayBackgroundOpacity.value + "%";
+
+    overlayType.value = status.config.overlayType || "text";
+    updateCustomDropdownDisplay(overlayType);
 
     // Toggle overlay type options
     if (overlayType.value === "text") {
