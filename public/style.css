@@ -730,7 +730,7 @@ header h1 {
 }
 
 .custom-dropdown-selected {
-  padding: 4px 4px;
+  padding: 6px 5px;
   font-size: 10px !important;
   background: #1a1a1a;
   border: 1px solid #1890ff;
@@ -754,7 +754,7 @@ header h1 {
 
 .custom-dropdown-selected::after {
   content: "▼";
-  font-size: 12px;
+  font-size: 10px;
   color: #1890ff;
   margin-left: 8px;
 }
