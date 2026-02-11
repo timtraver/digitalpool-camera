@@ -542,15 +542,23 @@ server.listen(PORT, async () => {
 // Proxy routes for digitalpool.com (MUST be last to not interfere with our API routes)
 app.use("/fonts", (req, res) => {
   const targetUrl = `https://digitalpool.com${req.originalUrl}`;
+  console.log("Proxying /fonts request:", req.originalUrl, "->", targetUrl);
   proxyUrl(targetUrl, res);
 });
 
 app.use("/static", (req, res) => {
   const targetUrl = `https://digitalpool.com${req.originalUrl}`;
+  console.log("Proxying /static request:", req.originalUrl, "->", targetUrl);
   proxyUrl(targetUrl, res);
 });
 
 app.use("/tournaments", (req, res) => {
   const targetUrl = `https://digitalpool.com${req.originalUrl}`;
+  console.log(
+    "Proxying /tournaments request:",
+    req.originalUrl,
+    "->",
+    targetUrl,
+  );
   proxyUrl(targetUrl, res);
 });

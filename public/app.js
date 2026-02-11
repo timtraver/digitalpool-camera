@@ -886,10 +886,10 @@ function drawUrlOverlay() {
     urlOverlayIframe.style.left = "0";
     urlOverlayIframe.style.width = "100%";
     urlOverlayIframe.style.height = "100%";
-    urlOverlayIframe.style.border = "2px solid red"; // Debug border
+    urlOverlayIframe.style.border = "none";
     urlOverlayIframe.style.pointerEvents = "none"; // Don't capture mouse events
     urlOverlayIframe.style.zIndex = "20"; // Above canvas (canvas is z-index 10)
-    urlOverlayIframe.style.background = "rgba(255, 0, 0, 0.1)"; // Debug background
+    urlOverlayIframe.style.background = "transparent";
 
     // Add load handler
     urlOverlayIframe.addEventListener("load", () => {
