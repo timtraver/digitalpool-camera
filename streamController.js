@@ -119,6 +119,10 @@ class StreamController extends EventEmitter {
       console.log("Checking for processes using camera device...");
       await this._killCameraProcesses();
 
+      // Kill any process using port 8554 (preview TCP server)
+      console.log("Checking for processes using port 8554...");
+      await this._killPortProcess(8554);
+
       // Wait a moment for the device to be released
       await new Promise((resolve) => setTimeout(resolve, 500));
 
@@ -279,6 +283,47 @@ class StreamController extends EventEmitter {
       console.log("Finished checking for camera processes");
     } catch (error) {
       console.log("Error checking for camera processes:", error.message);
+    }
+  }
+
+  /**
+   * Kill any process using a specific port
+   */
+  async _killPortProcess(port) {
+    const { exec } = require("child_process");
+    const util = require("util");
+    const execPromise = util.promisify(exec);
+
+    try {
+      // Use lsof to find process using the port
+      const { stdout } = await execPromise(
+        `lsof -ti:${port} 2>/dev/null || true`,
+      );
+      if (stdout.trim()) {
+        const pids = stdout.trim().split("\n");
+        for (const pid of pids) {
+          if (pid && !isNaN(pid)) {
+            console.log(`Killing process ${pid} using port ${port}...`);
+            try {
+              process.kill(parseInt(pid), "SIGTERM");
+              // Wait a moment for graceful shutdown
+              await new Promise((resolve) => setTimeout(resolve, 500));
+              // Force kill if still running
+              try {
+                process.kill(parseInt(pid), "SIGKILL");
+              } catch (err) {
+                // Process already dead, that's fine
+              }
+            } catch (err) {
+              console.log(`Could not kill process ${pid}:`, err.message);
+            }
+          }
+        }
+      } else {
+        console.log(`No process found using port ${port}`);
+      }
+    } catch (error) {
+      console.log(`Error checking port ${port}:`, error.message);
     }
   }
 
