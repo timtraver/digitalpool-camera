@@ -549,7 +549,10 @@ let isCurrentlyStreaming = false;
 // Update placeholder based on protocol
 streamProtocol.addEventListener("change", () => {
   const protocol = streamProtocol.value;
-  if (protocol === "srt") {
+  if (protocol === "udp") {
+    streamDestination.placeholder =
+      "udp://192.168.1.100:5000 or 192.168.1.100:5000";
+  } else if (protocol === "srt") {
     streamDestination.placeholder = "srt://server:port";
   } else if (protocol === "rtmp") {
     streamDestination.placeholder = "rtmp://server/live/stream";

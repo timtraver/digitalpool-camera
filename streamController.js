@@ -558,7 +558,7 @@ class StreamController extends EventEmitter {
     // Use tee to split the stream for both output and preview
     pipeline.push("tee", "name=t");
 
-    // Branch 1: Output stream (RTMP or SRT)
+    // Branch 1: Output stream (RTMP, SRT, or UDP)
     if (protocol === "srt") {
       pipeline.push(
         "t.",
@@ -574,6 +574,28 @@ class StreamController extends EventEmitter {
         "srtsink",
         `uri=${destination}`,
         "latency=125",
+      );
+    } else if (protocol === "udp") {
+      // UDP streaming - lowest latency (200-500ms)
+      // Format: udp://HOST:PORT (e.g., udp://192.168.1.100:5000)
+      pipeline.push(
+        "t.",
+        "!",
+        "queue",
+        "max-size-buffers=0", // No buffering for absolute minimum latency
+        "max-size-time=0",
+        "max-size-bytes=0",
+        "!",
+        "mpegtsmux",
+        "alignment=7", // Align packets for better UDP performance
+        "!",
+        "rtpmp2tpay",
+        "!",
+        "udpsink",
+        `host=${this._parseUdpHost(destination)}`,
+        `port=${this._parseUdpPort(destination)}`,
+        "sync=false", // Don't sync to clock
+        "async=false", // Don't wait for preroll
       );
     } else if (protocol === "rtmp") {
       // For RTMP, push to local nginx server
@@ -651,6 +673,36 @@ class StreamController extends EventEmitter {
       magenta: "0xFFFF00FF",
     };
     return colors[colorName.toLowerCase()] || colors.white;
+  }
+
+  /**
+   * Parse UDP destination to extract host
+   * Format: udp://HOST:PORT or HOST:PORT
+   */
+  _parseUdpHost(destination) {
+    try {
+      const url = new URL(destination);
+      return url.hostname || "127.0.0.1";
+    } catch (e) {
+      // If not a valid URL, assume it's just HOST:PORT
+      const parts = destination.split(":");
+      return parts[0] || "127.0.0.1";
+    }
+  }
+
+  /**
+   * Parse UDP destination to extract port
+   * Format: udp://HOST:PORT or HOST:PORT
+   */
+  _parseUdpPort(destination) {
+    try {
+      const url = new URL(destination);
+      return url.port || "5000";
+    } catch (e) {
+      // If not a valid URL, assume it's just HOST:PORT
+      const parts = destination.split(":");
+      return parts[1] || "5000";
+    }
   }
 
   /**
