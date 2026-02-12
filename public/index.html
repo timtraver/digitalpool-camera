@@ -23,7 +23,7 @@
         <div class="video-section">
           <div class="video-container">
             <img id="videoStream" src="/video/stream" alt="Camera Stream" />
-            <canvas id="overlayCanvas"></canvas>
+            <!-- Canvas overlay removed - preview now shows actual stream output via tee -->
             <div
               id="previewSourceIndicator"
               style="
@@ -223,8 +223,8 @@
                       <input
                         type="range"
                         id="overlayFontSize"
-                        min="16"
-                        max="72"
+                        min="4"
+                        max="64"
                         value="32"
                       />
                       <span id="fontSizeValue">32px</span>

@@ -649,10 +649,17 @@ socket.on("streamStatus", (status) => {
     streamStatusText.style.color = "#10b981";
 
     // Reload video stream to switch to GStreamer tee output
-    const videoStream = document.getElementById("videoStream");
-    if (videoStream) {
-      videoStream.src = "/video/stream?t=" + Date.now();
-    }
+    // Add delay to ensure GStreamer TCP server is ready
+    setTimeout(() => {
+      const videoStream = document.getElementById("videoStream");
+      if (videoStream) {
+        console.log("🔄 Reloading video stream to show tee output...");
+        videoStream.src = "";
+        setTimeout(() => {
+          videoStream.src = "/video/stream?t=" + Date.now();
+        }, 100);
+      }
+    }, 500);
   } else {
     startStreamBtn.disabled = false;
     stopStreamBtn.disabled = true;
@@ -660,10 +667,16 @@ socket.on("streamStatus", (status) => {
     streamStatusText.style.color = "rgba(255, 255, 255, 0.7)";
 
     // Reload video stream to switch back to direct camera feed
-    const videoStream = document.getElementById("videoStream");
-    if (videoStream) {
-      videoStream.src = "/video/stream?t=" + Date.now();
-    }
+    setTimeout(() => {
+      const videoStream = document.getElementById("videoStream");
+      if (videoStream) {
+        console.log("🔄 Reloading video stream to show direct camera feed...");
+        videoStream.src = "";
+        setTimeout(() => {
+          videoStream.src = "/video/stream?t=" + Date.now();
+        }, 100);
+      }
+    }, 200);
   }
 });
 
@@ -732,14 +745,15 @@ console.log("✅ Custom dropdowns initialized");
 
 console.log("🚀 app.js loaded!");
 
-// Canvas overlay for preview
+// Canvas overlay removed - preview now shows actual stream output via tee
+// Overlay settings still work, they just apply to the GStreamer pipeline
 const videoStream = document.getElementById("videoStream");
-const overlayCanvas = document.getElementById("overlayCanvas");
-const ctx = overlayCanvas.getContext("2d");
+// const overlayCanvas = document.getElementById("overlayCanvas");
+// const ctx = overlayCanvas.getContext("2d");
 
 console.log("📺 Video element:", videoStream);
-console.log("🎨 Canvas element:", overlayCanvas);
-console.log("🖌️ Canvas context:", ctx);
+// console.log("🎨 Canvas element:", overlayCanvas);
+// console.log("🖌️ Canvas context:", ctx);
 
 // Debug elements
 const canvasSizeSpan = document.getElementById("canvasSize");
@@ -797,61 +811,31 @@ function updateCanvasSize() {
   }
 }
 
-// MJPEG streams don't fire 'load' events, so we need to poll
-let canvasInitialized = false;
-let initAttempts = 0;
-const MAX_INIT_ATTEMPTS = 50; // Try for 10 seconds
+// Canvas initialization disabled - overlay now rendered by GStreamer only
+// let canvasInitialized = false;
+// let initAttempts = 0;
+// const MAX_INIT_ATTEMPTS = 50; // Try for 10 seconds
 
-function initializeCanvas() {
-  initAttempts++;
-  console.log(`🔄 Canvas init attempt ${initAttempts}/${MAX_INIT_ATTEMPTS}`);
-
-  const success = updateCanvasSize();
-
-  if (success && !canvasInitialized) {
-    canvasInitialized = true;
-    console.log("✅ Canvas initialized successfully!");
-    drawOverlay();
-  } else if (!canvasInitialized && initAttempts < MAX_INIT_ATTEMPTS) {
-    // Keep trying with increasing delays
-    const delay = initAttempts < 10 ? 200 : 500;
-    setTimeout(initializeCanvas, delay);
-  } else if (initAttempts >= MAX_INIT_ATTEMPTS) {
-    console.error(
-      "❌ Failed to initialize canvas after",
-      MAX_INIT_ATTEMPTS,
-      "attempts",
-    );
-    console.error("Video element might not be loading. Check MJPEG stream.");
-  }
-}
-
-// Start initialization immediately
-initializeCanvas();
-
-// Also try again after 2 seconds (in case video loads slowly)
-setTimeout(() => {
-  if (!canvasInitialized) {
-    console.log("🔄 Retrying canvas initialization after 2s delay...");
-    initAttempts = 0; // Reset counter
-    initializeCanvas();
-  }
-}, 2000);
-
-// Try again after 5 seconds (MJPEG streams can be slow to start)
-setTimeout(() => {
-  if (!canvasInitialized) {
-    console.log("🔄 Retrying canvas initialization after 5s delay...");
-    initAttempts = 0; // Reset counter
-    initializeCanvas();
-  }
-}, 5000);
-
-// Also update on window resize
-window.addEventListener("resize", () => {
-  updateCanvasSize();
-  drawOverlay();
-});
+// function initializeCanvas() {
+//   initAttempts++;
+//   console.log(`🔄 Canvas init attempt ${initAttempts}/${MAX_INIT_ATTEMPTS}`);
+//   const success = updateCanvasSize();
+//   if (success && !canvasInitialized) {
+//     canvasInitialized = true;
+//     console.log("✅ Canvas initialized successfully!");
+//     drawOverlay();
+//   } else if (!canvasInitialized && initAttempts < MAX_INIT_ATTEMPTS) {
+//     const delay = initAttempts < 10 ? 200 : 500;
+//     setTimeout(initializeCanvas, delay);
+//   } else if (initAttempts >= MAX_INIT_ATTEMPTS) {
+//     console.error("❌ Failed to initialize canvas after", MAX_INIT_ATTEMPTS, "attempts");
+//     console.error("Video element might not be loading. Check MJPEG stream.");
+//   }
+// }
+// initializeCanvas();
+// setTimeout(() => { if (!canvasInitialized) { initAttempts = 0; initializeCanvas(); } }, 2000);
+// setTimeout(() => { if (!canvasInitialized) { initAttempts = 0; initializeCanvas(); } }, 5000);
+// window.addEventListener("resize", () => { updateCanvasSize(); drawOverlay(); });
 
 // Toggle overlay type options
 overlayType.addEventListener("change", () => {
@@ -869,21 +853,27 @@ overlayType.addEventListener("change", () => {
   drawOverlay();
 });
 
-// Redraw overlay every 100ms (for timestamp updates and URL overlay)
-setInterval(() => {
-  if (currentOverlayConfig.overlayEnabled) {
-    drawOverlay();
-  } else {
-    ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-    // Hide URL overlay iframe if exists
-    if (urlOverlayIframe) {
-      urlOverlayIframe.style.display = "none";
-    }
-  }
-}, 100);
+// Canvas overlay redraw disabled - overlays now rendered by GStreamer only
+// setInterval(() => {
+//   if (currentOverlayConfig.overlayEnabled) {
+//     drawOverlay();
+//   } else {
+//     ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+//     if (urlOverlayIframe) {
+//       urlOverlayIframe.style.display = "none";
+//     }
+//   }
+// }, 100);
 
-// Draw overlay on canvas
+// Draw overlay on canvas - DISABLED
+// Canvas overlay removed - preview now shows actual stream output via tee
 function drawOverlay() {
+  // Canvas overlay disabled - overlays are now only rendered by GStreamer
+  // When streaming, the preview shows the actual tee output with overlays
+  // When not streaming, the preview shows direct camera feed without overlays
+  return;
+
+  /* DISABLED CODE:
   // Removed verbose logging - was flooding console at 5fps
   // console.log("=== drawOverlay called ===");
   // console.log("Canvas dimensions:", overlayCanvas.width, "x", overlayCanvas.height);
@@ -1120,6 +1110,7 @@ function drawTextOverlay() {
   }
 
   // console.log("✅ Overlay drawing complete"); // Removed - floods console at 5fps
+  */
 }
 
 // Helper function to apply overlay settings to server

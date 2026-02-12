@@ -438,12 +438,14 @@ class StreamController extends EventEmitter {
           this.streamConfig.overlayFontSize * 1.5,
         );
 
+        // Use clockoverlay to show actual time instead of timeoverlay (stream duration)
         const timestampArgs = [
-          "timeoverlay",
+          "clockoverlay",
           `valignment=${valign}`,
           `halignment=${halign}`,
           `font-desc=Sans Bold ${scaledFontSize}`,
           `color=${this._colorToInt(this.streamConfig.overlayColor)}`,
+          'time-format="%Y-%m-%d %H:%M:%S"', // Show date and time
         ];
 
         // Only add shaded background if not transparent
