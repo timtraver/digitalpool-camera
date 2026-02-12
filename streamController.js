@@ -562,7 +562,7 @@ class StreamController extends EventEmitter {
     if (protocol === "srt") {
       // SRT streaming - low latency with error correction
       // Format: srt://HOST:PORT (e.g., srt://192.168.1.100:8890)
-      // Use srtclientsink (not srtsink) - available in GStreamer 1.14
+      // Use srtclientsink in caller mode to connect to OBS listener
 
       // Validate destination
       if (!destination || destination.trim() === "") {
@@ -584,9 +584,11 @@ class StreamController extends EventEmitter {
         "!",
         "mpegtsmux",
         "!",
-        "srtclientsink", // Use srtclientsink instead of srtsink
+        "srtclientsink", // Use srtclientsink in caller mode
         `uri=${destination}`,
-        "latency=125", // 125ms latency
+        "mode=caller", // Explicitly set caller mode (connect to listener)
+        "latency=125000", // 125ms in microseconds
+        "wait-for-connection=false", // Don't block pipeline startup
       );
     } else if (protocol === "udp") {
       // UDP streaming - lowest latency (200-500ms)
