@@ -647,11 +647,23 @@ socket.on("streamStatus", (status) => {
     stopStreamBtn.disabled = false;
     streamStatusText.textContent = `Streaming (${status.config?.protocol?.toUpperCase()})`;
     streamStatusText.style.color = "#10b981";
+
+    // Reload video stream to switch to GStreamer tee output
+    const videoStream = document.getElementById("videoStream");
+    if (videoStream) {
+      videoStream.src = "/video/stream?t=" + Date.now();
+    }
   } else {
     startStreamBtn.disabled = false;
     stopStreamBtn.disabled = true;
     streamStatusText.textContent = "Not streaming";
     streamStatusText.style.color = "rgba(255, 255, 255, 0.7)";
+
+    // Reload video stream to switch back to direct camera feed
+    const videoStream = document.getElementById("videoStream");
+    if (videoStream) {
+      videoStream.src = "/video/stream?t=" + Date.now();
+    }
   }
 });
 

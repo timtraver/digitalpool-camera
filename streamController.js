@@ -425,18 +425,34 @@ class StreamController extends EventEmitter {
 
       // Add timestamp overlay if enabled
       if (this.streamConfig.showTimestamp) {
+        const tsPosition =
+          this.streamConfig.timestampPosition || "bottom-right";
+        const [vpos, hpos] = tsPosition.split("-");
         const valign =
-          this.streamConfig.overlayPosition === "bottom" ? "bottom" : "top";
-        pipeline.push(
+          vpos === "bottom" ? "bottom" : vpos === "center" ? "center" : "top";
+        const halign =
+          hpos === "left" ? "left" : hpos === "right" ? "right" : "center";
+
+        // Scale font size for 1920x1080 output (web preview uses scaled size for 1280x720)
+        const scaledFontSize = Math.round(
+          this.streamConfig.overlayFontSize * 1.5,
+        );
+
+        const timestampArgs = [
           "timeoverlay",
           `valignment=${valign}`,
-          "halignment=right",
-          `font-desc=Sans Bold ${this.streamConfig.overlayFontSize}`,
-          "shaded-background=true",
-          "xpad=20",
-          "ypad=20",
-          "!",
-        );
+          `halignment=${halign}`,
+          `font-desc=Sans Bold ${scaledFontSize}`,
+          `color=${this._colorToInt(this.streamConfig.overlayColor)}`,
+        ];
+
+        // Only add shaded background if not transparent
+        if (this.streamConfig.overlayBackground !== "transparent") {
+          timestampArgs.push("shaded-background=true");
+        }
+
+        timestampArgs.push("xpad=20", "ypad=20", "!");
+        pipeline.push(...timestampArgs);
       }
 
       // Add custom text overlay 1 (main title)
@@ -445,25 +461,37 @@ class StreamController extends EventEmitter {
           this.streamConfig.overlayText || this.streamConfig.customText1;
 
         // Parse position (e.g., "bottom-left", "top-center")
-        const position = this.streamConfig.overlayPosition || "bottom-left";
+        const position =
+          this.streamConfig.titlePosition ||
+          this.streamConfig.overlayPosition ||
+          "bottom-left";
         const [vpos, hpos] = position.split("-");
         const valign =
           vpos === "bottom" ? "bottom" : vpos === "center" ? "center" : "top";
         const halign =
           hpos === "left" ? "left" : hpos === "right" ? "right" : "center";
 
-        pipeline.push(
+        // Scale font size for 1920x1080 output (web preview uses scaled size for 1280x720)
+        const scaledFontSize = Math.round(
+          this.streamConfig.overlayFontSize * 1.5,
+        );
+
+        const textArgs = [
           "textoverlay",
           `text="${text}"`,
           `valignment=${valign}`,
           `halignment=${halign}`,
-          `font-desc=Sans Bold ${this.streamConfig.overlayFontSize}`,
+          `font-desc=Sans Bold ${scaledFontSize}`,
           `color=${this._colorToInt(this.streamConfig.overlayColor)}`,
-          this.streamConfig.overlayBackground ? "shaded-background=true" : "",
-          "xpad=20",
-          "ypad=20",
-          "!",
-        );
+        ];
+
+        // Only add shaded background if not transparent
+        if (this.streamConfig.overlayBackground !== "transparent") {
+          textArgs.push("shaded-background=true");
+        }
+
+        textArgs.push("xpad=20", "ypad=20", "!");
+        pipeline.push(...textArgs);
       }
 
       // Add custom text overlay 2 (subtitle/secondary text)
