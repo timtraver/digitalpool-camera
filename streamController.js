@@ -411,6 +411,7 @@ class StreamController extends EventEmitter {
       // Video source - use MJPEG format which most USB cameras support at high resolution
       "v4l2src",
       `device=${this.cameraDevice}`,
+      "do-timestamp=true", // Use pipeline clock timestamps for better sync
       "!",
       `image/jpeg,width=${width},height=${height},framerate=${framerate}/1`,
       "!",
@@ -535,8 +536,13 @@ class StreamController extends EventEmitter {
         "!",
         "nvv4l2h264enc",
         `bitrate=${bitrate}`,
-        "iframeinterval=30", // Keyframe every 1 second (30 fps)
         "preset-level=1", // Ultra-fast preset for low latency
+        "profile=0", // Baseline profile (fastest encoding)
+        "iframeinterval=15", // Keyframe every 0.5 seconds (reduced from 30)
+        "insert-sps-pps=true", // Insert SPS/PPS with every IDR frame
+        "insert-vui=false", // Disable VUI for lower overhead
+        "insert-aud=false", // Disable AUD for lower overhead
+        "maxperf-enable=true", // Enable maximum performance mode
         "!",
         "video/x-h264,stream-format=byte-stream",
         "!",
@@ -558,6 +564,10 @@ class StreamController extends EventEmitter {
         "t.",
         "!",
         "queue",
+        "max-size-buffers=2", // Minimal buffering for low latency
+        "max-size-time=0",
+        "max-size-bytes=0",
+        "leaky=downstream", // Drop old frames if queue is full
         "!",
         "mpegtsmux",
         "!",
@@ -573,12 +583,17 @@ class StreamController extends EventEmitter {
         "t.",
         "!",
         "queue",
+        "max-size-buffers=2", // Minimal buffering for low latency
+        "max-size-time=0",
+        "max-size-bytes=0",
+        "leaky=downstream", // Drop old frames if queue is full
         "!",
         "flvmux",
         "streamable=true",
         "!",
         "rtmpsink",
         `location=${rtmpUrl}`,
+        "sync=false", // Don't sync to clock for lower latency
       );
     } else {
       throw new Error(`Unsupported protocol: ${protocol}`);
