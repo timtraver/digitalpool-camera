@@ -397,9 +397,9 @@ app.get("/video/stream", (req, res) => {
 
   // If streaming is active, connect to GStreamer's TCP server
   if (streamController.isStreaming) {
-    console.log("📡 Connecting to GStreamer TCP stream on port 8554");
+    console.log("📡 Connecting to GStreamer TCP stream on port 8555");
     const net = require("net");
-    const client = net.connect({ port: 8554, host: "localhost" });
+    const client = net.connect({ port: 8555, host: "localhost" });
 
     client.on("connect", () => {
       console.log("✅ Connected to GStreamer TCP stream");

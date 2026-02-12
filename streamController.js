@@ -119,12 +119,14 @@ class StreamController extends EventEmitter {
       console.log("Checking for processes using camera device...");
       await this._killCameraProcesses();
 
-      // Kill any process using port 8554 (preview TCP server)
-      console.log("Checking for processes using port 8554...");
-      await this._killPortProcess(8554);
+      // Kill any process using port 8555 (preview TCP server)
+      console.log("🔍 Checking for processes using port 8555...");
+      await this._killPortProcess(8555);
+      console.log("✅ Port 8555 cleanup complete");
 
-      // Wait a moment for the device to be released
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Wait a moment for the device and port to be released
+      console.log("⏳ Waiting for resources to be released...");
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       const gstArgs = this._buildGStreamerPipeline();
       console.log("Starting GStreamer with pipeline:", gstArgs.join(" "));
@@ -295,30 +297,94 @@ class StreamController extends EventEmitter {
     const execPromise = util.promisify(exec);
 
     try {
-      // Use lsof to find process using the port
-      const { stdout } = await execPromise(
-        `lsof -ti:${port} 2>/dev/null || true`,
-      );
-      if (stdout.trim()) {
-        const pids = stdout.trim().split("\n");
+      let pids = [];
+
+      // Method 1: Try lsof first
+      try {
+        const { stdout: lsofOut } = await execPromise(
+          `lsof -ti:${port} 2>/dev/null || true`,
+        );
+        if (lsofOut.trim()) {
+          pids = lsofOut
+            .trim()
+            .split("\n")
+            .filter((p) => p && !isNaN(p));
+          console.log(`lsof found PIDs using port ${port}:`, pids);
+        }
+      } catch (err) {
+        console.log("lsof not available or failed");
+      }
+
+      // Method 2: Try fuser as fallback
+      if (pids.length === 0) {
+        try {
+          const { stdout: fuserOut } = await execPromise(
+            `fuser ${port}/tcp 2>/dev/null || true`,
+          );
+          if (fuserOut.trim()) {
+            pids = fuserOut
+              .trim()
+              .split(/\s+/)
+              .filter((p) => p && !isNaN(p));
+            console.log(`fuser found PIDs using port ${port}:`, pids);
+          }
+        } catch (err) {
+          console.log("fuser not available or failed");
+        }
+      }
+
+      // Method 3: Try netstat/ss as last resort
+      if (pids.length === 0) {
+        try {
+          const { stdout: netstatOut } = await execPromise(
+            `netstat -tlnp 2>/dev/null | grep :${port} || ss -tlnp 2>/dev/null | grep :${port} || true`,
+          );
+          if (netstatOut.trim()) {
+            console.log(`netstat/ss output:`, netstatOut);
+            // Extract PID from output like "tcp 0 0 0.0.0.0:8554 0.0.0.0:* LISTEN 12345/gst-launch-1"
+            const match = netstatOut.match(/(\d+)\//);
+            if (match) {
+              pids.push(match[1]);
+              console.log(`netstat/ss found PID using port ${port}:`, pids);
+            }
+          }
+        } catch (err) {
+          console.log("netstat/ss not available or failed");
+        }
+      }
+
+      // Kill all found PIDs
+      if (pids.length > 0) {
         for (const pid of pids) {
           if (pid && !isNaN(pid)) {
             console.log(`Killing process ${pid} using port ${port}...`);
             try {
               process.kill(parseInt(pid), "SIGTERM");
-              // Wait a moment for graceful shutdown
-              await new Promise((resolve) => setTimeout(resolve, 500));
-              // Force kill if still running
-              try {
-                process.kill(parseInt(pid), "SIGKILL");
-              } catch (err) {
-                // Process already dead, that's fine
-              }
+              console.log(`Sent SIGTERM to ${pid}`);
             } catch (err) {
-              console.log(`Could not kill process ${pid}:`, err.message);
+              console.log(`Could not send SIGTERM to ${pid}:`, err.message);
             }
           }
         }
+
+        // Wait for graceful shutdown
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+
+        // Force kill if still running
+        for (const pid of pids) {
+          if (pid && !isNaN(pid)) {
+            try {
+              process.kill(parseInt(pid), "SIGKILL");
+              console.log(`Sent SIGKILL to ${pid}`);
+            } catch (err) {
+              // Process already dead, that's fine
+              console.log(`Process ${pid} already terminated`);
+            }
+          }
+        }
+
+        // Wait a bit more for port to be released
+        await new Promise((resolve) => setTimeout(resolve, 500));
       } else {
         console.log(`No process found using port ${port}`);
       }
@@ -491,6 +557,7 @@ class StreamController extends EventEmitter {
     // Branch 2: Preview stream (TCP server for web interface)
     // Convert H.264 to MJPEG for browser compatibility
     // Use hardware decoder on Jetson for better performance
+    // Port 8555 (8554 is used by MediaMTX for RTSP)
     pipeline.push(
       "t.",
       "!",
@@ -515,7 +582,7 @@ class StreamController extends EventEmitter {
       "!",
       "tcpserversink",
       "host=0.0.0.0",
-      "port=8554",
+      "port=8555",
       "recover-policy=keyframe",
       "sync=false",
     );
