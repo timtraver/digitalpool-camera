@@ -251,25 +251,25 @@ header h1 {
 }
 
 .btn-top-inner {
-  top: 42px;
+  top: 36px;
   left: 50%;
   transform: translateX(-50%);
 }
 
 .btn-right-inner {
-  right: 42px;
+  right: 36px;
   top: 50%;
   transform: translateY(-50%);
 }
 
 .btn-bottom-inner {
-  bottom: 42px;
+  bottom: 36px;
   left: 50%;
   transform: translateX(-50%);
 }
 
 .btn-left-inner {
-  left: 42px;
+  left: 36px;
   top: 50%;
   transform: translateY(-50%);
 }
@@ -457,19 +457,19 @@ header h1 {
 }
 
 .control-panel h3 {
-  margin-bottom: 10px;
+  margin-bottom: 6px;
   color: rgba(255, 255, 255, 0.9);
   font-size: 16px;
 }
 
 .control-group {
-  margin-bottom: 15px;
-  padding-bottom: 12px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
 }
 
 .control-group h4 {
   color: rgba(255, 255, 255, 0.85);
-  margin-bottom: 8px;
+  margin-bottom: 4px;
   font-size: 13px;
 }
 
@@ -478,7 +478,7 @@ header h1 {
   grid-template-columns: 100px 1fr auto;
   gap: 8px;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .control-item label {
@@ -663,6 +663,18 @@ header h1 {
   background: linear-gradient(135deg, #34d399 0%, #10b981 100%);
   transform: translateY(-1px);
   box-shadow: 0 4px 8px rgba(16, 185, 129, 0.3);
+}
+
+.btn-restart {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  color: white;
+  border: 1px solid rgba(245, 158, 11, 0.5);
+}
+
+.btn-restart:hover:not(:disabled) {
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(245, 158, 11, 0.3);
 }
 
 .btn-stop {

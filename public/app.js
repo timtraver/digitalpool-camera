@@ -539,6 +539,8 @@ const streamBitrate = document.getElementById("streamBitrate");
 const startStreamBtn = document.getElementById("startStream");
 const stopStreamBtn = document.getElementById("stopStream");
 const streamStatusText = document.getElementById("streamStatusText");
+const startBtnIcon = document.getElementById("startBtnIcon");
+const startBtnText = document.getElementById("startBtnText");
 
 // Track streaming state
 let isCurrentlyStreaming = false;
@@ -553,30 +555,57 @@ streamProtocol.addEventListener("change", () => {
   }
 });
 
-// Start stream
+// Start/Restart stream
 startStreamBtn.addEventListener("click", async () => {
-  const config = {
-    protocol: streamProtocol.value,
-    destination: streamDestination.value,
-    bitrate: parseInt(streamBitrate.value),
-    width: 1920,
-    height: 1080,
-    framerate: 30,
-    encoder: "nvv4l2h264enc",
-  };
+  // Check if currently streaming (button shows "Restart")
+  const isRestart = !stopStreamBtn.disabled;
 
-  if (!config.destination) {
-    alert("Please enter a destination URL");
-    return;
+  if (isRestart) {
+    console.log("Restarting stream...");
+    streamStatusText.textContent = "Restarting...";
+    streamStatusText.style.color = "#f59e0b";
+
+    // Stop the stream first
+    socket.emit("stopStream");
+
+    // Wait for stream to stop, then start again
+    setTimeout(() => {
+      const config = {
+        protocol: streamProtocol.value,
+        destination: streamDestination.value,
+        bitrate: parseInt(streamBitrate.value),
+        width: 1920,
+        height: 1080,
+        framerate: 30,
+        encoder: "nvv4l2h264enc",
+      };
+
+      console.log("Starting stream after restart with config:", config);
+      socket.emit("startStream", config);
+    }, 1500); // Wait 1.5 seconds for clean shutdown
+  } else {
+    // Normal start
+    const config = {
+      protocol: streamProtocol.value,
+      destination: streamDestination.value,
+      bitrate: parseInt(streamBitrate.value),
+      width: 1920,
+      height: 1080,
+      framerate: 30,
+      encoder: "nvv4l2h264enc",
+    };
+
+    if (!config.destination) {
+      alert("Please enter a destination URL");
+      return;
+    }
+
+    console.log("Starting stream with config:", config);
+    socket.emit("startStream", config);
+
+    streamStatusText.textContent = "Starting...";
+    streamStatusText.style.color = "#f59e0b";
   }
-
-  console.log("Starting stream with config:", config);
-  socket.emit("startStream", config);
-
-  // Disable start, enable stop
-  startStreamBtn.disabled = true;
-  streamStatusText.textContent = "Starting...";
-  streamStatusText.style.color = "#f59e0b";
 });
 
 // Stop stream
@@ -643,7 +672,13 @@ socket.on("streamStatus", (status) => {
   }
 
   if (status.isStreaming) {
-    startStreamBtn.disabled = true;
+    // Change Start button to Restart button
+    startStreamBtn.disabled = false;
+    startBtnIcon.textContent = "🔄";
+    startBtnText.textContent = "Restart";
+    startStreamBtn.classList.remove("btn-start");
+    startStreamBtn.classList.add("btn-restart");
+
     stopStreamBtn.disabled = false;
     streamStatusText.textContent = `Streaming (${status.config?.protocol?.toUpperCase()})`;
     streamStatusText.style.color = "#10b981";
@@ -661,7 +696,13 @@ socket.on("streamStatus", (status) => {
       }
     }, 500);
   } else {
+    // Change Restart button back to Start button
     startStreamBtn.disabled = false;
+    startBtnIcon.textContent = "▶";
+    startBtnText.textContent = "Start";
+    startStreamBtn.classList.remove("btn-restart");
+    startStreamBtn.classList.add("btn-start");
+
     stopStreamBtn.disabled = true;
     streamStatusText.textContent = "Not streaming";
     streamStatusText.style.color = "rgba(255, 255, 255, 0.7)";
