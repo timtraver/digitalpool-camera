@@ -579,6 +579,19 @@ class StreamController extends EventEmitter {
       // UDP streaming - lowest latency (200-500ms)
       // Format: udp://HOST:PORT (e.g., udp://192.168.1.100:5000)
       // Sends raw MPEG-TS over UDP
+
+      // Validate destination
+      if (!destination || destination.trim() === "") {
+        throw new Error(
+          "UDP destination is required (e.g., udp://192.168.1.100:5000)",
+        );
+      }
+
+      const udpHost = this._parseUdpHost(destination);
+      const udpPort = this._parseUdpPort(destination);
+
+      console.log(`📡 UDP destination: ${udpHost}:${udpPort}`);
+
       pipeline.push(
         "t.",
         "!",
@@ -590,15 +603,21 @@ class StreamController extends EventEmitter {
         "mpegtsmux",
         "!",
         "udpsink",
-        `host=${this._parseUdpHost(destination)}`,
-        `port=${this._parseUdpPort(destination)}`,
+        `host=${udpHost}`,
+        `port=${udpPort}`,
         "sync=false", // Don't sync to clock
         "async=false", // Don't wait for preroll
       );
     } else if (protocol === "rtmp") {
-      // For RTMP, push to local nginx server
-      // If destination is empty or localhost, use local nginx
-      const rtmpUrl = destination || "rtmp://localhost:1935/stream";
+      // For RTMP, push to MediaMTX server
+      // If destination is empty or localhost, use local MediaMTX
+      const rtmpUrl =
+        destination && destination.trim() !== ""
+          ? destination
+          : "rtmp://localhost:1935/stream";
+
+      console.log(`📡 RTMP destination: ${rtmpUrl}`);
+
       pipeline.push(
         "t.",
         "!",
