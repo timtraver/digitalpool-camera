@@ -584,11 +584,10 @@ class StreamController extends EventEmitter {
         "!",
         "mpegtsmux",
         "!",
-        "srtclientsink", // Use srtclientsink in caller mode
+        "srtclientsink", // srtclientsink connects to listener (OBS)
         `uri=${destination}`,
-        "mode=caller", // Explicitly set caller mode (connect to listener)
-        "latency=125000", // 125ms in microseconds
-        "wait-for-connection=false", // Don't block pipeline startup
+        "latency=125", // Latency in milliseconds
+        "poll-timeout=100", // Poll timeout in milliseconds
       );
     } else if (protocol === "udp") {
       // UDP streaming - lowest latency (200-500ms)
