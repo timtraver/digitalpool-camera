@@ -560,6 +560,19 @@ class StreamController extends EventEmitter {
 
     // Branch 1: Output stream (RTMP, SRT, or UDP)
     if (protocol === "srt") {
+      // SRT streaming - low latency with error correction
+      // Format: srt://HOST:PORT (e.g., srt://192.168.1.100:8890)
+      // Use srtclientsink (not srtsink) - available in GStreamer 1.14
+
+      // Validate destination
+      if (!destination || destination.trim() === "") {
+        throw new Error(
+          "SRT destination is required (e.g., srt://192.168.1.100:8890)",
+        );
+      }
+
+      console.log(`📡 SRT destination: ${destination}`);
+
       pipeline.push(
         "t.",
         "!",
@@ -571,9 +584,9 @@ class StreamController extends EventEmitter {
         "!",
         "mpegtsmux",
         "!",
-        "srtsink",
+        "srtclientsink", // Use srtclientsink instead of srtsink
         `uri=${destination}`,
-        "latency=125",
+        "latency=125", // 125ms latency
       );
     } else if (protocol === "udp") {
       // UDP streaming - lowest latency (200-500ms)
