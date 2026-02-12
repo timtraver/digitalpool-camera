@@ -563,9 +563,10 @@ class StreamController extends EventEmitter {
       // SRT streaming - low latency with error correction
       // Use srtserversink - Jetson acts as server, OBS connects as client
       // This avoids firewall issues on the Mac
+      // Port 8891 (8890 is used by MediaMTX)
 
       console.log(
-        `📡 SRT server mode - OBS should connect to: srt://${this._getLocalIP()}:8890`,
+        `📡 SRT server mode - OBS should connect to: srt://${this._getLocalIP()}:8891`,
       );
 
       pipeline.push(
@@ -580,7 +581,7 @@ class StreamController extends EventEmitter {
         "mpegtsmux",
         "!",
         "srtserversink", // Jetson acts as SRT server
-        "uri=srt://0.0.0.0:8890", // Listen on all interfaces, port 8890
+        "uri=srt://0.0.0.0:8891", // Listen on all interfaces, port 8891
         "latency=125", // Latency in milliseconds
       );
     } else if (protocol === "udp") {
