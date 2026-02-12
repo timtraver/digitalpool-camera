@@ -399,31 +399,51 @@ app.get("/video/stream", (req, res) => {
   if (streamController.isStreaming) {
     console.log("📡 Connecting to GStreamer TCP stream on port 8555");
     const net = require("net");
-    const client = net.connect({ port: 8555, host: "localhost" });
 
-    client.on("connect", () => {
-      console.log("✅ Connected to GStreamer TCP stream");
-    });
+    // Retry connection with delay (TCP server might not be ready yet)
+    let retryCount = 0;
+    const maxRetries = 5;
+    const retryDelay = 500; // ms
 
-    client.on("data", (data) => {
-      res.write(data);
-    });
+    const tryConnect = () => {
+      const client = net.connect({ port: 8555, host: "localhost" });
 
-    client.on("error", (err) => {
-      console.error("❌ GStreamer TCP stream error:", err.message);
-      res.end();
-    });
+      client.on("connect", () => {
+        console.log("✅ Connected to GStreamer TCP stream");
+      });
 
-    client.on("end", () => {
-      console.log("GStreamer TCP stream ended");
-      res.end();
-    });
+      client.on("data", (data) => {
+        res.write(data);
+      });
 
-    req.on("close", () => {
-      console.log("Client disconnected from preview stream");
-      client.destroy();
-    });
+      client.on("error", (err) => {
+        console.error(
+          `❌ GStreamer TCP stream error (attempt ${retryCount + 1}/${maxRetries}):`,
+          err.message,
+        );
 
+        // Retry if connection refused and we haven't exceeded max retries
+        if (err.code === "ECONNREFUSED" && retryCount < maxRetries) {
+          retryCount++;
+          console.log(`⏳ Retrying connection in ${retryDelay}ms...`);
+          setTimeout(tryConnect, retryDelay);
+        } else {
+          res.end();
+        }
+      });
+
+      client.on("end", () => {
+        console.log("GStreamer TCP stream ended");
+        res.end();
+      });
+
+      req.on("close", () => {
+        console.log("Client disconnected from preview stream");
+        client.destroy();
+      });
+    };
+
+    tryConnect();
     return;
   }
 

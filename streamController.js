@@ -578,6 +578,7 @@ class StreamController extends EventEmitter {
     } else if (protocol === "udp") {
       // UDP streaming - lowest latency (200-500ms)
       // Format: udp://HOST:PORT (e.g., udp://192.168.1.100:5000)
+      // Sends raw MPEG-TS over UDP
       pipeline.push(
         "t.",
         "!",
@@ -587,9 +588,6 @@ class StreamController extends EventEmitter {
         "max-size-bytes=0",
         "!",
         "mpegtsmux",
-        "alignment=7", // Align packets for better UDP performance
-        "!",
-        "rtpmp2tpay",
         "!",
         "udpsink",
         `host=${this._parseUdpHost(destination)}`,
