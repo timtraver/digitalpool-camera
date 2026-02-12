@@ -280,6 +280,8 @@ class StreamController extends EventEmitter {
           "halignment=right",
           `font-desc=Sans Bold ${this.streamConfig.overlayFontSize}`,
           "shaded-background=true",
+          "xpad=20",
+          "ypad=20",
           "!",
         );
       }
@@ -288,9 +290,14 @@ class StreamController extends EventEmitter {
       if (this.streamConfig.overlayText || this.streamConfig.customText1) {
         const text =
           this.streamConfig.overlayText || this.streamConfig.customText1;
+
+        // Parse position (e.g., "bottom-left", "top-center")
+        const position = this.streamConfig.overlayPosition || "bottom-left";
+        const [vpos, hpos] = position.split("-");
         const valign =
-          this.streamConfig.overlayPosition === "bottom" ? "bottom" : "top";
-        const halign = "center";
+          vpos === "bottom" ? "bottom" : vpos === "center" ? "center" : "top";
+        const halign =
+          hpos === "left" ? "left" : hpos === "right" ? "right" : "center";
 
         pipeline.push(
           "textoverlay",
@@ -300,6 +307,8 @@ class StreamController extends EventEmitter {
           `font-desc=Sans Bold ${this.streamConfig.overlayFontSize}`,
           `color=${this._colorToInt(this.streamConfig.overlayColor)}`,
           this.streamConfig.overlayBackground ? "shaded-background=true" : "",
+          "xpad=20",
+          "ypad=20",
           "!",
         );
       }
@@ -343,10 +352,13 @@ class StreamController extends EventEmitter {
         "!",
         "nvv4l2h264enc",
         `bitrate=${bitrate}`,
+        "iframeinterval=30", // Keyframe every 1 second (30 fps)
+        "preset-level=1", // Ultra-fast preset for low latency
         "!",
         "video/x-h264,stream-format=byte-stream",
         "!",
         "h264parse",
+        "config-interval=-1", // Insert SPS/PPS before every keyframe
         "!",
       );
     } else if (encoder === "omxh264enc") {

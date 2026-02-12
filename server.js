@@ -591,6 +591,13 @@ io.on("connection", (socket) => {
   socket.on("stopStream", async () => {
     const result = await streamController.stopStream();
     socket.emit("streamResult", result);
+
+    // Notify client to refresh preview
+    if (result.success) {
+      socket.emit("previewRefreshNeeded", {
+        message: "Stream stopped. Refresh the page to restart the preview.",
+      });
+    }
   });
 
   socket.on("getStreamStatus", () => {
