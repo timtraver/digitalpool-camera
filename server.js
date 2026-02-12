@@ -331,6 +331,11 @@ app.get("/api/camera/config", (req, res) => {
   res.json({ success: true, config: camera.config });
 });
 
+// API endpoint to get stream configuration
+app.get("/api/stream/config", (req, res) => {
+  res.json({ success: true, config: streamController.streamConfig });
+});
+
 // API endpoint to reset camera to defaults
 app.post("/api/camera/reset", async (req, res) => {
   const result = await camera.resetToDefaults();
@@ -389,6 +394,38 @@ app.get("/video/stream", (req, res) => {
     Connection: "keep-alive",
     "Access-Control-Allow-Origin": "*",
   });
+
+  // If streaming is active, connect to GStreamer's TCP server
+  if (streamController.isStreaming) {
+    console.log("📡 Connecting to GStreamer TCP stream on port 8554");
+    const net = require("net");
+    const client = net.connect({ port: 8554, host: "localhost" });
+
+    client.on("connect", () => {
+      console.log("✅ Connected to GStreamer TCP stream");
+    });
+
+    client.on("data", (data) => {
+      res.write(data);
+    });
+
+    client.on("error", (err) => {
+      console.error("❌ GStreamer TCP stream error:", err.message);
+      res.end();
+    });
+
+    client.on("end", () => {
+      console.log("GStreamer TCP stream ended");
+      res.end();
+    });
+
+    req.on("close", () => {
+      console.log("Client disconnected from preview stream");
+      client.destroy();
+    });
+
+    return;
+  }
 
   // Try multiple ffmpeg configurations for better camera compatibility
   // First try: MJPEG format (fastest if supported)
@@ -710,6 +747,13 @@ server.listen(PORT, async () => {
   } catch (error) {
     console.error("❌ Error initializing camera:", error.message);
     cameraInitialized = true; // Allow commands even if init failed
+  }
+
+  // Initialize stream controller (auto-start if configured)
+  try {
+    await streamController.initialize();
+  } catch (error) {
+    console.error("❌ Error initializing stream controller:", error.message);
   }
 });
 

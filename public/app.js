@@ -636,6 +636,12 @@ socket.on("streamStatus", (status) => {
 
   isCurrentlyStreaming = status.isStreaming;
 
+  // Show/hide preview source indicator
+  const previewIndicator = document.getElementById("previewSourceIndicator");
+  if (previewIndicator) {
+    previewIndicator.style.display = status.isStreaming ? "block" : "none";
+  }
+
   if (status.isStreaming) {
     startStreamBtn.disabled = true;
     stopStreamBtn.disabled = false;
@@ -652,8 +658,13 @@ socket.on("streamStatus", (status) => {
 // Stream error handler
 socket.on("streamError", (data) => {
   console.error("Stream error:", data.error);
-  streamStatusText.textContent = "Stream error";
-  streamStatusText.style.color = "#ef4444";
+  // Only show error status if stream is not running
+  // (some "errors" are just informational messages)
+  if (!stopStreamBtn.disabled) {
+    // Stream is not running, so this is a real error
+    streamStatusText.textContent = "Stream error";
+    streamStatusText.style.color = "#ef4444";
+  }
 });
 
 // Get initial stream status on connect
@@ -1283,3 +1294,52 @@ socket.on("streamStatus", (status) => {
     drawOverlay();
   }
 });
+
+// Load stream configuration on page load
+async function loadStreamConfig() {
+  try {
+    const response = await fetch("/api/stream/config");
+    const data = await response.json();
+    if (data.success && data.config) {
+      console.log("📡 Loaded stream config:", data.config);
+
+      // Update UI with saved settings
+      streamProtocol.value = data.config.protocol || "rtmp";
+      streamDestination.value = data.config.destination || "";
+      streamBitrate.value = data.config.bitrate || 5000000;
+
+      // Update custom dropdowns
+      const protocolDropdown = streamProtocol.parentElement.querySelector(
+        ".custom-dropdown-selected",
+      );
+      if (protocolDropdown) {
+        const protocolOption =
+          streamProtocol.options[streamProtocol.selectedIndex];
+        protocolDropdown.textContent = protocolOption.text;
+        protocolDropdown.dataset.value = protocolOption.value;
+      }
+
+      const bitrateDropdown = streamBitrate.parentElement.querySelector(
+        ".custom-dropdown-selected",
+      );
+      if (bitrateDropdown) {
+        const bitrateOption =
+          streamBitrate.options[streamBitrate.selectedIndex];
+        bitrateDropdown.textContent = bitrateOption.text;
+        bitrateDropdown.dataset.value = bitrateOption.value;
+      }
+
+      // Update placeholder
+      if (data.config.protocol === "srt") {
+        streamDestination.placeholder = "srt://server:port";
+      } else if (data.config.protocol === "rtmp") {
+        streamDestination.placeholder = "rtmp://server/live/stream";
+      }
+    }
+  } catch (error) {
+    console.error("❌ Error loading stream config:", error);
+  }
+}
+
+// Load stream config on page load
+loadStreamConfig();

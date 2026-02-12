@@ -24,6 +24,23 @@
           <div class="video-container">
             <img id="videoStream" src="/video/stream" alt="Camera Stream" />
             <canvas id="overlayCanvas"></canvas>
+            <div
+              id="previewSourceIndicator"
+              style="
+                position: absolute;
+                top: 10px;
+                left: 10px;
+                background: rgba(18, 199, 255, 0.9);
+                color: white;
+                padding: 5px 10px;
+                border-radius: 5px;
+                font-size: 12px;
+                display: none;
+                z-index: 100;
+              "
+            >
+              📡 Live Stream Preview
+            </div>
           </div>
 
           <!-- PTZ and Overlay Controls Container -->

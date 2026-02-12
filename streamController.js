@@ -13,13 +13,14 @@ class StreamController extends EventEmitter {
 
     // Default configuration
     const defaultConfig = {
-      protocol: "srt", // 'srt' or 'rtmp'
-      destination: "",
+      protocol: "rtmp", // 'srt' or 'rtmp'
+      destination: "rtmp://localhost:1935/stream",
       width: 1920,
       height: 1080,
       framerate: 30,
       bitrate: 5000000, // 5 Mbps
       encoder: "nvv4l2h264enc", // Hardware encoder
+      autoStart: false, // Auto-start streaming on server startup
       // Overlay settings
       overlayEnabled: false,
       overlayType: "text",
@@ -39,6 +40,23 @@ class StreamController extends EventEmitter {
 
     // Load config from file or use defaults
     this.streamConfig = this.loadConfig() || defaultConfig;
+  }
+
+  /**
+   * Initialize and auto-start if configured
+   */
+  async initialize() {
+    if (this.streamConfig.autoStart) {
+      console.log("🚀 Auto-starting stream on server startup...");
+      // Wait a moment for the system to be ready
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const result = await this.startStream();
+      if (result.success) {
+        console.log("✅ Auto-start successful");
+      } else {
+        console.error("❌ Auto-start failed:", result.error);
+      }
+    }
   }
 
   /**
@@ -115,8 +133,23 @@ class StreamController extends EventEmitter {
       });
 
       this.gstProcess.stderr.on("data", (data) => {
-        console.error(`GStreamer stderr: ${data}`);
-        this.emit("error", data.toString());
+        const message = data.toString();
+        console.error(`GStreamer stderr: ${message}`);
+
+        // Only emit as error if it's an actual error (contains ERROR, WARNING, or CRITICAL)
+        // Ignore informational messages like NVMEDIA, NvMMLite, H264 profile info
+        if (
+          message.includes("ERROR") ||
+          message.includes("WARNING") ||
+          message.includes("CRITICAL") ||
+          message.includes("failed") ||
+          message.includes("Failed")
+        ) {
+          this.emit("error", message);
+        } else {
+          // Treat as informational log
+          this.emit("log", message);
+        }
       });
 
       this.gstProcess.on("close", (code) => {
@@ -128,6 +161,10 @@ class StreamController extends EventEmitter {
 
       this.isStreaming = true;
       this.emit("started");
+
+      // Enable auto-start and save config
+      this.streamConfig.autoStart = true;
+      this.saveConfig();
 
       return { success: true, message: "Stream started" };
     } catch (error) {
@@ -146,6 +183,11 @@ class StreamController extends EventEmitter {
     try {
       this.gstProcess.kill("SIGINT");
       this.isStreaming = false;
+
+      // Disable auto-start and save config
+      this.streamConfig.autoStart = false;
+      this.saveConfig();
+
       return { success: true, message: "Stream stopped" };
     } catch (error) {
       return { success: false, error: error.message };
@@ -366,9 +408,16 @@ class StreamController extends EventEmitter {
       pipeline.push("omxh264enc", `bitrate=${bitrate}`, "!", "h264parse", "!");
     }
 
-    // Output based on protocol
+    // Use tee to split the stream for both output and preview
+    pipeline.push("tee", "name=t");
+
+    // Branch 1: Output stream (RTMP or SRT)
     if (protocol === "srt") {
       pipeline.push(
+        "t.",
+        "!",
+        "queue",
+        "!",
         "mpegtsmux",
         "!",
         "srtsink",
@@ -378,8 +427,12 @@ class StreamController extends EventEmitter {
     } else if (protocol === "rtmp") {
       // For RTMP, push to local nginx server
       // If destination is empty or localhost, use local nginx
-      const rtmpUrl = destination || "rtmp://localhost:1935/live/stream";
+      const rtmpUrl = destination || "rtmp://localhost:1935/stream";
       pipeline.push(
+        "t.",
+        "!",
+        "queue",
+        "!",
         "flvmux",
         "streamable=true",
         "!",
@@ -389,6 +442,38 @@ class StreamController extends EventEmitter {
     } else {
       throw new Error(`Unsupported protocol: ${protocol}`);
     }
+
+    // Branch 2: Preview stream (TCP server for web interface)
+    // Convert H.264 to MJPEG for browser compatibility
+    // Use hardware decoder on Jetson for better performance
+    pipeline.push(
+      "t.",
+      "!",
+      "queue",
+      "max-size-buffers=3",
+      "leaky=downstream",
+      "!",
+      "h264parse",
+      "!",
+      "nvv4l2decoder",
+      "enable-max-performance=1",
+      "!",
+      "nvvidconv",
+      "!",
+      "video/x-raw,width=1280,height=720",
+      "!",
+      "nvjpegenc",
+      "quality=85",
+      "!",
+      "multipartmux",
+      "boundary=frame",
+      "!",
+      "tcpserversink",
+      "host=0.0.0.0",
+      "port=8554",
+      "recover-policy=keyframe",
+      "sync=false",
+    );
 
     return pipeline;
   }
