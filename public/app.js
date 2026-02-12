@@ -693,12 +693,20 @@ socket.on("streamStatus", (status) => {
       const videoStream = document.getElementById("videoStream");
       if (videoStream) {
         console.log("🔄 Reloading video stream to show tee output...");
-        videoStream.src = "";
-        setTimeout(() => {
-          videoStream.src = "/video/stream?t=" + Date.now();
-        }, 100);
+
+        // Force a complete reload by removing and re-adding the element
+        const parent = videoStream.parentNode;
+        const newImg = document.createElement("img");
+        newImg.id = "videoStream";
+        newImg.alt = "Camera Stream";
+        newImg.src = "/video/stream?t=" + Date.now();
+
+        parent.removeChild(videoStream);
+        parent.appendChild(newImg);
+
+        console.log("✅ Video stream element recreated");
       }
-    }, 500);
+    }, 1000); // Increased delay to 1 second
   } else {
     // Change Restart button back to Start button
     startStreamBtn.disabled = false;
@@ -716,12 +724,20 @@ socket.on("streamStatus", (status) => {
       const videoStream = document.getElementById("videoStream");
       if (videoStream) {
         console.log("🔄 Reloading video stream to show direct camera feed...");
-        videoStream.src = "";
-        setTimeout(() => {
-          videoStream.src = "/video/stream?t=" + Date.now();
-        }, 100);
+
+        // Force a complete reload by removing and re-adding the element
+        const parent = videoStream.parentNode;
+        const newImg = document.createElement("img");
+        newImg.id = "videoStream";
+        newImg.alt = "Camera Stream";
+        newImg.src = "/video/stream?t=" + Date.now();
+
+        parent.removeChild(videoStream);
+        parent.appendChild(newImg);
+
+        console.log("✅ Video stream element recreated");
       }
-    }, 200);
+    }, 500);
   }
 });
 
