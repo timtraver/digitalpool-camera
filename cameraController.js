@@ -468,6 +468,31 @@ class CameraController {
   }
 
   /**
+   * Sync tracked position with actual camera position
+   */
+  async syncPosition() {
+    try {
+      const panResult = await this.getControl("pan_absolute");
+      const tiltResult = await this.getControl("tilt_absolute");
+
+      if (panResult.success && panResult.value !== null) {
+        this.currentPan = panResult.value;
+        console.log(`📍 Synced pan position: ${this.currentPan}`);
+      }
+
+      if (tiltResult.success && tiltResult.value !== null) {
+        this.currentTilt = tiltResult.value;
+        console.log(`📍 Synced tilt position: ${this.currentTilt}`);
+      }
+
+      return { success: true, pan: this.currentPan, tilt: this.currentTilt };
+    } catch (error) {
+      console.error("Failed to sync position:", error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
    * Pan the camera (relative movement)
    * @param {number} degrees - Degrees to pan (positive = right, negative = left)
    */
@@ -483,12 +508,13 @@ class CameraController {
       Math.min(this.controls.pan_absolute.max, newValue),
     );
     console.log(
-      `Pan: current=${this.currentPan}, degrees=${degrees}, new=${newValue}, clamped=${clampedValue}`,
+      `🔄 Pan: current=${this.currentPan}, degrees=${degrees}, new=${newValue}, clamped=${clampedValue}`,
     );
 
     const result = await this.setControl("pan_absolute", clampedValue);
     if (result.success) {
       this.currentPan = clampedValue;
+      console.log(`✅ Pan complete, new position: ${this.currentPan}`);
     }
     return result;
   }
@@ -509,12 +535,13 @@ class CameraController {
       Math.min(this.controls.tilt_absolute.max, newValue),
     );
     console.log(
-      `Tilt: current=${this.currentTilt}, degrees=${degrees}, new=${newValue}, clamped=${clampedValue}`,
+      `🔄 Tilt: current=${this.currentTilt}, degrees=${degrees}, new=${newValue}, clamped=${clampedValue}`,
     );
 
     const result = await this.setControl("tilt_absolute", clampedValue);
     if (result.success) {
       this.currentTilt = clampedValue;
+      console.log(`✅ Tilt complete, new position: ${this.currentTilt}`);
     }
     return result;
   }

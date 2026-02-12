@@ -742,6 +742,10 @@ server.listen(PORT, async () => {
     await new Promise((resolve) => setTimeout(resolve, 500));
     console.log("✅ Temporary stream stopped");
 
+    // Sync pan/tilt position with actual camera position
+    console.log("📍 Syncing pan/tilt position...");
+    await camera.syncPosition();
+
     cameraInitialized = true;
     console.log("✅ Camera initialized successfully\n");
   } catch (error) {

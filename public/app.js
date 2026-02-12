@@ -190,7 +190,8 @@ socket.on("cameraConfigReset", (data) => {
 
 // Pan/Tilt/Zoom Controls
 // Define movement speeds
-const SMALL_MOVE = 0.5; // degrees for inner buttons
+// Note: Camera step size is 3600 units = 1 degree, so minimum movement is 1 degree
+const SMALL_MOVE = 1.0; // degrees for inner buttons (minimum step size)
 const LARGE_MOVE = 5.0; // degrees for outer buttons
 
 // Inner ring - Small movements
