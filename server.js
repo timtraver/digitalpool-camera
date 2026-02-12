@@ -384,6 +384,34 @@ app.post("/api/stream/overlay", (req, res) => {
 
 // ============ END STREAMING API ============
 
+// Test endpoint to check TCP connection
+app.get("/video/test", (req, res) => {
+  const net = require("net");
+  const client = net.connect({ port: 8555, host: "localhost" });
+
+  let received = 0;
+  const timeout = setTimeout(() => {
+    client.destroy();
+    res.json({
+      success: received > 0,
+      bytesReceived: received,
+      message:
+        received > 0
+          ? "TCP stream is working"
+          : "No data received from TCP stream",
+    });
+  }, 2000);
+
+  client.on("data", (data) => {
+    received += data.length;
+  });
+
+  client.on("error", (err) => {
+    clearTimeout(timeout);
+    res.json({ success: false, error: err.message });
+  });
+});
+
 // Video stream endpoint using MJPEG
 app.get("/video/stream", (req, res) => {
   console.log("New video stream connection requested");
@@ -407,13 +435,25 @@ app.get("/video/stream", (req, res) => {
 
     const tryConnect = () => {
       const client = net.connect({ port: 8555, host: "localhost" });
+      let dataReceived = false;
 
       client.on("connect", () => {
         console.log("✅ Connected to GStreamer TCP stream");
       });
 
       client.on("data", (data) => {
-        res.write(data);
+        if (!dataReceived) {
+          dataReceived = true;
+          console.log(
+            `📦 Receiving data from GStreamer (${data.length} bytes)`,
+          );
+        }
+        try {
+          res.write(data);
+        } catch (err) {
+          console.error("❌ Error writing to response:", err.message);
+          client.destroy();
+        }
       });
 
       client.on("error", (err) => {
@@ -428,6 +468,9 @@ app.get("/video/stream", (req, res) => {
           console.log(`⏳ Retrying connection in ${retryDelay}ms...`);
           setTimeout(tryConnect, retryDelay);
         } else {
+          if (!res.headersSent) {
+            res.writeHead(503);
+          }
           res.end();
         }
       });

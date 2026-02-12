@@ -621,13 +621,13 @@ class StreamController extends EventEmitter {
 
     // Branch 2: Preview stream (TCP server for web interface)
     // Convert H.264 to MJPEG for browser compatibility
-    // Use hardware decoder on Jetson for better performance
+    // Use hardware decoder/encoder on Jetson for better performance
     // Port 8555 (8554 is used by MediaMTX for RTSP)
     pipeline.push(
       "t.",
       "!",
       "queue",
-      "max-size-buffers=3",
+      "max-size-buffers=10", // Increase buffer to prevent blocking
       "leaky=downstream",
       "!",
       "h264parse",
@@ -637,7 +637,7 @@ class StreamController extends EventEmitter {
       "!",
       "nvvidconv",
       "!",
-      "video/x-raw,width=1280,height=720",
+      "video/x-raw,format=I420,width=1280,height=720", // Specify format
       "!",
       "nvjpegenc",
       "quality=85",
@@ -650,6 +650,7 @@ class StreamController extends EventEmitter {
       "port=8555",
       "recover-policy=keyframe",
       "sync=false",
+      "async=false", // Don't wait for preroll
     );
 
     return pipeline;
