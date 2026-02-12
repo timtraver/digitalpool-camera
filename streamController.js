@@ -561,17 +561,12 @@ class StreamController extends EventEmitter {
     // Branch 1: Output stream (RTMP, SRT, or UDP)
     if (protocol === "srt") {
       // SRT streaming - low latency with error correction
-      // Format: srt://HOST:PORT (e.g., srt://192.168.1.100:8890)
-      // Use srtclientsink in caller mode to connect to OBS listener
+      // Use srtserversink - Jetson acts as server, OBS connects as client
+      // This avoids firewall issues on the Mac
 
-      // Validate destination
-      if (!destination || destination.trim() === "") {
-        throw new Error(
-          "SRT destination is required (e.g., srt://192.168.1.100:8890)",
-        );
-      }
-
-      console.log(`📡 SRT destination: ${destination}`);
+      console.log(
+        `📡 SRT server mode - OBS should connect to: srt://${this._getLocalIP()}:8890`,
+      );
 
       pipeline.push(
         "t.",
@@ -584,10 +579,9 @@ class StreamController extends EventEmitter {
         "!",
         "mpegtsmux",
         "!",
-        "srtclientsink", // srtclientsink connects to listener (OBS)
-        `uri=${destination}`,
+        "srtserversink", // Jetson acts as SRT server
+        "uri=srt://0.0.0.0:8890", // Listen on all interfaces, port 8890
         "latency=125", // Latency in milliseconds
-        "poll-timeout=100", // Poll timeout in milliseconds
       );
     } else if (protocol === "udp") {
       // UDP streaming - lowest latency (200-500ms)
@@ -706,6 +700,24 @@ class StreamController extends EventEmitter {
       magenta: "0xFFFF00FF",
     };
     return colors[colorName.toLowerCase()] || colors.white;
+  }
+
+  /**
+   * Get local IP address for display purposes
+   */
+  _getLocalIP() {
+    const os = require("os");
+    const interfaces = os.networkInterfaces();
+
+    // Find first non-internal IPv4 address
+    for (const name of Object.keys(interfaces)) {
+      for (const iface of interfaces[name]) {
+        if (iface.family === "IPv4" && !iface.internal) {
+          return iface.address;
+        }
+      }
+    }
+    return "localhost";
   }
 
   /**
