@@ -158,10 +158,17 @@ class StreamController extends EventEmitter {
         }
       });
 
-      this.gstProcess.on("close", (code) => {
+      this.gstProcess.on("close", async (code) => {
         console.log(`GStreamer process exited with code ${code}`);
         this.isStreaming = false;
         this.gstProcess = null;
+
+        // If GStreamer failed (non-zero exit code), ensure camera is released
+        if (code !== 0) {
+          console.log("⚠️  GStreamer failed, cleaning up camera resources...");
+          await this._killCameraProcesses();
+        }
+
         this.emit("stopped", code);
       });
 
@@ -174,6 +181,12 @@ class StreamController extends EventEmitter {
 
       return { success: true, message: "Stream started" };
     } catch (error) {
+      // Ensure camera is released on error
+      console.log("⚠️  Stream start failed, cleaning up camera resources...");
+      await this._killCameraProcesses();
+      this.isStreaming = false;
+      this.gstProcess = null;
+
       return { success: false, error: error.message };
     }
   }
@@ -189,6 +202,12 @@ class StreamController extends EventEmitter {
     try {
       this.gstProcess.kill("SIGINT");
       this.isStreaming = false;
+
+      // Wait a moment for process to exit
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Ensure camera is fully released
+      await this._killCameraProcesses();
 
       // Disable auto-start and save config
       this.streamConfig.autoStart = false;
