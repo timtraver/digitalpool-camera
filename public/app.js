@@ -804,6 +804,15 @@ function switchToHLSPreview() {
     // Native HLS support (Safari)
     video.src = "/video/hls/playlist.m3u8";
     console.log("✅ Using native HLS support");
+
+    video.addEventListener("error", (e) => {
+      console.error("❌ Video error:", e);
+      console.error("Video error details:", video.error);
+    });
+
+    video.addEventListener("loadeddata", () => {
+      console.log("✅ HLS video loaded");
+    });
   } else if (typeof Hls !== "undefined") {
     // Use hls.js for other browsers
     if (hlsPlayer) {
@@ -813,12 +822,40 @@ function switchToHLSPreview() {
       enableWorker: true,
       lowLatencyMode: true,
       backBufferLength: 10,
+      debug: true, // Enable debug logging
     });
     hlsPlayer.loadSource("/video/hls/playlist.m3u8");
     hlsPlayer.attachMedia(video);
+
     hlsPlayer.on(Hls.Events.MANIFEST_PARSED, () => {
+      console.log("✅ HLS manifest parsed");
       video.play().catch((e) => console.log("Autoplay prevented:", e));
     });
+
+    hlsPlayer.on(Hls.Events.ERROR, (event, data) => {
+      console.error("❌ HLS error:", data.type, data.details);
+      if (data.fatal) {
+        console.error("❌ Fatal HLS error:", data);
+        switch (data.type) {
+          case Hls.ErrorTypes.NETWORK_ERROR:
+            console.log("🔄 Network error, trying to recover...");
+            hlsPlayer.startLoad();
+            break;
+          case Hls.ErrorTypes.MEDIA_ERROR:
+            console.log("🔄 Media error, trying to recover...");
+            hlsPlayer.recoverMediaError();
+            break;
+          default:
+            console.error("❌ Unrecoverable error");
+            break;
+        }
+      }
+    });
+
+    hlsPlayer.on(Hls.Events.FRAG_LOADED, (event, data) => {
+      console.log("✅ HLS fragment loaded:", data.frag.sn);
+    });
+
     console.log("✅ Using hls.js");
   } else {
     console.error("❌ HLS not supported in this browser");

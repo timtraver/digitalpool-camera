@@ -417,14 +417,26 @@ app.get("/video/hls/playlist.m3u8", (req, res) => {
   const fs = require("fs");
   const playlistPath = "/tmp/stream/playlist.m3u8";
 
+  console.log("📺 HLS playlist requested");
+
   if (!streamController.isStreaming) {
+    console.log("⚠️  Stream not active");
     return res.status(404).send("Stream not active");
   }
 
   if (!fs.existsSync(playlistPath)) {
+    console.log("⚠️  Playlist not ready yet:", playlistPath);
+    // List what files exist in the directory
+    try {
+      const files = fs.readdirSync("/tmp/stream");
+      console.log("📁 Files in /tmp/stream:", files);
+    } catch (e) {
+      console.log("❌ /tmp/stream directory doesn't exist");
+    }
     return res.status(404).send("Playlist not ready yet");
   }
 
+  console.log("✅ Serving HLS playlist");
   res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -435,10 +447,14 @@ app.get("/video/hls/:segment", (req, res) => {
   const fs = require("fs");
   const segmentPath = `/tmp/stream/${req.params.segment}`;
 
+  console.log("📺 HLS segment requested:", req.params.segment);
+
   if (!fs.existsSync(segmentPath)) {
+    console.log("⚠️  Segment not found:", segmentPath);
     return res.status(404).send("Segment not found");
   }
 
+  console.log("✅ Serving HLS segment:", req.params.segment);
   res.setHeader("Content-Type", "video/mp2t");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Access-Control-Allow-Origin", "*");

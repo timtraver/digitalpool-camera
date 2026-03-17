@@ -696,10 +696,10 @@ class StreamController extends EventEmitter {
       "mpegtsmux",
       "!",
       "hlssink",
-      "location=/tmp/stream/segment%05d.ts",
       "playlist-location=/tmp/stream/playlist.m3u8",
-      "max-files=5",
+      "location=/tmp/stream/segment%05d.ts",
       "target-duration=2",
+      "max-files=5",
       "playlist-length=3",
     );
 
