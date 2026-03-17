@@ -446,7 +446,7 @@ app.get("/video/hls/:segment", (req, res) => {
 });
 
 // Video stream endpoint using MJPEG
-app.get("/video/stream", (req, res) => {
+app.get("/video/stream", async (req, res) => {
   console.log("New video stream connection requested");
 
   res.writeHead(200, {
@@ -463,6 +463,40 @@ app.get("/video/stream", (req, res) => {
     );
     res.status(503).end("Stream active - use HLS preview");
     return;
+  }
+
+  // Check if camera is busy and try to clean up
+  const { execSync } = require("child_process");
+  try {
+    const fuserOutput = execSync(`fuser ${CAMERA_DEVICE} 2>&1`, {
+      encoding: "utf-8",
+      timeout: 1000,
+    });
+
+    if (fuserOutput.includes(":")) {
+      console.log("⚠️  Camera is busy, attempting cleanup...");
+      const pids = fuserOutput
+        .split(":")[1]
+        .trim()
+        .split(/\s+/)
+        .map((p) => p.replace(/\D/g, ""))
+        .filter((p) => p);
+
+      for (const pid of pids) {
+        console.log(`Killing process ${pid} using camera...`);
+        try {
+          execSync(`kill -9 ${pid}`);
+        } catch (e) {
+          // Process might already be dead
+        }
+      }
+
+      // Wait for device to be released
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      console.log("✅ Camera cleanup complete");
+    }
+  } catch (e) {
+    // Camera is free or fuser command failed
   }
 
   // Try multiple ffmpeg configurations for better camera compatibility
