@@ -687,26 +687,10 @@ socket.on("streamStatus", (status) => {
     streamStatusText.textContent = `Streaming (${status.config?.protocol?.toUpperCase()})`;
     streamStatusText.style.color = "#10b981";
 
-    // Reload video stream to switch to GStreamer tee output
-    // Add delay to ensure GStreamer TCP server is ready
+    // Switch to HLS preview when streaming
     setTimeout(() => {
-      const videoStream = document.getElementById("videoStream");
-      if (videoStream) {
-        console.log("🔄 Reloading video stream to show tee output...");
-
-        // Force a complete reload by removing and re-adding the element
-        const parent = videoStream.parentNode;
-        const newImg = document.createElement("img");
-        newImg.id = "videoStream";
-        newImg.alt = "Camera Stream";
-        newImg.src = "/video/stream?t=" + Date.now();
-
-        parent.removeChild(videoStream);
-        parent.appendChild(newImg);
-
-        console.log("✅ Video stream element recreated");
-      }
-    }, 1000); // Increased delay to 1 second
+      switchToHLSPreview();
+    }, 1500); // Wait for GStreamer to start generating HLS segments
   } else {
     // Change Restart button back to Start button
     startStreamBtn.disabled = false;
@@ -719,24 +703,9 @@ socket.on("streamStatus", (status) => {
     streamStatusText.textContent = "Not streaming";
     streamStatusText.style.color = "rgba(255, 255, 255, 0.7)";
 
-    // Reload video stream to switch back to direct camera feed
+    // Switch back to MJPEG preview when not streaming
     setTimeout(() => {
-      const videoStream = document.getElementById("videoStream");
-      if (videoStream) {
-        console.log("🔄 Reloading video stream to show direct camera feed...");
-
-        // Force a complete reload by removing and re-adding the element
-        const parent = videoStream.parentNode;
-        const newImg = document.createElement("img");
-        newImg.id = "videoStream";
-        newImg.alt = "Camera Stream";
-        newImg.src = "/video/stream?t=" + Date.now();
-
-        parent.removeChild(videoStream);
-        parent.appendChild(newImg);
-
-        console.log("✅ Video stream element recreated");
-      }
+      switchToMJPEGPreview();
     }, 500);
   }
 });
@@ -805,6 +774,83 @@ if (exposureAutoSelect) {
 console.log("✅ Custom dropdowns initialized");
 
 console.log("🚀 app.js loaded!");
+
+// Video preview switching functions
+let hlsPlayer = null;
+
+function switchToHLSPreview() {
+  console.log("🔄 Switching to HLS preview...");
+  const container = document.querySelector(".video-container");
+  const oldElement = document.getElementById("videoStream");
+
+  if (oldElement) {
+    oldElement.remove();
+  }
+
+  // Create video element for HLS
+  const video = document.createElement("video");
+  video.id = "videoStream";
+  video.controls = false;
+  video.autoplay = true;
+  video.muted = true;
+  video.style.width = "100%";
+  video.style.height = "100%";
+  video.style.objectFit = "contain";
+
+  container.insertBefore(video, container.firstChild);
+
+  // Load HLS using native HLS support or hls.js
+  if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    // Native HLS support (Safari)
+    video.src = "/video/hls/playlist.m3u8";
+    console.log("✅ Using native HLS support");
+  } else if (typeof Hls !== "undefined") {
+    // Use hls.js for other browsers
+    if (hlsPlayer) {
+      hlsPlayer.destroy();
+    }
+    hlsPlayer = new Hls({
+      enableWorker: true,
+      lowLatencyMode: true,
+      backBufferLength: 10,
+    });
+    hlsPlayer.loadSource("/video/hls/playlist.m3u8");
+    hlsPlayer.attachMedia(video);
+    hlsPlayer.on(Hls.Events.MANIFEST_PARSED, () => {
+      video.play().catch((e) => console.log("Autoplay prevented:", e));
+    });
+    console.log("✅ Using hls.js");
+  } else {
+    console.error("❌ HLS not supported in this browser");
+  }
+}
+
+function switchToMJPEGPreview() {
+  console.log("🔄 Switching to MJPEG preview...");
+  const container = document.querySelector(".video-container");
+  const oldElement = document.getElementById("videoStream");
+
+  if (oldElement) {
+    oldElement.remove();
+  }
+
+  if (hlsPlayer) {
+    hlsPlayer.destroy();
+    hlsPlayer = null;
+  }
+
+  // Create img element for MJPEG
+  const img = document.createElement("img");
+  img.id = "videoStream";
+  img.alt = "Camera Stream";
+  img.src = "/video/stream?t=" + Date.now();
+  img.style.width = "100%";
+  img.style.height = "100%";
+  img.style.objectFit = "contain";
+
+  container.insertBefore(img, container.firstChild);
+  console.log("✅ Switched to MJPEG preview");
+}
 
 // Canvas overlay removed - preview now shows actual stream output via tee
 // Overlay settings still work, they just apply to the GStreamer pipeline

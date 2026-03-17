@@ -412,6 +412,39 @@ app.get("/video/test", (req, res) => {
   });
 });
 
+// Serve HLS playlist and segments for preview when streaming
+app.get("/video/hls/playlist.m3u8", (req, res) => {
+  const fs = require("fs");
+  const playlistPath = "/tmp/stream/playlist.m3u8";
+
+  if (!streamController.isStreaming) {
+    return res.status(404).send("Stream not active");
+  }
+
+  if (!fs.existsSync(playlistPath)) {
+    return res.status(404).send("Playlist not ready yet");
+  }
+
+  res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  fs.createReadStream(playlistPath).pipe(res);
+});
+
+app.get("/video/hls/:segment", (req, res) => {
+  const fs = require("fs");
+  const segmentPath = `/tmp/stream/${req.params.segment}`;
+
+  if (!fs.existsSync(segmentPath)) {
+    return res.status(404).send("Segment not found");
+  }
+
+  res.setHeader("Content-Type", "video/mp2t");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  fs.createReadStream(segmentPath).pipe(res);
+});
+
 // Video stream endpoint using MJPEG
 app.get("/video/stream", (req, res) => {
   console.log("New video stream connection requested");
@@ -423,9 +456,14 @@ app.get("/video/stream", (req, res) => {
     "Access-Control-Allow-Origin": "*",
   });
 
-  // NOTE: GStreamer TCP preview is currently disabled in streamController.js
-  // Always use FFmpeg for preview, even when streaming is active
-  // This avoids conflicts with the camera device
+  // If streaming is active, use HLS preview instead of trying to access camera
+  if (streamController.isStreaming) {
+    console.log(
+      "⚠️  Stream is active - preview should use HLS at /video/hls/playlist.m3u8",
+    );
+    res.status(503).end("Stream active - use HLS preview");
+    return;
+  }
 
   // Try multiple ffmpeg configurations for better camera compatibility
   // First try: MJPEG format (fastest if supported)

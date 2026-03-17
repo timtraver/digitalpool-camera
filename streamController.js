@@ -124,6 +124,21 @@ class StreamController extends EventEmitter {
       await this._killPortProcess(8555);
       console.log("✅ Port 8555 cleanup complete");
 
+      // Create HLS directory for preview stream
+      const fs = require("fs");
+      const hlsDir = "/tmp/stream";
+      if (!fs.existsSync(hlsDir)) {
+        fs.mkdirSync(hlsDir, { recursive: true });
+        console.log("📁 Created HLS directory:", hlsDir);
+      } else {
+        // Clean old segments
+        const files = fs.readdirSync(hlsDir);
+        files.forEach((file) => {
+          fs.unlinkSync(`${hlsDir}/${file}`);
+        });
+        console.log("🧹 Cleaned old HLS segments");
+      }
+
       // Wait a moment for the device and port to be released
       console.log("⏳ Waiting for resources to be released...");
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -666,10 +681,9 @@ class StreamController extends EventEmitter {
       throw new Error(`Unsupported protocol: ${protocol}`);
     }
 
-    // Branch 2: Preview stream (TCP server for web interface)
-    // TEMPORARILY DISABLED - causing pipeline to fail
-    // TODO: Re-enable once main stream is working
-    /*
+    // Branch 2: Preview stream (HLS for web interface)
+    // Use HLS instead of TCP for better browser compatibility
+    // This creates a separate branch from the tee that writes HLS segments
     pipeline.push(
       "t.",
       "!",
@@ -679,27 +693,15 @@ class StreamController extends EventEmitter {
       "!",
       "h264parse",
       "!",
-      "nvv4l2decoder",
-      "enable-max-performance=1",
+      "mpegtsmux",
       "!",
-      "nvvidconv",
-      "!",
-      "video/x-raw,format=I420,width=1280,height=720",
-      "!",
-      "nvjpegenc",
-      "quality=85",
-      "!",
-      "multipartmux",
-      "boundary=frame",
-      "!",
-      "tcpserversink",
-      "host=0.0.0.0",
-      "port=8555",
-      "recover-policy=keyframe",
-      "sync=false",
-      "async=false",
+      "hlssink",
+      "location=/tmp/stream/segment%05d.ts",
+      "playlist-location=/tmp/stream/playlist.m3u8",
+      "max-files=5",
+      "target-duration=2",
+      "playlist-length=3",
     );
-    */
 
     return pipeline;
   }
