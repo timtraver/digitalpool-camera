@@ -423,72 +423,9 @@ app.get("/video/stream", (req, res) => {
     "Access-Control-Allow-Origin": "*",
   });
 
-  // If streaming is active, connect to GStreamer's TCP server
-  if (streamController.isStreaming) {
-    console.log("📡 Connecting to GStreamer TCP stream on port 8555");
-    const net = require("net");
-
-    // Retry connection with delay (TCP server might not be ready yet)
-    let retryCount = 0;
-    const maxRetries = 5;
-    const retryDelay = 500; // ms
-
-    const tryConnect = () => {
-      const client = net.connect({ port: 8555, host: "localhost" });
-      let dataReceived = false;
-
-      client.on("connect", () => {
-        console.log("✅ Connected to GStreamer TCP stream");
-      });
-
-      client.on("data", (data) => {
-        if (!dataReceived) {
-          dataReceived = true;
-          console.log(
-            `📦 Receiving data from GStreamer (${data.length} bytes)`,
-          );
-        }
-        try {
-          res.write(data);
-        } catch (err) {
-          console.error("❌ Error writing to response:", err.message);
-          client.destroy();
-        }
-      });
-
-      client.on("error", (err) => {
-        console.error(
-          `❌ GStreamer TCP stream error (attempt ${retryCount + 1}/${maxRetries}):`,
-          err.message,
-        );
-
-        // Retry if connection refused and we haven't exceeded max retries
-        if (err.code === "ECONNREFUSED" && retryCount < maxRetries) {
-          retryCount++;
-          console.log(`⏳ Retrying connection in ${retryDelay}ms...`);
-          setTimeout(tryConnect, retryDelay);
-        } else {
-          if (!res.headersSent) {
-            res.writeHead(503);
-          }
-          res.end();
-        }
-      });
-
-      client.on("end", () => {
-        console.log("GStreamer TCP stream ended");
-        res.end();
-      });
-
-      req.on("close", () => {
-        console.log("Client disconnected from preview stream");
-        client.destroy();
-      });
-    };
-
-    tryConnect();
-    return;
-  }
+  // NOTE: GStreamer TCP preview is currently disabled in streamController.js
+  // Always use FFmpeg for preview, even when streaming is active
+  // This avoids conflicts with the camera device
 
   // Try multiple ffmpeg configurations for better camera compatibility
   // First try: MJPEG format (fastest if supported)
