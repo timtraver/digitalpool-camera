@@ -702,6 +702,95 @@ server.listen(PORT, async () => {
   console.log(`Camera device: ${CAMERA_DEVICE}`);
   console.log(`Access the interface at http://localhost:${PORT}`);
 
+  // Clean up any processes using the camera before starting
+  console.log("\n🧹 Cleaning up camera resources...");
+  try {
+    const { execSync } = require("child_process");
+
+    // Kill any GStreamer processes first
+    try {
+      console.log("Checking for GStreamer processes...");
+      const gstProcesses = execSync("pgrep -f gst-launch", {
+        encoding: "utf-8",
+      }).trim();
+
+      if (gstProcesses) {
+        const pids = gstProcesses.split("\n").filter((p) => p);
+        for (const pid of pids) {
+          console.log(`Killing GStreamer process ${pid}...`);
+          try {
+            execSync(`kill -9 ${pid}`);
+          } catch (e) {
+            // Process might already be dead
+          }
+        }
+        console.log("✅ GStreamer processes killed");
+      }
+    } catch (e) {
+      // No GStreamer processes found
+      console.log("✅ No GStreamer processes found");
+    }
+
+    // Kill any FFmpeg processes using the camera
+    try {
+      console.log("Checking for FFmpeg processes...");
+      const ffmpegProcesses = execSync(
+        `ps aux | grep ffmpeg | grep ${CAMERA_DEVICE} | grep -v grep | awk '{print $2}'`,
+        { encoding: "utf-8" },
+      ).trim();
+
+      if (ffmpegProcesses) {
+        const pids = ffmpegProcesses.split("\n").filter((p) => p);
+        for (const pid of pids) {
+          console.log(`Killing FFmpeg process ${pid}...`);
+          try {
+            execSync(`kill -9 ${pid}`);
+          } catch (e) {
+            // Process might already be dead
+          }
+        }
+        console.log("✅ FFmpeg processes killed");
+      }
+    } catch (e) {
+      // No FFmpeg processes found
+      console.log("✅ No FFmpeg processes found");
+    }
+
+    // Final check: kill any remaining processes using the camera device
+    try {
+      const fuserOutput = execSync(`fuser ${CAMERA_DEVICE} 2>&1`, {
+        encoding: "utf-8",
+      });
+      console.log("fuser output:", fuserOutput);
+
+      if (fuserOutput.includes(":")) {
+        const pids = fuserOutput
+          .split(":")[1]
+          .trim()
+          .split(/\s+/)
+          .map((p) => p.replace(/\D/g, ""))
+          .filter((p) => p);
+
+        for (const pid of pids) {
+          console.log(`Killing process ${pid} using camera...`);
+          try {
+            execSync(`kill -9 ${pid}`);
+          } catch (e) {
+            // Process might already be dead
+          }
+        }
+      }
+    } catch (e) {
+      // No processes using camera
+    }
+
+    // Wait for device to be released
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    console.log("✅ Camera resources cleaned up");
+  } catch (error) {
+    console.log("⚠️  Error during cleanup:", error.message);
+  }
+
   // Apply saved camera configuration on startup
   console.log("\n🚀 Initializing camera with saved configuration...");
   try {
