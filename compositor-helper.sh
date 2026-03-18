@@ -47,7 +47,7 @@ exec gst-launch-1.0 \
   tcpclientsrc host=127.0.0.1 port=8556 do-timestamp=true \
   ! 'video/x-raw,format=RGBA,width='$WIDTH',height='$HEIGHT',framerate=5/1' \
   ! videorate \
-  ! 'video/x-raw,framerate=5/1' \
+  ! 'video/x-raw,framerate='$FRAMERATE'/1' \
   ! queue \
   ! mix.sink_1
 
