@@ -44,8 +44,10 @@ sudo ufw allow 8891/tcp
 1. Open the web interface at `http://<jetson-ip>:3000`
 2. In the **Stream Output** section:
    - **Protocol**: Select "SRT"
-   - **Destination**: Leave empty (server mode doesn't need a destination)
+   - **Destination**: **Leave empty** (the placeholder will say "Leave empty (server mode on port 8891)")
    - **Bitrate**: Set your desired bitrate (default: 5 Mbps)
+
+**Note:** The destination field is intentionally left empty because the Jetson acts as an SRT **server**. OBS will connect to the Jetson, not the other way around.
 
 ### Step 2: Start Streaming
 

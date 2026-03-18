@@ -106,12 +106,13 @@ class StreamController extends EventEmitter {
     this.streamConfig = { ...this.streamConfig, ...config };
 
     // For RTMP, destination is optional (defaults to local nginx)
-    // For SRT, destination is required
+    // For SRT server mode, destination is not needed (Jetson acts as server)
+    // For UDP, destination is required
     if (
-      this.streamConfig.protocol === "srt" &&
+      this.streamConfig.protocol === "udp" &&
       !this.streamConfig.destination
     ) {
-      return { success: false, error: "No destination URL specified for SRT" };
+      return { success: false, error: "No destination URL specified for UDP (e.g., udp://192.168.1.100:5000)" };
     }
 
     try {
