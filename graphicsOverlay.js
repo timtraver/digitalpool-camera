@@ -1,6 +1,7 @@
 const { createCanvas } = require("canvas");
 const { spawn } = require("child_process");
 const EventEmitter = require("events");
+const http = require("http");
 
 /**
  * Graphics Overlay Manager
@@ -18,7 +19,9 @@ class GraphicsOverlay extends EventEmitter {
     this.gstProcess = null;
     this.frameInterval = null;
     this.frameCount = 0;
-    
+    this.httpServer = null;
+    this.clients = [];
+
     // Custom drawing function (can be overridden)
     this.drawFunction = this.defaultDrawFunction.bind(this);
   }
@@ -88,41 +91,37 @@ class GraphicsOverlay extends EventEmitter {
       this.initialize();
     }
 
-    // GStreamer pipeline to accept raw RGBA frames and output as TCP server
-    // This can be composited with the video stream using 'compositor' element
-    const pipeline = [
-      "fdsrc",
-      "!",
-      `video/x-raw,format=RGBA,width=${this.width},height=${this.height},framerate=${this.fps}/1`,
-      "!",
-      "videoconvert",
-      "!",
-      "video/x-raw,format=I420",
-      "!",
-      "jpegenc",
-      "quality=85",
-      "!",
-      "multipartmux",
-      "boundary=--graphicsboundary",
-      "!",
-      "tcpserversink",
-      "host=0.0.0.0",
-      `port=${outputPort}`,
-      "sync=false",
-    ];
+    // Create HTTP server for MJPEG streaming
+    this.httpServer = http.createServer((req, res) => {
+      if (req.url === '/' || req.url.startsWith('/?')) {
+        // Serve MJPEG stream
+        res.writeHead(200, {
+          'Content-Type': 'multipart/x-mixed-replace; boundary=--graphicsboundary',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'Access-Control-Allow-Origin': '*'
+        });
 
-    console.log("🚀 Starting graphics overlay GStreamer pipeline...");
-    console.log("Pipeline:", pipeline.join(" "));
+        // Add client to list
+        this.clients.push(res);
+        console.log(`📺 Client connected (${this.clients.length} total)`);
 
-    this.gstProcess = spawn("gst-launch-1.0", pipeline);
-
-    this.gstProcess.stderr.on("data", (data) => {
-      console.log("GStreamer graphics:", data.toString());
+        // Remove client when disconnected
+        req.on('close', () => {
+          const index = this.clients.indexOf(res);
+          if (index > -1) {
+            this.clients.splice(index, 1);
+            console.log(`📺 Client disconnected (${this.clients.length} remaining)`);
+          }
+        });
+      } else {
+        res.writeHead(404);
+        res.end('Not found');
+      }
     });
 
-    this.gstProcess.on("exit", (code) => {
-      console.log(`Graphics overlay GStreamer exited with code ${code}`);
-      this.stop();
+    this.httpServer.listen(outputPort, '0.0.0.0', () => {
+      console.log(`✅ Graphics overlay HTTP server started on port ${outputPort}`);
     });
 
     // Start generating frames
@@ -134,15 +133,15 @@ class GraphicsOverlay extends EventEmitter {
       this.generateFrame();
     }, frameTime);
 
-    console.log(`✅ Graphics overlay started on port ${outputPort}`);
+    console.log(`🚀 Graphics overlay ready at http://0.0.0.0:${outputPort}`);
     this.emit("started");
   }
 
   /**
-   * Generate and send a single frame
+   * Generate and send a single frame to all connected clients
    */
   async generateFrame() {
-    if (!this.isRunning || !this.gstProcess) return;
+    if (!this.isRunning || this.clients.length === 0) return;
 
     try {
       const timestamp = Date.now();
@@ -150,25 +149,36 @@ class GraphicsOverlay extends EventEmitter {
       // Call the drawing function
       this.drawFunction(this.ctx, this.frameCount, timestamp);
 
-      // Get raw RGBA buffer from canvas
-      const imageData = this.ctx.getImageData(0, 0, this.width, this.height);
-      const buffer = Buffer.from(imageData.data.buffer);
+      // Convert canvas to JPEG buffer
+      const jpegBuffer = this.canvas.toBuffer('image/jpeg', { quality: 0.85 });
 
-      // Write to GStreamer stdin (check if writable first)
-      if (this.gstProcess.stdin && this.gstProcess.stdin.writable) {
-        this.gstProcess.stdin.write(buffer);
-      } else {
-        // Pipe is closed, stop generating frames
-        this.stop();
+      // Send to all connected clients
+      const disconnected = [];
+      for (let i = 0; i < this.clients.length; i++) {
+        const client = this.clients[i];
+        try {
+          if (!client.destroyed) {
+            client.write('--graphicsboundary\r\n');
+            client.write('Content-Type: image/jpeg\r\n');
+            client.write(`Content-Length: ${jpegBuffer.length}\r\n\r\n`);
+            client.write(jpegBuffer);
+            client.write('\r\n');
+          } else {
+            disconnected.push(i);
+          }
+        } catch (err) {
+          disconnected.push(i);
+        }
+      }
+
+      // Remove disconnected clients
+      for (let i = disconnected.length - 1; i >= 0; i--) {
+        this.clients.splice(disconnected[i], 1);
       }
 
       this.frameCount++;
     } catch (err) {
-      // Ignore EPIPE errors (broken pipe) - just stop gracefully
-      if (err.code !== 'EPIPE') {
-        console.error("Error generating frame:", err);
-      }
-      this.stop();
+      console.error("Error generating frame:", err);
     }
   }
 
@@ -179,19 +189,30 @@ class GraphicsOverlay extends EventEmitter {
     if (!this.isRunning) return;
 
     console.log("🛑 Stopping graphics overlay...");
-    
+
     this.isRunning = false;
-    
+
     if (this.frameInterval) {
       clearInterval(this.frameInterval);
       this.frameInterval = null;
     }
-    
-    if (this.gstProcess) {
-      this.gstProcess.kill();
-      this.gstProcess = null;
+
+    // Close all client connections
+    for (const client of this.clients) {
+      try {
+        client.end();
+      } catch (err) {
+        // Ignore errors
+      }
     }
-    
+    this.clients = [];
+
+    // Close HTTP server
+    if (this.httpServer) {
+      this.httpServer.close();
+      this.httpServer = null;
+    }
+
     this.emit("stopped");
     console.log("✅ Graphics overlay stopped");
   }
