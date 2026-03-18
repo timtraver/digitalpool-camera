@@ -106,6 +106,16 @@ class GraphicsOverlay extends EventEmitter {
     console.log("🚀 Starting graphics overlay TCP server...");
     this.gstProcess = spawn("gst-launch-1.0", pipeline);
 
+    // Handle EPIPE errors gracefully
+    this.gstProcess.stdin.on('error', (err) => {
+      if (err.code === 'EPIPE') {
+        console.log("Graphics stream pipe closed");
+        this.stop();
+      } else {
+        console.error("Graphics stdin error:", err);
+      }
+    });
+
     this.gstProcess.stderr.on("data", (data) => {
       const msg = data.toString();
       if (!msg.includes("Setting pipeline") && !msg.includes("Prerolled")) {
@@ -152,19 +162,24 @@ class GraphicsOverlay extends EventEmitter {
       const buffer = Buffer.from(imageData.data.buffer);
 
       // Write to GStreamer stdin
-      if (this.gstProcess.stdin && this.gstProcess.stdin.writable) {
-        try {
-          this.gstProcess.stdin.write(buffer);
+      if (this.gstProcess.stdin && this.gstProcess.stdin.writable && !this.gstProcess.stdin.destroyed) {
+        const success = this.gstProcess.stdin.write(buffer);
 
-          // Log first frame to confirm it's working
-          if (this.frameCount === 0) {
-            console.log(`✅ First frame sent (${buffer.length} bytes)`);
-          }
-        } catch (err) {
-          if (err.code !== 'EPIPE') {
-            console.error("Error writing frame:", err);
-          }
+        // Log first frame to confirm it's working
+        if (this.frameCount === 0) {
+          console.log(`✅ First frame sent (${buffer.length} bytes)`);
         }
+
+        // If write buffer is full, wait for drain
+        if (!success) {
+          this.gstProcess.stdin.once('drain', () => {
+            // Ready for more data
+          });
+        }
+      } else {
+        // Pipe is closed, stop generating frames
+        console.log("Graphics pipe closed, stopping...");
+        this.stop();
       }
 
       this.frameCount++;

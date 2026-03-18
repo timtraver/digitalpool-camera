@@ -18,6 +18,9 @@ echo "Graphics Alpha: $ALPHA"
 
 # Run GStreamer compositor pipeline
 # This composites camera video (bottom) with graphics from TCP (top)
+# Key fixes:
+# - Add do-timestamp=true to both sources for proper timing
+# - Add videorate to ensure consistent framerates
 exec gst-launch-1.0 \
   compositor name=mix \
     sink_0::zorder=0 \
@@ -29,16 +32,20 @@ exec gst-launch-1.0 \
   ! h264parse \
   ! srtserversink uri=srt://:$SRT_PORT \
   \
-  v4l2src device=$CAMERA_DEVICE \
+  v4l2src device=$CAMERA_DEVICE do-timestamp=true \
   ! image/jpeg,width=$WIDTH,height=$HEIGHT,framerate=$FRAMERATE/1 \
   ! jpegdec \
   ! videoconvert \
   ! 'video/x-raw,format=RGBA' \
+  ! videorate \
+  ! 'video/x-raw,framerate='$FRAMERATE'/1' \
   ! queue \
   ! mix.sink_0 \
   \
-  tcpclientsrc host=127.0.0.1 port=8556 \
+  tcpclientsrc host=127.0.0.1 port=8556 do-timestamp=true \
   ! 'video/x-raw,format=RGBA,width='$WIDTH',height='$HEIGHT',framerate=5/1' \
+  ! videorate \
+  ! 'video/x-raw,framerate=5/1' \
   ! queue \
   ! mix.sink_1
 
