@@ -50,7 +50,7 @@ exec gst-launch-1.0 -v \
   ! image/jpeg,width=$WIDTH,height=$HEIGHT,framerate=$FRAMERATE/1 \
   ! jpegdec \
   ! videoconvert \
-  ! 'video/x-raw,format=RGBA,width='$WIDTH',height='$HEIGHT \
+  ! 'video/x-raw,format=RGBA,width='$WIDTH',height='$HEIGHT' \
   ! videorate \
   ! 'video/x-raw,framerate='$FRAMERATE'/1' \
   ! queue \
