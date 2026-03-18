@@ -837,16 +837,12 @@ function switchToMJPEGPreview() {
   const container = document.querySelector(".video-container");
   const oldElement = document.getElementById("videoStream");
 
-  if (oldElement) {
-    oldElement.remove();
-  }
-
   if (hlsPlayer) {
     hlsPlayer.destroy();
     hlsPlayer = null;
   }
 
-  // Create img element for MJPEG
+  // Create new img element for MJPEG
   const img = document.createElement("img");
   img.id = "videoStream";
   img.alt = "Camera Stream";
@@ -858,8 +854,28 @@ function switchToMJPEGPreview() {
   img.style.height = "100%";
   img.style.objectFit = "contain";
 
-  container.insertBefore(img, container.firstChild);
-  console.log(`✅ Switched to MJPEG preview (overlays: ${overlaysEnabled})`);
+  // Start hidden until loaded
+  img.style.opacity = "0";
+  img.style.transition = "opacity 0.3s ease-in-out";
+
+  // When new stream loads, fade it in and remove old element
+  img.onload = function() {
+    img.style.opacity = "1";
+    // Remove old element after fade-in completes
+    setTimeout(() => {
+      if (oldElement && oldElement.parentElement) {
+        oldElement.remove();
+      }
+    }, 300);
+    console.log(`✅ MJPEG preview loaded (overlays: ${overlaysEnabled})`);
+  };
+
+  // Insert new element (will be behind old element initially)
+  if (oldElement) {
+    container.insertBefore(img, oldElement);
+  } else {
+    container.insertBefore(img, container.firstChild);
+  }
 }
 
 // Canvas overlay removed - preview now shows actual stream output via tee
