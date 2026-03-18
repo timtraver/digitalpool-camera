@@ -22,17 +22,28 @@ echo "Graphics Alpha: $ALPHA"
 # - Add do-timestamp=true to both sources for proper timing
 # - Add videorate to ensure consistent framerates
 # - Add mpegtsmux to properly packetize H.264 for SRT (fixes payload size errors)
-exec gst-launch-1.0 \
+# - Both sources upscaled to same framerate for proper blending
+# - Added tee to split output for both SRT and preview
+exec gst-launch-1.0 -v \
   compositor name=mix \
     sink_0::zorder=0 \
     sink_1::zorder=1 sink_1::alpha=$ALPHA \
   ! videoconvert \
-  ! nvvidconv \
+  ! tee name=t \
+  \
+  t. ! queue ! nvvidconv \
   ! 'video/x-raw(memory:NVMM)' \
   ! nvv4l2h264enc bitrate=$BITRATE \
   ! h264parse \
   ! mpegtsmux \
   ! srtserversink uri=srt://:$SRT_PORT \
+  \
+  t. ! queue max-size-buffers=10 leaky=downstream \
+  ! videoscale \
+  ! 'video/x-raw,width=1280,height=720' \
+  ! jpegenc quality=75 \
+  ! multipartmux boundary=--jpgboundary \
+  ! tcpserversink host=0.0.0.0 port=8555 sync=false recover-policy=keyframe \
   \
   v4l2src device=$CAMERA_DEVICE do-timestamp=true \
   ! image/jpeg,width=$WIDTH,height=$HEIGHT,framerate=$FRAMERATE/1 \

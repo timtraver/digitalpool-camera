@@ -49,13 +49,18 @@ if (GraphicsOverlay) {
     // Clear canvas with transparent background
     ctx.clearRect(0, 0, 1920, 1080);
 
+    // TEMPORARY: Draw a VERY OBVIOUS red rectangle to test if compositor is working
+    // This should be impossible to miss!
+    ctx.fillStyle = "rgba(255, 0, 0, 0.5)"; // Semi-transparent red
+    ctx.fillRect(0, 0, 960, 540); // Top-left quarter of screen
+
     // Draw a scoreboard
-    ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+    ctx.fillStyle = "rgba(0, 0, 0, 0.9)"; // More opaque
     ctx.fillRect(50, 50, 500, 200);
 
     // Draw border
-    ctx.strokeStyle = "white";
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = "yellow"; // Bright yellow border
+    ctx.lineWidth = 5;
     ctx.strokeRect(50, 50, 500, 200);
 
     // Draw title
