@@ -1357,9 +1357,11 @@ app.use("/graphql", (req, res) => {
 // This ensures the PNG file exists when gdkpixbufoverlay tries to load it
 streamController.on("preparing", async () => {
   if (graphicsOverlay && streamController.streamConfig.skiaGraphicsEnabled) {
-    // Only start PNG overlay if NOT using Cairo overlay
-    // Cairo overlay handles its own drawing via Python script
-    if (streamController.streamConfig.overlayType !== 'cairo') {
+    const overlayType = streamController.streamConfig.overlayType;
+
+    // Only start PNG overlay if NOT using Cairo or Node-Cairo overlay
+    // Cairo/Node-Cairo overlays handle their own drawing via scripts
+    if (overlayType !== 'cairo' && overlayType !== 'node-cairo') {
       console.log(`🎨 Preparing graphics overlay (PNG mode)...`);
 
       try {
@@ -1370,11 +1372,17 @@ streamController.on("preparing", async () => {
       } catch (err) {
         console.error("❌ Failed to start graphics overlay:", err.message);
       }
-    } else {
+    } else if (overlayType === 'cairo') {
       console.log(`🎨 Using Cairo overlay (Python-based dynamic graphics)`);
       console.log(`💡 Graphics will be drawn by cairo-graphics-stream.py`);
 
-      // Still write the initial game state JSON for Cairo to read
+      // Write the initial game state JSON for Cairo to read
+      regenerateOverlay();
+    } else if (overlayType === 'node-cairo') {
+      console.log(`🎨 Using Node-Cairo overlay (Node.js-based dynamic graphics)`);
+      console.log(`💡 Graphics will be drawn by node-graphics-stream.js`);
+
+      // Write the initial game state JSON for Node script to read
       regenerateOverlay();
     }
   }

@@ -78,7 +78,7 @@ class GraphicsOverlay extends EventEmitter {
 
   /**
    * Start the graphics overlay
-   * @param {string} mode - "png" for file-based overlay (simple), "tcp" for streaming (complex)
+   * @param {string} mode - "png" for file-based overlay (simple), "tcp" for streaming (complex), "pipe" for raw RGBA streaming
    */
   async start(mode = "png") {
     if (this.isRunning) {
@@ -115,6 +115,22 @@ class GraphicsOverlay extends EventEmitter {
       console.log(`✅ Graphics overlay started (PNG mode)`);
       console.log(`📊 Generating frames at ${this.fps} FPS`);
       console.log(`📁 Output: /tmp/graphics-overlay.png`);
+      this.emit("started");
+
+    } else if (mode === "pipe") {
+      // Pipe mode - stream raw RGBA frames to stdout for GStreamer appsrc
+      console.log("🎨 Starting graphics overlay (PIPE mode - raw RGBA frames)");
+      this.isRunning = true;
+      this.frameCount = 0;
+
+      // Start generating frames immediately
+      const frameTime = 1000 / this.fps;
+      this.frameInterval = setInterval(() => {
+        this.generateFrameRGBA();
+      }, frameTime);
+
+      console.log(`✅ Graphics overlay started (PIPE mode)`);
+      console.log(`📊 Generating RGBA frames at ${this.fps} FPS`);
       this.emit("started");
 
     } else {
@@ -290,6 +306,38 @@ class GraphicsOverlay extends EventEmitter {
     } catch (err) {
       if (err.code !== 'EPIPE') {
         console.error("Error generating frame:", err);
+      }
+    }
+  }
+
+  /**
+   * Generate a single RGBA frame and write to stdout for GStreamer appsrc
+   */
+  generateFrameRGBA() {
+    if (!this.isRunning) return;
+
+    try {
+      const timestamp = Date.now();
+
+      // Call the drawing function
+      this.drawFunction(this.ctx, this.frameCount, timestamp);
+
+      // Get raw RGBA buffer from canvas
+      const imageData = this.ctx.getImageData(0, 0, this.width, this.height);
+      const buffer = Buffer.from(imageData.data.buffer);
+
+      // Write to stdout for GStreamer to read
+      process.stdout.write(buffer);
+
+      // Log every 30 frames (once per second at 30fps, or every 15 seconds at 2fps)
+      if (this.frameCount % 30 === 0) {
+        console.error(`🎨 Generated frame ${this.frameCount} (${buffer.length} bytes)`);
+      }
+
+      this.frameCount++;
+    } catch (err) {
+      if (err.code !== 'EPIPE') {
+        console.error("Error generating RGBA frame:", err);
       }
     }
   }

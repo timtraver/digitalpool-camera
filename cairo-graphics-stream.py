@@ -43,9 +43,21 @@ def on_draw(overlay, cr, timestamp, duration, user_data):
         duration: Current buffer duration
         user_data: User data (not used)
     """
+    # Debug: Log every 30 frames (once per second at 30fps)
+    if not hasattr(on_draw, 'frame_count'):
+        on_draw.frame_count = 0
+        print("🎨 Cairo draw callback connected!", file=sys.stderr, flush=True)
+
+    on_draw.frame_count += 1
+
     try:
         # Get current game state
         state = get_game_state()
+
+        # Log every 30 frames
+        if on_draw.frame_count % 30 == 0:
+            print(f"🎨 Cairo drawing frame {on_draw.frame_count} | Score: {state['player1Score']} - {state['player2Score']}",
+                  file=sys.stderr, flush=True)
 
         # The 'cr' parameter is already a cairo.Context object from GStreamer
         # No conversion needed!
@@ -88,7 +100,7 @@ def on_draw(overlay, cr, timestamp, duration, user_data):
     except Exception as e:
         # Log first error only to avoid flooding
         if not hasattr(on_draw, 'error_logged'):
-            print(f"Cairo draw error: {e}", file=sys.stderr)
+            print(f"❌ Cairo draw error: {e}", file=sys.stderr, flush=True)
             import traceback
             traceback.print_exc()
             on_draw.error_logged = True
@@ -160,13 +172,20 @@ def main():
     
     # Create pipeline
     pipeline = Gst.parse_launch(pipeline_str)
-    
+
     # Get cairooverlay element and connect draw callback
     overlay = pipeline.get_by_name('overlay')
+    if overlay is None:
+        print("❌ ERROR: Could not find 'overlay' element in pipeline!", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"✅ Found cairooverlay element: {overlay}", file=sys.stderr, flush=True)
     overlay.connect('draw', on_draw, None)
-    
+    print("✅ Connected draw callback to cairooverlay", file=sys.stderr, flush=True)
+
     # Start pipeline
     pipeline.set_state(Gst.State.PLAYING)
+    print("✅ Pipeline set to PLAYING state", file=sys.stderr, flush=True)
     
     # Run main loop
     loop = GLib.MainLoop()

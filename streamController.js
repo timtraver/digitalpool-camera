@@ -23,7 +23,7 @@ class StreamController extends EventEmitter {
       autoStart: false, // Auto-start streaming on server startup
       // Overlay settings
       overlayEnabled: false,
-      overlayType: "text", // 'text', 'png', 'cairo'
+      overlayType: "text", // 'text', 'png', 'cairo', 'node-cairo'
       overlayText: "",
       showTimestamp: false,
       overlayUrl: "",
@@ -163,9 +163,9 @@ class StreamController extends EventEmitter {
         console.log("Starting GStreamer with compositor script...");
         console.log("Script args:", gstArgs.scriptArgs.join(" "));
 
-        // Check if scriptPath is a Python script or bash script
-        if (gstArgs.scriptPath === 'python3') {
-          // For Python scripts, spawn python3 directly with script as first arg
+        // Check if scriptPath is a Python script, Node script, or bash script
+        if (gstArgs.scriptPath === 'python3' || gstArgs.scriptPath === 'node') {
+          // For Python/Node scripts, spawn the interpreter directly with script as first arg
           this.gstProcess = spawn(gstArgs.scriptPath, gstArgs.scriptArgs);
         } else {
           // For bash scripts, spawn bash with script path
@@ -544,6 +544,39 @@ class StreamController extends EventEmitter {
   }
 
   /**
+   * Build Node-Cairo overlay pipeline (Node.js-based dynamic graphics)
+   * This uses Node.js with node-canvas to generate RGBA frames
+   */
+  _buildNodeCairoOverlayPipeline() {
+    const {
+      destination,
+      width,
+      height,
+      framerate,
+      bitrate,
+    } = this.streamConfig;
+
+    console.log("🎨 Graphics overlay enabled - using Node-Cairo overlay (Node.js + node-canvas)");
+
+    // Extract port from destination
+    const srtPort = destination ? destination.split(':')[1] : '8891';
+
+    // Use the Node.js graphics script
+    const scriptPath = path.join(__dirname, 'node-graphics-stream.js');
+    const scriptArgs = [
+      width.toString(),
+      height.toString(),
+      framerate.toString()
+    ];
+
+    return {
+      useCompositorScript: true,
+      scriptPath: 'node', // Use node to run the script
+      scriptArgs: [scriptPath, ...scriptArgs],
+    };
+  }
+
+  /**
    * Build GStreamer pipeline based on configuration
    */
   _buildGStreamerPipeline() {
@@ -559,9 +592,11 @@ class StreamController extends EventEmitter {
 
     // Check if graphics overlay is enabled
     if (this.streamConfig.skiaGraphicsEnabled) {
-      // Check overlay type: 'png' or 'cairo'
+      // Check overlay type: 'png', 'cairo', or 'node-cairo'
       if (this.streamConfig.overlayType === 'cairo') {
         return this._buildCairoOverlayPipeline();
+      } else if (this.streamConfig.overlayType === 'node-cairo') {
+        return this._buildNodeCairoOverlayPipeline();
       } else {
         return this._buildPNGOverlayPipeline();
       }
