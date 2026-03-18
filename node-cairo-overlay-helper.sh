@@ -21,18 +21,9 @@ echo "Resolution: ${WIDTH}x${HEIGHT}@${FRAMERATE}fps"
 echo "SRT Port: $SRT_PORT"
 echo "Graphics Script: $NODE_SCRIPT"
 
-# Start Node.js graphics generator in background, piping to a named pipe
-GRAPHICS_PIPE="/tmp/node-graphics-pipe"
-rm -f "$GRAPHICS_PIPE"
-mkfifo "$GRAPHICS_PIPE"
-
-# Start Node.js graphics generator
-node "$NODE_SCRIPT" "$WIDTH" "$HEIGHT" "$FRAMERATE" > "$GRAPHICS_PIPE" &
-NODE_PID=$!
-
-echo "✅ Node.js graphics generator started (PID: $NODE_PID)"
-
 # Build GStreamer pipeline with compositor
+# The Node.js script output will be piped directly to GStreamer's stdin
+node "$NODE_SCRIPT" "$WIDTH" "$HEIGHT" "$FRAMERATE" 2>&1 | \
 gst-launch-1.0 \
   v4l2src device="$CAMERA_DEVICE" do-timestamp=true ! \
   image/jpeg,width=$WIDTH,height=$HEIGHT,framerate=$FRAMERATE/1 ! \
@@ -54,7 +45,7 @@ gst-launch-1.0 \
   mpegtsmux alignment=7 ! \
   srtserversink uri=srt://0.0.0.0:$SRT_PORT latency=125 sync=false \
   \
-  fdsrc fd=3 do-timestamp=true ! \
+  fdsrc ! \
   video/x-raw,format=RGBA,width=$WIDTH,height=$HEIGHT,framerate=$FRAMERATE/1 ! \
   videoconvert ! \
   queue ! \
@@ -67,11 +58,5 @@ gst-launch-1.0 \
   video/x-raw,width=1280,height=720 ! \
   jpegenc quality=75 ! \
   multipartmux boundary=--jpgboundary ! \
-  tcpserversink host=0.0.0.0 port=8555 sync=false recover-policy=keyframe \
-  3< "$GRAPHICS_PIPE"
-
-# Cleanup
-echo "🛑 Stopping Node.js graphics generator..."
-kill $NODE_PID 2>/dev/null
-rm -f "$GRAPHICS_PIPE"
+  tcpserversink host=0.0.0.0 port=8555 sync=false recover-policy=keyframe
 
