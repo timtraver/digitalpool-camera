@@ -682,8 +682,8 @@ class StreamController extends EventEmitter {
     }
 
     // Branch 2: Preview stream (HLS for web interface)
-    // Use splitmuxsink to create HLS-compatible segments
-    // This is more reliable than hlssink on older GStreamer versions
+    // Use multifilesink to create segments, wrapped in MPEG-TS
+    // This is the most compatible approach for older GStreamer
     pipeline.push(
       "t.",
       "!",
@@ -695,9 +695,9 @@ class StreamController extends EventEmitter {
       "!",
       "mpegtsmux",
       "!",
-      "splitmuxsink",
+      "multifilesink",
       "location=/tmp/stream/segment%05d.ts",
-      "max-size-time=2000000000", // 2 seconds in nanoseconds
+      "max-file-size=1000000", // ~1MB per segment (about 2 seconds at 5Mbps)
       "max-files=5",
     );
 
