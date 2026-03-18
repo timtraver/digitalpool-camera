@@ -33,7 +33,9 @@ function getGameState() {
 // Parse command line arguments
 const width = parseInt(process.argv[2]) || 1920;
 const height = parseInt(process.argv[3]) || 1080;
-const fps = parseInt(process.argv[4]) || 30;
+const fps = parseInt(process.argv[4]) || 2; // Low FPS for scoreboard updates
+const outputMode = process.argv[5] || "pipe"; // "pipe" or "png"
+const pngPath = process.argv[6] || "/tmp/graphics-overlay.png";
 
 // Create graphics overlay
 const overlay = new GraphicsOverlay();
@@ -78,15 +80,20 @@ overlay.setDrawFunction((ctx, frameNumber) => {
   ctx.fillText(state.player2Name, x + boxWidth - 120, y + 180);
 });
 
-// Log to stderr (stdout is used for RGBA data)
+// Log to stderr (stdout is used for RGBA data in pipe mode)
 console.error(`🎨 Node.js Graphics Overlay Stream`);
 console.error(`📐 Resolution: ${width}x${height} @ ${fps}fps`);
-console.error(`📊 RGBA buffer size: ${width * height * 4} bytes per frame`);
+console.error(`📊 Output mode: ${outputMode}`);
+if (outputMode === "pipe") {
+  console.error(`📊 RGBA buffer size: ${width * height * 4} bytes per frame`);
+} else {
+  console.error(`📁 PNG output: ${pngPath}`);
+}
 console.error(`📁 Reading state from: ${STATE_FILE}`);
 console.error(`✅ Starting frame generation...`);
 
-// Start in pipe mode
-overlay.start("pipe");
+// Start in specified mode
+overlay.start(outputMode);
 
 // Handle cleanup
 process.on("SIGINT", () => {
