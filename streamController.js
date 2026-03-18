@@ -571,30 +571,35 @@ class StreamController extends EventEmitter {
       }
     }
 
-    // Check if Skia graphics overlay is enabled
-    const useCompositor = this.streamConfig.skiaGraphicsEnabled;
+    // Check if graphics overlay is enabled
+    const useGraphicsOverlay = this.streamConfig.skiaGraphicsEnabled;
 
-    if (useCompositor) {
-      // Use compositor to blend video with Skia graphics
+    if (useGraphicsOverlay) {
+      // Use gdkpixbufoverlay with a dynamically updated PNG file
       console.log(
-        `🎨 Skia graphics overlay enabled (port ${this.streamConfig.skiaGraphicsPort}, alpha ${this.streamConfig.skiaGraphicsAlpha})`,
+        `🎨 Graphics overlay enabled (alpha ${this.streamConfig.skiaGraphicsAlpha})`,
       );
 
-      // Convert video and send to tee (we'll composite later)
+      // The graphics overlay will write to /tmp/graphics-overlay.png
+      // gdkpixbufoverlay will read and composite it
       pipeline.push(
         "videoconvert",
         "!",
-        "queue",
+        "gdkpixbufoverlay",
+        "location=/tmp/graphics-overlay.png",
+        `alpha=${this.streamConfig.skiaGraphicsAlpha}`,
+        "overlay-width=1920",
+        "overlay-height=1080",
         "!",
         "tee",
         "name=t",
       );
 
-      // Branch 1: Encoding pipeline for streaming
+      // Branch 1: Encoding pipeline for streaming (from tee)
       pipeline.push("t.", "!", "queue", "!");
     } else {
-      // No compositor - use simple tee
-      pipeline.push("tee", "name=t");
+      // No compositor - simple pipeline
+      pipeline.push("videoconvert", "!", "tee", "name=t");
 
       // Branch 1: Encoding pipeline for streaming
       pipeline.push("t.", "!", "queue", "!");

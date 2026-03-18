@@ -1,7 +1,6 @@
 const { createCanvas } = require("canvas");
-const { spawn } = require("child_process");
 const EventEmitter = require("events");
-const http = require("http");
+const fs = require("fs");
 
 /**
  * Graphics Overlay Manager
@@ -16,11 +15,9 @@ class GraphicsOverlay extends EventEmitter {
     this.height = 1080;
     this.fps = 30;
     this.isRunning = false;
-    this.gstProcess = null;
     this.frameInterval = null;
     this.frameCount = 0;
-    this.httpServer = null;
-    this.clients = [];
+    this.outputPath = "/tmp/graphics-overlay.png";
 
     // Custom drawing function (can be overridden)
     this.drawFunction = this.defaultDrawFunction.bind(this);
@@ -78,10 +75,10 @@ class GraphicsOverlay extends EventEmitter {
   }
 
   /**
-   * Start the graphics overlay pipeline
-   * This creates a GStreamer pipeline that accepts raw RGBA frames
+   * Start the graphics overlay
+   * Writes PNG frames to /tmp/graphics-overlay.png for GStreamer gdkpixbufoverlay
    */
-  start(outputPort = 8556) {
+  start() {
     if (this.isRunning) {
       console.log("⚠️  Graphics overlay already running");
       return;
@@ -90,39 +87,6 @@ class GraphicsOverlay extends EventEmitter {
     if (!this.canvas) {
       this.initialize();
     }
-
-    // Create HTTP server for MJPEG streaming
-    this.httpServer = http.createServer((req, res) => {
-      if (req.url === '/' || req.url.startsWith('/?')) {
-        // Serve MJPEG stream
-        res.writeHead(200, {
-          'Content-Type': 'multipart/x-mixed-replace; boundary=--graphicsboundary',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-          'Access-Control-Allow-Origin': '*'
-        });
-
-        // Add client to list
-        this.clients.push(res);
-        console.log(`📺 Client connected (${this.clients.length} total)`);
-
-        // Remove client when disconnected
-        req.on('close', () => {
-          const index = this.clients.indexOf(res);
-          if (index > -1) {
-            this.clients.splice(index, 1);
-            console.log(`📺 Client disconnected (${this.clients.length} remaining)`);
-          }
-        });
-      } else {
-        res.writeHead(404);
-        res.end('Not found');
-      }
-    });
-
-    this.httpServer.listen(outputPort, '0.0.0.0', () => {
-      console.log(`✅ Graphics overlay HTTP server started on port ${outputPort}`);
-    });
 
     // Start generating frames
     this.isRunning = true;
@@ -133,15 +97,16 @@ class GraphicsOverlay extends EventEmitter {
       this.generateFrame();
     }, frameTime);
 
-    console.log(`🚀 Graphics overlay ready at http://0.0.0.0:${outputPort}`);
+    console.log(`✅ Graphics overlay started (writing to ${this.outputPath})`);
+    console.log(`📊 Generating frames at ${this.fps} FPS`);
     this.emit("started");
   }
 
   /**
-   * Generate and send a single frame to all connected clients
+   * Generate and write a single frame as PNG
    */
   async generateFrame() {
-    if (!this.isRunning || this.clients.length === 0) return;
+    if (!this.isRunning) return;
 
     try {
       const timestamp = Date.now();
@@ -149,32 +114,13 @@ class GraphicsOverlay extends EventEmitter {
       // Call the drawing function
       this.drawFunction(this.ctx, this.frameCount, timestamp);
 
-      // Convert canvas to PNG buffer (PNG supports transparency, JPEG doesn't!)
+      // Write canvas to PNG file (with transparency support!)
       const pngBuffer = this.canvas.toBuffer('image/png');
 
-      // Send to all connected clients
-      const disconnected = [];
-      for (let i = 0; i < this.clients.length; i++) {
-        const client = this.clients[i];
-        try {
-          if (!client.destroyed) {
-            client.write('--graphicsboundary\r\n');
-            client.write('Content-Type: image/png\r\n');
-            client.write(`Content-Length: ${pngBuffer.length}\r\n\r\n`);
-            client.write(pngBuffer);
-            client.write('\r\n');
-          } else {
-            disconnected.push(i);
-          }
-        } catch (err) {
-          disconnected.push(i);
-        }
-      }
-
-      // Remove disconnected clients
-      for (let i = disconnected.length - 1; i >= 0; i--) {
-        this.clients.splice(disconnected[i], 1);
-      }
+      // Write to temp file atomically (write to .tmp then rename)
+      const tempPath = this.outputPath + '.tmp';
+      fs.writeFileSync(tempPath, pngBuffer);
+      fs.renameSync(tempPath, this.outputPath);
 
       this.frameCount++;
     } catch (err) {
@@ -197,20 +143,16 @@ class GraphicsOverlay extends EventEmitter {
       this.frameInterval = null;
     }
 
-    // Close all client connections
-    for (const client of this.clients) {
-      try {
-        client.end();
-      } catch (err) {
-        // Ignore errors
+    // Clean up the PNG file
+    try {
+      if (fs.existsSync(this.outputPath)) {
+        fs.unlinkSync(this.outputPath);
       }
-    }
-    this.clients = [];
-
-    // Close HTTP server
-    if (this.httpServer) {
-      this.httpServer.close();
-      this.httpServer = null;
+      if (fs.existsSync(this.outputPath + '.tmp')) {
+        fs.unlinkSync(this.outputPath + '.tmp');
+      }
+    } catch (err) {
+      // Ignore errors
     }
 
     this.emit("stopped");
