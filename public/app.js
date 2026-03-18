@@ -687,10 +687,10 @@ socket.on("streamStatus", (status) => {
     streamStatusText.textContent = `Streaming (${status.config?.protocol?.toUpperCase()})`;
     streamStatusText.style.color = "#10b981";
 
-    // Switch to HLS preview when streaming
+    // Switch to TCP preview when streaming
     setTimeout(() => {
-      switchToHLSPreview();
-    }, 1500); // Wait for GStreamer to start generating HLS segments
+      switchToHLSPreview(); // Function now switches to TCP preview
+    }, 2000); // Wait for GStreamer TCP server to start (has retry logic)
   } else {
     // Change Restart button back to Start button
     startStreamBtn.disabled = false;
@@ -801,6 +801,24 @@ function switchToHLSPreview() {
   img.style.width = "100%";
   img.style.height = "100%";
   img.style.objectFit = "contain";
+
+  // Add error handler to retry if TCP server isn't ready yet
+  let retryCount = 0;
+  img.onerror = function() {
+    retryCount++;
+    if (retryCount < 5) {
+      console.log(`⚠️  TCP preview not ready, retrying (${retryCount}/5)...`);
+      setTimeout(() => {
+        img.src = "/video/tcp-preview?t=" + Date.now();
+      }, 1000);
+    } else {
+      console.error("❌ TCP preview failed after 5 retries");
+    }
+  };
+
+  img.onload = function() {
+    console.log("✅ TCP preview loaded successfully");
+  };
 
   container.insertBefore(img, container.firstChild);
   console.log("✅ Switched to TCP preview");

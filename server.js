@@ -599,129 +599,79 @@ app.get("/video/stream", async (req, res) => {
     // Camera is free or fuser command failed
   }
 
-  // Try multiple ffmpeg configurations for better camera compatibility
-  // First try: MJPEG format (fastest if supported)
-  let ffmpegArgs = [
-    "-f",
-    "v4l2",
-    "-input_format",
-    "mjpeg",
-    "-video_size",
-    "1280x720",
-    "-framerate",
-    "30",
-    "-i",
-    CAMERA_DEVICE,
-    "-f",
-    "mjpeg",
-    "-q:v",
-    "5",
-    "pipe:1",
+  // Use GStreamer with overlays for idle preview (same overlays as streaming)
+  const gstArgs = [
+    "v4l2src",
+    `device=${CAMERA_DEVICE}`,
+    "do-timestamp=true",
+    "!",
+    "image/jpeg,width=1280,height=720,framerate=30/1",
+    "!",
+    "jpegdec",
+    "!",
+    "videoconvert",
+    "!",
+    "clockoverlay",
+    "valignment=bottom",
+    "halignment=right",
+    "font-desc=Sans Bold 11",
+    "color=0xFFFFFFFF",
+    'time-format="%Y-%m-%d %H:%M:%S"',
+    "xpad=20",
+    "ypad=20",
+    "!",
+    "textoverlay",
+    'text="DigitalPool Tim\'s House"',
+    "valignment=bottom",
+    "halignment=left",
+    "font-desc=Sans Bold 11",
+    "color=0xFFFFFFFF",
+    "xpad=20",
+    "ypad=20",
+    "!",
+    "jpegenc",
+    "quality=85",
+    "!",
+    "multipartmux",
+    "boundary=frame",
+    "!",
+    "fdsink",
+    "fd=1",
   ];
 
-  // Check if alternative format is requested
-  if (req.query.format === "yuyv") {
-    console.log("Using YUYV format");
-    ffmpegArgs = [
-      "-f",
-      "v4l2",
-      "-input_format",
-      "yuyv422",
-      "-video_size",
-      "1280x720",
-      "-framerate",
-      "30",
-      "-i",
-      CAMERA_DEVICE,
-      "-r",
-      "5", // Output 5fps for preview (saves CPU/bandwidth)
-      "-f",
-      "mjpeg",
-      "-q:v",
-      "5",
-      "pipe:1",
-    ];
-  } else if (req.query.format === "auto") {
-    console.log("Using auto format detection");
-    ffmpegArgs = [
-      "-f",
-      "v4l2",
-      "-video_size",
-      "1280x720",
-      "-framerate",
-      "30",
-      "-i",
-      CAMERA_DEVICE,
-      "-r",
-      "5", // Output 5fps for preview (saves CPU/bandwidth)
-      "-f",
-      "mjpeg",
-      "-q:v",
-      "5",
-      "pipe:1",
-    ];
-  }
+  console.log("Starting GStreamer idle preview with overlays");
+  const gst = spawn("gst-launch-1.0", gstArgs);
 
-  console.log("Starting ffmpeg with args:", ffmpegArgs.join(" "));
-  const ffmpeg = spawn("ffmpeg", ffmpegArgs);
-
-  let frameBuffer = Buffer.alloc(0);
-  let errorOutput = "";
-
-  ffmpeg.stdout.on("data", (data) => {
-    frameBuffer = Buffer.concat([frameBuffer, data]);
-
-    // Look for JPEG markers
-    let start = frameBuffer.indexOf(Buffer.from([0xff, 0xd8])); // JPEG start
-    let end = frameBuffer.indexOf(Buffer.from([0xff, 0xd9])); // JPEG end
-
-    while (start !== -1 && end !== -1 && end > start) {
-      const frame = frameBuffer.slice(start, end + 2);
-      try {
-        res.write(`--frame\r\n`);
-        res.write(`Content-Type: image/jpeg\r\n`);
-        res.write(`Content-Length: ${frame.length}\r\n\r\n`);
-        res.write(frame);
-        res.write("\r\n");
-      } catch (err) {
-        console.error("Error writing frame:", err.message);
-        ffmpeg.kill();
-        return;
-      }
-
-      frameBuffer = frameBuffer.slice(end + 2);
-      start = frameBuffer.indexOf(Buffer.from([0xff, 0xd8]));
-      end = frameBuffer.indexOf(Buffer.from([0xff, 0xd9]));
+  gst.stdout.on("data", (data) => {
+    try {
+      res.write(data);
+    } catch (err) {
+      console.error("Error writing frame:", err.message);
+      gst.kill();
     }
   });
 
-  ffmpeg.stderr.on("data", (data) => {
-    errorOutput += data.toString();
-    // Only log important errors, not info messages
+  gst.stderr.on("data", (data) => {
     const msg = data.toString();
-    if (
-      msg.includes("error") ||
-      msg.includes("Error") ||
-      msg.includes("failed")
-    ) {
-      console.error(`FFmpeg error: ${msg}`);
+    // Only log actual errors, not status messages
+    if (msg.includes("ERROR") || msg.includes("WARN")) {
+      console.error(`GStreamer idle preview: ${msg}`);
     }
   });
 
-  ffmpeg.on("close", (code) => {
-    console.log(`FFmpeg process exited with code ${code}`);
-    if (code !== 0 && code !== null) {
-      console.error("FFmpeg full error output:", errorOutput);
-    }
+  gst.on("close", (code) => {
+    console.log(`GStreamer idle preview exited with code ${code}`);
+    res.end();
   });
 
-  ffmpeg.on("error", (err) => {
-    console.error("Failed to start ffmpeg:", err);
+  gst.on("error", (err) => {
+    console.error("Failed to start GStreamer:", err);
+    res.end();
   });
 
   req.on("close", () => {
-    console.log("Client disconnected, killing ffmpeg");
-    ffmpeg.kill();
+    console.log("Client disconnected, killing GStreamer idle preview");
+    gst.kill();
   });
 });
 
