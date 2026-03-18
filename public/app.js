@@ -750,12 +750,6 @@ const overlayFontSize = document.getElementById("overlayFontSize");
 const fontSizeValue = document.getElementById("fontSizeValue");
 const overlayColor = document.getElementById("overlayColor");
 const overlayBackground = document.getElementById("overlayBackground");
-const overlayBackgroundOpacity = document.getElementById(
-  "overlayBackgroundOpacity",
-);
-const backgroundOpacityValue = document.getElementById(
-  "backgroundOpacityValue",
-);
 
 // Initialize custom dropdowns for ALL select elements
 console.log("🎨 Initializing custom dropdowns...");
@@ -931,7 +925,6 @@ let currentOverlayConfig = {
   overlayFontSize: 32,
   overlayColor: "white",
   overlayBackground: "transparent",
-  overlayBackgroundOpacity: 70,
 };
 
 // URL overlay iframe
@@ -1139,23 +1132,15 @@ function drawTextOverlay() {
 
   // console.log("Scale:", scale, "fontSize:", fontSize, "padding:", padding); // Removed - floods console at 5fps
 
-  // Get background color with opacity
+  // Get background color (transparent or shaded)
   function getBackgroundColor() {
-    const opacity = currentOverlayConfig.overlayBackgroundOpacity / 100;
-
     switch (currentOverlayConfig.overlayBackground) {
       case "transparent":
         return "rgba(0, 0, 0, 0)";
-      case "semi-black":
-        return `rgba(0, 0, 0, ${opacity})`;
-      case "semi-white":
-        return `rgba(255, 255, 255, ${opacity})`;
-      case "black":
-        return "rgba(0, 0, 0, 1)";
-      case "white":
-        return "rgba(255, 255, 255, 1)";
+      case "shaded":
+        return "rgba(0, 0, 0, 0.7)"; // Match GStreamer's shaded-background opacity
       default:
-        return `rgba(0, 0, 0, ${opacity})`;
+        return "rgba(0, 0, 0, 0)";
     }
   }
 
@@ -1283,7 +1268,6 @@ function applyOverlaySettings() {
     overlayFontSize: parseInt(overlayFontSize.value),
     overlayColor: overlayColor.value,
     overlayBackground: overlayBackground.value,
-    overlayBackgroundOpacity: parseInt(overlayBackgroundOpacity.value),
   };
 
   console.log("Auto-applying overlay config:", overlayConfig);
@@ -1347,20 +1331,6 @@ overlayBackground.addEventListener("change", () => {
   currentOverlayConfig.overlayBackground = overlayBackground.value;
   drawOverlay();
   applyOverlaySettings();
-});
-
-// Apply opacity changes after user stops dragging (debounce)
-let opacityTimeout;
-overlayBackgroundOpacity.addEventListener("input", () => {
-  backgroundOpacityValue.textContent = overlayBackgroundOpacity.value + "%";
-  currentOverlayConfig.overlayBackgroundOpacity = parseInt(
-    overlayBackgroundOpacity.value,
-  );
-  drawOverlay();
-  clearTimeout(opacityTimeout);
-  opacityTimeout = setTimeout(() => {
-    applyOverlaySettings();
-  }, 500);
 });
 
 // Apply URL changes after user stops typing (debounce)
@@ -1437,10 +1407,6 @@ socket.on("streamStatus", (status) => {
     overlayBackground.value = status.config.overlayBackground || "transparent";
     updateCustomDropdownDisplay(overlayBackground);
 
-    overlayBackgroundOpacity.value =
-      status.config.overlayBackgroundOpacity || 70;
-    backgroundOpacityValue.textContent = overlayBackgroundOpacity.value + "%";
-
     overlayType.value = status.config.overlayType || "text";
     updateCustomDropdownDisplay(overlayType);
 
@@ -1465,7 +1431,6 @@ socket.on("streamStatus", (status) => {
       overlayFontSize: status.config.overlayFontSize || 32,
       overlayColor: status.config.overlayColor || "white",
       overlayBackground: status.config.overlayBackground || "transparent",
-      overlayBackgroundOpacity: status.config.overlayBackgroundOpacity || 70,
     };
     drawOverlay();
   }
