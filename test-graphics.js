@@ -64,29 +64,34 @@ overlay.setDrawFunction((ctx, frameNumber, timestamp) => {
   ctx.fillText(`${score1} - ${score2}`, 180, 150);
 });
 
-// Start the graphics server
-const PORT = 8556;
-overlay.start(PORT);
+// Start the graphics overlay
+overlay.start();
+
+// Show frame count every 5 seconds
+setInterval(() => {
+  const score1 = Math.floor((overlay.frameCount / 10) % 10);
+  const score2 = Math.floor((overlay.frameCount / 10) % 8);
+  console.log(`📊 Frame ${overlay.frameCount} | Score: ${score1} - ${score2}`);
+}, 5000);
 
 console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-console.log("🚀 Graphics overlay server running!");
+console.log("🚀 Graphics overlay running!");
 console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-console.log(`📡 Port: ${PORT}`);
-console.log(`🌐 Add to OBS: http://192.168.1.114:${PORT}`);
-console.log(`🎬 Resolution: 1920x1080 @ 2fps (low CPU)`);
+console.log(`� Output: /tmp/graphics-overlay.png`);
+console.log(`🎬 Resolution: 1920x1080 @ 5fps`);
 console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
-console.log("📋 How to use in OBS:");
-console.log("  1. In OBS, add a 'Media Source'");
-console.log(`  2. Input: http://192.168.1.114:${PORT}`);
-console.log("  3. Position it above your camera/SRT source");
-console.log("  4. Graphics will overlay on your video!\n");
+console.log("📋 Next steps:");
+console.log("  1. Open web UI: http://localhost:3000");
+console.log("  2. Enable 'Skia Graphics Overlay' in settings");
+console.log("  3. Start streaming");
+console.log("  4. Graphics will be composited into the stream!\n");
 
 console.log("💡 Performance Tips:");
-console.log("   • Currently: 2 FPS (very low CPU usage)");
+console.log("   • Currently: 5 FPS (low CPU usage)");
 console.log("   • Adjust FPS in line 36 if needed");
-console.log("   • Use 1 FPS for static graphics");
-console.log("   • Simplify drawing to reduce CPU load\n");
+console.log("   • Use 2 FPS for scoreboards");
+console.log("   • Use 1 FPS for static graphics\n");
 
 console.log("Press Ctrl+C to stop\n");
 

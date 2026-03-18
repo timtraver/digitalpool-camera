@@ -115,12 +115,21 @@ class GraphicsOverlay extends EventEmitter {
       this.drawFunction(this.ctx, this.frameCount, timestamp);
 
       // Write canvas to PNG file (with transparency support!)
-      const pngBuffer = this.canvas.toBuffer('image/png');
+      // Use async toBuffer with callback to avoid blocking
+      this.canvas.toBuffer((err, pngBuffer) => {
+        if (err) {
+          console.error("Error encoding PNG:", err);
+          return;
+        }
 
-      // Write to temp file atomically (write to .tmp then rename)
-      const tempPath = this.outputPath + '.tmp';
-      fs.writeFileSync(tempPath, pngBuffer);
-      fs.renameSync(tempPath, this.outputPath);
+        try {
+          // Write directly to the output file
+          // GStreamer's gdkpixbufoverlay will handle reading it
+          fs.writeFileSync(this.outputPath, pngBuffer);
+        } catch (writeErr) {
+          console.error("Error writing PNG file:", writeErr);
+        }
+      }, 'image/png');
 
       this.frameCount++;
     } catch (err) {
