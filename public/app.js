@@ -850,32 +850,40 @@ function switchToMJPEGPreview() {
   // Pass overlay setting as query parameter
   const overlaysEnabled = overlayEnabled.checked;
   img.src = `/video/stream?overlays=${overlaysEnabled}&t=${Date.now()}`;
-  img.style.width = "100%";
-  img.style.height = "100%";
-  img.style.objectFit = "contain";
+
+  // Position absolutely over the old element to prevent layout shift
   img.style.position = "absolute";
   img.style.top = "0";
   img.style.left = "0";
+  img.style.width = "100%";
+  img.style.height = "100%";
+  img.style.objectFit = "contain";
   img.style.opacity = "0";
   img.style.transition = "opacity 0.3s ease-in-out";
 
-  // When new stream loads, fade it in and remove old element
+  // When new stream loads, swap elements smoothly
   img.onload = function() {
     // Fade in new stream
     img.style.opacity = "1";
 
-    // After fade completes, remove old element and fix new element
+    // After fade completes, swap the elements
     setTimeout(() => {
-      if (oldElement && oldElement.parentElement) {
-        oldElement.remove();
-      }
-      // Remove absolute positioning and give proper ID
+      // Remove absolute positioning from new element
       img.style.position = "";
       img.style.top = "";
       img.style.left = "";
+      img.style.height = "auto"; // Let it size naturally
+
+      // Give new element the proper ID
       img.id = "videoStream";
+
+      // Remove old element
+      if (oldElement && oldElement.parentElement) {
+        oldElement.remove();
+      }
+
       console.log(`✅ MJPEG preview loaded (overlays: ${overlaysEnabled})`);
-    }, 300);
+    }, 350);
   };
 
   // Handle error case - if new stream fails to load, keep old one
@@ -886,7 +894,7 @@ function switchToMJPEGPreview() {
     }
   };
 
-  // Insert new element over the old one
+  // Insert new element into container (will be positioned over old one)
   if (oldElement) {
     container.insertBefore(img, oldElement);
   } else {
