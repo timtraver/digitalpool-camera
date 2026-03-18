@@ -669,10 +669,18 @@ socket.on("streamStatus", (status) => {
 
   isCurrentlyStreaming = status.isStreaming;
 
-  // Show/hide preview source indicator
+  // Update preview source indicator
   const previewIndicator = document.getElementById("previewSourceIndicator");
   if (previewIndicator) {
-    previewIndicator.style.display = status.isStreaming ? "block" : "none";
+    if (status.isStreaming) {
+      previewIndicator.textContent = "📡 Live Stream Preview";
+      previewIndicator.style.display = "block";
+      previewIndicator.style.background = "rgba(18, 199, 255, 0.9)";
+    } else {
+      previewIndicator.textContent = "📹 Raw Camera View";
+      previewIndicator.style.display = "block";
+      previewIndicator.style.background = "rgba(139, 92, 246, 0.9)";
+    }
   }
 
   if (status.isStreaming) {
