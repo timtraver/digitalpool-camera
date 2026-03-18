@@ -599,9 +599,8 @@ app.get("/video/stream", async (req, res) => {
     // Camera is free or fuser command failed
   }
 
-  // Use GStreamer for idle preview
-  // Check if overlays should be enabled (from query parameter or stream config)
-  const enableOverlays = req.query.overlays !== "false";
+  // Use GStreamer for idle preview with overlay settings from streamController
+  const config = streamController.streamConfig;
 
   const gstArgs = [
     "v4l2src",
@@ -615,33 +614,53 @@ app.get("/video/stream", async (req, res) => {
     "videoconvert",
   ];
 
-  // Add overlays if enabled
-  if (enableOverlays) {
-    gstArgs.push(
-      "!",
-      "clockoverlay",
-      "valignment=bottom",
-      "halignment=right",
-      "font-desc=Sans Bold 11",
-      "color=0xFFFFFFFF",
-      'time-format="%Y-%m-%d %H:%M:%S"',
-      "xpad=20",
-      "ypad=20",
-      "!",
-      "textoverlay",
-      'text="DigitalPool Tim\'s House"',
-      "valignment=bottom",
-      "halignment=left",
-      "font-desc=Sans Bold 11",
-      "color=0xFFFFFFFF",
-      "xpad=20",
-      "ypad=20"
-    );
+  // Add overlays if enabled (using same settings as streaming)
+  if (config.overlayEnabled) {
+    gstArgs.push("!");
+
+    // Add timestamp overlay if enabled
+    if (config.showTimestamp) {
+      const tsPosition = config.timestampPosition || "bottom-right";
+      const [vpos, hpos] = tsPosition.split("-");
+      const valign = vpos === "bottom" ? "bottom" : vpos === "center" ? "center" : "top";
+      const halign = hpos === "left" ? "left" : hpos === "right" ? "right" : "center";
+
+      gstArgs.push(
+        "clockoverlay",
+        `valignment=${valign}`,
+        `halignment=${halign}`,
+        `font-desc=Sans Bold ${config.overlayFontSize || 11}`,
+        "color=0xFFFFFFFF",
+        'time-format="%Y-%m-%d %H:%M:%S"',
+        "xpad=20",
+        "ypad=20",
+        "!"
+      );
+    }
+
+    // Add custom text overlay if provided
+    if (config.overlayText) {
+      const position = config.titlePosition || "bottom-left";
+      const [vpos, hpos] = position.split("-");
+      const valign = vpos === "bottom" ? "bottom" : vpos === "center" ? "center" : "top";
+      const halign = hpos === "left" ? "left" : hpos === "right" ? "right" : "center";
+
+      gstArgs.push(
+        "textoverlay",
+        `text="${config.overlayText}"`,
+        `valignment=${valign}`,
+        `halignment=${halign}`,
+        `font-desc=Sans Bold ${config.overlayFontSize || 11}`,
+        "color=0xFFFFFFFF",
+        "xpad=20",
+        "ypad=20",
+        "!"
+      );
+    }
   }
 
   // Add JPEG encoding and output
   gstArgs.push(
-    "!",
     "jpegenc",
     "quality=85",
     "!",
@@ -652,7 +671,7 @@ app.get("/video/stream", async (req, res) => {
     "fd=1"
   );
 
-  console.log(`Starting GStreamer idle preview ${enableOverlays ? "with" : "without"} overlays`);
+  console.log(`Starting GStreamer idle preview ${config.overlayEnabled ? "with" : "without"} overlays`);
 
   console.log("Starting GStreamer idle preview with overlays");
   const gst = spawn("gst-launch-1.0", gstArgs);

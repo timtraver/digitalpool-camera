@@ -1248,6 +1248,16 @@ function applyOverlaySettings() {
 
   console.log("Auto-applying overlay config:", overlayConfig);
   socket.emit("updateOverlay", overlayConfig);
+
+  // If not streaming, restart the idle preview to apply overlay changes
+  if (!isCurrentlyStreaming) {
+    console.log("🔄 Restarting idle preview to apply overlay changes...");
+    // Use a small delay to avoid too many rapid restarts
+    clearTimeout(window.idlePreviewRestartTimeout);
+    window.idlePreviewRestartTimeout = setTimeout(() => {
+      switchToMJPEGPreview();
+    }, 300);
+  }
 }
 
 // Live preview updates (update preview as user types/changes)
@@ -1255,13 +1265,7 @@ overlayEnabled.addEventListener("change", () => {
   currentOverlayConfig.overlayEnabled = overlayEnabled.checked;
   console.log("Overlay enabled changed:", overlayEnabled.checked);
   drawOverlay();
-  applyOverlaySettings();
-
-  // If not streaming, restart the idle preview to apply overlay changes
-  if (!isCurrentlyStreaming) {
-    console.log("🔄 Restarting idle preview to apply overlay changes...");
-    switchToMJPEGPreview();
-  }
+  applyOverlaySettings(); // This will restart idle preview if not streaming
 });
 
 // Apply text changes after user stops typing (debounce)
