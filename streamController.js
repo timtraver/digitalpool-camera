@@ -689,8 +689,8 @@ class StreamController extends EventEmitter {
     }
 
     // Branch 2: Preview stream (MJPEG over TCP)
-    // Since HLS is problematic on older GStreamer, use MJPEG preview
-    // This decodes H.264 back to raw, encodes as JPEG, and serves over TCP
+    // Tap the H.264 stream and decode it for preview
+    // Note: This adds some CPU overhead but provides a web preview
     pipeline.push(
       "t.",
       "!",
@@ -700,9 +700,9 @@ class StreamController extends EventEmitter {
       "!",
       "h264parse",
       "!",
-      "nvv4l2decoder",
+      "avdec_h264", // Use software decoder instead of nvv4l2decoder
       "!",
-      "nvvidconv",
+      "videoconvert",
       "!",
       "video/x-raw,format=I420",
       "!",
