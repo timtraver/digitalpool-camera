@@ -6,7 +6,8 @@ This script reads game state from a JSON file and draws it on every frame
 
 import gi
 gi.require_version('Gst', '1.0')
-from gi.repository import Gst, GLib
+gi.require_version('GstVideo', '1.0')
+from gi.repository import Gst, GLib, GstVideo
 import cairo
 import json
 import sys
@@ -32,45 +33,65 @@ def get_game_state():
             'matchTitle': 'Match 53'
         }
 
-def on_draw(overlay, context, timestamp, duration, user_data):
-    """Cairo drawing callback - called for every video frame"""
-    # Get current game state
-    state = get_game_state()
-    
-    # Draw scoreboard in top-left corner
-    x, y = 50, 50
-    width, height = 500, 200
-    
-    # Semi-transparent background
-    context.set_source_rgba(0, 0, 0, 0.7)
-    context.rectangle(x, y, width, height)
-    context.fill()
-    
-    # Border
-    context.set_source_rgb(1, 1, 1)
-    context.set_line_width(3)
-    context.rectangle(x, y, width, height)
-    context.stroke()
-    
-    # Title
-    context.set_source_rgb(1, 1, 1)
-    context.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-    context.set_font_size(32)
-    context.move_to(x + 20, y + 45)
-    context.show_text(f"🎱 {state['matchTitle']}")
-    
-    # Scores
-    context.set_font_size(60)
-    context.move_to(x + 180, y + 130)
-    context.show_text(f"{state['player1Score']} - {state['player2Score']}")
-    
-    # Player names
-    context.set_font_size(24)
-    context.set_source_rgba(1, 1, 1, 0.8)
-    context.move_to(x + 20, y + 180)
-    context.show_text(state['player1Name'])
-    context.move_to(x + width - 120, y + 180)
-    context.show_text(state['player2Name'])
+def on_draw(overlay, cr, timestamp, duration, user_data):
+    """Cairo drawing callback - called for every video frame
+
+    Args:
+        overlay: The cairooverlay element
+        cr: Cairo context (already a proper cairo.Context object)
+        timestamp: Current buffer timestamp
+        duration: Current buffer duration
+        user_data: User data (not used)
+    """
+    try:
+        # Get current game state
+        state = get_game_state()
+
+        # The 'cr' parameter is already a cairo.Context object from GStreamer
+        # No conversion needed!
+
+        # Draw scoreboard in top-left corner
+        x, y = 50, 50
+        width, height = 500, 200
+
+        # Semi-transparent background
+        cr.set_source_rgba(0, 0, 0, 0.7)
+        cr.rectangle(x, y, width, height)
+        cr.fill()
+
+        # Border
+        cr.set_source_rgb(1, 1, 1)
+        cr.set_line_width(3)
+        cr.rectangle(x, y, width, height)
+        cr.stroke()
+
+        # Title
+        cr.set_source_rgb(1, 1, 1)
+        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(32)
+        cr.move_to(x + 20, y + 45)
+        cr.show_text(state['matchTitle'])
+
+        # Scores
+        cr.set_font_size(60)
+        cr.move_to(x + 180, y + 130)
+        cr.show_text(f"{state['player1Score']} - {state['player2Score']}")
+
+        # Player names
+        cr.set_font_size(24)
+        cr.set_source_rgba(1, 1, 1, 0.8)
+        cr.move_to(x + 20, y + 180)
+        cr.show_text(state['player1Name'])
+        cr.move_to(x + width - 120, y + 180)
+        cr.show_text(state['player2Name'])
+
+    except Exception as e:
+        # Log first error only to avoid flooding
+        if not hasattr(on_draw, 'error_logged'):
+            print(f"Cairo draw error: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            on_draw.error_logged = True
 
 def main():
     """Create and run GStreamer pipeline with cairooverlay"""
