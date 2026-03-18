@@ -60,6 +60,8 @@ gst-launch-1.0 \
   mix. \
   \
   t. ! queue max-size-buffers=10 leaky=downstream ! \
+  nvvidconv ! \
+  video/x-raw,format=I420 ! \
   videoscale ! \
   video/x-raw,width=1280,height=720 ! \
   jpegenc quality=75 ! \
