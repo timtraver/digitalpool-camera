@@ -439,6 +439,59 @@ class StreamController extends EventEmitter {
   }
 
   /**
+   * Build compositor pipeline with graphics overlay
+   * This uses a completely different structure with multiple sources
+   */
+  _buildCompositorPipeline() {
+    const {
+      protocol,
+      destination,
+      width,
+      height,
+      framerate,
+      bitrate,
+      encoder,
+    } = this.streamConfig;
+
+    console.log("🎨 Building compositor pipeline with graphics overlay...");
+
+    // Build a compositor pipeline using gst-launch-1.0 string syntax
+    // This reads raw RGBA frames from the graphics overlay TCP server
+    const pipelineStr = `
+      compositor name=mix
+        sink_0::zorder=0
+        sink_1::zorder=1 sink_1::alpha=${this.streamConfig.skiaGraphicsAlpha || 1.0}
+      ! videoconvert
+      ! tee name=t
+
+      v4l2src device=${this.cameraDevice}
+      ! image/jpeg,width=${width},height=${height},framerate=${framerate}/1
+      ! jpegdec
+      ! videoconvert
+      ! video/x-raw,format=RGBA
+      ! queue
+      ! mix.sink_0
+
+      tcpclientsrc host=127.0.0.1 port=8556
+      ! video/x-raw,format=RGBA,width=${width},height=${height},framerate=5/1
+      ! queue
+      ! mix.sink_1
+
+      t. ! queue
+      ! nvvidconv
+      ! video/x-raw(memory:NVMM)
+      ! nvv4l2h264enc bitrate=${bitrate}
+      ! h264parse
+      ! srtserversink uri=srt://:${destination.split(':')[1] || 8891}
+
+      t. ! queue ! fakesink
+    `.replace(/\n\s+/g, ' ').trim();
+
+    // Return as array with single string (will be passed to gst-launch-1.0)
+    return [pipelineStr];
+  }
+
+  /**
    * Build GStreamer pipeline based on configuration
    */
   _buildGStreamerPipeline() {
@@ -451,6 +504,11 @@ class StreamController extends EventEmitter {
       bitrate,
       encoder,
     } = this.streamConfig;
+
+    // Check if graphics overlay is enabled - use completely different pipeline
+    if (this.streamConfig.skiaGraphicsEnabled) {
+      return this._buildCompositorPipeline();
+    }
 
     let pipeline = [
       // Video source - use MJPEG format which most USB cameras support at high resolution
@@ -571,39 +629,17 @@ class StreamController extends EventEmitter {
       }
     }
 
-    // Check if graphics overlay is enabled
-    const useGraphicsOverlay = this.streamConfig.skiaGraphicsEnabled;
+    // Graphics overlay compositing is disabled for now
+    // The compositor requires a complex multi-source pipeline that doesn't work
+    // well with our linear pipeline building approach
+    //
+    // TODO: Implement proper compositor using gst-launch-1.0 with multiple sources
 
-    if (useGraphicsOverlay) {
-      // Use gdkpixbufoverlay with a dynamically updated PNG file
-      console.log(
-        `🎨 Graphics overlay enabled (alpha ${this.streamConfig.skiaGraphicsAlpha})`,
-      );
+    // For now, just use the normal pipeline
+    pipeline.push("videoconvert", "!", "tee", "name=t");
 
-      // The graphics overlay will write to /tmp/graphics-overlay.png
-      // gdkpixbufoverlay will read and composite it
-      pipeline.push(
-        "videoconvert",
-        "!",
-        "gdkpixbufoverlay",
-        "location=/tmp/graphics-overlay.png",
-        `alpha=${this.streamConfig.skiaGraphicsAlpha}`,
-        "overlay-width=1920",
-        "overlay-height=1080",
-        "!",
-        "tee",
-        "name=t",
-      );
-
-      // Branch 1: Encoding pipeline for streaming (from tee)
-      pipeline.push("t.", "!", "queue", "!");
-    } else {
-      // No compositor - simple pipeline
-      pipeline.push("videoconvert", "!", "tee", "name=t");
-
-      // Branch 1: Encoding pipeline for streaming
-      pipeline.push("t.", "!", "queue", "!");
-    }
+    // Branch 1: Encoding pipeline for streaming
+    pipeline.push("t.", "!", "queue", "!");
 
     // Hardware encoding pipeline
     if (encoder === "nvv4l2h264enc") {
