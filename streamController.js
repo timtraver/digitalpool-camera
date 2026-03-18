@@ -148,6 +148,9 @@ class StreamController extends EventEmitter {
       console.log("⏳ Waiting for resources to be released...");
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
+      // Emit "preparing" event so graphics overlay can initialize before GStreamer starts
+      this.emit("preparing");
+
       const gstArgs = this._buildGStreamerPipeline();
 
       // Check if we're using the compositor helper script

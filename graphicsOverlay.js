@@ -80,7 +80,7 @@ class GraphicsOverlay extends EventEmitter {
    * Start the graphics overlay
    * @param {string} mode - "png" for file-based overlay (simple), "tcp" for streaming (complex)
    */
-  start(mode = "png") {
+  async start(mode = "png") {
     if (this.isRunning) {
       console.log("⚠️  Graphics overlay already running");
       return;
@@ -97,8 +97,13 @@ class GraphicsOverlay extends EventEmitter {
       console.log("🎨 Starting graphics overlay (PNG file mode)");
       this.isRunning = true;
       this.frameCount = 0;
-      const frameTime = 1000 / this.fps;
 
+      // Generate first frame SYNCHRONOUSLY so the file exists before GStreamer starts
+      console.log("📝 Generating initial PNG frame...");
+      await this.generateFramePNG(true);
+
+      // Now start the interval for subsequent frames
+      const frameTime = 1000 / this.fps;
       this.frameInterval = setInterval(() => {
         this.generateFramePNG();
       }, frameTime);
@@ -168,9 +173,10 @@ class GraphicsOverlay extends EventEmitter {
 
   /**
    * Generate and save frame as PNG (for gdkpixbufoverlay)
+   * @param {boolean} sync - If true, wait for file to be written (for first frame)
    */
-  generateFramePNG() {
-    if (!this.isRunning) return;
+  generateFramePNG(sync = false) {
+    if (!this.isRunning && !sync) return;
 
     try {
       const timestamp = Date.now();
@@ -184,14 +190,26 @@ class GraphicsOverlay extends EventEmitter {
       const stream = this.canvas.createPNGStream();
       stream.pipe(out);
 
-      // Log first frame
-      if (this.frameCount === 0) {
-        console.log(`✅ First PNG frame saved to ${pngPath}`);
+      if (sync) {
+        // Wait for file to be written (for first frame)
+        return new Promise((resolve, reject) => {
+          out.on("finish", () => {
+            console.log(`✅ First PNG frame saved to ${pngPath}`);
+            resolve();
+          });
+          out.on("error", reject);
+        });
+      } else {
+        // Async mode for subsequent frames
+        if (this.frameCount === 0) {
+          console.log(`✅ First PNG frame saved to ${pngPath}`);
+        }
       }
 
       this.frameCount++;
     } catch (err) {
       console.error("Error generating PNG frame:", err);
+      if (sync) throw err;
     }
   }
 

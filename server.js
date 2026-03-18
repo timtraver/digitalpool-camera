@@ -1224,15 +1224,17 @@ app.use("/graphql", (req, res) => {
 // Graphics Overlay Integration
 // ============================================================================
 
-// Start graphics overlay when stream starts (if enabled)
-streamController.on("started", () => {
+// Start graphics overlay BEFORE GStreamer starts (during "preparing" phase)
+// This ensures the PNG file exists when gdkpixbufoverlay tries to load it
+streamController.on("preparing", async () => {
   if (graphicsOverlay && streamController.streamConfig.skiaGraphicsEnabled) {
-    console.log(`🎨 Starting graphics overlay (PNG mode)...`);
+    console.log(`🎨 Preparing graphics overlay (PNG mode)...`);
 
     try {
       // Use PNG mode - simpler and more reliable than TCP/compositor
-      graphicsOverlay.start("png");
-      console.log("✅ Graphics overlay started successfully");
+      // This will generate the first frame synchronously so the file exists
+      await graphicsOverlay.start("png");
+      console.log("✅ Graphics overlay ready (PNG file created)");
     } catch (err) {
       console.error("❌ Failed to start graphics overlay:", err.message);
     }
