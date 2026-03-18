@@ -149,7 +149,12 @@ class StreamController extends EventEmitter {
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
       // Emit "preparing" event so graphics overlay can initialize before GStreamer starts
-      this.emit("preparing");
+      // Wait for the event handlers to complete (they may be async)
+      await new Promise((resolve) => {
+        this.emit("preparing");
+        // Give event handlers time to complete (PNG generation + file write)
+        setTimeout(resolve, 1500);
+      });
 
       const gstArgs = this._buildGStreamerPipeline();
 
