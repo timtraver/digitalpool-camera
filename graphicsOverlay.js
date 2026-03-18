@@ -146,20 +146,29 @@ class GraphicsOverlay extends EventEmitter {
 
     try {
       const timestamp = Date.now();
-      
+
       // Call the drawing function
       this.drawFunction(this.ctx, this.frameCount, timestamp);
-      
+
       // Get raw RGBA buffer from canvas
       const imageData = this.ctx.getImageData(0, 0, this.width, this.height);
       const buffer = Buffer.from(imageData.data.buffer);
-      
-      // Write to GStreamer stdin
-      this.gstProcess.stdin.write(buffer);
-      
+
+      // Write to GStreamer stdin (check if writable first)
+      if (this.gstProcess.stdin && this.gstProcess.stdin.writable) {
+        this.gstProcess.stdin.write(buffer);
+      } else {
+        // Pipe is closed, stop generating frames
+        this.stop();
+      }
+
       this.frameCount++;
     } catch (err) {
-      console.error("Error generating frame:", err);
+      // Ignore EPIPE errors (broken pipe) - just stop gracefully
+      if (err.code !== 'EPIPE') {
+        console.error("Error generating frame:", err);
+      }
+      this.stop();
     }
   }
 
