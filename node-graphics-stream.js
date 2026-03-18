@@ -27,6 +27,9 @@ function getGameState() {
     player2Name: "Player 2",
     player1Score: 0,
     player2Score: 0,
+    overlayFontSize: 32,
+    overlayColor: "white",
+    overlayBackground: "transparent",
   };
 }
 
@@ -46,6 +49,11 @@ overlay.setDrawFunction((ctx, frameNumber) => {
   // Get current game state
   const state = getGameState();
 
+  // Log state every 30 frames (every 15 seconds at 2fps) for debugging
+  if (frameNumber % 30 === 0) {
+    console.error(`🎨 Drawing frame ${frameNumber} | Score: ${state.player1Score} - ${state.player2Score} | Font: ${state.overlayFontSize}px`);
+  }
+
   // Clear canvas with transparent background
   ctx.clearRect(0, 0, width, height);
 
@@ -64,18 +72,27 @@ overlay.setDrawFunction((ctx, frameNumber) => {
   ctx.lineWidth = 3;
   ctx.strokeRect(x, y, boxWidth, boxHeight);
 
+  // Get font sizes from state (scaled by 1.5x for 1920x1080, matching streamController)
+  const baseFontSize = (state.overlayFontSize || 32) * 1.5;
+  const titleFontSize = Math.round(baseFontSize);
+  const scoreFontSize = Math.round(baseFontSize * 1.875); // 60/32 ratio
+  const nameFontSize = Math.round(baseFontSize * 0.75); // 24/32 ratio
+
+  // Get color from state
+  const textColor = state.overlayColor || "white";
+
   // Title
-  ctx.fillStyle = "white";
-  ctx.font = "bold 32px Sans";
+  ctx.fillStyle = textColor;
+  ctx.font = `bold ${titleFontSize}px Sans`;
   ctx.fillText(state.matchTitle, x + 20, y + 45);
 
   // Scores
-  ctx.font = "bold 60px Sans";
+  ctx.font = `bold ${scoreFontSize}px Sans`;
   ctx.fillText(`${state.player1Score} - ${state.player2Score}`, x + 180, y + 130);
 
   // Player names
-  ctx.font = "24px Sans";
-  ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+  ctx.font = `${nameFontSize}px Sans`;
+  ctx.fillStyle = textColor === "white" ? "rgba(255, 255, 255, 0.8)" : textColor;
   ctx.fillText(state.player1Name, x + 20, y + 180);
   ctx.fillText(state.player2Name, x + boxWidth - 120, y + 180);
 });

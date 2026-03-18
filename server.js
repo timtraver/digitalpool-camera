@@ -46,6 +46,10 @@ let gameState = {
   player1Score: 0,
   player2Score: 0,
   matchTitle: "Match 53",
+  // UI overlay configuration
+  overlayFontSize: 32,
+  overlayColor: "white",
+  overlayBackground: "transparent",
 };
 
 if (GraphicsOverlay) {
@@ -528,6 +532,21 @@ app.get("/api/stream/test", async (req, res) => {
 app.post("/api/stream/overlay", (req, res) => {
   const overlayConfig = req.body;
   const result = streamController.updateOverlay(overlayConfig);
+
+  // Also update gameState with overlay configuration for node-graphics-stream.js
+  if (overlayConfig.overlayFontSize !== undefined) {
+    gameState.overlayFontSize = overlayConfig.overlayFontSize;
+  }
+  if (overlayConfig.overlayColor !== undefined) {
+    gameState.overlayColor = overlayConfig.overlayColor;
+  }
+  if (overlayConfig.overlayBackground !== undefined) {
+    gameState.overlayBackground = overlayConfig.overlayBackground;
+  }
+
+  // Write updated state to JSON file
+  regenerateOverlay();
+
   res.json(result);
 });
 
@@ -1061,6 +1080,21 @@ io.on("connection", (socket) => {
 
   socket.on("updateOverlay", (overlayConfig) => {
     const result = streamController.updateOverlay(overlayConfig);
+
+    // Also update gameState with overlay configuration for node-graphics-stream.js
+    if (overlayConfig.overlayFontSize !== undefined) {
+      gameState.overlayFontSize = overlayConfig.overlayFontSize;
+    }
+    if (overlayConfig.overlayColor !== undefined) {
+      gameState.overlayColor = overlayConfig.overlayColor;
+    }
+    if (overlayConfig.overlayBackground !== undefined) {
+      gameState.overlayBackground = overlayConfig.overlayBackground;
+    }
+
+    // Write updated state to JSON file
+    regenerateOverlay();
+
     socket.emit("overlayResult", result);
   });
 
