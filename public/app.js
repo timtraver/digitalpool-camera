@@ -599,8 +599,9 @@ startStreamBtn.addEventListener("click", async () => {
       encoder: "nvv4l2h264enc",
     };
 
-    if (!config.destination) {
-      alert("Please enter a destination URL");
+    // Only UDP requires a destination (SRT uses server mode, RTMP has default)
+    if (config.protocol === "udp" && !config.destination) {
+      alert("Please enter a destination URL for UDP (e.g., udp://192.168.1.100:5000)");
       return;
     }
 
