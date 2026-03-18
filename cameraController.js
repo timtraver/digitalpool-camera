@@ -224,7 +224,6 @@ class CameraController {
    */
   async applyConfig() {
     console.log("📸 Applying saved camera configuration...");
-    console.log("📋 Config in memory:", JSON.stringify(this.config, null, 2));
     const results = [];
 
     // Separate PTZ controls from other controls
@@ -252,15 +251,15 @@ class CameraController {
     for (const [controlName, value] of otherControls) {
       if (this.controls[controlName]) {
         try {
-          console.log(`  ⚙️  Setting ${controlName} = ${value}`);
+          // console.log(`  ⚙️  Setting ${controlName} = ${value}`);
           const result = await this.setControl(controlName, value, false);
           results.push({ control: controlName, ...result });
 
-          if (result.success) {
-            console.log(`  ✅ ${controlName} set successfully`);
-          } else {
-            console.log(`  ❌ ${controlName} failed: ${result.error}`);
-          }
+          // if (result.success) {
+          //   console.log(`  ✅ ${controlName} set successfully`);
+          // } else {
+          //   console.log(`  ❌ ${controlName} failed: ${result.error}`);
+          // }
 
           await new Promise((resolve) => setTimeout(resolve, 50));
         } catch (error) {
@@ -300,7 +299,7 @@ class CameraController {
     for (const [controlName, value] of sortedPtzSettings) {
       if (this.controls[controlName]) {
         try {
-          console.log(`  ⚙️  Setting ${controlName} = ${value}`);
+          // console.log(`  ⚙️  Setting ${controlName} = ${value}`);
           const result = await this.setControl(controlName, value, false);
           results.push({ control: controlName, ...result });
 
@@ -311,11 +310,11 @@ class CameraController {
             this.currentTilt = value;
           }
 
-          if (result.success) {
-            console.log(`  ✅ ${controlName} set successfully`);
-          } else {
-            console.log(`  ❌ ${controlName} failed: ${result.error}`);
-          }
+          // if (result.success) {
+          //   console.log(`  ✅ ${controlName} set successfully`);
+          // } else {
+          //   console.log(`  ❌ ${controlName} failed: ${result.error}`);
+          // }
 
           // Longer delay for PTZ commands to allow camera to move
           await new Promise((resolve) => setTimeout(resolve, 500));

@@ -39,13 +39,22 @@ const streamController = new StreamController(CAMERA_DEVICE);
 
 // Initialize graphics overlay (if available)
 let graphicsOverlay = null;
+// Game state for scoreboard (update this from your app)
+let gameState = {
+  player1Name: "Player 1",
+  player2Name: "Player 2",
+  player1Score: 0,
+  player2Score: 0,
+  matchTitle: "Pool Match",
+};
+
 if (GraphicsOverlay) {
   graphicsOverlay = new GraphicsOverlay();
   // Use 2 FPS to reduce CPU and memory load - scoreboards don't need high framerates
   graphicsOverlay.initialize(1920, 1080, 2);
 
   // Set up a custom drawing function for the scoreboard
-  graphicsOverlay.setDrawFunction((ctx, frameNumber, timestamp) => {
+  graphicsOverlay.setDrawFunction((ctx, frameNumber) => {
     // Clear canvas with transparent background
     ctx.clearRect(0, 0, 1920, 1080);
 
@@ -67,33 +76,58 @@ if (GraphicsOverlay) {
     // Title
     ctx.fillStyle = "white";
     ctx.font = "bold 32px Sans";
-    ctx.fillText("🎱 POOL MATCH - LIVE", x + 20, y + 45);
+    ctx.fillText(`🎱 ${gameState.matchTitle}`, x + 20, y + 45);
 
-    // Example scores (these would come from your app in production)
-    const score1 = Math.floor((frameNumber / 5) % 10);
-    const score2 = Math.floor((frameNumber / 5) % 8);
-
+    // Scores (from gameState)
     ctx.font = "bold 60px Sans";
-    ctx.fillText(`${score1} - ${score2}`, x + 200, y + 130);
+    ctx.fillText(`${gameState.player1Score} - ${gameState.player2Score}`, x + 180, y + 130);
 
     // Player names
     ctx.font = "24px Sans";
     ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
-    ctx.fillText("Player 1", x + 20, y + 180);
-    ctx.fillText("Player 2", x + width - 120, y + 180);
+    ctx.fillText(gameState.player1Name, x + 20, y + 180);
+    ctx.fillText(gameState.player2Name, x + width - 120, y + 180);
 
-    // Frame counter (for debugging)
-    ctx.font = "16px Sans";
-    ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
-    ctx.fillText(`Frame: ${frameNumber}`, x + 20, y + height + 25);
-
-    // Log every 10 frames to show activity
-    if (frameNumber % 10 === 0) {
-      console.log(`🎨 Drawing frame ${frameNumber} | Score: ${score1} - ${score2}`);
+    // Log every 30 frames to show activity (every 15 seconds at 2 FPS)
+    if (frameNumber % 30 === 0) {
+      console.log(`🎨 Drawing frame ${frameNumber} | Score: ${gameState.player1Score} - ${gameState.player2Score}`);
     }
   });
 
-  console.log("🎨 Graphics overlay initialized (5fps for low CPU usage)");
+  console.log("🎨 Graphics overlay initialized (2fps for low CPU usage)");
+  console.log("💡 Update scores via Socket.IO event 'updateScore' or REST API");
+
+  // FOR TESTING: Automatically update scores every 5 seconds
+  let testScoreInterval = setInterval(() => {
+    if (graphicsOverlay && graphicsOverlay.isRunning) {
+      // Increment scores (wrap around at 10)
+      gameState.player1Score = (gameState.player1Score + 1) % 11;
+      if (gameState.player1Score === 0) {
+        gameState.player2Score = (gameState.player2Score + 1) % 11;
+      }
+
+      console.log(`🧪 TEST: Auto-updating scores: ${gameState.player1Score} - ${gameState.player2Score}`);
+
+      // The graphics overlay is already running at 2 FPS and will pick up the changes
+      // No need to manually regenerate - it will update on the next frame
+    }
+  }, 5000); // Every 5 seconds
+
+  // Clean up interval on exit
+  process.on('SIGINT', () => {
+    clearInterval(testScoreInterval);
+  });
+}
+
+// Function to regenerate the PNG overlay with updated game state
+function regenerateOverlay() {
+  if (graphicsOverlay && graphicsOverlay.isRunning) {
+    // The overlay is already running at 2 FPS, so it will pick up changes automatically
+    // Just log that we're updating
+    console.log(`✅ Scoreboard updated: ${gameState.player1Score} - ${gameState.player2Score}`);
+    // Broadcast to all clients
+    io.emit("scoreUpdated", gameState);
+  }
 }
 
 // Stream controller event handlers
@@ -374,6 +408,37 @@ app.get("/api/status", (req, res) => {
     status: "ok",
     camera_device: CAMERA_DEVICE,
     timestamp: new Date().toISOString(),
+  });
+});
+
+// API endpoint to get current scoreboard
+app.get("/api/scoreboard", (req, res) => {
+  res.json({
+    success: true,
+    gameState,
+  });
+});
+
+// API endpoint to update scoreboard
+app.post("/api/scoreboard", express.json(), (req, res) => {
+  console.log(`📊 REST API: Updating scoreboard:`, req.body);
+
+  // Update game state
+  if (req.body.player1Name !== undefined) gameState.player1Name = req.body.player1Name;
+  if (req.body.player2Name !== undefined) gameState.player2Name = req.body.player2Name;
+  if (req.body.player1Score !== undefined) gameState.player1Score = req.body.player1Score;
+  if (req.body.player2Score !== undefined) gameState.player2Score = req.body.player2Score;
+  if (req.body.matchTitle !== undefined) gameState.matchTitle = req.body.matchTitle;
+
+  // Regenerate the PNG overlay
+  regenerateOverlay();
+
+  // Broadcast to all Socket.IO clients
+  io.emit("scoreUpdated", gameState);
+
+  res.json({
+    success: true,
+    gameState,
   });
 });
 
@@ -984,6 +1049,32 @@ io.on("connection", (socket) => {
     const result = streamController.updateOverlay(overlayConfig);
     socket.emit("overlayResult", result);
   });
+
+  // ============ SCOREBOARD SOCKET EVENTS ============
+
+  socket.on("updateScore", (data) => {
+    console.log(`📊 Updating scoreboard:`, data);
+
+    // Update game state
+    if (data.player1Name !== undefined) gameState.player1Name = data.player1Name;
+    if (data.player2Name !== undefined) gameState.player2Name = data.player2Name;
+    if (data.player1Score !== undefined) gameState.player1Score = data.player1Score;
+    if (data.player2Score !== undefined) gameState.player2Score = data.player2Score;
+    if (data.matchTitle !== undefined) gameState.matchTitle = data.matchTitle;
+
+    // Regenerate the PNG overlay
+    regenerateOverlay();
+
+    // Broadcast to all clients
+    io.emit("scoreUpdated", gameState);
+    socket.emit("scoreResult", { success: true, gameState });
+  });
+
+  socket.on("getScore", () => {
+    socket.emit("scoreResult", { success: true, gameState });
+  });
+
+  // ============ END SCOREBOARD SOCKET EVENTS ============
 
   // ============ END STREAMING SOCKET EVENTS ============
 

@@ -221,33 +221,31 @@ class GraphicsOverlay extends EventEmitter {
       });
     } else {
       // Async mode for subsequent frames
-      // Write to a temporary file first, then atomically rename it
-      // This ensures GStreamer never reads a partially-written file
+      // Write to numbered files that multifilesrc can read in sequence
       try {
-        const tempPath = `${staticPath}.tmp`;
-        const out = fs.createWriteStream(tempPath);
+        const out = fs.createWriteStream(numberedPath);
         const stream = this.canvas.createPNGStream();
 
         stream.pipe(out);
 
         out.on("finish", () => {
-          // Atomically replace the static file
-          // This is the key to making gdkpixbufoverlay reload the image
-          fs.renameSync(tempPath, staticPath);
-
-          // Also save numbered file for debugging/fallback
+          // Also update the static file for compatibility
           try {
-            fs.copyFileSync(staticPath, numberedPath);
+            fs.copyFileSync(numberedPath, staticPath);
+          } catch (err) {
+            // Ignore copy errors
+          }
 
-            // Clean up old numbered files (keep only last 10)
-            if (this.frameCount > 10) {
-              const oldFile = `/tmp/graphics-overlay-${String(this.frameCount - 10).padStart(6, '0')}.png`;
+          // Clean up old numbered files (keep only last 20 for smooth playback)
+          if (this.frameCount > 20) {
+            const oldFile = `/tmp/graphics-overlay-${String(this.frameCount - 20).padStart(6, '0')}.png`;
+            try {
               if (fs.existsSync(oldFile)) {
                 fs.unlinkSync(oldFile);
               }
+            } catch (err) {
+              // Ignore cleanup errors
             }
-          } catch (err) {
-            // Ignore cleanup errors
           }
         });
 
