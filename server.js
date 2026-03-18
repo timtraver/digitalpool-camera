@@ -1227,11 +1227,11 @@ app.use("/graphql", (req, res) => {
 // Start graphics overlay when stream starts (if enabled)
 streamController.on("started", () => {
   if (graphicsOverlay && streamController.streamConfig.skiaGraphicsEnabled) {
-    const port = streamController.streamConfig.skiaGraphicsPort || 8556;
-    console.log(`🎨 Starting Skia graphics overlay on port ${port}...`);
+    console.log(`🎨 Starting graphics overlay (PNG mode)...`);
 
     try {
-      graphicsOverlay.start(port);
+      // Use PNG mode - simpler and more reliable than TCP/compositor
+      graphicsOverlay.start("png");
       console.log("✅ Graphics overlay started successfully");
     } catch (err) {
       console.error("❌ Failed to start graphics overlay:", err.message);

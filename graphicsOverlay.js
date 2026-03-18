@@ -78,9 +78,9 @@ class GraphicsOverlay extends EventEmitter {
 
   /**
    * Start the graphics overlay
-   * Streams raw RGBA frames via TCP for real-time compositing
+   * @param {string} mode - "png" for file-based overlay (simple), "tcp" for streaming (complex)
    */
-  start() {
+  start(mode = "png") {
     if (this.isRunning) {
       console.log("⚠️  Graphics overlay already running");
       return;
@@ -90,59 +90,109 @@ class GraphicsOverlay extends EventEmitter {
       this.initialize();
     }
 
-    // Start GStreamer pipeline that serves raw RGBA video via TCP
-    const pipeline = [
-      "fdsrc",
-      "!",
-      `video/x-raw,format=RGBA,width=${this.width},height=${this.height},framerate=${this.fps}/1`,
-      "!",
-      "tcpserversink",
-      "host=127.0.0.1",
-      "port=8556",
-      "sync=false",
-      "recover-policy=keyframe",
-    ];
+    this.mode = mode;
 
-    console.log("🚀 Starting graphics overlay TCP server...");
-    this.gstProcess = spawn("gst-launch-1.0", pipeline);
-
-    // Handle EPIPE errors gracefully
-    this.gstProcess.stdin.on('error', (err) => {
-      if (err.code === 'EPIPE') {
-        console.log("Graphics stream pipe closed");
-        this.stop();
-      } else {
-        console.error("Graphics stdin error:", err);
-      }
-    });
-
-    this.gstProcess.stderr.on("data", (data) => {
-      const msg = data.toString();
-      if (!msg.includes("Setting pipeline") && !msg.includes("Prerolled")) {
-        console.log("Graphics GStreamer:", msg.trim());
-      }
-    });
-
-    this.gstProcess.on("exit", (code) => {
-      console.log(`Graphics GStreamer exited with code ${code}`);
-      this.isRunning = false;
-    });
-
-    // Wait a moment for GStreamer to start
-    setTimeout(() => {
-      // Start generating frames
+    if (mode === "png") {
+      // PNG file mode - simple and reliable for gdkpixbufoverlay
+      console.log("🎨 Starting graphics overlay (PNG file mode)");
       this.isRunning = true;
       this.frameCount = 0;
       const frameTime = 1000 / this.fps;
 
       this.frameInterval = setInterval(() => {
-        this.generateFrame();
+        this.generateFramePNG();
       }, frameTime);
 
-      console.log(`✅ Graphics overlay started (TCP port 8556)`);
+      console.log(`✅ Graphics overlay started (PNG mode)`);
       console.log(`📊 Generating frames at ${this.fps} FPS`);
+      console.log(`📁 Output: /tmp/graphics-overlay.png`);
       this.emit("started");
-    }, 500);
+
+    } else {
+      // TCP mode - for compositor (currently broken on Jetson)
+      // Start GStreamer pipeline that serves raw RGBA video via TCP
+      const pipeline = [
+        "fdsrc",
+        "!",
+        `video/x-raw,format=RGBA,width=${this.width},height=${this.height},framerate=${this.fps}/1`,
+        "!",
+        "tcpserversink",
+        "host=127.0.0.1",
+        "port=8556",
+        "sync=false",
+        "recover-policy=keyframe",
+      ];
+
+      console.log("🚀 Starting graphics overlay TCP server...");
+      this.gstProcess = spawn("gst-launch-1.0", pipeline);
+
+      // Handle EPIPE errors gracefully
+      this.gstProcess.stdin.on('error', (err) => {
+        if (err.code === 'EPIPE') {
+          console.log("Graphics stream pipe closed");
+          this.stop();
+        } else {
+          console.error("Graphics stdin error:", err);
+        }
+      });
+
+      this.gstProcess.stderr.on("data", (data) => {
+        const msg = data.toString();
+        if (!msg.includes("Setting pipeline") && !msg.includes("Prerolled")) {
+          console.log("Graphics GStreamer:", msg.trim());
+        }
+      });
+
+      this.gstProcess.on("exit", (code) => {
+        console.log(`Graphics GStreamer exited with code ${code}`);
+        this.isRunning = false;
+      });
+
+      // Wait a moment for GStreamer to start
+      setTimeout(() => {
+        // Start generating frames
+        this.isRunning = true;
+        this.frameCount = 0;
+        const frameTime = 1000 / this.fps;
+
+        this.frameInterval = setInterval(() => {
+          this.generateFrame();
+        }, frameTime);
+
+        console.log(`✅ Graphics overlay started (TCP port 8556)`);
+        console.log(`📊 Generating frames at ${this.fps} FPS`);
+        this.emit("started");
+      }, 500);
+    }
+  }
+
+  /**
+   * Generate and save frame as PNG (for gdkpixbufoverlay)
+   */
+  generateFramePNG() {
+    if (!this.isRunning) return;
+
+    try {
+      const timestamp = Date.now();
+
+      // Call the drawing function
+      this.drawFunction(this.ctx, this.frameCount, timestamp);
+
+      // Save as PNG
+      const pngPath = "/tmp/graphics-overlay.png";
+      const out = fs.createWriteStream(pngPath);
+      const stream = this.canvas.createPNGStream();
+      stream.pipe(out);
+
+      // Log first frame
+      if (this.frameCount === 0) {
+        console.log(`✅ First PNG frame saved to ${pngPath}`);
+      }
+
+      this.frameCount++;
+    } catch (err) {
+      console.error("Error generating PNG frame:", err);
+    }
   }
 
   /**

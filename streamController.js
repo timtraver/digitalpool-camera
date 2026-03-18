@@ -446,10 +446,11 @@ class StreamController extends EventEmitter {
   }
 
   /**
-   * Build compositor pipeline with graphics overlay
-   * Uses a helper script to run the complex compositor pipeline
+   * Build PNG overlay pipeline with graphics overlay
+   * Uses gdkpixbufoverlay to overlay a dynamically updated PNG file
+   * This is MUCH simpler and more reliable than the compositor approach
    */
-  _buildCompositorPipeline() {
+  _buildPNGOverlayPipeline() {
     const {
       destination,
       width,
@@ -458,14 +459,14 @@ class StreamController extends EventEmitter {
       bitrate,
     } = this.streamConfig;
 
-    console.log("🎨 Graphics overlay enabled - using compositor script");
+    console.log("🎨 Graphics overlay enabled - using PNG overlay (gdkpixbufoverlay)");
 
     // Extract port from destination
     const srtPort = destination ? destination.split(':')[1] : '8891';
-    const alpha = this.streamConfig.skiaGraphicsAlpha || 1.0;
+    const pngPath = "/tmp/graphics-overlay.png";
 
-    // Use the compositor helper script
-    const scriptPath = path.join(__dirname, 'compositor-helper.sh');
+    // Use the PNG overlay helper script
+    const scriptPath = path.join(__dirname, 'png-overlay-helper.sh');
     const scriptArgs = [
       this.cameraDevice,
       width.toString(),
@@ -473,7 +474,7 @@ class StreamController extends EventEmitter {
       framerate.toString(),
       bitrate.toString(),
       srtPort,
-      alpha.toString(),
+      pngPath,
     ];
 
     return {
@@ -497,9 +498,9 @@ class StreamController extends EventEmitter {
       encoder,
     } = this.streamConfig;
 
-    // Check if graphics overlay is enabled - use completely different pipeline
+    // Check if graphics overlay is enabled - use PNG overlay pipeline
     if (this.streamConfig.skiaGraphicsEnabled) {
-      return this._buildCompositorPipeline();
+      return this._buildPNGOverlayPipeline();
     }
 
     let pipeline = [
