@@ -43,6 +43,38 @@ if (GraphicsOverlay) {
   graphicsOverlay = new GraphicsOverlay();
   // Use 5 FPS to reduce CPU load - graphics overlays don't need high framerates
   graphicsOverlay.initialize(1920, 1080, 5);
+
+  // Set up a custom drawing function for the scoreboard
+  graphicsOverlay.setDrawFunction((ctx, frameNumber, timestamp) => {
+    // Clear canvas with transparent background
+    ctx.clearRect(0, 0, 1920, 1080);
+
+    // Draw a scoreboard
+    ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+    ctx.fillRect(50, 50, 500, 200);
+
+    // Draw border
+    ctx.strokeStyle = "white";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(50, 50, 500, 200);
+
+    // Draw title
+    ctx.fillStyle = "white";
+    ctx.font = "bold 32px Sans";
+    ctx.fillText("POOL MATCH - LIVE", 70, 95);
+
+    // Draw score that changes every 5 frames (every second at 5fps)
+    const score1 = Math.floor((frameNumber / 5) % 10);
+    const score2 = Math.floor((frameNumber / 5) % 8);
+    ctx.font = "bold 60px Sans";
+    ctx.fillText(`${score1} - ${score2}`, 200, 170);
+
+    // Draw frame counter to show it's updating
+    ctx.font = "20px Sans";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+    ctx.fillText(`Frame: ${frameNumber}`, 70, 230);
+  });
+
   console.log("🎨 Graphics overlay initialized (5fps for low CPU usage)");
 }
 
