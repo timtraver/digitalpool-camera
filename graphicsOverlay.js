@@ -105,7 +105,7 @@ class GraphicsOverlay extends EventEmitter {
   /**
    * Generate and write a single frame as PNG
    */
-  async generateFrame() {
+  generateFrame() {
     if (!this.isRunning) return;
 
     try {
@@ -115,21 +115,17 @@ class GraphicsOverlay extends EventEmitter {
       this.drawFunction(this.ctx, this.frameCount, timestamp);
 
       // Write canvas to PNG file (with transparency support!)
-      // Use async toBuffer with callback to avoid blocking
-      this.canvas.toBuffer((err, pngBuffer) => {
-        if (err) {
-          console.error("Error encoding PNG:", err);
-          return;
-        }
+      // Use synchronous toBuffer for reliability
+      const pngBuffer = this.canvas.toBuffer('image/png');
 
-        try {
-          // Write directly to the output file
-          // GStreamer's gdkpixbufoverlay will handle reading it
-          fs.writeFileSync(this.outputPath, pngBuffer);
-        } catch (writeErr) {
-          console.error("Error writing PNG file:", writeErr);
-        }
-      }, 'image/png');
+      // Write directly to the output file
+      // GStreamer's gdkpixbufoverlay will handle reading it
+      fs.writeFileSync(this.outputPath, pngBuffer);
+
+      // Log first frame to confirm it's working
+      if (this.frameCount === 0) {
+        console.log(`✅ First frame written to ${this.outputPath} (${pngBuffer.length} bytes)`);
+      }
 
       this.frameCount++;
     } catch (err) {
