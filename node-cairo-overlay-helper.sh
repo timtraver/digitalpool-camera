@@ -42,7 +42,7 @@ fi
 
 echo "✅ PNG file ready: $PNG_PATH"
 
-# Build GStreamer pipeline with gdkpixbufoverlay (same as PNG overlay mode)
+# Build GStreamer pipeline with compositor (overlay graphics on camera feed)
 gst-launch-1.0 \
   v4l2src device="$CAMERA_DEVICE" do-timestamp=true ! \
   image/jpeg,width=$WIDTH,height=$HEIGHT,framerate=$FRAMERATE/1 ! \
@@ -54,7 +54,7 @@ gst-launch-1.0 \
   t. ! queue max-size-buffers=2 leaky=downstream ! \
   nvvidconv ! \
   video/x-raw,format=RGBA ! \
-  gdkpixbufoverlay location="$PNG_PATH" overlay-width=$WIDTH overlay-height=$HEIGHT ! \
+  compositor name=mix sink_0::zorder=0 sink_1::zorder=1 sink_1::alpha=1.0 ! \
   nvvidconv ! \
   video/x-raw\(memory:NVMM\) ! \
   nvv4l2h264enc bitrate=$BITRATE preset-level=1 profile=0 iframeinterval=15 insert-sps-pps=true maxperf-enable=true ! \
@@ -63,6 +63,13 @@ gst-launch-1.0 \
   queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! \
   mpegtsmux alignment=7 ! \
   srtserversink uri=srt://0.0.0.0:$SRT_PORT latency=125 sync=false \
+  \
+  multifilesrc location="$PNG_PATH" loop=true caps="image/png,framerate=2/1" ! \
+  pngdec ! \
+  videoconvert ! \
+  video/x-raw,format=RGBA,width=$WIDTH,height=$HEIGHT ! \
+  queue ! \
+  mix. \
   \
   t. ! queue max-size-buffers=10 leaky=downstream ! \
   nvvidconv ! \
