@@ -20,27 +20,18 @@ echo "PNG Overlay: $PNG_PATH"
 echo "Text Overlay: $OVERLAY_TEXT"
 echo "Show Timestamp: $SHOW_TIMESTAMP"
 
-# Build the GStreamer pipeline
-# Start with camera and PNG overlay
-PIPELINE="v4l2src device=$CAMERA_DEVICE do-timestamp=true \
+# GStreamer pipeline with gdkpixbufoverlay and optional text overlays
+# Build pipeline step by step to handle optional elements
+exec gst-launch-1.0 -v \
+  v4l2src device=$CAMERA_DEVICE do-timestamp=true \
   ! image/jpeg,width=$WIDTH,height=$HEIGHT,framerate=$FRAMERATE/1 \
   ! jpegdec \
   ! videoconvert \
   ! gdkpixbufoverlay location=$PNG_PATH overlay-width=$WIDTH overlay-height=$HEIGHT \
-  ! videoconvert"
-
-# Add text overlay if provided
-if [ -n "$OVERLAY_TEXT" ]; then
-  PIPELINE="$PIPELINE ! textoverlay text=\"$OVERLAY_TEXT\" valignment=bottom halignment=left font-desc=\"Sans Bold 48\" color=4294967295 xpad=20 ypad=20 shaded-background=true"
-fi
-
-# Add timestamp overlay if enabled
-if [ "$SHOW_TIMESTAMP" = "true" ]; then
-  PIPELINE="$PIPELINE ! clockoverlay valignment=bottom halignment=right font-desc=\"Sans Bold 48\" color=4294967295 time-format=\"%Y-%m-%d %H:%M:%S\" xpad=20 ypad=20 shaded-background=true"
-fi
-
-# Add tee and output branches
-PIPELINE="$PIPELINE ! tee name=t \
+  ! videoconvert \
+  $(if [ -n "$OVERLAY_TEXT" ]; then echo "! textoverlay text=\"$OVERLAY_TEXT\" valignment=bottom halignment=left font-desc=\"Sans Bold 48\" color=4294967295 xpad=20 ypad=20 shaded-background=true"; fi) \
+  $(if [ "$SHOW_TIMESTAMP" = "true" ]; then echo "! clockoverlay valignment=bottom halignment=right font-desc=\"Sans Bold 48\" color=4294967295 time-format=\"%Y-%m-%d %H:%M:%S\" xpad=20 ypad=20 shaded-background=true"; fi) \
+  ! tee name=t \
   \
   t. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! nvvidconv \
   ! 'video/x-raw(memory:NVMM)' \
@@ -56,8 +47,5 @@ PIPELINE="$PIPELINE ! tee name=t \
   ! video/x-raw,width=1280,height=720 \
   ! jpegenc quality=75 \
   ! multipartmux boundary=--jpgboundary \
-  ! tcpserversink host=0.0.0.0 port=8555 sync=false recover-policy=keyframe"
-
-# Execute the pipeline
-exec gst-launch-1.0 -v $PIPELINE
+  ! tcpserversink host=0.0.0.0 port=8555 sync=false recover-policy=keyframe
 
