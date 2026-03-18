@@ -554,6 +554,8 @@ class StreamController extends EventEmitter {
       height,
       framerate,
       bitrate,
+      overlayText,
+      showTimestamp,
     } = this.streamConfig;
 
     console.log("🎨 Graphics overlay enabled - using Node-Cairo overlay (Node.js + node-canvas)");
@@ -561,18 +563,23 @@ class StreamController extends EventEmitter {
     // Extract port from destination
     const srtPort = destination ? destination.split(':')[1] : '8891';
 
-    // Use the Node.js graphics script
-    const scriptPath = path.join(__dirname, 'node-graphics-stream.js');
+    // Use the shell script that manages Node.js + GStreamer
+    const scriptPath = path.join(__dirname, 'node-cairo-overlay-helper.sh');
     const scriptArgs = [
+      this.cameraDevice,
       width.toString(),
       height.toString(),
-      framerate.toString()
+      framerate.toString(),
+      bitrate.toString(),
+      srtPort,
+      overlayText || "",
+      showTimestamp ? "true" : "false",
     ];
 
     return {
       useCompositorScript: true,
-      scriptPath: 'node', // Use node to run the script
-      scriptArgs: [scriptPath, ...scriptArgs],
+      scriptPath: scriptPath,
+      scriptArgs: scriptArgs,
     };
   }
 
