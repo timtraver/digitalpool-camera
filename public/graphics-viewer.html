@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Graphics Overlay Viewer</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1a1a1a;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1920px;
+      width: 100%;
+    }
+
+    h1 {
+      text-align: center;
+      margin-bottom: 20px;
+      font-size: 2rem;
+    }
+
+    .info {
+      background: #2a2a2a;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+
+    .info p {
+      margin: 5px 0;
+      color: #aaa;
+    }
+
+    .viewer {
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+      position: relative;
+    }
+
+    .viewer img {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .status {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 8px 15px;
+      border-radius: 20px;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #4CAF50;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .error {
+      background: #ff4444;
+      color: white;
+      padding: 20px;
+      border-radius: 8px;
+      text-align: center;
+      margin: 20px 0;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #aaa;
+    }
+
+    .controls {
+      margin-top: 20px;
+      text-align: center;
+    }
+
+    button {
+      background: #4CAF50;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+      margin: 0 5px;
+      transition: background 0.3s;
+    }
+
+    button:hover {
+      background: #45a049;
+    }
+
+    button:disabled {
+      background: #666;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎨 Graphics Overlay Viewer</h1>
+    
+    <div class="info">
+      <p><strong>Graphics Server:</strong> <span id="server-url">http://192.168.1.114:8556</span></p>
+      <p><strong>Format:</strong> MJPEG over TCP</p>
+      <p><strong>Resolution:</strong> 1920x1080 @ 5fps</p>
+    </div>
+
+    <div class="viewer">
+      <div class="status">
+        <div class="status-dot"></div>
+        <span>Live</span>
+      </div>
+      <img id="graphics-stream" src="/api/graphics-proxy" alt="Graphics Overlay">
+    </div>
+
+    <div class="controls">
+      <button onclick="reload()">🔄 Reload</button>
+      <button onclick="toggleFullscreen()">⛶ Fullscreen</button>
+    </div>
+
+    <div id="error-message" class="error" style="display: none;">
+      <h3>⚠️ Connection Error</h3>
+      <p>Make sure the graphics server is running:</p>
+      <code>node test-graphics.js</code>
+    </div>
+  </div>
+
+  <script>
+    const img = document.getElementById('graphics-stream');
+    const errorDiv = document.getElementById('error-message');
+
+    // Handle image load errors
+    img.onerror = function() {
+      errorDiv.style.display = 'block';
+    };
+
+    img.onload = function() {
+      errorDiv.style.display = 'none';
+    };
+
+    function reload() {
+      const timestamp = new Date().getTime();
+      img.src = `/api/graphics-proxy?t=${timestamp}`;
+    }
+
+    function toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        img.requestFullscreen().catch(err => {
+          alert(`Error attempting to enable fullscreen: ${err.message}`);
+        });
+      } else {
+        document.exitFullscreen();
+      }
+    }
+
+    // Auto-reload on error after 5 seconds
+    img.addEventListener('error', () => {
+      setTimeout(reload, 5000);
+    });
+  </script>
+</body>
+</html>
+

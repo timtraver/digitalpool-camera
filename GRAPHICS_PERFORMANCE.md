@@ -15,7 +15,9 @@ Graphics overlays **don't need high framerates**! Here are recommended FPS value
 | **Smooth animations** | 10-15 FPS | Medium ⚠️ |
 | **Fast animations** | 20-30 FPS | High ❌ |
 
-**Default:** We now use **5 FPS** by default, which is perfect for most overlays.
+**Default:** We now use **2 FPS** by default for test-graphics.js, which keeps CPU usage very low on Jetson Nano.
+
+**Important:** Even at low FPS, complex drawing operations can stress the CPU. Keep graphics simple!
 
 ### Resolution Guidelines
 
