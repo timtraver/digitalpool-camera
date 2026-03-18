@@ -779,7 +779,7 @@ console.log("🚀 app.js loaded!");
 let hlsPlayer = null;
 
 function switchToHLSPreview() {
-  console.log("🔄 Switching to HLS preview...");
+  console.log("🔄 Switching to TCP preview (MJPEG over TCP)...");
   const container = document.querySelector(".video-container");
   const oldElement = document.getElementById("videoStream");
 
@@ -787,75 +787,23 @@ function switchToHLSPreview() {
     oldElement.remove();
   }
 
-  // Create video element for HLS
-  const video = document.createElement("video");
-  video.id = "videoStream";
-  video.controls = false;
-  video.autoplay = true;
-  video.muted = true;
-  video.style.width = "100%";
-  video.style.height = "100%";
-  video.style.objectFit = "contain";
-
-  container.insertBefore(video, container.firstChild);
-
-  // Load HLS using native HLS support or hls.js
-  if (video.canPlayType("application/vnd.apple.mpegurl")) {
-    // Native HLS support (Safari)
-    video.src = "/video/hls/playlist.m3u8";
-    console.log("✅ Using native HLS support");
-
-    video.addEventListener("error", (e) => {
-      console.error("❌ Video error:", e);
-      console.error("Video error details:", video.error);
-    });
-
-    video.addEventListener("loadeddata", () => {
-      console.log("✅ HLS video loaded");
-    });
-  } else if (typeof Hls !== "undefined") {
-    // Use hls.js for other browsers
-    if (hlsPlayer) {
-      hlsPlayer.destroy();
-    }
-    hlsPlayer = new Hls({
-      enableWorker: true,
-      lowLatencyMode: true,
-      backBufferLength: 10,
-      debug: false, // Disable verbose debug logging
-    });
-    hlsPlayer.loadSource("/video/hls/playlist.m3u8");
-    hlsPlayer.attachMedia(video);
-
-    hlsPlayer.on(Hls.Events.MANIFEST_PARSED, () => {
-      console.log("✅ HLS manifest parsed");
-      video.play().catch((e) => console.log("Autoplay prevented:", e));
-    });
-
-    hlsPlayer.on(Hls.Events.ERROR, (_event, data) => {
-      // Only log errors, not warnings
-      if (data.fatal) {
-        console.error("❌ Fatal HLS error:", data.type, data.details);
-        switch (data.type) {
-          case Hls.ErrorTypes.NETWORK_ERROR:
-            console.log("🔄 Network error, trying to recover...");
-            hlsPlayer.startLoad();
-            break;
-          case Hls.ErrorTypes.MEDIA_ERROR:
-            console.log("🔄 Media error, trying to recover...");
-            hlsPlayer.recoverMediaError();
-            break;
-          default:
-            console.error("❌ Unrecoverable error");
-            break;
-        }
-      }
-    });
-
-    console.log("✅ Using hls.js");
-  } else {
-    console.error("❌ HLS not supported in this browser");
+  // Destroy HLS player if it exists
+  if (hlsPlayer) {
+    hlsPlayer.destroy();
+    hlsPlayer = null;
   }
+
+  // Create img element for MJPEG from TCP server
+  const img = document.createElement("img");
+  img.id = "videoStream";
+  img.alt = "Camera Stream";
+  img.src = "/video/tcp-preview?t=" + Date.now();
+  img.style.width = "100%";
+  img.style.height = "100%";
+  img.style.objectFit = "contain";
+
+  container.insertBefore(img, container.firstChild);
+  console.log("✅ Switched to TCP preview");
 }
 
 function switchToMJPEGPreview() {

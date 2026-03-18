@@ -681,9 +681,9 @@ class StreamController extends EventEmitter {
       throw new Error(`Unsupported protocol: ${protocol}`);
     }
 
-    // Branch 2: Preview stream (HLS for web interface)
-    // Use multifilesink to create segments, wrapped in MPEG-TS
-    // This is the most compatible approach for older GStreamer
+    // Branch 2: Preview stream (MJPEG over TCP)
+    // Since HLS is problematic on older GStreamer, use MJPEG preview
+    // This decodes H.264 back to raw, encodes as JPEG, and serves over TCP
     pipeline.push(
       "t.",
       "!",
@@ -693,12 +693,23 @@ class StreamController extends EventEmitter {
       "!",
       "h264parse",
       "!",
-      "mpegtsmux",
+      "nvv4l2decoder",
       "!",
-      "multifilesink",
-      "location=/tmp/stream/segment%05d.ts",
-      "max-file-size=1000000", // ~1MB per segment (about 2 seconds at 5Mbps)
-      "max-files=5",
+      "nvvidconv",
+      "!",
+      "video/x-raw,format=I420",
+      "!",
+      "jpegenc",
+      "quality=85",
+      "!",
+      "multipartmux",
+      "boundary=frame",
+      "!",
+      "tcpserversink",
+      "host=0.0.0.0",
+      "port=8555",
+      "sync=false",
+      "recover-policy=keyframe",
     );
 
     return pipeline;

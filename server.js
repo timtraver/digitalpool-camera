@@ -497,6 +497,54 @@ app.get("/video/hls/:segment", (req, res) => {
   fs.createReadStream(segmentPath).pipe(res);
 });
 
+// TCP preview endpoint - proxies the GStreamer TCP server
+app.get("/video/tcp-preview", (req, res) => {
+  console.log("📺 TCP preview connection requested");
+
+  if (!streamController.isStreaming) {
+    console.log("⚠️  Stream not active, redirecting to regular preview");
+    return res.redirect("/video/stream");
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "multipart/x-mixed-replace; boundary=frame",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "*",
+  });
+
+  const net = require("net");
+  const client = net.connect({ port: 8555, host: "localhost" });
+
+  client.on("connect", () => {
+    console.log("✅ Connected to GStreamer TCP server on port 8555");
+  });
+
+  client.on("data", (data) => {
+    try {
+      res.write(data);
+    } catch (e) {
+      console.log("Client disconnected from TCP preview");
+      client.destroy();
+    }
+  });
+
+  client.on("error", (err) => {
+    console.error("❌ TCP preview error:", err.message);
+    res.end();
+  });
+
+  client.on("end", () => {
+    console.log("TCP preview stream ended");
+    res.end();
+  });
+
+  req.on("close", () => {
+    console.log("Client disconnected from TCP preview");
+    client.destroy();
+  });
+});
+
 // Video stream endpoint using MJPEG
 app.get("/video/stream", async (req, res) => {
   console.log("New video stream connection requested");
