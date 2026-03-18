@@ -106,6 +106,44 @@ Or from another device on the same network:
 http://<jetson-nano-ip>:3000
 ```
 
+### Test Skia Graphics Overlay:
+
+To test the graphics overlay feature:
+
+1. **Install skia-canvas** (if not already installed):
+```bash
+npm install skia-canvas
+```
+
+2. **Start the main server** (in one terminal):
+```bash
+npm start
+```
+
+3. **Start the test graphics server** (in another terminal):
+```bash
+node test-graphics.js
+```
+
+4. **Enable graphics in the web UI**:
+   - Open http://localhost:3000
+   - Scroll to "Overlay Settings"
+   - Check "🎨 Skia Graphics Overlay"
+   - Click "Start Stream"
+
+5. **View the result**:
+   - Graphics will be composited into the stream
+   - View in OBS: `srt://192.168.1.114:8891`
+   - Or view preview: http://localhost:3000
+
+The test graphics show:
+- Animated scoreboard
+- Pulsing circle
+- Rotating square
+- Live timestamp
+
+See [SKIA_GRAPHICS_GUIDE.md](SKIA_GRAPHICS_GUIDE.md) for more details on creating custom graphics.
+
 ### Run as a system service (optional):
 
 To run the camera service automatically on boot:
