@@ -102,6 +102,10 @@ class GraphicsOverlay extends EventEmitter {
       console.log("📝 Generating initial PNG frame...");
       await this.generateFramePNG(true);
 
+      // Wait a moment to ensure filesystem has flushed the file
+      await new Promise(resolve => setTimeout(resolve, 100));
+      console.log("✅ PNG file ready for GStreamer");
+
       // Now start the interval for subsequent frames
       const frameTime = 1000 / this.fps;
       this.frameInterval = setInterval(() => {
@@ -178,38 +182,48 @@ class GraphicsOverlay extends EventEmitter {
   generateFramePNG(sync = false) {
     if (!this.isRunning && !sync) return;
 
-    try {
-      const timestamp = Date.now();
+    const timestamp = Date.now();
 
-      // Call the drawing function
-      this.drawFunction(this.ctx, this.frameCount, timestamp);
+    // Call the drawing function
+    this.drawFunction(this.ctx, this.frameCount, timestamp);
 
-      // Save as PNG
-      const pngPath = "/tmp/graphics-overlay.png";
-      const out = fs.createWriteStream(pngPath);
-      const stream = this.canvas.createPNGStream();
-      stream.pipe(out);
+    // Save as PNG
+    const pngPath = "/tmp/graphics-overlay.png";
 
-      if (sync) {
-        // Wait for file to be written (for first frame)
-        return new Promise((resolve, reject) => {
-          out.on("finish", () => {
-            console.log(`✅ First PNG frame saved to ${pngPath}`);
-            resolve();
-          });
-          out.on("error", reject);
+    if (sync) {
+      // Synchronous mode - wait for file to be fully written
+      return new Promise((resolve, reject) => {
+        const out = fs.createWriteStream(pngPath);
+        const stream = this.canvas.createPNGStream();
+
+        stream.pipe(out);
+
+        out.on("finish", () => {
+          console.log(`✅ First PNG frame saved to ${pngPath} (${fs.statSync(pngPath).size} bytes)`);
+          this.frameCount++;
+          resolve();
         });
-      } else {
-        // Async mode for subsequent frames
-        if (this.frameCount === 0) {
-          console.log(`✅ First PNG frame saved to ${pngPath}`);
-        }
-      }
 
-      this.frameCount++;
-    } catch (err) {
-      console.error("Error generating PNG frame:", err);
-      if (sync) throw err;
+        out.on("error", (err) => {
+          console.error("Error writing PNG:", err);
+          reject(err);
+        });
+
+        stream.on("error", (err) => {
+          console.error("Error creating PNG stream:", err);
+          reject(err);
+        });
+      });
+    } else {
+      // Async mode for subsequent frames
+      try {
+        const out = fs.createWriteStream(pngPath);
+        const stream = this.canvas.createPNGStream();
+        stream.pipe(out);
+        this.frameCount++;
+      } catch (err) {
+        console.error("Error generating PNG frame:", err);
+      }
     }
   }
 
