@@ -73,6 +73,11 @@ if (GraphicsOverlay) {
     ctx.font = "20px Sans";
     ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
     ctx.fillText(`Frame: ${frameNumber}`, 70, 230);
+
+    // Log every 10 frames to show activity
+    if (frameNumber % 10 === 0) {
+      console.log(`🎨 Drawing frame ${frameNumber} | Score: ${score1} - ${score2}`);
+    }
   });
 
   console.log("🎨 Graphics overlay initialized (5fps for low CPU usage)");
