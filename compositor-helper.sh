@@ -26,8 +26,8 @@ echo "Graphics Alpha: $ALPHA"
 # - Added tee to split output for both SRT and preview
 exec gst-launch-1.0 -v \
   compositor name=mix \
-    sink_0::zorder=0 sink_0::alpha=1.0 \
-    sink_1::zorder=10 sink_1::alpha=$ALPHA \
+    sink_0::zorder=0 sink_0::alpha=1.0 sink_0::xpos=0 sink_0::ypos=0 sink_0::width=$WIDTH sink_0::height=$HEIGHT \
+    sink_1::zorder=10 sink_1::alpha=$ALPHA sink_1::xpos=0 sink_1::ypos=0 sink_1::width=$WIDTH sink_1::height=$HEIGHT \
   ! 'video/x-raw,width='$WIDTH',height='$HEIGHT',framerate='$FRAMERATE'/1' \
   ! videoconvert \
   ! tee name=t \
@@ -50,7 +50,7 @@ exec gst-launch-1.0 -v \
   ! image/jpeg,width=$WIDTH,height=$HEIGHT,framerate=$FRAMERATE/1 \
   ! jpegdec \
   ! videoconvert \
-  ! 'video/x-raw,format=RGBA' \
+  ! 'video/x-raw,format=RGBA,width='$WIDTH',height='$HEIGHT \
   ! videorate \
   ! 'video/x-raw,framerate='$FRAMERATE'/1' \
   ! queue \
