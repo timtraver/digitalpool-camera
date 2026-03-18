@@ -17,8 +17,10 @@ echo "SRT Port: $SRT_PORT"
 echo "PNG Overlay: $PNG_PATH"
 
 # GStreamer pipeline with gdkpixbufoverlay
-# The gdkpixbufoverlay element overlays a PNG file
-# It automatically reloads the file when it changes
+# NOTE: gdkpixbufoverlay loads the image once at startup and does NOT reload it
+# We need to use a workaround: write to numbered files and use multifilesrc
+# OR use the compositor with a PNG stream (but compositor is broken on Jetson)
+# FOR NOW: This will show a static overlay (first frame only)
 exec gst-launch-1.0 -v \
   v4l2src device=$CAMERA_DEVICE do-timestamp=true \
   ! image/jpeg,width=$WIDTH,height=$HEIGHT,framerate=$FRAMERATE/1 \

@@ -178,6 +178,10 @@ class GraphicsOverlay extends EventEmitter {
   /**
    * Generate and save frame as PNG (for gdkpixbufoverlay)
    * @param {boolean} sync - If true, wait for file to be written (for first frame)
+   *
+   * NOTE: We write to BOTH a static file AND a numbered sequence:
+   * - /tmp/graphics-overlay.png - for gdkpixbufoverlay (static, first frame only)
+   * - /tmp/graphics-overlay-NNNN.png - for multifilesrc (dynamic, all frames)
    */
   generateFramePNG(sync = false) {
     if (!this.isRunning && !sync) return;
@@ -187,19 +191,20 @@ class GraphicsOverlay extends EventEmitter {
     // Call the drawing function
     this.drawFunction(this.ctx, this.frameCount, timestamp);
 
-    // Save as PNG
-    const pngPath = "/tmp/graphics-overlay.png";
+    // Save as PNG to BOTH locations
+    const staticPath = "/tmp/graphics-overlay.png";
+    const numberedPath = `/tmp/graphics-overlay-${String(this.frameCount).padStart(6, '0')}.png`;
 
     if (sync) {
       // Synchronous mode - wait for file to be fully written
       return new Promise((resolve, reject) => {
-        const out = fs.createWriteStream(pngPath);
+        const out = fs.createWriteStream(staticPath);
         const stream = this.canvas.createPNGStream();
 
         stream.pipe(out);
 
         out.on("finish", () => {
-          console.log(`✅ First PNG frame saved to ${pngPath} (${fs.statSync(pngPath).size} bytes)`);
+          console.log(`✅ First PNG frame saved to ${staticPath} (${fs.statSync(staticPath).size} bytes)`);
           this.frameCount++;
           resolve();
         });
@@ -216,10 +221,30 @@ class GraphicsOverlay extends EventEmitter {
       });
     } else {
       // Async mode for subsequent frames
+      // Write to numbered file for multifilesrc
       try {
-        const out = fs.createWriteStream(pngPath);
+        const out = fs.createWriteStream(numberedPath);
         const stream = this.canvas.createPNGStream();
         stream.pipe(out);
+
+        // Also update the static file (atomic replace)
+        out.on("finish", () => {
+          // Copy numbered file to static location
+          fs.copyFileSync(numberedPath, staticPath);
+
+          // Clean up old numbered files (keep only last 10)
+          if (this.frameCount > 10) {
+            const oldFile = `/tmp/graphics-overlay-${String(this.frameCount - 10).padStart(6, '0')}.png`;
+            try {
+              if (fs.existsSync(oldFile)) {
+                fs.unlinkSync(oldFile);
+              }
+            } catch (err) {
+              // Ignore cleanup errors
+            }
+          }
+        });
+
         this.frameCount++;
       } catch (err) {
         console.error("Error generating PNG frame:", err);
