@@ -850,13 +850,16 @@ function switchToMJPEGPreview() {
   const img = document.createElement("img");
   img.id = "videoStream";
   img.alt = "Camera Stream";
-  img.src = "/video/stream?t=" + Date.now();
+
+  // Pass overlay setting as query parameter
+  const overlaysEnabled = overlayEnabled.checked;
+  img.src = `/video/stream?overlays=${overlaysEnabled}&t=${Date.now()}`;
   img.style.width = "100%";
   img.style.height = "100%";
   img.style.objectFit = "contain";
 
   container.insertBefore(img, container.firstChild);
-  console.log("✅ Switched to MJPEG preview");
+  console.log(`✅ Switched to MJPEG preview (overlays: ${overlaysEnabled})`);
 }
 
 // Canvas overlay removed - preview now shows actual stream output via tee
@@ -1253,6 +1256,12 @@ overlayEnabled.addEventListener("change", () => {
   console.log("Overlay enabled changed:", overlayEnabled.checked);
   drawOverlay();
   applyOverlaySettings();
+
+  // If not streaming, restart the idle preview to apply overlay changes
+  if (!isCurrentlyStreaming) {
+    console.log("🔄 Restarting idle preview to apply overlay changes...");
+    switchToMJPEGPreview();
+  }
 });
 
 // Apply text changes after user stops typing (debounce)

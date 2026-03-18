@@ -599,7 +599,10 @@ app.get("/video/stream", async (req, res) => {
     // Camera is free or fuser command failed
   }
 
-  // Use GStreamer with overlays for idle preview (same overlays as streaming)
+  // Use GStreamer for idle preview
+  // Check if overlays should be enabled (from query parameter or stream config)
+  const enableOverlays = req.query.overlays !== "false";
+
   const gstArgs = [
     "v4l2src",
     `device=${CAMERA_DEVICE}`,
@@ -610,24 +613,34 @@ app.get("/video/stream", async (req, res) => {
     "jpegdec",
     "!",
     "videoconvert",
-    "!",
-    "clockoverlay",
-    "valignment=bottom",
-    "halignment=right",
-    "font-desc=Sans Bold 11",
-    "color=0xFFFFFFFF",
-    'time-format="%Y-%m-%d %H:%M:%S"',
-    "xpad=20",
-    "ypad=20",
-    "!",
-    "textoverlay",
-    'text="DigitalPool Tim\'s House"',
-    "valignment=bottom",
-    "halignment=left",
-    "font-desc=Sans Bold 11",
-    "color=0xFFFFFFFF",
-    "xpad=20",
-    "ypad=20",
+  ];
+
+  // Add overlays if enabled
+  if (enableOverlays) {
+    gstArgs.push(
+      "!",
+      "clockoverlay",
+      "valignment=bottom",
+      "halignment=right",
+      "font-desc=Sans Bold 11",
+      "color=0xFFFFFFFF",
+      'time-format="%Y-%m-%d %H:%M:%S"',
+      "xpad=20",
+      "ypad=20",
+      "!",
+      "textoverlay",
+      'text="DigitalPool Tim\'s House"',
+      "valignment=bottom",
+      "halignment=left",
+      "font-desc=Sans Bold 11",
+      "color=0xFFFFFFFF",
+      "xpad=20",
+      "ypad=20"
+    );
+  }
+
+  // Add JPEG encoding and output
+  gstArgs.push(
     "!",
     "jpegenc",
     "quality=85",
@@ -636,8 +649,10 @@ app.get("/video/stream", async (req, res) => {
     "boundary=frame",
     "!",
     "fdsink",
-    "fd=1",
-  ];
+    "fd=1"
+  );
+
+  console.log(`Starting GStreamer idle preview ${enableOverlays ? "with" : "without"} overlays`);
 
   console.log("Starting GStreamer idle preview with overlays");
   const gst = spawn("gst-launch-1.0", gstArgs);
