@@ -786,45 +786,60 @@ function switchToHLSPreview() {
   const container = document.querySelector(".video-container");
   const oldElement = document.getElementById("videoStream");
 
+  console.log("📦 Container:", container);
+  console.log("🗑️  Old element:", oldElement);
+
   if (oldElement) {
     oldElement.remove();
+    console.log("✅ Removed old element");
   }
 
   // Destroy HLS player if it exists
   if (hlsPlayer) {
     hlsPlayer.destroy();
     hlsPlayer = null;
+    console.log("✅ Destroyed HLS player");
   }
 
   // Create img element for MJPEG from TCP server
   const img = document.createElement("img");
   img.id = "videoStream";
   img.alt = "Camera Stream";
-  img.src = "/video/tcp-preview?t=" + Date.now();
+  const previewUrl = "/video/tcp-preview?t=" + Date.now();
+  img.src = previewUrl;
   img.style.width = "100%";
   img.style.height = "100%";
   img.style.objectFit = "contain";
+  img.style.display = "block"; // Ensure it's visible
+
+  console.log("🖼️  Created new img element with src:", previewUrl);
 
   // Add error handler to retry if TCP server isn't ready yet
   let retryCount = 0;
-  img.onerror = function() {
+  img.onerror = function(e) {
     retryCount++;
+    console.error(`❌ TCP preview error (attempt ${retryCount}/5):`, e);
     if (retryCount < 5) {
       console.log(`⚠️  TCP preview not ready, retrying (${retryCount}/5)...`);
       setTimeout(() => {
-        img.src = "/video/tcp-preview?t=" + Date.now();
+        const newUrl = "/video/tcp-preview?t=" + Date.now();
+        console.log("🔄 Retrying with URL:", newUrl);
+        img.src = newUrl;
       }, 1000);
     } else {
       console.error("❌ TCP preview failed after 5 retries");
+      console.error("💡 Try accessing http://" + window.location.host + "/video/tcp-preview directly");
     }
   };
 
   img.onload = function() {
-    console.log("✅ TCP preview loaded successfully");
+    console.log("✅ TCP preview loaded successfully!");
+    console.log("📐 Image dimensions:", img.naturalWidth, "x", img.naturalHeight);
   };
 
   container.insertBefore(img, container.firstChild);
-  console.log("✅ Switched to TCP preview");
+  console.log("✅ Inserted img into container");
+  console.log("📊 Container children:", container.children.length);
 }
 
 function switchToMJPEGPreview() {

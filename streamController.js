@@ -180,7 +180,13 @@ class StreamController extends EventEmitter {
         this.gstProcess = null;
 
         // If GStreamer failed (non-zero exit code), ensure camera is released
-        if (code !== 0) {
+        if (code !== 0 && code !== null) {
+          console.error(`❌ GStreamer failed with exit code ${code}`);
+          console.error("💡 Common causes:");
+          console.error("   - Missing plugin (e.g., srtserversink for SRT)");
+          console.error("   - Invalid pipeline syntax");
+          console.error("   - Camera device busy");
+          console.error("💡 Run 'gst-inspect-1.0 srtserversink' to check if SRT plugin is installed");
           console.log("⚠️  GStreamer failed, cleaning up camera resources...");
           await this._killCameraProcesses();
         }
@@ -704,7 +710,7 @@ class StreamController extends EventEmitter {
       "quality=85",
       "!",
       "multipartmux",
-      "boundary=frame",
+      "boundary=--jpgboundary",
       "!",
       "tcpserversink",
       "host=0.0.0.0",

@@ -509,7 +509,7 @@ app.get("/video/tcp-preview", (req, res) => {
   }
 
   res.writeHead(200, {
-    "Content-Type": "multipart/x-mixed-replace; boundary=frame",
+    "Content-Type": "multipart/x-mixed-replace; boundary=--jpgboundary",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
     "Access-Control-Allow-Origin": "*",
