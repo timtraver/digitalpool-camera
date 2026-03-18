@@ -162,7 +162,15 @@ class StreamController extends EventEmitter {
       if (gstArgs.useCompositorScript) {
         console.log("Starting GStreamer with compositor script...");
         console.log("Script args:", gstArgs.scriptArgs.join(" "));
-        this.gstProcess = spawn("bash", [gstArgs.scriptPath, ...gstArgs.scriptArgs]);
+
+        // Check if scriptPath is a Python script or bash script
+        if (gstArgs.scriptPath === 'python3') {
+          // For Python scripts, spawn python3 directly with script as first arg
+          this.gstProcess = spawn(gstArgs.scriptPath, gstArgs.scriptArgs);
+        } else {
+          // For bash scripts, spawn bash with script path
+          this.gstProcess = spawn("bash", [gstArgs.scriptPath, ...gstArgs.scriptArgs]);
+        }
       } else {
         console.log("Starting GStreamer with pipeline:", gstArgs.join(" "));
         this.gstProcess = spawn("gst-launch-1.0", gstArgs);
