@@ -21,6 +21,7 @@ echo "Graphics Alpha: $ALPHA"
 # Key fixes:
 # - Add do-timestamp=true to both sources for proper timing
 # - Add videorate to ensure consistent framerates
+# - Add mpegtsmux to properly packetize H.264 for SRT (fixes payload size errors)
 exec gst-launch-1.0 \
   compositor name=mix \
     sink_0::zorder=0 \
@@ -30,6 +31,7 @@ exec gst-launch-1.0 \
   ! 'video/x-raw(memory:NVMM)' \
   ! nvv4l2h264enc bitrate=$BITRATE \
   ! h264parse \
+  ! mpegtsmux \
   ! srtserversink uri=srt://:$SRT_PORT \
   \
   v4l2src device=$CAMERA_DEVICE do-timestamp=true \

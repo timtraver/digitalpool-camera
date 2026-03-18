@@ -163,18 +163,11 @@ class GraphicsOverlay extends EventEmitter {
 
       // Write to GStreamer stdin
       if (this.gstProcess.stdin && this.gstProcess.stdin.writable && !this.gstProcess.stdin.destroyed) {
-        const success = this.gstProcess.stdin.write(buffer);
+        this.gstProcess.stdin.write(buffer);
 
         // Log first frame to confirm it's working
         if (this.frameCount === 0) {
           console.log(`✅ First frame sent (${buffer.length} bytes)`);
-        }
-
-        // If write buffer is full, wait for drain
-        if (!success) {
-          this.gstProcess.stdin.once('drain', () => {
-            // Ready for more data
-          });
         }
       } else {
         // Pipe is closed, stop generating frames
