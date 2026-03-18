@@ -79,8 +79,9 @@ class GraphicsOverlay extends EventEmitter {
   /**
    * Start the graphics overlay
    * @param {string} mode - "png" for file-based overlay (simple), "tcp" for streaming (complex), "pipe" for raw RGBA streaming
+   * @param {string} pngPath - Path to PNG file (only used in PNG mode)
    */
-  async start(mode = "png") {
+  async start(mode = "png", pngPath = "/tmp/graphics-overlay.png") {
     if (this.isRunning) {
       console.log("⚠️  Graphics overlay already running");
       return;
@@ -91,6 +92,7 @@ class GraphicsOverlay extends EventEmitter {
     }
 
     this.mode = mode;
+    this.pngPath = pngPath;
 
     if (mode === "png") {
       // PNG file mode - simple and reliable for gdkpixbufoverlay
@@ -114,7 +116,7 @@ class GraphicsOverlay extends EventEmitter {
 
       console.log(`✅ Graphics overlay started (PNG mode)`);
       console.log(`📊 Generating frames at ${this.fps} FPS`);
-      console.log(`📁 Output: /tmp/graphics-overlay.png`);
+      console.log(`📁 Output: ${this.pngPath}`);
       this.emit("started");
 
     } else if (mode === "pipe") {
@@ -207,8 +209,8 @@ class GraphicsOverlay extends EventEmitter {
     // Call the drawing function
     this.drawFunction(this.ctx, this.frameCount, timestamp);
 
-    // Save as PNG to BOTH locations
-    const staticPath = "/tmp/graphics-overlay.png";
+    // Save as PNG to the configured path (or default)
+    const staticPath = this.pngPath || "/tmp/graphics-overlay.png";
     const numberedPath = `/tmp/graphics-overlay-${String(this.frameCount).padStart(6, '0')}.png`;
 
     if (sync) {
@@ -246,8 +248,9 @@ class GraphicsOverlay extends EventEmitter {
 
         out.on("finish", () => {
           // Also update the static file for compatibility
+          const targetPath = this.pngPath || staticPath;
           try {
-            fs.copyFileSync(numberedPath, staticPath);
+            fs.copyFileSync(numberedPath, targetPath);
           } catch (err) {
             // Ignore copy errors
           }

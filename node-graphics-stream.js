@@ -93,7 +93,11 @@ console.error(`📁 Reading state from: ${STATE_FILE}`);
 console.error(`✅ Starting frame generation...`);
 
 // Start in specified mode
-overlay.start(outputMode);
+if (outputMode === "png") {
+  overlay.start(outputMode, pngPath);
+} else {
+  overlay.start(outputMode);
+}
 
 // Handle cleanup
 process.on("SIGINT", () => {

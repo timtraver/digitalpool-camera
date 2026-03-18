@@ -29,8 +29,18 @@ NODE_PID=$!
 
 echo "✅ Node.js graphics generator started (PID: $NODE_PID)"
 
-# Wait a moment for the first PNG to be generated
-sleep 1
+# Wait for the first PNG to be generated
+echo "⏳ Waiting for PNG file to be created..."
+sleep 2
+
+# Verify PNG exists
+if [ ! -f "$PNG_PATH" ]; then
+  echo "❌ ERROR: PNG file not created at $PNG_PATH"
+  kill $NODE_PID 2>/dev/null
+  exit 1
+fi
+
+echo "✅ PNG file ready: $PNG_PATH"
 
 # Build GStreamer pipeline with gdkpixbufoverlay (same as PNG overlay mode)
 gst-launch-1.0 \
