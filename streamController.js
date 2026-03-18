@@ -23,13 +23,13 @@ class StreamController extends EventEmitter {
       autoStart: false, // Auto-start streaming on server startup
       // Overlay settings
       overlayEnabled: false,
-      overlayType: "text",
+      overlayType: "text", // 'text', 'png', 'cairo'
       overlayText: "",
       showTimestamp: false,
       overlayUrl: "",
       timestampPosition: "bottom-right",
       titlePosition: "top-left",
-      overlayFontSize: 32,
+      overlayFontSize: 24, // Reduced from 32 for better fit
       overlayColor: "white",
       overlayBackground: "transparent",
       overlayBackgroundOpacity: 70,
@@ -497,6 +497,45 @@ class StreamController extends EventEmitter {
   }
 
   /**
+   * Build Cairo overlay pipeline (Python-based dynamic graphics)
+   */
+  _buildCairoOverlayPipeline() {
+    const {
+      destination,
+      width,
+      height,
+      framerate,
+      bitrate,
+      overlayText,
+      showTimestamp,
+    } = this.streamConfig;
+
+    console.log("🎨 Graphics overlay enabled - using Cairo overlay (DYNAMIC)");
+
+    // Extract port from destination
+    const srtPort = destination ? destination.split(':')[1] : '8891';
+
+    // Use the Python-based Cairo overlay script
+    const scriptPath = path.join(__dirname, 'cairo-graphics-stream.py');
+    const scriptArgs = [
+      this.cameraDevice,
+      width.toString(),
+      height.toString(),
+      framerate.toString(),
+      bitrate.toString(),
+      srtPort,
+      overlayText || "",
+      showTimestamp ? "true" : "false",
+    ];
+
+    return {
+      useCompositorScript: true,
+      scriptPath: 'python3', // Use python3 to run the script
+      scriptArgs: [scriptPath, ...scriptArgs],
+    };
+  }
+
+  /**
    * Build GStreamer pipeline based on configuration
    */
   _buildGStreamerPipeline() {
@@ -510,9 +549,14 @@ class StreamController extends EventEmitter {
       encoder,
     } = this.streamConfig;
 
-    // Check if graphics overlay is enabled - use PNG overlay pipeline
+    // Check if graphics overlay is enabled
     if (this.streamConfig.skiaGraphicsEnabled) {
-      return this._buildPNGOverlayPipeline();
+      // Check overlay type: 'png' or 'cairo'
+      if (this.streamConfig.overlayType === 'cairo') {
+        return this._buildCairoOverlayPipeline();
+      } else {
+        return this._buildPNGOverlayPipeline();
+      }
     }
 
     let pipeline = [

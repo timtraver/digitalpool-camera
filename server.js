@@ -45,7 +45,7 @@ let gameState = {
   player2Name: "Player 2",
   player1Score: 0,
   player2Score: 0,
-  matchTitle: "Pool Match",
+  matchTitle: "Match 53",
 };
 
 if (GraphicsOverlay) {
@@ -97,6 +97,9 @@ if (GraphicsOverlay) {
   console.log("🎨 Graphics overlay initialized (2fps for low CPU usage)");
   console.log("💡 Update scores via Socket.IO event 'updateScore' or REST API");
 
+  // Write initial game state to JSON file for cairooverlay
+  regenerateOverlay();
+
   // FOR TESTING: Automatically update scores every 5 seconds
   let testScoreInterval = setInterval(() => {
     if (graphicsOverlay && graphicsOverlay.isRunning) {
@@ -108,8 +111,8 @@ if (GraphicsOverlay) {
 
       console.log(`🧪 TEST: Auto-updating scores: ${gameState.player1Score} - ${gameState.player2Score}`);
 
-      // The graphics overlay is already running at 2 FPS and will pick up the changes
-      // No need to manually regenerate - it will update on the next frame
+      // Update the JSON file for cairooverlay to pick up
+      regenerateOverlay();
     }
   }, 5000); // Every 5 seconds
 
@@ -127,6 +130,14 @@ function regenerateOverlay() {
     console.log(`✅ Scoreboard updated: ${gameState.player1Score} - ${gameState.player2Score}`);
     // Broadcast to all clients
     io.emit("scoreUpdated", gameState);
+  }
+
+  // Also write game state to JSON file for cairooverlay Python script
+  try {
+    const fs = require('fs');
+    fs.writeFileSync('/tmp/graphics-overlay-state.json', JSON.stringify(gameState, null, 2));
+  } catch (err) {
+    console.error('Error writing game state JSON:', err);
   }
 }
 

@@ -133,7 +133,7 @@ class CameraController {
         const data = fs.readFileSync(this.configFile, "utf8");
         let config = JSON.parse(data);
         console.log("✅ Loaded camera config from file:", this.configFile);
-        console.log("📋 Config contents:", JSON.stringify(config, null, 2));
+        // console.log("📋 Config contents:", JSON.stringify(config, null, 2));
 
         // Validate and fix invalid values
         let needsSave = false;
@@ -247,7 +247,7 @@ class CameraController {
     }
 
     // Apply non-PTZ controls first
-    console.log("  📷 Applying image quality and exposure settings...");
+    // console.log("  📷 Applying image quality and exposure settings...");
     for (const [controlName, value] of otherControls) {
       if (this.controls[controlName]) {
         try {
@@ -370,7 +370,7 @@ class CameraController {
       }
 
       const command = `v4l2-ctl -d ${this.device} --set-ctrl=${controlName}=${value}`;
-      console.log(`    🔧 Executing: ${command}`);
+      // console.log(`    🔧 Executing: ${command}`);
 
       const { stdout, stderr } = await execAsync(command);
 
