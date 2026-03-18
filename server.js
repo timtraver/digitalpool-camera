@@ -415,7 +415,6 @@ app.get("/video/test", (req, res) => {
 // Serve HLS playlist and segments for preview when streaming
 app.get("/video/hls/playlist.m3u8", (req, res) => {
   const fs = require("fs");
-  const playlistPath = "/tmp/stream/playlist.m3u8";
 
   console.log("📺 HLS playlist requested");
 
@@ -424,23 +423,48 @@ app.get("/video/hls/playlist.m3u8", (req, res) => {
     return res.status(404).send("Stream not active");
   }
 
-  if (!fs.existsSync(playlistPath)) {
-    console.log("⚠️  Playlist not ready yet:", playlistPath);
-    // List what files exist in the directory
-    try {
-      const files = fs.readdirSync("/tmp/stream");
-      console.log("📁 Files in /tmp/stream:", files);
-    } catch (e) {
-      console.log("❌ /tmp/stream directory doesn't exist");
-    }
-    return res.status(404).send("Playlist not ready yet");
-  }
+  // Generate playlist dynamically from available segments
+  try {
+    const streamDir = "/tmp/stream";
 
-  console.log("✅ Serving HLS playlist");
-  res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  fs.createReadStream(playlistPath).pipe(res);
+    if (!fs.existsSync(streamDir)) {
+      console.log("❌ /tmp/stream directory doesn't exist");
+      return res.status(404).send("Stream directory not found");
+    }
+
+    // Get all .ts files and sort them
+    const files = fs.readdirSync(streamDir)
+      .filter(f => f.endsWith('.ts'))
+      .sort();
+
+    console.log("📁 Found segments:", files);
+
+    if (files.length === 0) {
+      console.log("⚠️  No segments available yet");
+      return res.status(404).send("No segments available yet");
+    }
+
+    // Generate HLS playlist
+    let playlist = "#EXTM3U\n";
+    playlist += "#EXT-X-VERSION:3\n";
+    playlist += "#EXT-X-TARGETDURATION:2\n";
+    playlist += "#EXT-X-MEDIA-SEQUENCE:0\n";
+
+    // Add each segment
+    for (const file of files) {
+      playlist += "#EXTINF:2.0,\n";
+      playlist += file + "\n";
+    }
+
+    console.log("✅ Serving dynamic HLS playlist with", files.length, "segments");
+    res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.send(playlist);
+  } catch (error) {
+    console.error("❌ Error generating playlist:", error);
+    res.status(500).send("Error generating playlist");
+  }
 });
 
 app.get("/video/hls/:segment", (req, res) => {

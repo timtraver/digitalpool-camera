@@ -682,8 +682,8 @@ class StreamController extends EventEmitter {
     }
 
     // Branch 2: Preview stream (HLS for web interface)
-    // Use HLS instead of TCP for better browser compatibility
-    // This creates a separate branch from the tee that writes HLS segments
+    // Use splitmuxsink to create HLS-compatible segments
+    // This is more reliable than hlssink on older GStreamer versions
     pipeline.push(
       "t.",
       "!",
@@ -695,12 +695,10 @@ class StreamController extends EventEmitter {
       "!",
       "mpegtsmux",
       "!",
-      "hlssink",
-      "playlist-location=/tmp/stream/playlist.m3u8",
+      "splitmuxsink",
       "location=/tmp/stream/segment%05d.ts",
-      "target-duration=2",
+      "max-size-time=2000000000", // 2 seconds in nanoseconds
       "max-files=5",
-      "playlist-length=3",
     );
 
     return pipeline;
