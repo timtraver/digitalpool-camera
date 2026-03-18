@@ -9,26 +9,38 @@ FRAMERATE=$4
 BITRATE=$5
 SRT_PORT=$6
 PNG_PATH=${7:-"/tmp/graphics-overlay.png"}
+OVERLAY_TEXT=${8:-""}
+SHOW_TIMESTAMP=${9:-"false"}
 
 echo "🎨 Starting stream with PNG graphics overlay..."
 echo "Camera: $CAMERA_DEVICE"
 echo "Resolution: ${WIDTH}x${HEIGHT}@${FRAMERATE}fps"
 echo "SRT Port: $SRT_PORT"
 echo "PNG Overlay: $PNG_PATH"
+echo "Text Overlay: $OVERLAY_TEXT"
+echo "Show Timestamp: $SHOW_TIMESTAMP"
 
-# GStreamer pipeline with gdkpixbufoverlay
-# NOTE: gdkpixbufoverlay loads the image once at startup and does NOT reload it
-# We need to use a workaround: write to numbered files and use multifilesrc
-# OR use the compositor with a PNG stream (but compositor is broken on Jetson)
-# FOR NOW: This will show a static overlay (first frame only)
-exec gst-launch-1.0 -v \
-  v4l2src device=$CAMERA_DEVICE do-timestamp=true \
+# Build the GStreamer pipeline
+# Start with camera and PNG overlay
+PIPELINE="v4l2src device=$CAMERA_DEVICE do-timestamp=true \
   ! image/jpeg,width=$WIDTH,height=$HEIGHT,framerate=$FRAMERATE/1 \
   ! jpegdec \
   ! videoconvert \
   ! gdkpixbufoverlay location=$PNG_PATH overlay-width=$WIDTH overlay-height=$HEIGHT \
-  ! videoconvert \
-  ! tee name=t \
+  ! videoconvert"
+
+# Add text overlay if provided
+if [ -n "$OVERLAY_TEXT" ]; then
+  PIPELINE="$PIPELINE ! textoverlay text=\"$OVERLAY_TEXT\" valignment=bottom halignment=left font-desc=\"Sans Bold 48\" color=4294967295 xpad=20 ypad=20 shaded-background=true"
+fi
+
+# Add timestamp overlay if enabled
+if [ "$SHOW_TIMESTAMP" = "true" ]; then
+  PIPELINE="$PIPELINE ! clockoverlay valignment=bottom halignment=right font-desc=\"Sans Bold 48\" color=4294967295 time-format=\"%Y-%m-%d %H:%M:%S\" xpad=20 ypad=20 shaded-background=true"
+fi
+
+# Add tee and output branches
+PIPELINE="$PIPELINE ! tee name=t \
   \
   t. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! nvvidconv \
   ! 'video/x-raw(memory:NVMM)' \
@@ -44,5 +56,8 @@ exec gst-launch-1.0 -v \
   ! video/x-raw,width=1280,height=720 \
   ! jpegenc quality=75 \
   ! multipartmux boundary=--jpgboundary \
-  ! tcpserversink host=0.0.0.0 port=8555 sync=false recover-policy=keyframe
+  ! tcpserversink host=0.0.0.0 port=8555 sync=false recover-policy=keyframe"
+
+# Execute the pipeline
+exec gst-launch-1.0 -v $PIPELINE
 

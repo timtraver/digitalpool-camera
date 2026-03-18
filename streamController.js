@@ -465,6 +465,8 @@ class StreamController extends EventEmitter {
       height,
       framerate,
       bitrate,
+      overlayText,
+      showTimestamp,
     } = this.streamConfig;
 
     console.log("🎨 Graphics overlay enabled - using PNG overlay (gdkpixbufoverlay)");
@@ -483,6 +485,8 @@ class StreamController extends EventEmitter {
       bitrate.toString(),
       srtPort,
       pngPath,
+      overlayText || "",
+      showTimestamp ? "true" : "false",
     ];
 
     return {

@@ -49,23 +49,47 @@ if (GraphicsOverlay) {
     // Clear canvas with transparent background
     ctx.clearRect(0, 0, 1920, 1080);
 
-    // TEMPORARY: Draw a VERY OBVIOUS FULL SCREEN test to see if compositor is working
-    // Fill entire screen with semi-transparent red
-    ctx.fillStyle = "rgba(255, 0, 0, 0.8)"; // Very opaque red - IMPOSSIBLE TO MISS!
-    ctx.fillRect(0, 0, 1920, 1080); // FULL SCREEN
+    // Draw a pool scoreboard in the top-left corner
+    const x = 50;
+    const y = 50;
+    const width = 500;
+    const height = 200;
 
-    // Draw HUGE text in the center
+    // Semi-transparent background
+    ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+    ctx.fillRect(x, y, width, height);
+
+    // Border
+    ctx.strokeStyle = "white";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x, y, width, height);
+
+    // Title
     ctx.fillStyle = "white";
-    ctx.font = "bold 120px Sans";
-    ctx.fillText("GRAPHICS OVERLAY TEST", 200, 500);
+    ctx.font = "bold 32px Sans";
+    ctx.fillText("🎱 POOL MATCH - LIVE", x + 20, y + 45);
 
-    // Draw frame counter
-    ctx.font = "bold 80px Sans";
-    ctx.fillText(`Frame: ${frameNumber}`, 400, 650);
+    // Example scores (these would come from your app in production)
+    const score1 = Math.floor((frameNumber / 5) % 10);
+    const score2 = Math.floor((frameNumber / 5) % 8);
+
+    ctx.font = "bold 60px Sans";
+    ctx.fillText(`${score1} - ${score2}`, x + 200, y + 130);
+
+    // Player names
+    ctx.font = "24px Sans";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+    ctx.fillText("Player 1", x + 20, y + 180);
+    ctx.fillText("Player 2", x + width - 120, y + 180);
+
+    // Frame counter (for debugging)
+    ctx.font = "16px Sans";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+    ctx.fillText(`Frame: ${frameNumber}`, x + 20, y + height + 25);
 
     // Log every 10 frames to show activity
     if (frameNumber % 10 === 0) {
-      console.log(`🎨 Drawing frame ${frameNumber} | FULL SCREEN RED TEST`);
+      console.log(`🎨 Drawing frame ${frameNumber} | Score: ${score1} - ${score2}`);
     }
   });
 
