@@ -545,12 +545,21 @@ app.get("/video/tcp-preview", (req, res) => {
   });
 });
 
-// Track active idle preview processes to avoid killing them
-let activeIdlePreviewPids = new Set();
+// Track active idle preview process (only one at a time)
+let currentIdlePreviewProcess = null;
 
 // Video stream endpoint using MJPEG
 app.get("/video/stream", async (req, res) => {
   console.log("New video stream connection requested");
+
+  // Kill the previous idle preview process if it exists
+  if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
+    console.log("🔄 Killing previous idle preview to start new one with updated settings");
+    currentIdlePreviewProcess.kill();
+    currentIdlePreviewProcess = null;
+    // Wait a moment for the process to die and release the camera
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
 
   res.writeHead(200, {
     "Content-Type": "multipart/x-mixed-replace; boundary=frame",
@@ -568,7 +577,7 @@ app.get("/video/stream", async (req, res) => {
     return;
   }
 
-  // Check if camera is busy and try to clean up (but don't kill our own idle preview processes)
+  // Check if camera is busy and try to clean up
   const { execSync } = require("child_process");
   try {
     const fuserOutput = execSync(`fuser ${CAMERA_DEVICE} 2>&1`, {
@@ -577,7 +586,7 @@ app.get("/video/stream", async (req, res) => {
     });
 
     if (fuserOutput.includes(":")) {
-      console.log("⚠️  Camera is busy, checking processes...");
+      console.log("⚠️  Camera is busy, attempting cleanup...");
       const pids = fuserOutput
         .split(":")[1]
         .trim()
@@ -586,13 +595,7 @@ app.get("/video/stream", async (req, res) => {
         .filter((p) => p);
 
       for (const pid of pids) {
-        // Don't kill our own idle preview processes
-        if (activeIdlePreviewPids.has(parseInt(pid))) {
-          console.log(`Skipping our own idle preview process ${pid}`);
-          continue;
-        }
-
-        console.log(`Killing external process ${pid} using camera...`);
+        console.log(`Killing process ${pid} using camera...`);
         try {
           execSync(`kill -9 ${pid}`);
         } catch (e) {
@@ -748,11 +751,9 @@ app.get("/video/stream", async (req, res) => {
 
   const gst = spawn("gst-launch-1.0", gstArgs);
 
-  // Track this process so we don't kill it when a new connection comes in
-  if (gst.pid) {
-    activeIdlePreviewPids.add(gst.pid);
-    console.log(`📹 Tracking idle preview process PID: ${gst.pid}`);
-  }
+  // Track this as the current idle preview process
+  currentIdlePreviewProcess = gst;
+  console.log(`📹 Started new idle preview process PID: ${gst.pid}`);
 
   gst.stdout.on("data", (data) => {
     try {
@@ -773,19 +774,18 @@ app.get("/video/stream", async (req, res) => {
 
   gst.on("close", (code) => {
     console.log(`GStreamer idle preview exited with code ${code}`);
-    // Remove from tracking
-    if (gst.pid) {
-      activeIdlePreviewPids.delete(gst.pid);
-      console.log(`📹 Removed idle preview process PID: ${gst.pid}`);
+    // Clear the current process if it's this one
+    if (currentIdlePreviewProcess === gst) {
+      currentIdlePreviewProcess = null;
     }
     res.end();
   });
 
   gst.on("error", (err) => {
     console.error("Failed to start GStreamer:", err);
-    // Remove from tracking
-    if (gst.pid) {
-      activeIdlePreviewPids.delete(gst.pid);
+    // Clear the current process if it's this one
+    if (currentIdlePreviewProcess === gst) {
+      currentIdlePreviewProcess = null;
     }
     res.end();
   });
@@ -793,7 +793,7 @@ app.get("/video/stream", async (req, res) => {
   req.on("close", () => {
     console.log("Client disconnected, killing GStreamer idle preview");
     gst.kill();
-    // PID will be removed in the 'close' event handler
+    // Process will be cleared in the 'close' event handler
   });
 });
 
