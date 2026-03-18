@@ -149,17 +149,9 @@ class StreamController extends EventEmitter {
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
       const gstArgs = this._buildGStreamerPipeline();
+      console.log("Starting GStreamer with pipeline:", gstArgs.join(" "));
 
-      // Check if this is a compositor pipeline (returns object with isCompositor flag)
-      if (gstArgs.isCompositor) {
-        console.log("Starting GStreamer compositor pipeline...");
-        console.log("Pipeline:", gstArgs.pipeline);
-        // Use shell to execute the complex compositor pipeline
-        this.gstProcess = spawn("sh", ["-c", `gst-launch-1.0 ${gstArgs.pipeline}`]);
-      } else {
-        console.log("Starting GStreamer with pipeline:", gstArgs.join(" "));
-        this.gstProcess = spawn("gst-launch-1.0", gstArgs);
-      }
+      this.gstProcess = spawn("gst-launch-1.0", gstArgs);
 
       this.gstProcess.stdout.on("data", (data) => {
         console.log(`GStreamer stdout: ${data}`);
@@ -448,36 +440,40 @@ class StreamController extends EventEmitter {
 
   /**
    * Build compositor pipeline with graphics overlay
-   * This uses a completely different structure with multiple sources
+   * Uses gdkpixbufoverlay which is simpler than compositor
    */
   _buildCompositorPipeline() {
-    const {
-      protocol,
-      destination,
-      width,
-      height,
-      framerate,
-      bitrate,
-      encoder,
-    } = this.streamConfig;
+    console.log("🎨 Graphics overlay enabled - using gdkpixbufoverlay");
 
-    console.log("🎨 Building compositor pipeline with graphics overlay...");
+    // Just use the normal pipeline but add gdkpixbufoverlay
+    // This is much simpler than trying to use compositor
+    // Temporarily disable graphics to get base pipeline, then add overlay
+    const tempConfig = { ...this.streamConfig, skiaGraphicsEnabled: false };
+    const savedConfig = this.streamConfig;
+    this.streamConfig = tempConfig;
+    const basePipeline = this._buildGStreamerPipeline();
+    this.streamConfig = savedConfig;
 
-    // Extract port from destination
-    const srtPort = destination ? destination.split(':')[1] : '8891';
+    // Find where to insert the overlay (after jpegdec, before text overlays)
+    const jpegdecIndex = basePipeline.indexOf("jpegdec");
+    if (jpegdecIndex === -1) {
+      console.log("⚠️  Could not find jpegdec in pipeline, graphics overlay disabled");
+      return basePipeline;
+    }
 
-    // Build compositor pipeline as a string (GStreamer syntax for multiple sources)
-    // The compositor needs both sources defined separately and then connected
-    const pipelineStr = `compositor name=mix sink_0::zorder=0 sink_1::zorder=1 sink_1::alpha=${this.streamConfig.skiaGraphicsAlpha || 1.0} ! videoconvert ! tee name=t ` +
-      `v4l2src device=${this.cameraDevice} ! image/jpeg,width=${width},height=${height},framerate=${framerate}/1 ! jpegdec ! videoconvert ! video/x-raw,format=RGBA ! queue ! mix.sink_0 ` +
-      `tcpclientsrc host=127.0.0.1 port=8556 ! video/x-raw,format=RGBA,width=${width},height=${height},framerate=5/1 ! queue ! mix.sink_1 ` +
-      `t. ! queue ! nvvidconv ! video/x-raw(memory:NVMM) ! nvv4l2h264enc bitrate=${bitrate} ! h264parse ! srtserversink uri=srt://:${srtPort} ` +
-      `t. ! queue ! fakesink`;
+    // Insert gdkpixbufoverlay after jpegdec
+    const overlayElements = [
+      "!",
+      "gdkpixbufoverlay",
+      "location=/tmp/graphics-overlay.png",
+      `alpha=${this.streamConfig.skiaGraphicsAlpha || 1.0}`,
+      "overlay-width=" + this.streamConfig.width,
+      "overlay-height=" + this.streamConfig.height,
+    ];
 
-    return {
-      isCompositor: true,
-      pipeline: pipelineStr
-    };
+    basePipeline.splice(jpegdecIndex + 1, 0, ...overlayElements);
+
+    return basePipeline;
   }
 
   /**

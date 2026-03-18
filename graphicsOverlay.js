@@ -78,7 +78,7 @@ class GraphicsOverlay extends EventEmitter {
 
   /**
    * Start the graphics overlay
-   * Streams raw RGBA frames via GStreamer pipeline for compositing
+   * Writes PNG frames to numbered files for GStreamer multifilesrc
    */
   start() {
     if (this.isRunning) {
@@ -90,38 +90,6 @@ class GraphicsOverlay extends EventEmitter {
       this.initialize();
     }
 
-    // Start GStreamer pipeline that outputs raw RGBA video via TCP
-    const pipeline = [
-      "fdsrc",
-      "!",
-      `video/x-raw,format=RGBA,width=${this.width},height=${this.height},framerate=${this.fps}/1`,
-      "!",
-      "videoconvert",
-      "!",
-      "video/x-raw,format=RGBA",
-      "!",
-      "tcpserversink",
-      "host=127.0.0.1",
-      "port=8556",
-      "sync=false",
-      "recover-policy=keyframe",
-    ];
-
-    console.log("🚀 Starting graphics overlay GStreamer pipeline...");
-    this.gstProcess = spawn("gst-launch-1.0", pipeline);
-
-    this.gstProcess.stderr.on("data", (data) => {
-      const msg = data.toString();
-      if (!msg.includes("Setting pipeline") && !msg.includes("Prerolled")) {
-        console.log("GStreamer graphics:", msg.trim());
-      }
-    });
-
-    this.gstProcess.on("exit", (code) => {
-      console.log(`Graphics overlay GStreamer exited with code ${code}`);
-      this.isRunning = false;
-    });
-
     // Start generating frames
     this.isRunning = true;
     this.frameCount = 0;
@@ -131,16 +99,16 @@ class GraphicsOverlay extends EventEmitter {
       this.generateFrame();
     }, frameTime);
 
-    console.log(`✅ Graphics overlay started (streaming via TCP port 8556)`);
+    console.log(`✅ Graphics overlay started (writing PNG files)`);
     console.log(`📊 Generating frames at ${this.fps} FPS`);
     this.emit("started");
   }
 
   /**
-   * Generate and send a single frame to GStreamer
+   * Generate and write a single frame as PNG
    */
   generateFrame() {
-    if (!this.isRunning || !this.gstProcess) return;
+    if (!this.isRunning) return;
 
     try {
       const timestamp = Date.now();
@@ -148,37 +116,24 @@ class GraphicsOverlay extends EventEmitter {
       // Call the drawing function
       this.drawFunction(this.ctx, this.frameCount, timestamp);
 
-      // Get raw RGBA buffer from canvas
-      const imageData = this.ctx.getImageData(0, 0, this.width, this.height);
-      const buffer = Buffer.from(imageData.data.buffer);
+      // Write canvas to PNG file with frame number
+      // This allows multifilesrc to read them in sequence
+      const pngBuffer = this.canvas.toBuffer('image/png');
+      const filename = `/tmp/graphics-overlay-${this.frameCount % 10}.png`;
 
-      // Write to GStreamer stdin (check if writable first)
-      if (this.gstProcess.stdin && this.gstProcess.stdin.writable) {
-        try {
-          this.gstProcess.stdin.write(buffer);
+      fs.writeFileSync(filename, pngBuffer);
 
-          // Log first frame to confirm it's working
-          if (this.frameCount === 0) {
-            console.log(`✅ First frame sent to GStreamer (${buffer.length} bytes)`);
-          }
-        } catch (err) {
-          if (err.code === 'EPIPE') {
-            // Pipe closed, stop gracefully
-            this.stop();
-          }
-        }
-      } else {
-        // Pipe is closed, stop generating frames
-        this.stop();
+      // Also write to the main file for compatibility
+      fs.writeFileSync('/tmp/graphics-overlay.png', pngBuffer);
+
+      // Log first frame to confirm it's working
+      if (this.frameCount === 0) {
+        console.log(`✅ First frame written (${pngBuffer.length} bytes)`);
       }
 
       this.frameCount++;
     } catch (err) {
-      // Ignore EPIPE errors (broken pipe) - just stop gracefully
-      if (err.code !== 'EPIPE') {
-        console.error("Error generating frame:", err);
-      }
-      this.stop();
+      console.error("Error generating frame:", err);
     }
   }
 
@@ -197,14 +152,19 @@ class GraphicsOverlay extends EventEmitter {
       this.frameInterval = null;
     }
 
-    if (this.gstProcess) {
-      try {
-        this.gstProcess.stdin.end();
-      } catch (err) {
-        // Ignore errors
+    // Clean up PNG files
+    try {
+      for (let i = 0; i < 10; i++) {
+        const filename = `/tmp/graphics-overlay-${i}.png`;
+        if (fs.existsSync(filename)) {
+          fs.unlinkSync(filename);
+        }
       }
-      this.gstProcess.kill();
-      this.gstProcess = null;
+      if (fs.existsSync('/tmp/graphics-overlay.png')) {
+        fs.unlinkSync('/tmp/graphics-overlay.png');
+      }
+    } catch (err) {
+      // Ignore errors
     }
 
     this.emit("stopped");
