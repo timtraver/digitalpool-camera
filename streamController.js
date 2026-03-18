@@ -149,9 +149,17 @@ class StreamController extends EventEmitter {
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
       const gstArgs = this._buildGStreamerPipeline();
-      console.log("Starting GStreamer with pipeline:", gstArgs.join(" "));
 
-      this.gstProcess = spawn("gst-launch-1.0", gstArgs);
+      // Check if this is a compositor pipeline (returns object with isCompositor flag)
+      if (gstArgs.isCompositor) {
+        console.log("Starting GStreamer compositor pipeline...");
+        console.log("Pipeline:", gstArgs.pipeline);
+        // Use shell to execute the complex compositor pipeline
+        this.gstProcess = spawn("sh", ["-c", `gst-launch-1.0 ${gstArgs.pipeline}`]);
+      } else {
+        console.log("Starting GStreamer with pipeline:", gstArgs.join(" "));
+        this.gstProcess = spawn("gst-launch-1.0", gstArgs);
+      }
 
       this.gstProcess.stdout.on("data", (data) => {
         console.log(`GStreamer stdout: ${data}`);
@@ -455,40 +463,21 @@ class StreamController extends EventEmitter {
 
     console.log("🎨 Building compositor pipeline with graphics overlay...");
 
-    // Build a compositor pipeline using gst-launch-1.0 string syntax
-    // This reads raw RGBA frames from the graphics overlay TCP server
-    const pipelineStr = `
-      compositor name=mix
-        sink_0::zorder=0
-        sink_1::zorder=1 sink_1::alpha=${this.streamConfig.skiaGraphicsAlpha || 1.0}
-      ! videoconvert
-      ! tee name=t
+    // Extract port from destination
+    const srtPort = destination ? destination.split(':')[1] : '8891';
 
-      v4l2src device=${this.cameraDevice}
-      ! image/jpeg,width=${width},height=${height},framerate=${framerate}/1
-      ! jpegdec
-      ! videoconvert
-      ! video/x-raw,format=RGBA
-      ! queue
-      ! mix.sink_0
+    // Build compositor pipeline as a string (GStreamer syntax for multiple sources)
+    // The compositor needs both sources defined separately and then connected
+    const pipelineStr = `compositor name=mix sink_0::zorder=0 sink_1::zorder=1 sink_1::alpha=${this.streamConfig.skiaGraphicsAlpha || 1.0} ! videoconvert ! tee name=t ` +
+      `v4l2src device=${this.cameraDevice} ! image/jpeg,width=${width},height=${height},framerate=${framerate}/1 ! jpegdec ! videoconvert ! video/x-raw,format=RGBA ! queue ! mix.sink_0 ` +
+      `tcpclientsrc host=127.0.0.1 port=8556 ! video/x-raw,format=RGBA,width=${width},height=${height},framerate=5/1 ! queue ! mix.sink_1 ` +
+      `t. ! queue ! nvvidconv ! video/x-raw(memory:NVMM) ! nvv4l2h264enc bitrate=${bitrate} ! h264parse ! srtserversink uri=srt://:${srtPort} ` +
+      `t. ! queue ! fakesink`;
 
-      tcpclientsrc host=127.0.0.1 port=8556
-      ! video/x-raw,format=RGBA,width=${width},height=${height},framerate=5/1
-      ! queue
-      ! mix.sink_1
-
-      t. ! queue
-      ! nvvidconv
-      ! video/x-raw(memory:NVMM)
-      ! nvv4l2h264enc bitrate=${bitrate}
-      ! h264parse
-      ! srtserversink uri=srt://:${destination.split(':')[1] || 8891}
-
-      t. ! queue ! fakesink
-    `.replace(/\n\s+/g, ' ').trim();
-
-    // Return as array with single string (will be passed to gst-launch-1.0)
-    return [pipelineStr];
+    return {
+      isCompositor: true,
+      pipeline: pipelineStr
+    };
   }
 
   /**
