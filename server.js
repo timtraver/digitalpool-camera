@@ -30,11 +30,13 @@ const streamController = new StreamController(CAMERA_DEVICE);
 
 // Stream controller event handlers
 streamController.on("started", () => {
-  io.emit("streamStatus", { isStreaming: true, status: "started" });
+  const status = streamController.getStatus();
+  io.emit("streamStatus", { ...status, status: "started" });
 });
 
 streamController.on("stopped", (code) => {
-  io.emit("streamStatus", { isStreaming: false, status: "stopped", code });
+  const status = streamController.getStatus();
+  io.emit("streamStatus", { ...status, status: "stopped", code });
 });
 
 streamController.on("error", (error) => {
