@@ -31,48 +31,53 @@ try {
 }
 
 // Initialize graphics overlay
-// Using 2 FPS to reduce CPU load - graphics don't need to update that fast!
+// Using 5 FPS for smooth updates
 const overlay = new GraphicsOverlay();
-overlay.initialize(1920, 1080, 2);
+overlay.initialize(1920, 1080, 5);
 
-console.log("✅ Graphics overlay initialized (1920x1080 @ 2fps)\n");
-console.log("💡 Using 2 FPS to keep CPU usage very low");
+console.log("✅ Graphics overlay initialized (1920x1080 @ 5fps)\n");
+console.log("💡 Using 5 FPS for smooth real-time updates");
 
-// Set up a VERY simple test drawing function (minimal CPU usage)
+// Set up a test drawing function that updates every frame
 overlay.setDrawFunction((ctx, frameNumber, timestamp) => {
   // Clear canvas with transparent background
   ctx.clearRect(0, 0, 1920, 1080);
 
-  // Draw a simple scoreboard (no animations to save CPU)
+  // Draw a simple scoreboard
   ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-  ctx.fillRect(50, 50, 400, 150);
+  ctx.fillRect(50, 50, 500, 200);
 
   // Draw border
   ctx.strokeStyle = "white";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(50, 50, 400, 150);
+  ctx.lineWidth = 3;
+  ctx.strokeRect(50, 50, 500, 200);
 
   // Draw title
   ctx.fillStyle = "white";
-  ctx.font = "bold 28px Sans";
-  ctx.fillText("POOL MATCH", 70, 90);
+  ctx.font = "bold 32px Sans";
+  ctx.fillText("POOL MATCH - LIVE", 70, 95);
 
-  // Draw static score (update every 10 frames to save CPU)
-  const score1 = Math.floor((frameNumber / 10) % 10);
-  const score2 = Math.floor((frameNumber / 10) % 8);
-  ctx.font = "bold 40px Sans";
-  ctx.fillText(`${score1} - ${score2}`, 180, 150);
+  // Draw score that changes every 5 frames (every second at 5fps)
+  const score1 = Math.floor((frameNumber / 5) % 10);
+  const score2 = Math.floor((frameNumber / 5) % 8);
+  ctx.font = "bold 60px Sans";
+  ctx.fillText(`${score1} - ${score2}`, 200, 170);
+
+  // Draw frame counter to show it's updating
+  ctx.font = "20px Sans";
+  ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+  ctx.fillText(`Frame: ${frameNumber}`, 70, 230);
 });
 
 // Start the graphics overlay
 overlay.start();
 
-// Show frame count every 5 seconds
+// Show frame count every 2 seconds to see updates
 setInterval(() => {
-  const score1 = Math.floor((overlay.frameCount / 10) % 10);
-  const score2 = Math.floor((overlay.frameCount / 10) % 8);
+  const score1 = Math.floor((overlay.frameCount / 5) % 10);
+  const score2 = Math.floor((overlay.frameCount / 5) % 8);
   console.log(`📊 Frame ${overlay.frameCount} | Score: ${score1} - ${score2}`);
-}, 5000);
+}, 2000);
 
 console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 console.log("🚀 Graphics overlay running!");
