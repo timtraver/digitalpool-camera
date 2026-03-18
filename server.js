@@ -102,7 +102,10 @@ if (GraphicsOverlay) {
 
   // FOR TESTING: Automatically update scores every 5 seconds
   let testScoreInterval = setInterval(() => {
-    if (graphicsOverlay && graphicsOverlay.isRunning) {
+    // Update scores if graphics overlay is enabled (PNG or Cairo mode)
+    const graphicsEnabled = streamController && streamController.streamConfig && streamController.streamConfig.skiaGraphicsEnabled;
+
+    if (graphicsEnabled) {
       // Increment scores (wrap around at 10)
       gameState.player1Score = (gameState.player1Score + 1) % 11;
       if (gameState.player1Score === 0) {
@@ -111,7 +114,7 @@ if (GraphicsOverlay) {
 
       console.log(`🧪 TEST: Auto-updating scores: ${gameState.player1Score} - ${gameState.player2Score}`);
 
-      // Update the JSON file for cairooverlay to pick up
+      // Update the JSON file for cairooverlay to pick up, or regenerate PNG
       regenerateOverlay();
     }
   }, 5000); // Every 5 seconds
@@ -1354,15 +1357,25 @@ app.use("/graphql", (req, res) => {
 // This ensures the PNG file exists when gdkpixbufoverlay tries to load it
 streamController.on("preparing", async () => {
   if (graphicsOverlay && streamController.streamConfig.skiaGraphicsEnabled) {
-    console.log(`🎨 Preparing graphics overlay (PNG mode)...`);
+    // Only start PNG overlay if NOT using Cairo overlay
+    // Cairo overlay handles its own drawing via Python script
+    if (streamController.streamConfig.overlayType !== 'cairo') {
+      console.log(`🎨 Preparing graphics overlay (PNG mode)...`);
 
-    try {
-      // Use PNG mode - simpler and more reliable than TCP/compositor
-      // This will generate the first frame synchronously so the file exists
-      await graphicsOverlay.start("png");
-      console.log("✅ Graphics overlay ready (PNG file created)");
-    } catch (err) {
-      console.error("❌ Failed to start graphics overlay:", err.message);
+      try {
+        // Use PNG mode - simpler and more reliable than TCP/compositor
+        // This will generate the first frame synchronously so the file exists
+        await graphicsOverlay.start("png");
+        console.log("✅ Graphics overlay ready (PNG file created)");
+      } catch (err) {
+        console.error("❌ Failed to start graphics overlay:", err.message);
+      }
+    } else {
+      console.log(`🎨 Using Cairo overlay (Python-based dynamic graphics)`);
+      console.log(`💡 Graphics will be drawn by cairo-graphics-stream.py`);
+
+      // Still write the initial game state JSON for Cairo to read
+      regenerateOverlay();
     }
   }
 });
