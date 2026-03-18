@@ -1396,11 +1396,17 @@ titlePosition.addEventListener("change", () => {
 socket.on("overlayResult", (result) => {
   console.log("Overlay result:", result);
   if (result.success) {
-    // Only show restart message if stream is currently running
+    // If stream is currently running, auto-restart to apply changes
     if (isCurrentlyStreaming) {
-      alert(
-        result.message || "Overlay settings updated. Restart stream to apply.",
-      );
+      console.log("🔄 Auto-restarting stream to apply overlay changes...");
+
+      // Stop and restart the stream
+      socket.emit("stopStream");
+
+      // Wait a moment for cleanup, then restart
+      setTimeout(() => {
+        socket.emit("startStream");
+      }, 1000);
     }
   } else {
     alert(`Overlay error: ${result.error}`);

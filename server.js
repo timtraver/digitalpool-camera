@@ -602,6 +602,21 @@ app.get("/video/stream", async (req, res) => {
   // Use GStreamer for idle preview with overlay settings from streamController
   const config = streamController.streamConfig;
 
+  // Helper function to convert color name to GStreamer integer format
+  const colorToInt = (colorName) => {
+    const colors = {
+      white: "0xFFFFFFFF",
+      black: "0xFF000000",
+      red: "0xFFFF0000",
+      green: "0xFF00FF00",
+      blue: "0xFF0000FF",
+      yellow: "0xFFFFFF00",
+      cyan: "0xFF00FFFF",
+      magenta: "0xFFFF00FF",
+    };
+    return colors[colorName?.toLowerCase()] || colors.white;
+  };
+
   const gstArgs = [
     "v4l2src",
     `device=${CAMERA_DEVICE}`,
@@ -614,46 +629,90 @@ app.get("/video/stream", async (req, res) => {
     "videoconvert",
   ];
 
-  // Add overlays if enabled (using same settings as streaming)
+  // Add overlays if enabled (using EXACT same structure as streaming pipeline)
   if (config.overlayEnabled) {
     gstArgs.push("!");
 
-    // Add timestamp overlay if enabled
+    // Add timestamp overlay if enabled (matches streamController.js exactly)
     if (config.showTimestamp) {
       const tsPosition = config.timestampPosition || "bottom-right";
       const [vpos, hpos] = tsPosition.split("-");
       const valign = vpos === "bottom" ? "bottom" : vpos === "center" ? "center" : "top";
       const halign = hpos === "left" ? "left" : hpos === "right" ? "right" : "center";
 
-      gstArgs.push(
+      // Use base font size for 1280x720 (streaming uses 1.5x for 1920x1080)
+      const fontSize = config.overlayFontSize || 32;
+
+      const timestampArgs = [
         "clockoverlay",
         `valignment=${valign}`,
         `halignment=${halign}`,
-        `font-desc=Sans Bold ${config.overlayFontSize || 11}`,
-        "color=0xFFFFFFFF",
-        'time-format="%Y-%m-%d %H:%M:%S"',
-        "xpad=20",
-        "ypad=20",
-        "!"
-      );
+        `font-desc=Sans Bold ${fontSize}`,
+        `color=${colorToInt(config.overlayColor)}`,
+        'time-format="%Y-%m-%d %H:%M:%S"', // Show date and time
+      ];
+
+      // Only add shaded background if not transparent
+      if (config.overlayBackground !== "transparent") {
+        timestampArgs.push("shaded-background=true");
+      }
+
+      timestampArgs.push("xpad=20", "ypad=20", "!");
+      gstArgs.push(...timestampArgs);
     }
 
-    // Add custom text overlay if provided
+    // Add custom text overlay 1 (main title) - matches streamController.js exactly
     if (config.overlayText) {
-      const position = config.titlePosition || "bottom-left";
+      const position = config.titlePosition || config.overlayPosition || "bottom-left";
       const [vpos, hpos] = position.split("-");
       const valign = vpos === "bottom" ? "bottom" : vpos === "center" ? "center" : "top";
       const halign = hpos === "left" ? "left" : hpos === "right" ? "right" : "center";
 
-      gstArgs.push(
+      // Use base font size for 1280x720 (streaming uses 1.5x for 1920x1080)
+      const fontSize = config.overlayFontSize || 32;
+
+      const textArgs = [
         "textoverlay",
         `text="${config.overlayText}"`,
         `valignment=${valign}`,
         `halignment=${halign}`,
-        `font-desc=Sans Bold ${config.overlayFontSize || 11}`,
-        "color=0xFFFFFFFF",
-        "xpad=20",
-        "ypad=20",
+        `font-desc=Sans Bold ${fontSize}`,
+        `color=${colorToInt(config.overlayColor)}`,
+      ];
+
+      // Only add shaded background if not transparent
+      if (config.overlayBackground !== "transparent") {
+        textArgs.push("shaded-background=true");
+      }
+
+      textArgs.push("xpad=20", "ypad=20", "!");
+      gstArgs.push(...textArgs);
+    }
+
+    // Add custom text overlay 2 (subtitle/secondary text) if provided
+    if (config.customText2) {
+      const valign = config.overlayPosition === "bottom" ? "bottom" : "center";
+      const fontSize = Math.floor((config.overlayFontSize || 32) * 0.75);
+
+      gstArgs.push(
+        "textoverlay",
+        `text="${config.customText2}"`,
+        `valignment=${valign}`,
+        "halignment=center",
+        `font-desc=Sans ${fontSize}`,
+        `color=${colorToInt(config.overlayColor)}`,
+        "shaded-background=true",
+        "!"
+      );
+    }
+
+    // Add logo overlay if path provided
+    if (config.logoPath) {
+      gstArgs.push(
+        "gdkpixbufoverlay",
+        `location=${config.logoPath}`,
+        "offset-x=20",
+        "offset-y=20",
         "!"
       );
     }
