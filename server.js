@@ -49,39 +49,23 @@ if (GraphicsOverlay) {
     // Clear canvas with transparent background
     ctx.clearRect(0, 0, 1920, 1080);
 
-    // TEMPORARY: Draw a VERY OBVIOUS red rectangle to test if compositor is working
-    // This should be impossible to miss!
-    ctx.fillStyle = "rgba(255, 0, 0, 0.5)"; // Semi-transparent red
-    ctx.fillRect(0, 0, 960, 540); // Top-left quarter of screen
+    // TEMPORARY: Draw a VERY OBVIOUS FULL SCREEN test to see if compositor is working
+    // Fill entire screen with semi-transparent red
+    ctx.fillStyle = "rgba(255, 0, 0, 0.8)"; // Very opaque red - IMPOSSIBLE TO MISS!
+    ctx.fillRect(0, 0, 1920, 1080); // FULL SCREEN
 
-    // Draw a scoreboard
-    ctx.fillStyle = "rgba(0, 0, 0, 0.9)"; // More opaque
-    ctx.fillRect(50, 50, 500, 200);
-
-    // Draw border
-    ctx.strokeStyle = "yellow"; // Bright yellow border
-    ctx.lineWidth = 5;
-    ctx.strokeRect(50, 50, 500, 200);
-
-    // Draw title
+    // Draw HUGE text in the center
     ctx.fillStyle = "white";
-    ctx.font = "bold 32px Sans";
-    ctx.fillText("POOL MATCH - LIVE", 70, 95);
+    ctx.font = "bold 120px Sans";
+    ctx.fillText("GRAPHICS OVERLAY TEST", 200, 500);
 
-    // Draw score that changes every 2 frames (every second at 2fps)
-    const score1 = Math.floor((frameNumber / 2) % 10);
-    const score2 = Math.floor((frameNumber / 2) % 8);
-    ctx.font = "bold 60px Sans";
-    ctx.fillText(`${score1} - ${score2}`, 200, 170);
-
-    // Draw frame counter to show it's updating
-    ctx.font = "20px Sans";
-    ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
-    ctx.fillText(`Frame: ${frameNumber}`, 70, 230);
+    // Draw frame counter
+    ctx.font = "bold 80px Sans";
+    ctx.fillText(`Frame: ${frameNumber}`, 400, 650);
 
     // Log every 10 frames to show activity
     if (frameNumber % 10 === 0) {
-      console.log(`🎨 Drawing frame ${frameNumber} | Score: ${score1} - ${score2} | RED OVERLAY ACTIVE`);
+      console.log(`🎨 Drawing frame ${frameNumber} | FULL SCREEN RED TEST`);
     }
   });
 
