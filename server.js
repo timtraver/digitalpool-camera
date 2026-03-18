@@ -11,9 +11,9 @@ const StreamController = require("./streamController");
 let GraphicsOverlay = null;
 try {
   GraphicsOverlay = require("./graphicsOverlay");
-  console.log("✅ Skia graphics overlay module loaded");
+  console.log("✅ Graphics overlay module loaded (node-canvas)");
 } catch (err) {
-  console.log("ℹ️  Skia graphics overlay not available (install 'skia-canvas' to enable)");
+  console.log("ℹ️  Graphics overlay not available (install 'canvas' to enable)");
 }
 
 const app = express();

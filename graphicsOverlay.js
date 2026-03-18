@@ -1,10 +1,10 @@
-const { Canvas } = require("skia-canvas");
+const { createCanvas } = require("canvas");
 const { spawn } = require("child_process");
 const EventEmitter = require("events");
 
 /**
  * Graphics Overlay Manager
- * Uses Skia Canvas to draw custom graphics and composites them over the video stream
+ * Uses node-canvas to draw custom graphics and composites them over the video stream
  */
 class GraphicsOverlay extends EventEmitter {
   constructor() {
@@ -30,12 +30,12 @@ class GraphicsOverlay extends EventEmitter {
     this.width = width;
     this.height = height;
     this.fps = fps;
-    
-    // Create Skia canvas
-    this.canvas = new Canvas(width, height);
+
+    // Create node-canvas
+    this.canvas = createCanvas(width, height);
     this.ctx = this.canvas.getContext("2d");
-    
-    console.log(`🎨 Initialized Skia canvas: ${width}x${height} @ ${fps}fps`);
+
+    console.log(`🎨 Initialized canvas: ${width}x${height} @ ${fps}fps`);
   }
 
   /**

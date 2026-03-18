@@ -1,6 +1,6 @@
 # Deploy Graphics Overlay to Jetson
 
-Quick guide to deploy and test the Skia graphics overlay system on your Jetson Nano.
+Quick guide to deploy and test the graphics overlay system on your Jetson Nano using **node-canvas**.
 
 ## 📦 Step 1: Transfer Files to Jetson
 
@@ -12,7 +12,7 @@ rsync -avz --exclude 'node_modules' \
   jetson@192.168.1.114:/home/jetson/Desktop/digitalpool-camera/
 ```
 
-## 🔧 Step 2: Install Skia Canvas on Jetson
+## 🔧 Step 2: Install node-canvas on Jetson
 
 SSH into the Jetson:
 
@@ -21,21 +21,26 @@ ssh jetson@192.168.1.114
 cd ~/Desktop/digitalpool-camera
 ```
 
-Install skia-canvas:
-
-```bash
-npm install skia-canvas
-```
-
-**Note:** This may take 5-10 minutes as it downloads and compiles native binaries for ARM64.
-
-**If installation fails**, you may need to install build dependencies:
+Install system dependencies first:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential python3 libfontconfig1-dev
-npm install skia-canvas
+sudo apt-get install -y build-essential libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
 ```
+
+Install node-canvas:
+
+```bash
+npm install canvas
+```
+
+**Note:** This may take 5-10 minutes as it compiles native binaries for ARM64.
+
+**Why node-canvas instead of skia-canvas?**
+- ✅ Works with Node.js 14+ (skia-canvas requires Node 18+)
+- ✅ Fully compatible with Jetson Nano
+- ✅ Same HTML5 Canvas API
+- ✅ Proven and stable
 
 ## ✅ Step 3: Test the Graphics Overlay
 
@@ -90,18 +95,18 @@ tcpclientsrc host=localhost port=8556 ! jpegdec ! videoconvert ! mix.sink_1
 
 ## 🔍 Troubleshooting
 
-### "Cannot find module 'skia-canvas'"
+### "Cannot find module 'canvas'"
 
 Install it:
 ```bash
-npm install skia-canvas
+npm install canvas
 ```
 
 ### Installation fails with "node-gyp" errors
 
 Install build tools:
 ```bash
-sudo apt-get install -y build-essential python3 libfontconfig1-dev pkg-config
+sudo apt-get install -y build-essential libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev pkg-config
 ```
 
 ### Graphics not showing

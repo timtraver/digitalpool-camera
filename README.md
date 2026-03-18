@@ -106,13 +106,21 @@ Or from another device on the same network:
 http://<jetson-nano-ip>:3000
 ```
 
-### Test Skia Graphics Overlay:
+### Test Graphics Overlay:
 
-To test the graphics overlay feature:
+To test the graphics overlay feature using **node-canvas**:
 
-1. **Install skia-canvas** (if not already installed):
+1. **Install node-canvas** (if not already installed):
+
+**On Jetson Nano:**
 ```bash
-npm install skia-canvas
+sudo apt-get install -y build-essential libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+npm install canvas
+```
+
+**On Mac/Linux:**
+```bash
+npm install canvas
 ```
 
 2. **Start the main server** (in one terminal):
@@ -142,7 +150,9 @@ The test graphics show:
 - Rotating square
 - Live timestamp
 
-See [SKIA_GRAPHICS_GUIDE.md](SKIA_GRAPHICS_GUIDE.md) for more details on creating custom graphics.
+See [GRAPHICS_GUIDE_NODE_CANVAS.md](GRAPHICS_GUIDE_NODE_CANVAS.md) for more details on creating custom graphics.
+
+**Note:** We use **node-canvas** instead of skia-canvas because it's compatible with Node.js 14+ (Jetson Nano). It provides the same HTML5 Canvas API.
 
 ### Run as a system service (optional):
 

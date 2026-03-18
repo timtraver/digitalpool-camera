@@ -1,13 +1,24 @@
-# Testing Skia Graphics Overlay
+# Testing Graphics Overlay (node-canvas)
 
-Quick guide to test the Skia graphics overlay with your video stream.
+Quick guide to test the graphics overlay with your video stream using **node-canvas**.
 
 ## 🚀 Quick Start
 
 ### Step 1: Install Dependencies
 
+**On Jetson Nano:**
 ```bash
-npm install skia-canvas
+# Install system dependencies
+sudo apt-get update
+sudo apt-get install -y build-essential libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+
+# Install node-canvas
+npm install canvas
+```
+
+**On Mac/Linux:**
+```bash
+npm install canvas
 ```
 
 **Note:** This may take 5-10 minutes on the Jetson Nano as it compiles native binaries.
@@ -24,7 +35,7 @@ You should see:
 ```
 🚀 Server running on port 3000
 📹 Camera device: /dev/video0
-✅ Skia graphics overlay module loaded
+✅ Graphics overlay module loaded (node-canvas)
 🎨 Graphics overlay initialized
 ```
 

@@ -1,12 +1,12 @@
 /**
- * Example: Custom Skia Graphics Overlay
- * 
- * This example shows how to draw custom graphics using Skia Canvas
+ * Example: Custom Graphics Overlay (using node-canvas)
+ *
+ * This example shows how to draw custom graphics using node-canvas
  * and overlay them on your video stream.
- * 
+ *
  * Run this example:
  *   node examples/skia-graphics-example.js
- * 
+ *
  * Then view the graphics at:
  *   http://localhost:8556 (raw graphics stream)
  */

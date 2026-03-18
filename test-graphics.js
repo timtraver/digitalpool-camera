@@ -2,13 +2,13 @@
 
 /**
  * Test Graphics Overlay
- * 
- * This script runs a simple Skia graphics overlay server for testing.
+ *
+ * This script runs a simple graphics overlay server for testing.
  * Run this alongside your main server (npm start) to test graphics integration.
- * 
+ *
  * Usage:
  *   node test-graphics.js
- * 
+ *
  * Then:
  *   1. Open web UI: http://localhost:3000
  *   2. Enable "Skia Graphics Overlay" in Overlay Settings
@@ -18,15 +18,15 @@
 
 const GraphicsOverlay = require("./graphicsOverlay");
 
-console.log("🎨 Starting Skia Graphics Test Server...\n");
+console.log("🎨 Starting Graphics Test Server...\n");
 
-// Check if skia-canvas is installed
+// Check if node-canvas is installed
 try {
-  require("skia-canvas");
-  console.log("✅ skia-canvas module found");
+  require("canvas");
+  console.log("✅ node-canvas module found");
 } catch (err) {
-  console.error("❌ skia-canvas not installed!");
-  console.error("   Install it with: npm install skia-canvas");
+  console.error("❌ node-canvas not installed!");
+  console.error("   Install it with: npm install canvas");
   process.exit(1);
 }
 
