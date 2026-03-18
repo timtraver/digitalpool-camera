@@ -54,8 +54,9 @@ gst-launch-1.0 \
   mpegtsmux alignment=7 ! \
   srtserversink uri=srt://0.0.0.0:$SRT_PORT latency=125 sync=false \
   \
-  fdsrc fd=3 ! \
+  fdsrc fd=3 do-timestamp=true ! \
   video/x-raw,format=RGBA,width=$WIDTH,height=$HEIGHT,framerate=$FRAMERATE/1 ! \
+  videoconvert ! \
   queue ! \
   mix. \
   \
