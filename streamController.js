@@ -567,6 +567,12 @@ class StreamController extends EventEmitter {
       }
     }
 
+    // Add tee BEFORE encoding to split raw video for preview
+    pipeline.push("tee", "name=t");
+
+    // Branch 1: Encoding pipeline for streaming
+    pipeline.push("t.", "!", "queue", "!");
+
     // Hardware encoding pipeline
     if (encoder === "nvv4l2h264enc") {
       // NVIDIA V4L2 encoder (best for Jetson)
@@ -596,10 +602,10 @@ class StreamController extends EventEmitter {
       pipeline.push("omxh264enc", `bitrate=${bitrate}`, "!", "h264parse", "!");
     }
 
-    // Use tee to split the stream for both output and preview
-    pipeline.push("tee", "name=t");
+    // Add another tee after encoding to split H.264 for output and preview
+    pipeline.push("tee", "name=t2");
 
-    // Branch 1: Output stream (RTMP, SRT, or UDP)
+    // Branch 2a: Output stream (RTMP, SRT, or UDP) - from t2 (H.264)
     if (protocol === "srt") {
       // SRT streaming - low latency with error correction
       // Use srtserversink - Jetson acts as server, OBS connects as client
@@ -611,7 +617,7 @@ class StreamController extends EventEmitter {
       );
 
       pipeline.push(
-        "t.",
+        "t2.",
         "!",
         "queue",
         "max-size-buffers=2", // Minimal buffering for low latency
@@ -643,7 +649,7 @@ class StreamController extends EventEmitter {
       console.log(`📡 UDP destination: ${udpHost}:${udpPort}`);
 
       pipeline.push(
-        "t.",
+        "t2.",
         "!",
         "queue",
         "max-size-buffers=0", // No buffering for absolute minimum latency
@@ -669,7 +675,7 @@ class StreamController extends EventEmitter {
       console.log(`📡 RTMP destination: ${rtmpUrl}`);
 
       pipeline.push(
-        "t.",
+        "t2.",
         "!",
         "queue",
         "max-size-buffers=2", // Minimal buffering for low latency
@@ -688,9 +694,9 @@ class StreamController extends EventEmitter {
       throw new Error(`Unsupported protocol: ${protocol}`);
     }
 
-    // Branch 2: Preview stream (MJPEG over TCP)
-    // Tap the H.264 stream and decode it for preview
-    // Note: This adds some CPU overhead but provides a web preview
+    // Branch 2b: Preview stream (MJPEG over TCP) - from t (raw video before encoding)
+    // This taps the raw video BEFORE H.264 encoding, so no decoding needed!
+    // Much more efficient and reliable than decoding H.264
     pipeline.push(
       "t.",
       "!",
@@ -698,16 +704,12 @@ class StreamController extends EventEmitter {
       "max-size-buffers=10",
       "leaky=downstream",
       "!",
-      "h264parse",
+      "videoscale", // Scale down for lower bandwidth if needed
       "!",
-      "avdec_h264", // Use software decoder instead of nvv4l2decoder
-      "!",
-      "videoconvert",
-      "!",
-      "video/x-raw,format=I420",
+      "video/x-raw,width=1280,height=720", // 720p preview (lower bandwidth)
       "!",
       "jpegenc",
-      "quality=85",
+      "quality=75", // Lower quality for preview
       "!",
       "multipartmux",
       "boundary=--jpgboundary",
