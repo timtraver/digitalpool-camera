@@ -631,8 +631,6 @@ class StreamController extends EventEmitter {
         "srtserversink", // Jetson acts as SRT server
         "uri=srt://0.0.0.0:8891", // Listen on all interfaces, port 8891
         "latency=125", // Latency in milliseconds
-        "wait-for-connection=false", // Don't wait for client to connect before starting
-        "sync=false", // Don't sync to clock
       );
     } else if (protocol === "udp") {
       // UDP streaming - lowest latency (200-500ms)
