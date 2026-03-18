@@ -29,7 +29,7 @@ exec gst-launch-1.0 -v \
   ! tee name=t \
   \
   t. ! queue ! nvvidconv \
-  ! video/x-raw(memory:NVMM) \
+  ! 'video/x-raw(memory:NVMM)' \
   ! nvv4l2h264enc bitrate=$BITRATE \
   ! h264parse \
   ! mpegtsmux \
