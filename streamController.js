@@ -36,6 +36,10 @@ class StreamController extends EventEmitter {
       // Legacy fields
       timestampFormat: "%Y-%m-%d %H:%M:%S",
       logoPath: "", // Path to logo image overlay
+      // Skia graphics overlay
+      skiaGraphicsEnabled: false, // Enable Skia graphics overlay
+      skiaGraphicsPort: 8556, // Port where Skia graphics server is running
+      skiaGraphicsAlpha: 1.0, // Opacity of graphics overlay (0.0-1.0)
     };
 
     // Load config from file or use defaults
@@ -567,11 +571,44 @@ class StreamController extends EventEmitter {
       }
     }
 
-    // Add tee BEFORE encoding to split raw video for preview
-    pipeline.push("tee", "name=t");
+    // Check if Skia graphics overlay is enabled
+    const useCompositor = this.streamConfig.skiaGraphicsEnabled;
 
-    // Branch 1: Encoding pipeline for streaming
-    pipeline.push("t.", "!", "queue", "!");
+    if (useCompositor) {
+      // Use compositor to blend video with Skia graphics
+      console.log(
+        `🎨 Skia graphics overlay enabled (port ${this.streamConfig.skiaGraphicsPort}, alpha ${this.streamConfig.skiaGraphicsAlpha})`,
+      );
+
+      // Route video to compositor sink_0
+      pipeline.push(
+        "videoconvert",
+        "!",
+        "queue",
+        "!",
+        "mix.sink_0", // Video goes to compositor sink_0
+        "compositor",
+        "name=mix",
+        "sink_0::xpos=0",
+        "sink_0::ypos=0",
+        "sink_0::alpha=1.0", // Video layer (bottom)
+        "sink_1::xpos=0",
+        "sink_1::ypos=0",
+        `sink_1::alpha=${this.streamConfig.skiaGraphicsAlpha}`, // Graphics layer (top)
+        "!",
+        "tee",
+        "name=t",
+      );
+
+      // Branch 1: Encoding pipeline for streaming
+      pipeline.push("t.", "!", "queue", "!");
+    } else {
+      // No compositor - use simple tee
+      pipeline.push("tee", "name=t");
+
+      // Branch 1: Encoding pipeline for streaming
+      pipeline.push("t.", "!", "queue", "!");
+    }
 
     // Hardware encoding pipeline
     if (encoder === "nvv4l2h264enc") {
@@ -721,6 +758,33 @@ class StreamController extends EventEmitter {
       "sync=false",
       "recover-policy=keyframe",
     );
+
+    // If compositor is enabled, add the graphics input pipeline
+    if (useCompositor) {
+      const graphicsPort = this.streamConfig.skiaGraphicsPort || 8556;
+
+      // Graphics input: Connect to Skia graphics TCP server
+      // This reads MJPEG from the graphics overlay and feeds it to compositor sink_1
+      pipeline.push(
+        "tcpclientsrc",
+        `host=127.0.0.1`,
+        `port=${graphicsPort}`,
+        "!",
+        "multipartdemux",
+        "!",
+        "jpegdec",
+        "!",
+        "videoconvert",
+        "!",
+        "videoscale",
+        "!",
+        `video/x-raw,width=${width},height=${height}`, // Match video resolution
+        "!",
+        "queue",
+        "!",
+        "mix.sink_1", // Connect to compositor's graphics input
+      );
+    }
 
     return pipeline;
   }

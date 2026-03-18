@@ -7,6 +7,15 @@ const path = require("path");
 const CameraController = require("./cameraController");
 const StreamController = require("./streamController");
 
+// Try to load GraphicsOverlay (optional dependency)
+let GraphicsOverlay = null;
+try {
+  GraphicsOverlay = require("./graphicsOverlay");
+  console.log("✅ Skia graphics overlay module loaded");
+} catch (err) {
+  console.log("ℹ️  Skia graphics overlay not available (install 'skia-canvas' to enable)");
+}
+
 const app = express();
 const server = http.createServer(app);
 const io = socketIO(server, {
@@ -27,6 +36,14 @@ let cameraInitialized = false;
 
 // Initialize stream controller
 const streamController = new StreamController(CAMERA_DEVICE);
+
+// Initialize graphics overlay (if available)
+let graphicsOverlay = null;
+if (GraphicsOverlay) {
+  graphicsOverlay = new GraphicsOverlay();
+  graphicsOverlay.initialize(1920, 1080, 30);
+  console.log("🎨 Graphics overlay initialized");
+}
 
 // Stream controller event handlers
 streamController.on("started", () => {
@@ -1167,4 +1184,31 @@ app.use("/graphql", (req, res) => {
   const targetUrl = `https://api-prod.digitalpool.com/v1/graphql`;
   console.log("Proxying /graphql request:", req.originalUrl, "->", targetUrl);
   proxyUrl(targetUrl, res, req);
+});
+
+// ============================================================================
+// Graphics Overlay Integration
+// ============================================================================
+
+// Start graphics overlay when stream starts (if enabled)
+streamController.on("started", () => {
+  if (graphicsOverlay && streamController.streamConfig.skiaGraphicsEnabled) {
+    const port = streamController.streamConfig.skiaGraphicsPort || 8556;
+    console.log(`🎨 Starting Skia graphics overlay on port ${port}...`);
+
+    try {
+      graphicsOverlay.start(port);
+      console.log("✅ Graphics overlay started successfully");
+    } catch (err) {
+      console.error("❌ Failed to start graphics overlay:", err.message);
+    }
+  }
+});
+
+// Stop graphics overlay when stream stops
+streamController.on("stopped", () => {
+  if (graphicsOverlay && graphicsOverlay.isRunning) {
+    console.log("🛑 Stopping graphics overlay...");
+    graphicsOverlay.stop();
+  }
 });

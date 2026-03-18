@@ -23,5 +23,12 @@
     "dotenv": "^17.2.4",
     "express": "^5.2.1",
     "socket.io": "^4.8.3"
+  },
+  "optionalDependencies": {
+    "skia-canvas": "^1.0.0"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=14.0.0"
   }
 }

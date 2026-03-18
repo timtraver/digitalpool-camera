@@ -5,11 +5,15 @@ A Node.js web service for remotely controlling a USB camera on a Jetson Nano. Th
 ## Features
 
 - 🎥 **Live Video Streaming**: Real-time MJPEG video stream from the USB camera
+- 📡 **Professional Streaming**: SRT, RTMP, and UDP streaming with ultra-low latency (~125ms)
 - 🕹️ **Pan/Tilt/Zoom Controls**: Intuitive directional pad and zoom controls
 - ⚙️ **Camera Settings**: Adjust brightness, contrast, saturation, exposure, white balance, focus, and more
+- 🎨 **Custom Graphics Overlay**: Draw custom graphics using Skia Canvas (scores, diagrams, animations)
+- 📝 **Text Overlays**: Add custom text, timestamps, and logos to the stream
 - 🎮 **Keyboard Controls**: Use arrow keys for quick pan/tilt adjustments
 - 🔄 **Real-time Updates**: Socket.IO for instant camera control feedback
 - 📱 **Responsive Design**: Works on desktop and mobile devices
+- ⚡ **Hardware Acceleration**: NVIDIA hardware encoding on Jetson Nano
 
 ## Prerequisites
 
@@ -248,6 +252,37 @@ sudo usermod -a -G video $USER
 To modify camera control definitions, edit the `controls` object in `cameraController.js`.
 
 To change video streaming parameters, modify the ffmpeg arguments in `server.js`.
+
+## 🎨 Custom Graphics with Skia
+
+You can draw custom graphics on your stream using Skia Canvas! Perfect for:
+- Score overlays
+- Pool table diagrams
+- Real-time data visualizations
+- Animated graphics
+
+**Quick Start:**
+
+```bash
+# Install Skia Canvas
+npm install skia-canvas
+
+# Run the example
+node examples/skia-graphics-example.js
+
+# View at http://192.168.1.114:8556
+```
+
+**See the guides:**
+- [SKIA_GRAPHICS_GUIDE.md](SKIA_GRAPHICS_GUIDE.md) - Complete integration guide
+- [examples/README.md](examples/README.md) - Example code and patterns
+
+## 📚 Documentation
+
+- [STREAMING_ARCHITECTURE.md](STREAMING_ARCHITECTURE.md) - Streaming system overview
+- [SRT_SETUP_GUIDE.md](SRT_SETUP_GUIDE.md) - SRT streaming configuration
+- [SKIA_GRAPHICS_GUIDE.md](SKIA_GRAPHICS_GUIDE.md) - Custom graphics overlay guide
+- [DEPLOY_TO_JETSON.md](DEPLOY_TO_JETSON.md) - Deployment instructions
 
 ## License
 
