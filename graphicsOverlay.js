@@ -26,7 +26,7 @@ class GraphicsOverlay extends EventEmitter {
   /**
    * Initialize the canvas
    */
-  initialize(width = 1920, height = 1080, fps = 30) {
+  initialize(width = 1920, height = 1080, fps = 5) {
     this.width = width;
     this.height = height;
     this.fps = fps;

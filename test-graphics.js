@@ -31,10 +31,12 @@ try {
 }
 
 // Initialize graphics overlay
+// Using 5 FPS to reduce CPU load - graphics don't need to update that fast!
 const overlay = new GraphicsOverlay();
-overlay.initialize(1920, 1080, 30);
+overlay.initialize(1920, 1080, 5);
 
-console.log("✅ Graphics overlay initialized (1920x1080 @ 30fps)\n");
+console.log("✅ Graphics overlay initialized (1920x1080 @ 5fps)\n");
+console.log("💡 Using 5 FPS to keep CPU usage low");
 
 // Set up a simple test drawing function
 overlay.setDrawFunction((ctx, frameNumber, timestamp) => {
@@ -107,8 +109,11 @@ console.log("  2. Enable 'Skia Graphics Overlay' in Overlay Settings");
 console.log("  3. Click 'Start Stream'");
 console.log("  4. Graphics will be composited into the stream!\n");
 
-console.log("💡 Tip: You can also view the graphics alone at:");
-console.log(`   http://localhost:${PORT}\n`);
+console.log("💡 Tips:");
+console.log(`   • View graphics alone: http://localhost:${PORT}`);
+console.log("   • Adjust FPS in line 36 if CPU usage is too high/low");
+console.log("   • 5 FPS is usually enough for scoreboards and overlays");
+console.log("   • Use 1-2 FPS for static graphics that rarely change\n");
 
 console.log("Press Ctrl+C to stop\n");
 

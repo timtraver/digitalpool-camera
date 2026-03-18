@@ -17,7 +17,8 @@ const GraphicsOverlay = require("../graphicsOverlay");
 const overlay = new GraphicsOverlay();
 
 // Initialize with your desired resolution and framerate
-overlay.initialize(1920, 1080, 30);
+// Using 5 FPS to reduce CPU load - graphics overlays don't need high framerates!
+overlay.initialize(1920, 1080, 5);
 
 // Define your custom drawing function
 overlay.setDrawFunction((ctx, frameNumber, timestamp) => {

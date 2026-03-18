@@ -41,8 +41,9 @@ const streamController = new StreamController(CAMERA_DEVICE);
 let graphicsOverlay = null;
 if (GraphicsOverlay) {
   graphicsOverlay = new GraphicsOverlay();
-  graphicsOverlay.initialize(1920, 1080, 30);
-  console.log("🎨 Graphics overlay initialized");
+  // Use 5 FPS to reduce CPU load - graphics overlays don't need high framerates
+  graphicsOverlay.initialize(1920, 1080, 5);
+  console.log("🎨 Graphics overlay initialized (5fps for low CPU usage)");
 }
 
 // Stream controller event handlers
