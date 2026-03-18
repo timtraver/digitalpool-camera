@@ -30,12 +30,14 @@ exec gst-launch-1.0 -v \
   ! videoconvert \
   ! tee name=t \
   \
-  t. ! queue ! nvvidconv \
+  t. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! nvvidconv \
   ! 'video/x-raw(memory:NVMM)' \
-  ! nvv4l2h264enc bitrate=$BITRATE \
-  ! h264parse \
-  ! mpegtsmux \
-  ! srtserversink uri=srt://:$SRT_PORT \
+  ! nvv4l2h264enc bitrate=$BITRATE preset-level=1 profile=0 iframeinterval=15 insert-sps-pps=true maxperf-enable=true \
+  ! 'video/x-h264,stream-format=byte-stream' \
+  ! h264parse config-interval=-1 \
+  ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream \
+  ! mpegtsmux alignment=7 \
+  ! srtserversink uri=srt://:$SRT_PORT latency=125 sync=false \
   \
   t. ! queue max-size-buffers=10 leaky=downstream \
   ! videoscale \
