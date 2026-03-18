@@ -518,15 +518,27 @@ app.get("/video/tcp-preview", (req, res) => {
   const net = require("net");
   const client = net.connect({ port: 8555, host: "localhost" });
 
+  let bytesReceived = 0;
+  let firstDataReceived = false;
+
   client.on("connect", () => {
     console.log("✅ Connected to GStreamer TCP server on port 8555");
   });
 
   client.on("data", (data) => {
+    bytesReceived += data.length;
+
+    if (!firstDataReceived) {
+      firstDataReceived = true;
+      console.log("📦 First data chunk received:", data.length, "bytes");
+      console.log("📝 First 100 bytes:", data.slice(0, 100).toString('hex'));
+    }
+
     try {
       res.write(data);
     } catch (e) {
       console.log("Client disconnected from TCP preview");
+      console.log("📊 Total bytes sent:", bytesReceived);
       client.destroy();
     }
   });
