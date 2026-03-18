@@ -854,6 +854,12 @@ function switchToMJPEGPreview() {
   img.style.objectFit = "contain";
   img.style.opacity = "0";
   img.style.transition = "opacity 0.3s ease-in-out";
+  img.style.zIndex = "1"; // Place new image above old one
+
+  // Keep old element visible during transition
+  if (oldElement) {
+    oldElement.style.zIndex = "0";
+  }
 
   // When new stream loads, swap elements smoothly
   img.onload = function() {
@@ -867,6 +873,7 @@ function switchToMJPEGPreview() {
       img.style.top = "";
       img.style.left = "";
       img.style.height = "auto"; // Let it size naturally
+      img.style.zIndex = "";
 
       // Give new element the proper ID
       img.id = "videoStream";
@@ -885,6 +892,10 @@ function switchToMJPEGPreview() {
     console.error("❌ Failed to load new preview, keeping old one");
     if (img.parentElement) {
       img.remove();
+    }
+    // Restore old element's z-index
+    if (oldElement) {
+      oldElement.style.zIndex = "";
     }
   };
 
