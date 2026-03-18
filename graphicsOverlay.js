@@ -149,8 +149,8 @@ class GraphicsOverlay extends EventEmitter {
       // Call the drawing function
       this.drawFunction(this.ctx, this.frameCount, timestamp);
 
-      // Convert canvas to JPEG buffer
-      const jpegBuffer = this.canvas.toBuffer('image/jpeg', { quality: 0.85 });
+      // Convert canvas to PNG buffer (PNG supports transparency, JPEG doesn't!)
+      const pngBuffer = this.canvas.toBuffer('image/png');
 
       // Send to all connected clients
       const disconnected = [];
@@ -159,9 +159,9 @@ class GraphicsOverlay extends EventEmitter {
         try {
           if (!client.destroyed) {
             client.write('--graphicsboundary\r\n');
-            client.write('Content-Type: image/jpeg\r\n');
-            client.write(`Content-Length: ${jpegBuffer.length}\r\n\r\n`);
-            client.write(jpegBuffer);
+            client.write('Content-Type: image/png\r\n');
+            client.write(`Content-Length: ${pngBuffer.length}\r\n\r\n`);
+            client.write(pngBuffer);
             client.write('\r\n');
           } else {
             disconnected.push(i);
