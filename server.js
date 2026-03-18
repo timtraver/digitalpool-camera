@@ -41,8 +41,8 @@ const streamController = new StreamController(CAMERA_DEVICE);
 let graphicsOverlay = null;
 if (GraphicsOverlay) {
   graphicsOverlay = new GraphicsOverlay();
-  // Use 5 FPS to reduce CPU load - graphics overlays don't need high framerates
-  graphicsOverlay.initialize(1920, 1080, 5);
+  // Use 2 FPS to reduce CPU and memory load - scoreboards don't need high framerates
+  graphicsOverlay.initialize(1920, 1080, 2);
 
   // Set up a custom drawing function for the scoreboard
   graphicsOverlay.setDrawFunction((ctx, frameNumber, timestamp) => {
@@ -68,9 +68,9 @@ if (GraphicsOverlay) {
     ctx.font = "bold 32px Sans";
     ctx.fillText("POOL MATCH - LIVE", 70, 95);
 
-    // Draw score that changes every 5 frames (every second at 5fps)
-    const score1 = Math.floor((frameNumber / 5) % 10);
-    const score2 = Math.floor((frameNumber / 5) % 8);
+    // Draw score that changes every 2 frames (every second at 2fps)
+    const score1 = Math.floor((frameNumber / 2) % 10);
+    const score2 = Math.floor((frameNumber / 2) % 8);
     ctx.font = "bold 60px Sans";
     ctx.fillText(`${score1} - ${score2}`, 200, 170);
 
@@ -625,6 +625,13 @@ let currentIdlePreviewProcess = null;
 // Video stream endpoint using MJPEG
 app.get("/video/stream", async (req, res) => {
   console.log("New video stream connection requested");
+
+  // If graphics overlay is enabled, don't start idle preview (saves memory)
+  if (streamController.streamConfig.skiaGraphicsEnabled) {
+    console.log("⚠️  Idle preview disabled when graphics overlay is enabled (saves memory)");
+    res.status(503).send("Idle preview disabled when graphics overlay is enabled. Start the stream to see preview.");
+    return;
+  }
 
   // Kill the previous idle preview process if it exists
   if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
