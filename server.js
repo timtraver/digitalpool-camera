@@ -81,7 +81,7 @@ if (GraphicsOverlay) {
 
     // Log every 10 frames to show activity
     if (frameNumber % 10 === 0) {
-      console.log(`🎨 Drawing frame ${frameNumber} | Score: ${score1} - ${score2}`);
+      console.log(`🎨 Drawing frame ${frameNumber} | Score: ${score1} - ${score2} | RED OVERLAY ACTIVE`);
     }
   });
 

@@ -28,6 +28,7 @@ exec gst-launch-1.0 -v \
   compositor name=mix \
     sink_0::zorder=0 \
     sink_1::zorder=1 sink_1::alpha=$ALPHA \
+  ! 'video/x-raw,width='$WIDTH',height='$HEIGHT',framerate='$FRAMERATE'/1' \
   ! videoconvert \
   ! tee name=t \
   \
