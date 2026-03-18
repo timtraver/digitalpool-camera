@@ -545,6 +545,9 @@ app.get("/video/tcp-preview", (req, res) => {
   });
 });
 
+// Track active idle preview processes to avoid killing them
+let activeIdlePreviewPids = new Set();
+
 // Video stream endpoint using MJPEG
 app.get("/video/stream", async (req, res) => {
   console.log("New video stream connection requested");
@@ -565,7 +568,7 @@ app.get("/video/stream", async (req, res) => {
     return;
   }
 
-  // Check if camera is busy and try to clean up
+  // Check if camera is busy and try to clean up (but don't kill our own idle preview processes)
   const { execSync } = require("child_process");
   try {
     const fuserOutput = execSync(`fuser ${CAMERA_DEVICE} 2>&1`, {
@@ -574,7 +577,7 @@ app.get("/video/stream", async (req, res) => {
     });
 
     if (fuserOutput.includes(":")) {
-      console.log("⚠️  Camera is busy, attempting cleanup...");
+      console.log("⚠️  Camera is busy, checking processes...");
       const pids = fuserOutput
         .split(":")[1]
         .trim()
@@ -583,7 +586,13 @@ app.get("/video/stream", async (req, res) => {
         .filter((p) => p);
 
       for (const pid of pids) {
-        console.log(`Killing process ${pid} using camera...`);
+        // Don't kill our own idle preview processes
+        if (activeIdlePreviewPids.has(parseInt(pid))) {
+          console.log(`Skipping our own idle preview process ${pid}`);
+          continue;
+        }
+
+        console.log(`Killing external process ${pid} using camera...`);
         try {
           execSync(`kill -9 ${pid}`);
         } catch (e) {
@@ -737,8 +746,13 @@ app.get("/video/stream", async (req, res) => {
 
   console.log(`Starting GStreamer idle preview ${config.overlayEnabled ? "with" : "without"} overlays`);
 
-  console.log("Starting GStreamer idle preview with overlays");
   const gst = spawn("gst-launch-1.0", gstArgs);
+
+  // Track this process so we don't kill it when a new connection comes in
+  if (gst.pid) {
+    activeIdlePreviewPids.add(gst.pid);
+    console.log(`📹 Tracking idle preview process PID: ${gst.pid}`);
+  }
 
   gst.stdout.on("data", (data) => {
     try {
@@ -759,17 +773,27 @@ app.get("/video/stream", async (req, res) => {
 
   gst.on("close", (code) => {
     console.log(`GStreamer idle preview exited with code ${code}`);
+    // Remove from tracking
+    if (gst.pid) {
+      activeIdlePreviewPids.delete(gst.pid);
+      console.log(`📹 Removed idle preview process PID: ${gst.pid}`);
+    }
     res.end();
   });
 
   gst.on("error", (err) => {
     console.error("Failed to start GStreamer:", err);
+    // Remove from tracking
+    if (gst.pid) {
+      activeIdlePreviewPids.delete(gst.pid);
+    }
     res.end();
   });
 
   req.on("close", () => {
     console.log("Client disconnected, killing GStreamer idle preview");
     gst.kill();
+    // PID will be removed in the 'close' event handler
   });
 });
 
