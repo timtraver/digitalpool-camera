@@ -432,33 +432,43 @@ app.get("/video/hls/playlist.m3u8", (req, res) => {
       return res.status(404).send("Stream directory not found");
     }
 
-    // Get all .ts files and sort them
+    // Get all .ts files and sort them numerically
     const files = fs.readdirSync(streamDir)
       .filter(f => f.endsWith('.ts'))
-      .sort();
-
-    console.log("📁 Found segments:", files);
+      .map(f => {
+        const match = f.match(/segment(\d+)\.ts/);
+        return match ? { name: f, num: parseInt(match[1]) } : null;
+      })
+      .filter(f => f !== null)
+      .sort((a, b) => a.num - b.num);
 
     if (files.length === 0) {
       console.log("⚠️  No segments available yet");
       return res.status(404).send("No segments available yet");
     }
 
+    // Get the sequence number from the oldest segment
+    const mediaSequence = files[0].num;
+
     // Generate HLS playlist
     let playlist = "#EXTM3U\n";
     playlist += "#EXT-X-VERSION:3\n";
-    playlist += "#EXT-X-TARGETDURATION:2\n";
-    playlist += "#EXT-X-MEDIA-SEQUENCE:0\n";
+    playlist += "#EXT-X-TARGETDURATION:3\n";
+    playlist += `#EXT-X-MEDIA-SEQUENCE:${mediaSequence}\n`;
 
     // Add each segment
     for (const file of files) {
       playlist += "#EXTINF:2.0,\n";
-      playlist += file + "\n";
+      playlist += file.name + "\n";
     }
 
-    console.log("✅ Serving dynamic HLS playlist with", files.length, "segments");
+    // Only log occasionally to reduce spam (every 10th request)
+    if (Math.random() < 0.1) {
+      console.log("✅ Serving HLS playlist: segments", mediaSequence, "to", files[files.length - 1].num);
+    }
+
     res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
-    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.send(playlist);
   } catch (error) {
@@ -471,16 +481,18 @@ app.get("/video/hls/:segment", (req, res) => {
   const fs = require("fs");
   const segmentPath = `/tmp/stream/${req.params.segment}`;
 
-  console.log("📺 HLS segment requested:", req.params.segment);
-
   if (!fs.existsSync(segmentPath)) {
-    console.log("⚠️  Segment not found:", segmentPath);
+    console.log("⚠️  Segment not found:", req.params.segment);
     return res.status(404).send("Segment not found");
   }
 
-  console.log("✅ Serving HLS segment:", req.params.segment);
+  // Only log occasionally to reduce spam
+  if (Math.random() < 0.05) {
+    console.log("✅ Serving segment:", req.params.segment);
+  }
+
   res.setHeader("Content-Type", "video/mp2t");
-  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.setHeader("Access-Control-Allow-Origin", "*");
   fs.createReadStream(segmentPath).pipe(res);
 });
