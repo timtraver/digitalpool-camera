@@ -367,7 +367,7 @@ function updateExposureControlsState() {
 if (exposureAuto) {
   exposureAuto.addEventListener("change", (e) => {
     const value = parseInt(e.target.value);
-    socket.emit("setControl", { control: "exposure_auto", value: value });
+    socket.emit("setControl", { control: "auto_exposure", value: value });
     updateExposureControlsState(); // Update control states
   });
 
@@ -376,7 +376,7 @@ if (exposureAuto) {
 }
 
 createSliderControl(
-  "exposure_absolute",
+  "exposure_time_absolute",
   "exposureAbsolute",
   "exposureAbsoluteValue",
 );
@@ -393,7 +393,7 @@ if (whiteBalanceAuto) {
   whiteBalanceAuto.addEventListener("change", (e) => {
     const value = e.target.checked ? 1 : 0;
     socket.emit("setControl", {
-      control: "white_balance_temperature_auto",
+      control: "white_balance_automatic",
       value: value,
     });
   });
@@ -410,7 +410,7 @@ const focusAuto = document.getElementById("focusAuto");
 if (focusAuto) {
   focusAuto.addEventListener("change", (e) => {
     const value = e.target.checked ? 1 : 0;
-    socket.emit("setControl", { control: "focus_auto", value: value });
+    socket.emit("setControl", { control: "focus_automatic_continuous", value: value });
   });
 }
 
@@ -439,17 +439,17 @@ function loadCameraConfigToUI(config) {
   }
 
   // Exposure controls
-  if (config.exposure_auto !== undefined) {
+  if (config.auto_exposure !== undefined) {
     const exposureAutoSelect = document.getElementById("exposureAuto");
-    exposureAutoSelect.value = config.exposure_auto;
+    exposureAutoSelect.value = config.auto_exposure;
     updateCustomDropdownDisplay(exposureAutoSelect);
     updateExposureControlsState();
   }
-  if (config.exposure_absolute !== undefined) {
+  if (config.exposure_time_absolute !== undefined) {
     document.getElementById("exposureAbsolute").value =
-      config.exposure_absolute;
+      config.exposure_time_absolute;
     document.getElementById("exposureAbsoluteValue").textContent =
-      config.exposure_absolute;
+      config.exposure_time_absolute;
   }
   if (config.gain !== undefined) {
     document.getElementById("gain").value = config.gain;
@@ -463,9 +463,9 @@ function loadCameraConfigToUI(config) {
   }
 
   // White Balance controls
-  if (config.white_balance_temperature_auto !== undefined) {
+  if (config.white_balance_automatic !== undefined) {
     document.getElementById("whiteBalanceAuto").checked =
-      config.white_balance_temperature_auto === 1;
+      config.white_balance_automatic === 1;
   }
   if (config.white_balance_temperature !== undefined) {
     document.getElementById("whiteBalanceTemp").value =
@@ -475,8 +475,8 @@ function loadCameraConfigToUI(config) {
   }
 
   // Focus controls
-  if (config.focus_auto !== undefined) {
-    document.getElementById("focusAuto").checked = config.focus_auto === 1;
+  if (config.focus_automatic_continuous !== undefined) {
+    document.getElementById("focusAuto").checked = config.focus_automatic_continuous === 1;
   }
   if (config.focus_absolute !== undefined) {
     document.getElementById("focusAbsolute").value = config.focus_absolute;

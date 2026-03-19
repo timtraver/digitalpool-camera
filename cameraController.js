@@ -14,31 +14,32 @@ class CameraController {
     this.currentTilt = 0;
 
     // Camera control definitions based on v4l2-ctl
+    // Control names match Orange Pi 5 (mainline kernel 6.11) with OBSBOT Tiny 2 Lite
     this.controls = {
       brightness: { id: "0x00980900", min: 0, max: 100, step: 1, default: 50 },
       contrast: { id: "0x00980901", min: 0, max: 100, step: 1, default: 50 },
       saturation: { id: "0x00980902", min: 0, max: 100, step: 1, default: 50 },
       hue: { id: "0x00980903", min: 0, max: 100, step: 1, default: 50 },
-      white_balance_temperature_auto: {
+      white_balance_automatic: {
         id: "0x0098090c",
         type: "bool",
         default: 1,
       },
-      white_balance_red_component: {
+      red_balance: {
         id: "0x0098090e",
         min: 0,
         max: 2048,
         step: 1,
         default: 1024,
       },
-      white_balance_blue_component: {
+      blue_balance: {
         id: "0x0098090f",
         min: 0,
         max: 2048,
         step: 1,
         default: 1024,
       },
-      gain: { id: "0x00980913", min: 1, max: 128, step: 1, default: 1 },
+      gain: { id: "0x00980913", min: 1, max: 64, step: 1, default: 1 },
       power_line_frequency: {
         id: "0x00980918",
         type: "menu",
@@ -61,14 +62,14 @@ class CameraController {
         step: 1,
         default: 9,
       },
-      exposure_auto: {
+      auto_exposure: {
         id: "0x009a0901",
         type: "menu",
         min: 0,
         max: 3,
-        default: 0,
+        default: 0, // 0=Auto, 1=Manual, 3=Aperture Priority
       },
-      exposure_absolute: {
+      exposure_time_absolute: {
         id: "0x009a0902",
         min: 1,
         max: 2500,
@@ -96,8 +97,8 @@ class CameraController {
         step: 1,
         default: 0,
       },
-      focus_auto: { id: "0x009a090c", type: "bool", default: 1 },
-      zoom_absolute: { id: "0x009a090d", min: 0, max: 12, step: 1, default: 0 },
+      focus_automatic_continuous: { id: "0x009a090c", type: "bool", default: 1 },
+      zoom_absolute: { id: "0x009a090d", min: 0, max: 100, step: 1, default: 0 },
       zoom_continuous: {
         id: "0x009a090f",
         min: 0,
