@@ -197,7 +197,7 @@ sudo journalctl -u digitalpool-camera -f
 
 - **Directional Pad**: Click arrows to pan/tilt the camera
 - **Home Button**: Reset camera to center position
-- **Zoom Slider**: Adjust zoom level (0-12)
+- **Zoom Slider**: Adjust zoom level (0-100)
 - **Keyboard**: Use arrow keys for pan/tilt
 
 ### Image Quality

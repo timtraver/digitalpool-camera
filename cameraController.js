@@ -548,7 +548,7 @@ class CameraController {
 
   /**
    * Zoom the camera
-   * @param {number} level - Zoom level (0-12)
+   * @param {number} level - Zoom level (0-100)
    */
   async zoom(level) {
     return await this.setControl("zoom_absolute", level);
