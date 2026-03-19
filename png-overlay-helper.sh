@@ -34,14 +34,14 @@ exec gst-launch-1.0 -v \
   $(if [ "$SHOW_TIMESTAMP" = "true" ]; then echo "! clockoverlay valignment=bottom halignment=right font-desc=\"Sans Bold 24\" color=4294967295 time-format=\"%Y-%m-%d %H:%M:%S\" xpad=20 ypad=20 shaded-background=true"; fi) \
   ! tee name=t \
   \
-  t. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! nvvidconv \
-  ! 'video/x-raw(memory:NVMM)' \
-  ! nvv4l2h264enc bitrate=$BITRATE preset-level=1 profile=0 iframeinterval=15 insert-sps-pps=true maxperf-enable=true \
+  t. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert \
+  ! 'video/x-raw,format=I420' \
+  ! x264enc speed-preset=ultrafast tune=zerolatency bitrate=$((BITRATE/1000)) key-int-max=30 \
   ! 'video/x-h264,stream-format=byte-stream' \
   ! h264parse config-interval=-1 \
   ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream \
   ! mpegtsmux alignment=7 \
-  ! srtserversink uri=srt://:$SRT_PORT latency=125 sync=false \
+  ! srtsink uri="srt://:$SRT_PORT" wait-for-connection=false latency=125 \
   \
   t. ! queue max-size-buffers=10 leaky=downstream \
   ! videoscale \

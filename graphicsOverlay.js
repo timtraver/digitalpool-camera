@@ -318,8 +318,9 @@ class GraphicsOverlay extends EventEmitter {
       this.drawFunction(this.ctx, this.frameCount, timestamp);
 
       // Get raw RGBA buffer from canvas
+      // Use Buffer.from(typedArray) NOT Buffer.from(arrayBuffer) to avoid Cairo stride padding
       const imageData = this.ctx.getImageData(0, 0, this.width, this.height);
-      const buffer = Buffer.from(imageData.data.buffer);
+      const buffer = Buffer.from(imageData.data);
 
       // Write to GStreamer stdin
       if (this.gstProcess.stdin && this.gstProcess.stdin.writable && !this.gstProcess.stdin.destroyed) {
@@ -327,7 +328,8 @@ class GraphicsOverlay extends EventEmitter {
 
         // Log first frame to confirm it's working
         if (this.frameCount === 0) {
-          console.log(`✅ First frame sent (${buffer.length} bytes)`);
+          const expected = this.width * this.height * 4;
+          console.log(`✅ First frame sent (${buffer.length} bytes, expected ${expected})`);
         }
       } else {
         // Pipe is closed, stop generating frames
@@ -362,8 +364,9 @@ class GraphicsOverlay extends EventEmitter {
       this.drawFunction(this.ctx, this.frameCount, timestamp);
 
       // Get raw RGBA buffer from canvas
+      // Use Buffer.from(typedArray) NOT Buffer.from(arrayBuffer) to avoid Cairo stride padding
       const imageData = this.ctx.getImageData(0, 0, this.width, this.height);
-      const buffer = Buffer.from(imageData.data.buffer);
+      const buffer = Buffer.from(imageData.data);
 
       // Write to output stream with backpressure handling
       const out = this.outputStream || process.stdout;
@@ -379,7 +382,8 @@ class GraphicsOverlay extends EventEmitter {
 
       // Log every 30 frames (once per second at 30fps, or every 15 seconds at 2fps)
       if (this.frameCount % 30 === 0) {
-        console.error(`🎨 Generated frame ${this.frameCount} (${buffer.length} bytes)`);
+        const expected = this.width * this.height * 4;
+        console.error(`🎨 Generated frame ${this.frameCount} (${buffer.length} bytes, expected ${expected})`);
       }
 
       this.frameCount++;

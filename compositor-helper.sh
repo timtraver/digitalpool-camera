@@ -32,12 +32,12 @@ exec gst-launch-1.0 -v \
   ! videoconvert \
   ! tee name=t \
   \
-  t. ! queue ! nvvidconv \
-  ! 'video/x-raw(memory:NVMM)' \
-  ! nvv4l2h264enc bitrate=$BITRATE \
+  t. ! queue ! videoconvert \
+  ! 'video/x-raw,format=I420' \
+  ! x264enc speed-preset=ultrafast tune=zerolatency bitrate=$((BITRATE/1000)) key-int-max=30 \
   ! h264parse \
   ! mpegtsmux \
-  ! srtserversink uri=srt://:$SRT_PORT \
+  ! srtsink uri="srt://:$SRT_PORT" wait-for-connection=false latency=125 \
   \
   t. ! queue max-size-buffers=10 leaky=downstream \
   ! videoscale \

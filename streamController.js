@@ -19,7 +19,7 @@ class StreamController extends EventEmitter {
       height: 1080,
       framerate: 30,
       bitrate: 5000000, // 5 Mbps
-      encoder: "nvv4l2h264enc", // Hardware encoder
+      encoder: "x264enc", // Software encoder (Orange Pi 5)
       autoStart: false, // Auto-start streaming on server startup
       // Overlay settings
       overlayEnabled: false,
@@ -210,10 +210,10 @@ class StreamController extends EventEmitter {
         if (code !== 0 && code !== null) {
           console.error(`❌ GStreamer failed with exit code ${code}`);
           console.error("💡 Common causes:");
-          console.error("   - Missing plugin (e.g., srtserversink for SRT)");
+          console.error("   - Missing plugin (e.g., srtsink for SRT)");
           console.error("   - Invalid pipeline syntax");
           console.error("   - Camera device busy");
-          console.error("💡 Run 'gst-inspect-1.0 srtserversink' to check if SRT plugin is installed");
+          console.error("💡 Run 'gst-inspect-1.0 srtsink' to check if SRT plugin is installed");
           console.log("⚠️  GStreamer failed, cleaning up camera resources...");
           await this._killCameraProcesses();
         }
@@ -748,9 +748,29 @@ class StreamController extends EventEmitter {
     // Branch 1: Encoding pipeline for streaming
     pipeline.push("t.", "!", "queue", "!");
 
-    // Hardware encoding pipeline
-    if (encoder === "nvv4l2h264enc") {
-      // NVIDIA V4L2 encoder (best for Jetson)
+    // Encoding pipeline
+    if (encoder === "x264enc") {
+      // Software encoder (Orange Pi 5 / generic Linux)
+      const bitrate_kbps = Math.round(bitrate / 1000);
+      pipeline.push(
+        "videoconvert",
+        "!",
+        "video/x-raw,format=I420",
+        "!",
+        "x264enc",
+        `speed-preset=ultrafast`,
+        `tune=zerolatency`,
+        `bitrate=${bitrate_kbps}`,
+        "key-int-max=30",
+        "!",
+        "video/x-h264,stream-format=byte-stream",
+        "!",
+        "h264parse",
+        "config-interval=-1", // Insert SPS/PPS before every keyframe
+        "!",
+      );
+    } else if (encoder === "nvv4l2h264enc") {
+      // NVIDIA V4L2 encoder (Jetson)
       pipeline.push(
         "nvvidconv",
         "!",
@@ -758,18 +778,16 @@ class StreamController extends EventEmitter {
         "!",
         "nvv4l2h264enc",
         `bitrate=${bitrate}`,
-        "preset-level=1", // Ultra-fast preset for low latency
-        "profile=0", // Baseline profile (fastest encoding)
-        "iframeinterval=15", // Keyframe every 0.5 seconds (reduced from 30)
-        "insert-sps-pps=true", // Insert SPS/PPS with every IDR frame
-        "insert-vui=false", // Disable VUI for lower overhead
-        "insert-aud=false", // Disable AUD for lower overhead
-        "maxperf-enable=true", // Enable maximum performance mode
+        "preset-level=1",
+        "profile=0",
+        "iframeinterval=15",
+        "insert-sps-pps=true",
+        "maxperf-enable=true",
         "!",
         "video/x-h264,stream-format=byte-stream",
         "!",
         "h264parse",
-        "config-interval=-1", // Insert SPS/PPS before every keyframe
+        "config-interval=-1",
         "!",
       );
     } else if (encoder === "omxh264enc") {
@@ -783,8 +801,7 @@ class StreamController extends EventEmitter {
     // Branch 2a: Output stream (RTMP, SRT, or UDP) - from t2 (H.264)
     if (protocol === "srt") {
       // SRT streaming - low latency with error correction
-      // Use srtserversink - Jetson acts as server, OBS connects as client
-      // This avoids firewall issues on the Mac
+      // Use srtsink as listener - device acts as server, OBS connects as client
       // Port 8891 (8890 is used by MediaMTX)
 
       console.log(
@@ -803,8 +820,9 @@ class StreamController extends EventEmitter {
         "mpegtsmux",
         "alignment=7", // Align packets for better compatibility
         "!",
-        "srtserversink", // Jetson acts as SRT server
-        "uri=srt://0.0.0.0:8891", // Listen on all interfaces, port 8891
+        "srtsink", // SRT listener mode
+        "uri=srt://:8891", // Listen on all interfaces, port 8891
+        "wait-for-connection=false", // Don't block pipeline waiting for client
         "latency=125", // Latency in milliseconds
       );
     } else if (protocol === "udp") {
@@ -987,7 +1005,8 @@ class StreamController extends EventEmitter {
    */
   static async testGStreamer() {
     return new Promise((resolve) => {
-      const test = spawn("gst-inspect-1.0", ["nvv4l2h264enc"]);
+      // Try x264enc first (software encoder, works on Orange Pi 5 and most Linux)
+      const test = spawn("gst-inspect-1.0", ["x264enc"]);
       let output = "";
 
       test.stdout.on("data", (data) => {
@@ -998,23 +1017,23 @@ class StreamController extends EventEmitter {
         if (code === 0) {
           resolve({
             success: true,
-            encoder: "nvv4l2h264enc",
-            message: "Hardware encoder available",
+            encoder: "x264enc",
+            message: "x264 software encoder available",
           });
         } else {
-          // Try fallback to omxh264enc
-          const testOmx = spawn("gst-inspect-1.0", ["omxh264enc"]);
-          testOmx.on("close", (omxCode) => {
-            if (omxCode === 0) {
+          // Try fallback to nvv4l2h264enc (Jetson)
+          const testNv = spawn("gst-inspect-1.0", ["nvv4l2h264enc"]);
+          testNv.on("close", (nvCode) => {
+            if (nvCode === 0) {
               resolve({
                 success: true,
-                encoder: "omxh264enc",
-                message: "OpenMAX encoder available",
+                encoder: "nvv4l2h264enc",
+                message: "NVIDIA hardware encoder available",
               });
             } else {
               resolve({
                 success: false,
-                error: "No hardware encoder found",
+                error: "No encoder found (tried x264enc, nvv4l2h264enc)",
               });
             }
           });
