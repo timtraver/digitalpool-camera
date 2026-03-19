@@ -18,7 +18,7 @@ OVERLAY_FPS=2
 
 # Overlay canvas size - just the scoreboard box, not full 1920x1080
 # Position on screen (compositor xpos/ypos)
-OVL_WIDTH=500
+OVL_WIDTH=600
 OVL_HEIGHT=200
 OVL_X=50
 OVL_Y=50
@@ -47,8 +47,7 @@ gst-launch-1.0 \
   jpegdec ! \
   videoconvert ! \
   video/x-raw,format=RGBA ! \
-  compositor name=mix sink_0::zorder=0 sink_0::width=$WIDTH sink_0::height=$HEIGHT sink_1::zorder=1 sink_1::alpha=1.0 sink_1::xpos=$OVL_X sink_1::ypos=$OVL_Y ! \
-  video/x-raw,width=$WIDTH,height=$HEIGHT ! \
+  compositor name=mix sink_0::zorder=0 sink_1::zorder=1 sink_1::alpha=1.0 sink_1::xpos=$OVL_X sink_1::ypos=$OVL_Y ! \
   tee name=t \
   \
   t. ! queue max-size-buffers=2 leaky=downstream ! \
