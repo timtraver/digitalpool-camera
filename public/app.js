@@ -581,7 +581,6 @@ startStreamBtn.addEventListener("click", async () => {
         width: 1920,
         height: 1080,
         framerate: 30,
-        encoder: "nvv4l2h264enc",
       };
 
       console.log("Starting stream after restart with config:", config);
@@ -596,7 +595,6 @@ startStreamBtn.addEventListener("click", async () => {
       width: 1920,
       height: 1080,
       framerate: 30,
-      encoder: "nvv4l2h264enc",
     };
 
     // Only UDP requires a destination (SRT uses server mode, RTMP has default)
