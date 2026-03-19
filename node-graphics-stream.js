@@ -72,11 +72,10 @@ overlay.setDrawFunction((ctx, frameNumber) => {
   ctx.lineWidth = 3;
   ctx.strokeRect(x, y, boxWidth, boxHeight);
 
-  // Get font sizes from state (scaled by 1.5x for 1920x1080, matching streamController)
-  const baseFontSize = (state.overlayFontSize || 32) * 1.5;
-  const titleFontSize = Math.round(baseFontSize);
-  const scoreFontSize = Math.round(baseFontSize * 1.875); // 60/32 ratio
-  const nameFontSize = Math.round(baseFontSize * 0.75); // 24/32 ratio
+  // Fixed font sizes for scoreboard (independent of overlayFontSize which is for title/timestamp)
+  const titleFontSize = 32;
+  const scoreFontSize = 60;
+  const nameFontSize = 24;
 
   // Get color from state
   const textColor = state.overlayColor || "white";
