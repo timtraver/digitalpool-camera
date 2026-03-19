@@ -26,6 +26,8 @@ class GraphicsOverlay extends EventEmitter {
 
     // Output stream for RGBA pipe mode (defaults to process.stdout)
     this.outputStream = null;
+    // Backpressure flag - true when pipe is ready for more data
+    this.pipeReady = true;
   }
 
   /**
@@ -347,6 +349,12 @@ class GraphicsOverlay extends EventEmitter {
   generateFrameRGBA() {
     if (!this.isRunning) return;
 
+    // Skip this frame if the previous write hasn't drained yet
+    // This prevents buffering stale frames and keeps the overlay current
+    if (!this.pipeReady) {
+      return;
+    }
+
     try {
       const timestamp = Date.now();
 
@@ -357,9 +365,17 @@ class GraphicsOverlay extends EventEmitter {
       const imageData = this.ctx.getImageData(0, 0, this.width, this.height);
       const buffer = Buffer.from(imageData.data.buffer);
 
-      // Write to output stream (FIFO or stdout)
+      // Write to output stream with backpressure handling
       const out = this.outputStream || process.stdout;
-      out.write(buffer);
+      const canContinue = out.write(buffer);
+
+      if (!canContinue) {
+        // Pipe is full - wait for drain before writing next frame
+        this.pipeReady = false;
+        out.once('drain', () => {
+          this.pipeReady = true;
+        });
+      }
 
       // Log every 30 frames (once per second at 30fps, or every 15 seconds at 2fps)
       if (this.frameCount % 30 === 0) {

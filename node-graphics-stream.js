@@ -54,23 +54,17 @@ overlay.setDrawFunction((ctx, frameNumber) => {
     console.error(`🎨 Drawing frame ${frameNumber} | Score: ${state.player1Score} - ${state.player2Score} | Font: ${state.overlayFontSize}px`);
   }
 
-  // Clear canvas with transparent background
+  // Clear canvas (canvas is sized to the scoreboard box, positioned by GStreamer compositor)
   ctx.clearRect(0, 0, width, height);
 
-  // Draw a pool scoreboard in the top-left corner
-  const x = 50;
-  const y = 50;
-  const boxWidth = 500;
-  const boxHeight = 200;
-
-  // Semi-transparent background
+  // Semi-transparent background (fills entire canvas)
   ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-  ctx.fillRect(x, y, boxWidth, boxHeight);
+  ctx.fillRect(0, 0, width, height);
 
   // Border
   ctx.strokeStyle = "white";
   ctx.lineWidth = 3;
-  ctx.strokeRect(x, y, boxWidth, boxHeight);
+  ctx.strokeRect(0, 0, width, height);
 
   // Fixed font sizes for scoreboard (independent of overlayFontSize which is for title/timestamp)
   const titleFontSize = 32;
@@ -83,17 +77,17 @@ overlay.setDrawFunction((ctx, frameNumber) => {
   // Title
   ctx.fillStyle = textColor;
   ctx.font = `bold ${titleFontSize}px Sans`;
-  ctx.fillText(state.matchTitle, x + 20, y + 45);
+  ctx.fillText(state.matchTitle, 20, 45);
 
   // Scores
   ctx.font = `bold ${scoreFontSize}px Sans`;
-  ctx.fillText(`${state.player1Score} - ${state.player2Score}`, x + 180, y + 130);
+  ctx.fillText(`${state.player1Score} - ${state.player2Score}`, 130, 130);
 
   // Player names
   ctx.font = `${nameFontSize}px Sans`;
   ctx.fillStyle = textColor === "white" ? "rgba(255, 255, 255, 0.8)" : textColor;
-  ctx.fillText(state.player1Name, x + 20, y + 180);
-  ctx.fillText(state.player2Name, x + boxWidth - 120, y + 180);
+  ctx.fillText(state.player1Name, 20, 180);
+  ctx.fillText(state.player2Name, width - 120, 180);
 });
 
 // Log to stderr (stdout is used for RGBA data in pipe mode)
