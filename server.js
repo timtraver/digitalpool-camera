@@ -1410,11 +1410,37 @@ streamController.on("preparing", async () => {
       console.log(`🎨 Using Cairo overlay (Python-based dynamic graphics)`);
       console.log(`💡 Graphics will be drawn by cairo-graphics-stream.py`);
 
+      // Sync gameState with current stream config
+      const config = streamController.streamConfig;
+      if (config.overlayFontSize !== undefined) {
+        gameState.overlayFontSize = config.overlayFontSize;
+      }
+      if (config.overlayColor !== undefined) {
+        gameState.overlayColor = config.overlayColor;
+      }
+      if (config.overlayBackground !== undefined) {
+        gameState.overlayBackground = config.overlayBackground;
+      }
+
       // Write the initial game state JSON for Cairo to read
       regenerateOverlay();
     } else if (overlayType === 'node-cairo') {
       console.log(`🎨 Using Node-Cairo overlay (Node.js-based dynamic graphics)`);
       console.log(`💡 Graphics will be drawn by node-graphics-stream.js`);
+
+      // Sync gameState with current stream config
+      const config = streamController.streamConfig;
+      if (config.overlayFontSize !== undefined) {
+        gameState.overlayFontSize = config.overlayFontSize;
+      }
+      if (config.overlayColor !== undefined) {
+        gameState.overlayColor = config.overlayColor;
+      }
+      if (config.overlayBackground !== undefined) {
+        gameState.overlayBackground = config.overlayBackground;
+      }
+
+      console.log(`📝 Using font size: ${gameState.overlayFontSize}px`);
 
       // Write the initial game state JSON for Node script to read
       regenerateOverlay();

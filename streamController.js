@@ -29,7 +29,7 @@ class StreamController extends EventEmitter {
       overlayUrl: "",
       timestampPosition: "bottom-right",
       titlePosition: "top-left",
-      overlayFontSize: 24, // Reduced from 32 for better fit
+      overlayFontSize: 32, // Default font size for overlays
       overlayColor: "white",
       overlayBackground: "transparent",
       overlayBackgroundOpacity: 70,

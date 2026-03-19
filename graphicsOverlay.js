@@ -23,6 +23,9 @@ class GraphicsOverlay extends EventEmitter {
 
     // Custom drawing function (can be overridden)
     this.drawFunction = this.defaultDrawFunction.bind(this);
+
+    // Output stream for RGBA pipe mode (defaults to process.stdout)
+    this.outputStream = null;
   }
 
   /**
@@ -74,6 +77,14 @@ class GraphicsOverlay extends EventEmitter {
    */
   setDrawFunction(drawFn) {
     this.drawFunction = drawFn;
+  }
+
+  /**
+   * Set a custom output stream for RGBA pipe mode (instead of process.stdout)
+   * @param {WritableStream} stream - Writable stream to write RGBA frames to
+   */
+  setOutputStream(stream) {
+    this.outputStream = stream;
   }
 
   /**
@@ -329,8 +340,9 @@ class GraphicsOverlay extends EventEmitter {
       const imageData = this.ctx.getImageData(0, 0, this.width, this.height);
       const buffer = Buffer.from(imageData.data.buffer);
 
-      // Write to stdout for GStreamer to read
-      process.stdout.write(buffer);
+      // Write to output stream (FIFO or stdout)
+      const out = this.outputStream || process.stdout;
+      out.write(buffer);
 
       // Log every 30 frames (once per second at 30fps, or every 15 seconds at 2fps)
       if (this.frameCount % 30 === 0) {

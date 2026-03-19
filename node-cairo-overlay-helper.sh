@@ -1,6 +1,6 @@
 #!/bin/bash
 # Node-Cairo Graphics Overlay Helper
-# Runs Node.js graphics generator in PNG mode with gdkpixbufoverlay
+# Runs Node.js graphics generator streaming raw RGBA via pipe to GStreamer compositor
 
 CAMERA_DEVICE=$1
 WIDTH=$2
@@ -14,35 +14,22 @@ SHOW_TIMESTAMP=$8
 # Path to Node.js graphics script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_SCRIPT="$SCRIPT_DIR/node-graphics-stream.js"
-PNG_PATH="/tmp/graphics-overlay-node.png"
+OVERLAY_FPS=2
 
-echo "🎨 Starting Node-Cairo overlay pipeline (PNG mode)..."
+echo "🎨 Starting Node-Cairo overlay pipeline (RGBA pipe mode)..."
 echo "Camera: $CAMERA_DEVICE"
 echo "Resolution: ${WIDTH}x${HEIGHT}@${FRAMERATE}fps"
 echo "SRT Port: $SRT_PORT"
 echo "Graphics Script: $NODE_SCRIPT"
-echo "PNG Path: $PNG_PATH"
+echo "Overlay FPS: $OVERLAY_FPS"
 
-# Start Node.js graphics generator in background (PNG mode)
-node "$NODE_SCRIPT" "$WIDTH" "$HEIGHT" "2" "png" "$PNG_PATH" &
-NODE_PID=$!
+# Start Node.js graphics generator writing RGBA to stdout
+# We pipe it directly into GStreamer via fdsrc
+echo "✅ Starting pipeline with Node.js RGBA pipe..."
 
-echo "✅ Node.js graphics generator started (PID: $NODE_PID)"
-
-# Wait for the first PNG to be generated
-echo "⏳ Waiting for PNG file to be created..."
-sleep 2
-
-# Verify PNG exists
-if [ ! -f "$PNG_PATH" ]; then
-  echo "❌ ERROR: PNG file not created at $PNG_PATH"
-  kill $NODE_PID 2>/dev/null
-  exit 1
-fi
-
-echo "✅ PNG file ready: $PNG_PATH"
-
-# Build GStreamer pipeline with compositor (overlay graphics on camera feed)
+# Build GStreamer pipeline with compositor
+# Node.js writes raw RGBA frames to stdout, piped to fdsrc via process substitution
+node "$NODE_SCRIPT" "$WIDTH" "$HEIGHT" "$OVERLAY_FPS" "pipe" "" | \
 gst-launch-1.0 \
   v4l2src device="$CAMERA_DEVICE" do-timestamp=true ! \
   image/jpeg,width=$WIDTH,height=$HEIGHT,framerate=$FRAMERATE/1 ! \
@@ -64,11 +51,9 @@ gst-launch-1.0 \
   mpegtsmux alignment=7 ! \
   srtserversink uri=srt://0.0.0.0:$SRT_PORT latency=125 sync=false \
   \
-  multifilesrc location="$PNG_PATH" loop=true caps="image/png,framerate=2/1" ! \
-  pngdec ! \
-  videoconvert ! \
-  video/x-raw,format=RGBA,width=$WIDTH,height=$HEIGHT ! \
-  queue ! \
+  fdsrc fd=0 ! \
+  video/x-raw,format=RGBA,width=$WIDTH,height=$HEIGHT,framerate=${OVERLAY_FPS}/1 ! \
+  queue max-size-buffers=2 leaky=downstream ! \
   mix. \
   \
   t. ! queue max-size-buffers=10 leaky=downstream ! \
@@ -81,8 +66,5 @@ gst-launch-1.0 \
   multipartmux boundary=--jpgboundary ! \
   tcpserversink host=0.0.0.0 port=8555 sync=false recover-policy=keyframe
 
-# Cleanup
-echo "🛑 Stopping Node.js graphics generator..."
-kill $NODE_PID 2>/dev/null
-rm -f "$PNG_PATH"
+echo "🛑 Pipeline exited"
 
