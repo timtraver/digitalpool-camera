@@ -38,7 +38,7 @@ gst-launch-1.0 \
   v4l2src device="$CAMERA_DEVICE" do-timestamp=true ! \
   image/jpeg,width=$WIDTH,height=$HEIGHT,framerate=$FRAMERATE/1 ! \
   jpegdec ! \
-  nvvidconv ! \
+  videoconvert ! \
   video/x-raw,format=RGBA ! \
   compositor name=mix sink_0::zorder=0 sink_1::zorder=1 sink_1::alpha=1.0 ! \
   tee name=t \
