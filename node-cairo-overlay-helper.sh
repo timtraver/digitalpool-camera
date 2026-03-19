@@ -48,6 +48,10 @@ gst-launch-1.0 \
   videoconvert ! \
   video/x-raw,format=RGBA ! \
   compositor name=mix sink_0::zorder=0 sink_1::zorder=1 sink_1::alpha=1.0 sink_1::xpos=$OVL_X sink_1::ypos=$OVL_Y ! \
+  video/x-raw,width=$WIDTH,height=$HEIGHT ! \
+  videoconvert ! \
+  $(if [ -n "$OVERLAY_TEXT" ]; then echo "textoverlay text=\"$OVERLAY_TEXT\" valignment=bottom halignment=left font-desc=\"Sans Bold 24\" color=4294967295 xpad=20 ypad=20 shaded-background=true !"; fi) \
+  $(if [ "$SHOW_TIMESTAMP" = "true" ]; then echo "clockoverlay valignment=bottom halignment=right font-desc=\"Sans Bold 24\" color=4294967295 time-format=\"%Y-%m-%d %H:%M:%S\" xpad=20 ypad=20 shaded-background=true !"; fi) \
   tee name=t \
   \
   t. ! queue max-size-buffers=2 leaky=downstream ! \

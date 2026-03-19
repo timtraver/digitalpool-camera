@@ -54,23 +54,36 @@ overlay.setDrawFunction((ctx, frameNumber) => {
     console.error(`🎨 Drawing frame ${frameNumber} | Score: ${state.player1Score} - ${state.player2Score} | Font: ${state.overlayFontSize}px`);
   }
 
-  // Clear canvas (canvas is sized to the scoreboard box, positioned by GStreamer compositor)
+  // Clear entire canvas (transparent)
   ctx.clearRect(0, 0, width, height);
 
-  // Semi-transparent background (fills entire canvas)
-  ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-  ctx.fillRect(0, 0, width, height);
+  // Draw scoreboard box with margin inside the canvas
+  // This ensures borders and text never touch the canvas edge
+  const margin = 4;
+  const boxX = margin;
+  const boxY = margin;
+  const boxW = width - margin * 2;
+  const boxH = height - margin * 2;
 
-  // Border - inset by half lineWidth so it stays fully inside the canvas
+  // Semi-transparent background
+  ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+
+  // Border
   ctx.strokeStyle = "white";
   ctx.lineWidth = 3;
-  ctx.strokeRect(1.5, 1.5, width - 3, height - 3);
+  ctx.strokeRect(boxX + 1.5, boxY + 1.5, boxW - 3, boxH - 3);
 
-  // Fixed font sizes for scoreboard (independent of overlayFontSize which is for title/timestamp)
+  // Fixed font sizes for scoreboard
   const titleFontSize = 32;
   const scoreFontSize = 60;
   const nameFontSize = 24;
   const padding = 20;
+
+  // Inner content area
+  const contentLeft = boxX + padding;
+  const contentRight = boxX + boxW - padding;
+  const contentWidth = boxW - padding * 2;
 
   // Get color from state
   const textColor = state.overlayColor || "white";
@@ -78,21 +91,35 @@ overlay.setDrawFunction((ctx, frameNumber) => {
   // Title
   ctx.fillStyle = textColor;
   ctx.font = `bold ${titleFontSize}px Sans`;
-  ctx.fillText(state.matchTitle, padding, 45);
+  ctx.fillText(state.matchTitle, contentLeft, boxY + 42);
 
-  // Scores - centered
+  // Scores - centered in box
   ctx.font = `bold ${scoreFontSize}px Sans`;
   const scoreText = `${state.player1Score} - ${state.player2Score}`;
   const scoreWidth = ctx.measureText(scoreText).width;
-  ctx.fillText(scoreText, (width - scoreWidth) / 2, 130);
+  ctx.fillText(scoreText, boxX + (boxW - scoreWidth) / 2, boxY + 120);
 
   // Player names
   ctx.font = `${nameFontSize}px Sans`;
   ctx.fillStyle = textColor === "white" ? "rgba(255, 255, 255, 0.8)" : textColor;
-  ctx.fillText(state.player1Name, padding, 180);
-  // Right-align player 2 name
-  const p2Width = ctx.measureText(state.player2Name).width;
-  ctx.fillText(state.player2Name, width - padding - p2Width, 180);
+
+  // Truncate names if they would overlap (each name gets half the content width)
+  const maxNameWidth = contentWidth / 2 - 10; // 10px gap between names
+
+  // Player 1 - left aligned
+  let p1Name = state.player1Name;
+  while (ctx.measureText(p1Name).width > maxNameWidth && p1Name.length > 1) {
+    p1Name = p1Name.slice(0, -1);
+  }
+  ctx.fillText(p1Name, contentLeft, boxY + boxH - padding);
+
+  // Player 2 - right aligned
+  let p2Name = state.player2Name;
+  while (ctx.measureText(p2Name).width > maxNameWidth && p2Name.length > 1) {
+    p2Name = p2Name.slice(0, -1);
+  }
+  const p2Width = ctx.measureText(p2Name).width;
+  ctx.fillText(p2Name, contentRight - p2Width, boxY + boxH - padding);
 });
 
 // Log to stderr (stdout is used for RGBA data in pipe mode)
