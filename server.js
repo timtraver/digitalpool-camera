@@ -829,9 +829,11 @@ app.get("/video/stream", async (req, res) => {
     "videoconvert",
   ];
 
+  // Always need a ! after videoconvert
+  gstArgs.push("!");
+
   // Add overlays if enabled (using EXACT same structure as streaming pipeline)
   if (config.overlayEnabled) {
-    gstArgs.push("!");
 
     // Add timestamp overlay if enabled (matches streamController.js exactly)
     if (config.showTimestamp) {
