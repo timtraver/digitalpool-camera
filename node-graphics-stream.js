@@ -61,15 +61,16 @@ overlay.setDrawFunction((ctx, frameNumber) => {
   ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
   ctx.fillRect(0, 0, width, height);
 
-  // Border
+  // Border - inset by half lineWidth so it stays fully inside the canvas
   ctx.strokeStyle = "white";
   ctx.lineWidth = 3;
-  ctx.strokeRect(0, 0, width, height);
+  ctx.strokeRect(1.5, 1.5, width - 3, height - 3);
 
   // Fixed font sizes for scoreboard (independent of overlayFontSize which is for title/timestamp)
   const titleFontSize = 32;
   const scoreFontSize = 60;
   const nameFontSize = 24;
+  const padding = 20;
 
   // Get color from state
   const textColor = state.overlayColor || "white";
@@ -77,17 +78,21 @@ overlay.setDrawFunction((ctx, frameNumber) => {
   // Title
   ctx.fillStyle = textColor;
   ctx.font = `bold ${titleFontSize}px Sans`;
-  ctx.fillText(state.matchTitle, 20, 45);
+  ctx.fillText(state.matchTitle, padding, 45);
 
-  // Scores
+  // Scores - centered
   ctx.font = `bold ${scoreFontSize}px Sans`;
-  ctx.fillText(`${state.player1Score} - ${state.player2Score}`, 130, 130);
+  const scoreText = `${state.player1Score} - ${state.player2Score}`;
+  const scoreWidth = ctx.measureText(scoreText).width;
+  ctx.fillText(scoreText, (width - scoreWidth) / 2, 130);
 
   // Player names
   ctx.font = `${nameFontSize}px Sans`;
   ctx.fillStyle = textColor === "white" ? "rgba(255, 255, 255, 0.8)" : textColor;
-  ctx.fillText(state.player1Name, 20, 180);
-  ctx.fillText(state.player2Name, width - 120, 180);
+  ctx.fillText(state.player1Name, padding, 180);
+  // Right-align player 2 name
+  const p2Width = ctx.measureText(state.player2Name).width;
+  ctx.fillText(state.player2Name, width - padding - p2Width, 180);
 });
 
 // Log to stderr (stdout is used for RGBA data in pipe mode)
