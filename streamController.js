@@ -4,7 +4,7 @@ const fs = require("fs");
 const path = require("path");
 
 class StreamController extends EventEmitter {
-  constructor(cameraDevice = "/dev/video0") {
+  constructor(cameraDevice = "/dev/video2") {
     super();
     this.cameraDevice = cameraDevice;
     this.gstProcess = null;

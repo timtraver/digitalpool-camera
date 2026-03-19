@@ -5,7 +5,7 @@ const path = require("path");
 const execAsync = promisify(exec);
 
 class CameraController {
-  constructor(device = "/dev/video0") {
+  constructor(device = "/dev/video2") {
     this.device = device;
     this.configFile = path.join(__dirname, "camera-config.json");
 

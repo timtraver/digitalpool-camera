@@ -26,7 +26,7 @@ const io = socketIO(server, {
 });
 
 const PORT = process.env.PORT || 3000;
-const CAMERA_DEVICE = process.env.CAMERA_DEVICE || "/dev/video0";
+const CAMERA_DEVICE = process.env.CAMERA_DEVICE || "/dev/video2";
 
 // Initialize camera controller
 const camera = new CameraController(CAMERA_DEVICE);
@@ -1234,20 +1234,14 @@ server.listen(PORT, async () => {
     // Start a temporary stream to wake up the camera for PTZ commands
     console.log("📹 Starting temporary stream to activate camera PTZ...");
     const { spawn } = require("child_process");
-    const tempStream = spawn("ffmpeg", [
-      "-f",
-      "v4l2",
-      "-input_format",
-      "mjpeg",
-      "-video_size",
-      "1280x720",
-      "-framerate",
-      "30",
-      "-i",
-      CAMERA_DEVICE,
-      "-f",
-      "null",
-      "-",
+    const tempStream = spawn("gst-launch-1.0", [
+      "v4l2src",
+      `device=${CAMERA_DEVICE}`,
+      "num-buffers=60",
+      "!",
+      "image/jpeg,width=1280,height=720,framerate=30/1",
+      "!",
+      "fakesink",
     ]);
 
     // Wait for stream to start
