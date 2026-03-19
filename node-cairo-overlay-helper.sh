@@ -23,12 +23,15 @@ echo "SRT Port: $SRT_PORT"
 echo "Graphics Script: $NODE_SCRIPT"
 echo "Overlay FPS: $OVERLAY_FPS"
 
-# Start Node.js graphics generator writing RGBA to stdout
-# We pipe it directly into GStreamer via fdsrc
+# Calculate RGBA frame size for blocksize
+FRAME_SIZE=$((WIDTH * HEIGHT * 4))
 echo "✅ Starting pipeline with Node.js RGBA pipe..."
+echo "📊 RGBA frame size: $FRAME_SIZE bytes"
 
 # Build GStreamer pipeline with compositor
 # Node.js writes raw RGBA frames to stdout, piped to fdsrc via process substitution
+# blocksize must match exactly one frame so fdsrc delivers complete frames
+# rawvideoparse ensures GStreamer correctly identifies frame boundaries
 node "$NODE_SCRIPT" "$WIDTH" "$HEIGHT" "$OVERLAY_FPS" "pipe" "" | \
 gst-launch-1.0 \
   v4l2src device="$CAMERA_DEVICE" do-timestamp=true ! \
@@ -51,8 +54,8 @@ gst-launch-1.0 \
   mpegtsmux alignment=7 ! \
   srtserversink uri=srt://0.0.0.0:$SRT_PORT latency=125 sync=false \
   \
-  fdsrc fd=0 ! \
-  video/x-raw,format=RGBA,width=$WIDTH,height=$HEIGHT,framerate=${OVERLAY_FPS}/1 ! \
+  fdsrc fd=0 blocksize=$FRAME_SIZE ! \
+  rawvideoparse format=rgba width=$WIDTH height=$HEIGHT framerate=${OVERLAY_FPS}/1 ! \
   queue max-size-buffers=2 leaky=downstream ! \
   mix. \
   \

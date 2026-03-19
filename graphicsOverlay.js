@@ -136,6 +136,23 @@ class GraphicsOverlay extends EventEmitter {
       this.isRunning = true;
       this.frameCount = 0;
 
+      // Handle EPIPE gracefully - GStreamer may exit before us
+      const out = this.outputStream || process.stdout;
+      out.on('error', (err) => {
+        if (err.code === 'EPIPE') {
+          console.error('🛑 Pipe closed (GStreamer exited), stopping overlay...');
+          this.stop();
+        } else {
+          console.error('❌ Output stream error:', err);
+        }
+      });
+
+      // Ignore SIGPIPE to prevent crash when pipe breaks
+      process.on('SIGPIPE', () => {
+        console.error('🛑 SIGPIPE received, stopping overlay...');
+        this.stop();
+      });
+
       // Start generating frames immediately
       const frameTime = 1000 / this.fps;
       this.frameInterval = setInterval(() => {
