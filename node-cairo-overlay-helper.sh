@@ -10,6 +10,9 @@ BITRATE=$5
 SRT_PORT=$6
 OVERLAY_TEXT=$7
 SHOW_TIMESTAMP=$8
+FONT_SIZE=${9:-48}
+OVERLAY_COLOR=${10:-0xFFFFFFFF}
+OVERLAY_BG=${11:-transparent}
 
 # Path to Node.js graphics script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,8 +53,8 @@ gst-launch-1.0 \
   compositor name=mix sink_0::zorder=0 sink_1::zorder=1 sink_1::alpha=1.0 sink_1::xpos=$OVL_X sink_1::ypos=$OVL_Y ! \
   video/x-raw,width=$WIDTH,height=$HEIGHT ! \
   videoconvert ! \
-  $(if [ -n "$OVERLAY_TEXT" ]; then echo "textoverlay text=\"$OVERLAY_TEXT\" valignment=bottom halignment=left font-desc=\"Sans Bold 24\" color=4294967295 xpad=20 ypad=20 shaded-background=true !"; fi) \
-  $(if [ "$SHOW_TIMESTAMP" = "true" ]; then echo "clockoverlay valignment=bottom halignment=right font-desc=\"Sans Bold 24\" color=4294967295 time-format=\"%Y-%m-%d %H:%M:%S\" xpad=20 ypad=20 shaded-background=true !"; fi) \
+  $(if [ -n "$OVERLAY_TEXT" ]; then BG_OPT=""; if [ "$OVERLAY_BG" != "transparent" ]; then BG_OPT="shaded-background=true"; fi; echo "textoverlay text=\"$OVERLAY_TEXT\" valignment=bottom halignment=left font-desc=\"Sans Bold $FONT_SIZE\" color=$OVERLAY_COLOR xpad=20 ypad=20 $BG_OPT !"; fi) \
+  $(if [ "$SHOW_TIMESTAMP" = "true" ]; then BG_OPT=""; if [ "$OVERLAY_BG" != "transparent" ]; then BG_OPT="shaded-background=true"; fi; echo "clockoverlay valignment=bottom halignment=right font-desc=\"Sans Bold $FONT_SIZE\" color=$OVERLAY_COLOR time-format=\"%Y-%m-%d %H:%M:%S\" xpad=20 ypad=20 $BG_OPT !"; fi) \
   tee name=t \
   \
   t. ! queue max-size-buffers=2 leaky=downstream ! \

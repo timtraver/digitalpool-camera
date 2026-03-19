@@ -565,6 +565,11 @@ class StreamController extends EventEmitter {
 
     // Use the shell script that manages Node.js + GStreamer
     const scriptPath = path.join(__dirname, 'node-cairo-overlay-helper.sh');
+    // Scale font size the same way the text-only pipeline does (1.5x for 1080p)
+    const scaledFontSize = Math.round((this.streamConfig.overlayFontSize || 32) * 1.5);
+    const overlayColor = this._colorToInt(this.streamConfig.overlayColor || "white");
+    const overlayBackground = this.streamConfig.overlayBackground || "transparent";
+
     const scriptArgs = [
       this.cameraDevice,
       width.toString(),
@@ -574,6 +579,9 @@ class StreamController extends EventEmitter {
       srtPort,
       overlayText || "",
       showTimestamp ? "true" : "false",
+      scaledFontSize.toString(),
+      overlayColor,
+      overlayBackground,
     ];
 
     return {
