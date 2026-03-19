@@ -1295,10 +1295,9 @@ function applyOverlaySettings() {
     overlayFontSize: parseInt(overlayFontSize.value),
     overlayColor: overlayColor.value,
     overlayBackground: overlayBackground.value,
-    // Skia graphics overlay
+    // Graphics overlay
     skiaGraphicsEnabled: document.getElementById("skiaGraphicsEnabled")?.checked || false,
-    skiaGraphicsPort: parseInt(document.getElementById("skiaGraphicsPort")?.value || 8556),
-    skiaGraphicsAlpha: parseFloat(document.getElementById("skiaGraphicsAlpha")?.value || 1.0),
+    overlayType: document.getElementById("skiaGraphicsType")?.value || "node-cairo",
   };
 
   console.log("Auto-applying overlay config:", overlayConfig);
@@ -1393,45 +1392,28 @@ titlePosition.addEventListener("change", () => {
   applyOverlaySettings();
 });
 
-// Skia Graphics Overlay Controls
+// Graphics Overlay Controls
 const skiaGraphicsEnabled = document.getElementById("skiaGraphicsEnabled");
-const skiaGraphicsPort = document.getElementById("skiaGraphicsPort");
-const skiaGraphicsAlpha = document.getElementById("skiaGraphicsAlpha");
-const skiaGraphicsAlphaValue = document.getElementById("skiaGraphicsAlphaValue");
-const skiaGraphicsOptions = document.getElementById("skiaGraphicsOptions");
-const skiaGraphicsAlphaControl = document.getElementById("skiaGraphicsAlphaControl");
+const skiaGraphicsType = document.getElementById("skiaGraphicsType");
+const skiaGraphicsTypeControl = document.getElementById("skiaGraphicsTypeControl");
 
 if (skiaGraphicsEnabled) {
   skiaGraphicsEnabled.addEventListener("change", () => {
     const enabled = skiaGraphicsEnabled.checked;
-    console.log(`🎨 Skia graphics overlay ${enabled ? "enabled" : "disabled"}`);
+    console.log(`🎨 Graphics overlay ${enabled ? "enabled" : "disabled"}`);
 
     // Show/hide options
-    if (skiaGraphicsOptions) {
-      skiaGraphicsOptions.style.display = enabled ? "flex" : "none";
-    }
-    if (skiaGraphicsAlphaControl) {
-      skiaGraphicsAlphaControl.style.display = enabled ? "flex" : "none";
+    if (skiaGraphicsTypeControl) {
+      skiaGraphicsTypeControl.style.display = enabled ? "flex" : "none";
     }
 
     applyOverlaySettings();
   });
 }
 
-if (skiaGraphicsPort) {
-  skiaGraphicsPort.addEventListener("change", () => {
-    console.log(`🎨 Skia graphics port changed to: ${skiaGraphicsPort.value}`);
-    applyOverlaySettings();
-  });
-}
-
-if (skiaGraphicsAlpha) {
-  skiaGraphicsAlpha.addEventListener("input", () => {
-    const alpha = parseFloat(skiaGraphicsAlpha.value);
-    if (skiaGraphicsAlphaValue) {
-      skiaGraphicsAlphaValue.textContent = alpha.toFixed(1);
-    }
-    console.log(`🎨 Skia graphics alpha changed to: ${alpha}`);
+if (skiaGraphicsType) {
+  skiaGraphicsType.addEventListener("change", () => {
+    console.log(`🎨 Graphics type changed to: ${skiaGraphicsType.value}`);
     applyOverlaySettings();
   });
 }
@@ -1493,29 +1475,18 @@ socket.on("streamStatus", (status) => {
       urlOverlayOptions.style.display = "block";
     }
 
-    // Load Skia graphics settings
+    // Load graphics overlay settings
     if (skiaGraphicsEnabled) {
       skiaGraphicsEnabled.checked = status.config.skiaGraphicsEnabled || false;
       const enabled = skiaGraphicsEnabled.checked;
 
-      if (skiaGraphicsOptions) {
-        skiaGraphicsOptions.style.display = enabled ? "flex" : "none";
-      }
-      if (skiaGraphicsAlphaControl) {
-        skiaGraphicsAlphaControl.style.display = enabled ? "flex" : "none";
+      if (skiaGraphicsTypeControl) {
+        skiaGraphicsTypeControl.style.display = enabled ? "flex" : "none";
       }
     }
 
-    if (skiaGraphicsPort) {
-      skiaGraphicsPort.value = status.config.skiaGraphicsPort || 8556;
-    }
-
-    if (skiaGraphicsAlpha) {
-      const alpha = status.config.skiaGraphicsAlpha || 1.0;
-      skiaGraphicsAlpha.value = alpha;
-      if (skiaGraphicsAlphaValue) {
-        skiaGraphicsAlphaValue.textContent = alpha.toFixed(1);
-      }
+    if (skiaGraphicsType) {
+      skiaGraphicsType.value = status.config.overlayType || "node-cairo";
     }
 
     // Update preview overlay

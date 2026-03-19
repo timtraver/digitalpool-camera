@@ -274,42 +274,26 @@
                   </div>
                 </div>
 
-                <!-- Skia Graphics Overlay -->
+                <!-- Graphics Overlay -->
                 <div class="overlay-section" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1)">
                   <div class="control-item-compact">
                     <label>
                       <input type="checkbox" id="skiaGraphicsEnabled" />
-                      <strong>🎨 Skia Graphics Overlay</strong>
+                      <strong>🎨 Graphics Overlay</strong>
                     </label>
                   </div>
                   <div style="padding: 4px 0">
                     <small style="color: rgba(255, 255, 255, 0.6); font-size: 9px">
-                      Composites custom graphics from Node.js/Skia into the stream
+                      Composites custom scoreboard graphics into the stream
                     </small>
                   </div>
-                  <div class="control-item-compact" id="skiaGraphicsOptions" style="display: none">
-                    <label>Graphics Port:</label>
-                    <input
-                      type="number"
-                      id="skiaGraphicsPort"
-                      value="8556"
-                      min="1024"
-                      max="65535"
-                      style="width: 80px"
-                    />
-                  </div>
-                  <div class="control-item-compact" id="skiaGraphicsAlphaControl" style="display: none">
-                    <label>Opacity:</label>
-                    <input
-                      type="range"
-                      id="skiaGraphicsAlpha"
-                      min="0"
-                      max="1"
-                      step="0.1"
-                      value="1.0"
-                      style="flex: 1"
-                    />
-                    <span id="skiaGraphicsAlphaValue" style="min-width: 40px; text-align: right">1.0</span>
+                  <div class="control-item-compact" id="skiaGraphicsTypeControl" style="display: none">
+                    <label>Graphics Type:</label>
+                    <select id="skiaGraphicsType">
+                      <option value="png">PNG (Static)</option>
+                      <option value="node-cairo" selected>Node-Cairo (Dynamic)</option>
+                      <option value="cairo">Cairo (Python)</option>
+                    </select>
                   </div>
                 </div>
               </div>
