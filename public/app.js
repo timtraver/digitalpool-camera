@@ -248,8 +248,8 @@ let currentZoom = 0;
 if (zoomLevel) {
   zoomLevel.addEventListener("change", (e) => {
     const value = parseInt(e.target.value);
-    // Clamp value between 0 and 12
-    const clampedValue = Math.max(0, Math.min(12, value));
+    // Clamp value between 0 and 100
+    const clampedValue = Math.max(0, Math.min(100, value));
     if (value !== clampedValue) {
       e.target.value = clampedValue;
     }
@@ -264,7 +264,7 @@ const zoomOutBtn = document.getElementById("zoomOut");
 
 if (zoomInBtn) {
   zoomInBtn.addEventListener("click", () => {
-    if (currentZoom < 12) {
+    if (currentZoom < 100) {
       currentZoom++;
       if (zoomLevel) zoomLevel.value = currentZoom;
       socket.emit("zoom", { level: currentZoom });
