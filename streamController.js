@@ -42,8 +42,15 @@ class StreamController extends EventEmitter {
       skiaGraphicsAlpha: 1.0, // Opacity of graphics overlay (0.0-1.0)
     };
 
-    // Load config from file or use defaults
-    this.streamConfig = this.loadConfig() || defaultConfig;
+    // Load config from file, merging with defaults to fill in any missing fields
+    const savedConfig = this.loadConfig();
+    if (savedConfig) {
+      this.streamConfig = { ...defaultConfig, ...savedConfig };
+    } else {
+      this.streamConfig = defaultConfig;
+      // Save defaults so a config file always exists
+      this.saveConfig();
+    }
   }
 
   /**
