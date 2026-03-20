@@ -95,13 +95,16 @@ class PuppeteerOverlay extends EventEmitter {
       ]);
 
       // Use ImageMagick to make green background transparent
+      // Write to temp file first, then atomically rename to avoid GStreamer reading a half-written file
+      const tempOutput = this.pngPath + ".tmp";
       await this._execPromise("convert", [
         this.rawPngPath,
         "-alpha", "on",
         "-fuzz", "10%",
         "-transparent", "rgb(0,255,0)",
-        `PNG32:${this.pngPath}`,
+        `PNG32:${tempOutput}`,
       ]);
+      fs.renameSync(tempOutput, this.pngPath);
 
       console.log(`📸 Overlay PNG updated: ${gameState.player1Score} - ${gameState.player2Score}`);
       this.emit("updated", this.pngPath);
