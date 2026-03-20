@@ -144,7 +144,7 @@
               <!-- Startup Position -->
               <div class="ptz-settings" style="margin-top: 8px">
                 <button id="setStartupPosition" class="btn-control" style="font-size: 10px; padding: 4px 8px; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer;" title="Save current PTZ position as the startup position">
-                  📌 Set Startup Position
+                  📌 Set Home Position
                 </button>
                 <small id="startupPosInfo" style="color: #888; font-size: 9px; text-align: center; margin-top: 2px"></small>
               </div>
@@ -247,7 +247,7 @@
                       <strong>Remote Overlay</strong>
                     </label>
                   </div>
-                  <div id="urlOverlayOptions" style="display: none">
+                  <div id="urlOverlayOptions">
                     <div class="control-item-compact">
                       <label>URL:</label>
                       <input
@@ -474,25 +474,9 @@
               </button>
             </div>
 
-            <div
-              id="streamStatus"
-              style="
-                text-align: center;
-                padding: 6px;
-                background: rgba(6, 16, 27, 0.6);
-                border-radius: 4px;
-                border: 1px solid rgba(18, 199, 255, 0.2);
-                margin-top: 8px;
-              "
-            >
-              <small style="font-size: 10px; color: rgba(255, 255, 255, 0.7)"
-                >Status:
-                <span
-                  id="streamStatusText"
-                  style="font-weight: 600; color: rgba(255, 255, 255, 0.9)"
-                  >Not streaming</span
-                ></small
-              >
+            <div id="streamStatus" class="stream-status-bar status-idle">
+              <span id="streamStatusDot" class="status-dot"></span>
+              <span id="streamStatusText">⏹ Not Streaming</span>
             </div>
           </div>
         </div>

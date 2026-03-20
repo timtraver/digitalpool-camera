@@ -544,11 +544,35 @@ const streamBitrate = document.getElementById("streamBitrate");
 const startStreamBtn = document.getElementById("startStream");
 const stopStreamBtn = document.getElementById("stopStream");
 const streamStatusText = document.getElementById("streamStatusText");
+const streamStatusBar = document.getElementById("streamStatus");
 const startBtnIcon = document.getElementById("startBtnIcon");
 const startBtnText = document.getElementById("startBtnText");
 
 // Track streaming state
 let isCurrentlyStreaming = false;
+
+// Helper to update stream status display
+function setStreamStatus(state, text) {
+  streamStatusBar.className = "stream-status-bar";
+  switch (state) {
+    case "idle":
+      streamStatusBar.classList.add("status-idle");
+      streamStatusText.textContent = "⏹ " + text;
+      break;
+    case "starting":
+      streamStatusBar.classList.add("status-starting");
+      streamStatusText.textContent = "⏳ " + text;
+      break;
+    case "live":
+      streamStatusBar.classList.add("status-live");
+      streamStatusText.textContent = "🔴 " + text;
+      break;
+    case "error":
+      streamStatusBar.classList.add("status-error");
+      streamStatusText.textContent = "⚠️ " + text;
+      break;
+  }
+}
 
 // Update placeholder based on protocol
 streamProtocol.addEventListener("change", () => {
@@ -570,8 +594,7 @@ startStreamBtn.addEventListener("click", async () => {
 
   if (isRestart) {
     console.log("Restarting stream...");
-    streamStatusText.textContent = "Restarting...";
-    streamStatusText.style.color = "#f59e0b";
+    setStreamStatus("starting", "Restarting...");
 
     // Stop the stream first
     socket.emit("stopStream");
@@ -610,8 +633,7 @@ startStreamBtn.addEventListener("click", async () => {
     console.log("Starting stream with config:", config);
     socket.emit("startStream", config);
 
-    streamStatusText.textContent = "Starting...";
-    streamStatusText.style.color = "#f59e0b";
+    setStreamStatus("starting", "Starting...");
   }
 });
 
@@ -620,8 +642,7 @@ stopStreamBtn.addEventListener("click", () => {
   console.log("Stopping stream");
   socket.emit("stopStream");
 
-  streamStatusText.textContent = "Stopping...";
-  streamStatusText.style.color = "#f59e0b";
+  setStreamStatus("starting", "Stopping...");
 });
 
 // Stream result handler
@@ -631,8 +652,7 @@ socket.on("streamResult", (result) => {
     alert(`Stream error: ${result.error}`);
     startStreamBtn.disabled = false;
     stopStreamBtn.disabled = true;
-    streamStatusText.textContent = "Error";
-    streamStatusText.style.color = "#ef4444";
+    setStreamStatus("error", "Stream Error");
   }
 });
 
@@ -695,8 +715,7 @@ socket.on("streamStatus", (status) => {
     startStreamBtn.classList.add("btn-restart");
 
     stopStreamBtn.disabled = false;
-    streamStatusText.textContent = `Streaming (${status.config?.protocol?.toUpperCase()})`;
-    streamStatusText.style.color = "#10b981";
+    setStreamStatus("live", `LIVE — ${status.config?.protocol?.toUpperCase() || "SRT"}`);
 
     // Switch to TCP preview when streaming
     setTimeout(() => {
@@ -711,8 +730,7 @@ socket.on("streamStatus", (status) => {
     startStreamBtn.classList.add("btn-start");
 
     stopStreamBtn.disabled = true;
-    streamStatusText.textContent = "Not streaming";
-    streamStatusText.style.color = "rgba(255, 255, 255, 0.7)";
+    setStreamStatus("idle", "Not Streaming");
 
     // Switch back to MJPEG preview when not streaming
     setTimeout(() => {
@@ -728,8 +746,7 @@ socket.on("streamError", (data) => {
   // (some "errors" are just informational messages)
   if (!stopStreamBtn.disabled) {
     // Stream is not running, so this is a real error
-    streamStatusText.textContent = "Stream error";
-    streamStatusText.style.color = "#ef4444";
+    setStreamStatus("error", "Stream Error");
   }
 });
 
@@ -1030,8 +1047,9 @@ function updateOverlayVisibility() {
   // Text style section visible if either title or timestamp is on
   textStyleOptions.style.display =
     (overlayEnabled.checked || showTimestamp.checked) ? "" : "none";
-  // Remote overlay URL options
-  urlOverlayOptions.style.display = remoteOverlayEnabled.checked ? "" : "none";
+  // Remote overlay URL options - always visible, but dimmed when unchecked
+  urlOverlayOptions.style.opacity = remoteOverlayEnabled.checked ? "1" : "0.4";
+  urlOverlayOptions.style.pointerEvents = remoteOverlayEnabled.checked ? "" : "none";
 }
 updateOverlayVisibility();
 

@@ -698,22 +698,76 @@ header h1 {
   cursor: not-allowed;
 }
 
-.stream-status {
-  text-align: center;
-  padding: 6px;
-  background: rgba(6, 16, 27, 0.6);
-  border-radius: 4px;
-  border: 1px solid rgba(18, 199, 255, 0.2);
+/* Stream status bar - prominent indicator */
+.stream-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 6px;
+  margin-top: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  transition: all 0.3s ease;
 }
 
-.stream-status small {
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.7);
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
 }
 
-#streamStatusText {
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.9);
+/* Idle / Not Streaming */
+.stream-status-bar.status-idle {
+  background: rgba(100, 116, 139, 0.3);
+  border: 2px solid rgba(100, 116, 139, 0.6);
+  color: #94a3b8;
+}
+.stream-status-bar.status-idle .status-dot {
+  background: #64748b;
+}
+
+/* Starting / Stopping / Restarting */
+.stream-status-bar.status-starting {
+  background: rgba(245, 158, 11, 0.2);
+  border: 2px solid rgba(245, 158, 11, 0.6);
+  color: #fbbf24;
+}
+.stream-status-bar.status-starting .status-dot {
+  background: #f59e0b;
+  animation: pulse-dot 1s ease-in-out infinite;
+}
+
+/* Live / Streaming */
+.stream-status-bar.status-live {
+  background: rgba(239, 68, 68, 0.2);
+  border: 2px solid rgba(239, 68, 68, 0.7);
+  color: #f87171;
+}
+.stream-status-bar.status-live .status-dot {
+  background: #ef4444;
+  animation: pulse-dot 1.5s ease-in-out infinite;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.8);
+}
+
+/* Error */
+.stream-status-bar.status-error {
+  background: rgba(239, 68, 68, 0.15);
+  border: 2px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+.stream-status-bar.status-error .status-dot {
+  background: #ef4444;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.75); }
 }
 
 .overlay-controls {
