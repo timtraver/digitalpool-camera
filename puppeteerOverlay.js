@@ -86,7 +86,10 @@ class PuppeteerOverlay extends EventEmitter {
     } else {
       this._overlayUrl = null;
       this._stopPeriodicRefresh();
-      console.log("📄 Overlay switched to local HTML mode");
+      // Replace the last URL screenshot with a transparent placeholder
+      // so GStreamer doesn't keep showing the old (possibly white) image
+      this._createPlaceholderPNG(this.pngPath);
+      console.log("📄 Overlay switched to local HTML mode (cleared old overlay)");
     }
   }
 
@@ -183,8 +186,10 @@ class PuppeteerOverlay extends EventEmitter {
   }
 
   /**
-   * Render a remote URL overlay. Screenshots the URL using wkhtmltoimage
-   * with JavaScript execution enabled, then chroma-keys the green background.
+   * Render a remote URL overlay. Uses wkhtmltoimage with --transparent
+   * so the page background becomes alpha-transparent directly in the PNG.
+   * No chroma-keying needed — the remote page just uses normal HTML/CSS
+   * positioning and the empty areas are transparent.
    */
   async _renderUrlOverlay() {
     if (this._renderInProgress) {
@@ -194,23 +199,26 @@ class PuppeteerOverlay extends EventEmitter {
 
     this._renderInProgress = true;
     try {
-      // Render remote URL to PNG with wkhtmltoimage
+      // Render remote URL directly to PNG with transparent background
+      // --transparent: makes page background transparent (no chroma-key needed)
       // --enable-javascript: allow JS to execute (fetch scores, etc.)
       // --javascript-delay: wait for JS to finish before screenshot
       // --no-stop-slow-scripts: don't kill long-running scripts
+      const tempOutput = this.pngPath + ".tmp";
       await this._execPromise("wkhtmltoimage", [
         "--width", String(this.width),
         "--height", String(this.height),
         "--quality", "100",
+        "--transparent",
         "--enable-javascript",
         "--javascript-delay", String(this._jsDelay),
         "--no-stop-slow-scripts",
         this._overlayUrl,
-        this.rawPngPath,
+        tempOutput,
       ]);
 
-      // Use ImageMagick to make green background transparent
-      await this._chromaKeyAndSave();
+      // Atomic rename so GStreamer doesn't read a half-written file
+      fs.renameSync(tempOutput, this.pngPath);
 
       console.log(`📸 URL overlay PNG updated from: ${this._overlayUrl}`);
       this.emit("updated", this.pngPath);
@@ -369,7 +377,7 @@ class PuppeteerOverlay extends EventEmitter {
    */
   _execPromise(cmd, args) {
     return new Promise((resolve, reject) => {
-      execFile(cmd, args, { timeout: 15000 }, (err, stdout, stderr) => {
+      execFile(cmd, args, { timeout: 30000 }, (err, stdout, stderr) => {
         if (err) {
           reject(new Error(`${cmd} failed: ${err.message}\n${stderr}`));
         } else {

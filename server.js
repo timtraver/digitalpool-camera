@@ -382,7 +382,7 @@ app.post("/api/scoreboard", express.json(), (req, res) => {
 });
 
 // API endpoint to set/change the overlay URL (for remote JS-based overlays)
-app.post("/api/overlay-url", express.json(), (req, res) => {
+app.post("/api/overlay-url", express.json(), async (req, res) => {
   const { url, refreshInterval, jsDelay } = req.body;
   console.log(`🌍 REST API: Setting overlay URL:`, url || "(disabled)");
 
@@ -390,6 +390,9 @@ app.post("/api/overlay-url", express.json(), (req, res) => {
     puppeteerOverlay.setOverlayUrl(url, { refreshInterval, jsDelay });
     if (url && url.trim()) {
       puppeteerOverlay.startPeriodicRefresh();
+    } else {
+      // Switching back to local mode — regenerate the local scoreboard overlay
+      await puppeteerOverlay.updateState(gameState);
     }
   }
 
