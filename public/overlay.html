@@ -7,7 +7,7 @@
   html, body {
     width: 1920px;
     height: 1080px;
-    background: transparent;
+    background: #00FF00; /* chroma key green - will be made transparent */
     overflow: hidden;
     font-family: 'DejaVu Sans', 'Liberation Sans', Arial, sans-serif;
   }
@@ -16,8 +16,8 @@
     position: absolute;
     top: 40px;
     left: 40px;
-    background: rgba(0, 0, 0, 0.75);
-    border: 2px solid rgba(255, 255, 255, 0.6);
+    background: #1a1a2e; /* fully opaque dark background - no green bleed */
+    border: 2px solid #cccccc;
     border-radius: 12px;
     padding: 16px 24px;
     color: white;

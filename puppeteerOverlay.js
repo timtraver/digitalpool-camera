@@ -1,161 +1,257 @@
 const EventEmitter = require("events");
+const { execFile } = require("child_process");
+const fs = require("fs");
 const path = require("path");
 
 /**
- * Puppeteer-based HTML Overlay Generator
- * Uses headless Chromium to render an HTML overlay page and screenshot it as a transparent PNG.
+ * HTML Overlay Generator using wkhtmltoimage + ImageMagick
+ * Renders an HTML template to PNG using WebKit (wkhtmltoimage),
+ * then uses ImageMagick to chroma-key the green background to transparency.
  * The PNG is saved to disk for GStreamer's gdkpixbufoverlay to composite onto the video stream.
  */
 class PuppeteerOverlay extends EventEmitter {
   constructor() {
     super();
-    this.browser = null;
-    this.page = null;
     this.pngPath = "/tmp/graphics-overlay.png";
-    this.overlayUrl = null;
+    this.rawPngPath = "/tmp/overlay-raw.png";
+    this.tempHtmlPath = "/tmp/overlay-render.html";
     this.isRunning = false;
     this.width = 1920;
     this.height = 1080;
-    this._screenshotInProgress = false;
+    this._renderInProgress = false;
+    this._templateHtml = null;
   }
 
   /**
-   * Initialize and launch headless Chromium, navigate to the overlay page.
-   * @param {number} serverPort - The Express server port (to load overlay.html)
-   * @param {string} pngPath - Path to write the PNG screenshot
+   * Initialize the overlay renderer.
+   * Loads the HTML template and verifies wkhtmltoimage + convert are available.
+   * @param {number} serverPort - unused (kept for API compatibility)
+   * @param {string} pngPath - Path to write the final transparent PNG
    */
   async initialize(serverPort = 3000, pngPath = "/tmp/graphics-overlay.png") {
     this.pngPath = pngPath;
-    this.overlayUrl = `http://localhost:${serverPort}/overlay.html`;
 
-    console.log("🌐 Launching headless Chromium for overlay rendering...");
+    console.log("🌐 Initializing HTML overlay renderer (wkhtmltoimage + ImageMagick)...");
 
     try {
-      // Use puppeteer-core with the system Chromium
-      const puppeteer = require("puppeteer-core");
+      // Verify wkhtmltoimage is available
+      await this._execPromise("which", ["wkhtmltoimage"]);
+      console.log("  ✅ wkhtmltoimage found");
 
-      // Find system Chromium
-      const chromiumPath = await this._findChromium();
-      if (!chromiumPath) {
-        throw new Error("Chromium not found. Install with: sudo apt install chromium-browser");
-      }
-      console.log(`  📍 Using Chromium: ${chromiumPath}`);
+      // Verify ImageMagick convert is available
+      await this._execPromise("which", ["convert"]);
+      console.log("  ✅ ImageMagick convert found");
 
-      this.browser = await puppeteer.launch({
-        executablePath: chromiumPath,
-        headless: "new",
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-gpu",
-          "--disable-dev-shm-usage",
-          "--disable-web-security",
-          `--window-size=${this.width},${this.height}`,
-        ],
-      });
+      // Load the HTML template
+      const templatePath = path.join(__dirname, "public", "overlay.html");
+      this._templateHtml = fs.readFileSync(templatePath, "utf8");
+      console.log("  ✅ Overlay HTML template loaded");
 
-      this.page = await this.browser.newPage();
-      await this.page.setViewport({
-        width: this.width,
-        height: this.height,
-        deviceScaleFactor: 1,
-      });
-
-      // Navigate to overlay page
-      await this.page.goto(this.overlayUrl, { waitUntil: "domcontentloaded" });
       this.isRunning = true;
 
-      console.log("✅ Puppeteer overlay ready");
-      console.log(`  📐 Viewport: ${this.width}x${this.height}`);
+      console.log("✅ HTML overlay renderer ready");
+      console.log(`  📐 Output size: ${this.width}x${this.height}`);
       console.log(`  📁 PNG output: ${this.pngPath}`);
 
       this.emit("ready");
     } catch (err) {
-      console.error("❌ Failed to initialize Puppeteer overlay:", err.message);
+      console.error("❌ Failed to initialize overlay renderer:", err.message);
+      this._createPlaceholderPNG(this.pngPath);
       throw err;
     }
   }
 
   /**
-   * Update the overlay with new game state and take a screenshot.
+   * Update the overlay with new game state.
+   * Generates HTML with state baked in, renders with wkhtmltoimage,
+   * then strips green background with ImageMagick.
    * @param {object} gameState - The current game state
    */
   async updateState(gameState) {
-    if (!this.isRunning || !this.page) {
-      console.warn("⚠️  Puppeteer overlay not running, skipping update");
+    if (!this.isRunning) {
+      console.warn("⚠️  Overlay renderer not initialized, skipping update");
       return;
     }
 
-    // Prevent concurrent screenshots
-    if (this._screenshotInProgress) {
-      console.log("⏳ Screenshot already in progress, skipping");
+    // Prevent concurrent renders
+    if (this._renderInProgress) {
+      console.log("⏳ Render already in progress, skipping");
       return;
     }
 
-    this._screenshotInProgress = true;
+    this._renderInProgress = true;
     try {
-      // Inject the game state into the page
-      await this.page.evaluate((state) => {
-        if (typeof updateState === "function") {
-          updateState(state);
-        }
-      }, gameState);
+      // Generate HTML with game state baked in
+      const html = this._generateHtml(gameState);
+      fs.writeFileSync(this.tempHtmlPath, html);
 
-      // Take a transparent PNG screenshot
-      await this.page.screenshot({
-        path: this.pngPath,
-        type: "png",
-        omitBackground: true, // Transparent background
-      });
+      // Render HTML to PNG with wkhtmltoimage
+      await this._execPromise("wkhtmltoimage", [
+        "--width", String(this.width),
+        "--height", String(this.height),
+        "--quality", "100",
+        this.tempHtmlPath,
+        this.rawPngPath,
+      ]);
+
+      // Use ImageMagick to make green background transparent
+      await this._execPromise("convert", [
+        this.rawPngPath,
+        "-alpha", "on",
+        "-fuzz", "10%",
+        "-transparent", "rgb(0,255,0)",
+        `PNG32:${this.pngPath}`,
+      ]);
 
       console.log(`📸 Overlay PNG updated: ${gameState.player1Score} - ${gameState.player2Score}`);
       this.emit("updated", this.pngPath);
     } catch (err) {
       console.error("❌ Failed to update overlay:", err.message);
     } finally {
-      this._screenshotInProgress = false;
+      this._renderInProgress = false;
     }
   }
 
   /**
-   * Stop Puppeteer and close the browser.
+   * Stop the overlay renderer and clean up temp files.
    */
   async stop() {
-    if (this.browser) {
-      console.log("🛑 Closing Puppeteer browser...");
-      try {
-        await this.browser.close();
-      } catch (err) {
-        console.error("Error closing browser:", err.message);
-      }
-      this.browser = null;
-      this.page = null;
-    }
+    console.log("🛑 Stopping overlay renderer...");
     this.isRunning = false;
+    // Clean up temp files
+    for (const f of [this.tempHtmlPath, this.rawPngPath]) {
+      try { fs.unlinkSync(f); } catch (e) { /* ignore */ }
+    }
     this.emit("stopped");
   }
 
   /**
-   * Find system Chromium executable
+   * Generate HTML with game state values baked directly into the markup.
+   * This avoids needing JavaScript execution in wkhtmltoimage.
    */
-  async _findChromium() {
-    const { execSync } = require("child_process");
-    const candidates = [
-      "chromium-browser",
-      "chromium",
-      "google-chrome",
-      "google-chrome-stable",
-    ];
+  _generateHtml(gameState) {
+    const matchTitle = this._escapeHtml(gameState.matchTitle || "Match");
+    const p1Name = this._escapeHtml(gameState.player1Name || "Player 1");
+    const p2Name = this._escapeHtml(gameState.player2Name || "Player 2");
+    const p1Score = gameState.player1Score ?? 0;
+    const p2Score = gameState.player2Score ?? 0;
 
-    for (const cmd of candidates) {
-      try {
-        const result = execSync(`which ${cmd}`, { encoding: "utf8" }).trim();
-        if (result) return result;
-      } catch (e) {
-        // not found, try next
-      }
-    }
-    return null;
+    return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: ${this.width}px;
+    height: ${this.height}px;
+    background: #00FF00;
+    overflow: hidden;
+    font-family: 'DejaVu Sans', 'Liberation Sans', Arial, sans-serif;
+  }
+  #scoreboard {
+    position: absolute;
+    top: 40px;
+    left: 40px;
+    background: rgb(20, 20, 20);
+    border: 2px solid #cccccc;
+    border-radius: 12px;
+    padding: 16px 24px;
+    color: white;
+    min-width: 420px;
+  }
+  .match-title {
+    font-size: 20px;
+    font-weight: bold;
+    text-align: center;
+    margin-bottom: 12px;
+    opacity: 0.9;
+    letter-spacing: 0.5px;
+  }
+  .players {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+  }
+  .player { flex: 1; text-align: center; }
+  .player-name {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .player-score {
+    font-size: 48px;
+    font-weight: bold;
+    line-height: 1;
+  }
+  .vs-divider {
+    font-size: 24px;
+    font-weight: bold;
+    opacity: 0.5;
+    padding: 0 4px;
+  }
+</style>
+</head>
+<body>
+  <div id="scoreboard">
+    <div class="match-title">${matchTitle}</div>
+    <div class="players">
+      <div class="player">
+        <div class="player-name">${p1Name}</div>
+        <div class="player-score">${p1Score}</div>
+      </div>
+      <div class="vs-divider">–</div>
+      <div class="player">
+        <div class="player-name">${p2Name}</div>
+        <div class="player-score">${p2Score}</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+  }
+
+  _escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  /**
+   * Create a placeholder transparent PNG so GStreamer doesn't crash
+   */
+  _createPlaceholderPNG(pngPath) {
+    const transparentPNG = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAB" +
+      "Nl7BcQAAAABJRU5ErkJggg==",
+      "base64"
+    );
+    fs.writeFileSync(pngPath, transparentPNG);
+    console.log(`📝 Created placeholder transparent PNG at ${pngPath}`);
+  }
+
+  /**
+   * Promise wrapper around execFile
+   */
+  _execPromise(cmd, args) {
+    return new Promise((resolve, reject) => {
+      execFile(cmd, args, { timeout: 15000 }, (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error(`${cmd} failed: ${err.message}\n${stderr}`));
+        } else {
+          resolve(stdout);
+        }
+      });
+    });
   }
 }
 

@@ -7,13 +7,13 @@ const path = require("path");
 const CameraController = require("./cameraController");
 const StreamController = require("./streamController");
 
-// Try to load PuppeteerOverlay (HTML-based overlay via headless Chromium)
+// Try to load HTML overlay renderer (wkhtmltoimage + ImageMagick)
 let PuppeteerOverlay = null;
 try {
   PuppeteerOverlay = require("./puppeteerOverlay");
-  console.log("✅ Puppeteer overlay module loaded");
+  console.log("✅ HTML overlay module loaded (wkhtmltoimage + ImageMagick)");
 } catch (err) {
-  console.log("ℹ️  Puppeteer overlay not available:", err.message);
+  console.log("ℹ️  HTML overlay not available:", err.message);
 }
 
 const app = express();
@@ -1331,9 +1331,8 @@ streamController.on("preparing", async () => {
 
 // Stop Puppeteer overlay when stream stops (optional - can keep browser running)
 streamController.on("stopped", async () => {
-  // We keep Puppeteer running between streams for faster restarts.
-  // It only gets stopped on server shutdown.
-  console.log("ℹ️  Stream stopped (Puppeteer overlay stays ready for next stream)");
+  // Overlay renderer stays ready between streams for faster restarts.
+  console.log("ℹ️  Stream stopped (overlay renderer stays ready for next stream)");
 });
 
 
