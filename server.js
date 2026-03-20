@@ -1377,7 +1377,7 @@ streamController.on("preparing", async () => {
     console.log("✅ Idle preview killed");
   }
 
-  const hasUrlOverlay = (streamController.streamConfig.remoteOverlayEnabled || streamController.streamConfig.overlayType === 'url') &&
+  const hasUrlOverlay = streamController.streamConfig.remoteOverlayEnabled &&
     streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
   const needsGraphicsOverlay = streamController.streamConfig.skiaGraphicsEnabled || hasUrlOverlay;
 
@@ -1398,8 +1398,9 @@ streamController.on("preparing", async () => {
       const overlayUrl = streamController.streamConfig.overlayUrl;
       if (overlayUrl && overlayUrl.trim()) {
         // URL mode: screenshot a remote page that has its own JS to fetch scores
-        console.log(`🌍 Using remote overlay URL: ${overlayUrl}`);
-        puppeteerOverlay.setOverlayUrl(overlayUrl);
+        const overlayZoom = streamController.streamConfig.overlayZoom || 100;
+        console.log(`🌍 Using remote overlay URL: ${overlayUrl} (zoom: ${overlayZoom}%)`);
+        puppeteerOverlay.setOverlayUrl(overlayUrl, { zoom: overlayZoom });
         puppeteerOverlay.startPeriodicRefresh();
       } else {
         // Local mode: generate HTML with baked-in game state

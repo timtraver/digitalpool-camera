@@ -27,6 +27,7 @@ class StreamController extends EventEmitter {
       overlayText: "",
       showTimestamp: false,
       overlayUrl: "",
+      overlayZoom: 100, // Zoom level for remote overlay page (50-200%)
       timestampPosition: "bottom-right",
       titlePosition: "top-left",
       overlayFontSize: 32, // Default font size for overlays
@@ -660,7 +661,7 @@ class StreamController extends EventEmitter {
     // - Legacy: skiaGraphicsEnabled checkbox (being removed from UI)
     // - New: Remote overlay checkbox with a URL set
     const needsGraphicsOverlay = this.streamConfig.skiaGraphicsEnabled ||
-      ((this.streamConfig.remoteOverlayEnabled || this.streamConfig.overlayType === 'url') &&
+      (this.streamConfig.remoteOverlayEnabled &&
         this.streamConfig.overlayUrl && this.streamConfig.overlayUrl.trim());
 
     if (needsGraphicsOverlay) {

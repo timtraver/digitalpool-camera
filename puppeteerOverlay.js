@@ -28,6 +28,7 @@ class PuppeteerOverlay extends EventEmitter {
     this._refreshTimer = null;      // Periodic refresh timer for URL mode
     this._refreshIntervalMs = 3000; // How often to re-screenshot the URL (ms)
     this._jsDelay = 2000;           // Time to wait for JS execution before screenshot (ms)
+    this._zoom = 100;               // CSS zoom level for overlay page (50-200%)
     // Puppeteer browser instance (reused across screenshots)
     this._browser = null;
     this._page = null;
@@ -94,8 +95,9 @@ class PuppeteerOverlay extends EventEmitter {
       this._overlayUrl = url.trim();
       this._refreshIntervalMs = options.refreshInterval || 3000;
       this._jsDelay = options.jsDelay || 2000;
+      this._zoom = options.zoom || 100;
       console.log(`🌍 Overlay URL mode enabled: ${this._overlayUrl}`);
-      console.log(`   Refresh interval: ${this._refreshIntervalMs}ms, JS delay: ${this._jsDelay}ms`);
+      console.log(`   Refresh interval: ${this._refreshIntervalMs}ms, JS delay: ${this._jsDelay}ms, zoom: ${this._zoom}%`);
     } else {
       this._overlayUrl = null;
       this._stopPeriodicRefresh();
@@ -260,6 +262,13 @@ class PuppeteerOverlay extends EventEmitter {
         waitUntil: "networkidle0",
         timeout: 15000,
       });
+
+      // Apply CSS zoom if not 100%
+      if (this._zoom !== 100) {
+        await this._page.evaluate((zoom) => {
+          document.body.style.zoom = (zoom / 100).toString();
+        }, this._zoom);
+      }
 
       // Take screenshot with transparent background (no chroma-key needed).
       // omitBackground: true makes the default white page background transparent.

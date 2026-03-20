@@ -771,6 +771,8 @@ const fontSizeValue = document.getElementById("fontSizeValue");
 const overlayColor = document.getElementById("overlayColor");
 const overlayBackground = document.getElementById("overlayBackground");
 const remoteOverlayEnabled = document.getElementById("remoteOverlayEnabled");
+const overlayZoom = document.getElementById("overlayZoom");
+const overlayZoomValue = document.getElementById("overlayZoomValue");
 const titleOptions = document.getElementById("titleOptions");
 const timestampOptions = document.getElementById("timestampOptions");
 const textStyleOptions = document.getElementById("textStyleOptions");
@@ -1322,6 +1324,7 @@ function applyOverlaySettings() {
     overlayFontSize: parseInt(overlayFontSize.value),
     overlayColor: overlayColor.value,
     overlayBackground: overlayBackground.value,
+    overlayZoom: parseInt(overlayZoom.value),
   };
 
   console.log("Auto-applying overlay config:", overlayConfig);
@@ -1417,6 +1420,15 @@ overlayUrl.addEventListener("input", () => {
   }, 1000);
 });
 
+// Overlay zoom slider
+overlayZoom.addEventListener("input", () => {
+  overlayZoomValue.textContent = overlayZoom.value + "%";
+  currentOverlayConfig.overlayZoom = parseInt(overlayZoom.value);
+});
+overlayZoom.addEventListener("change", () => {
+  applyOverlaySettings();
+});
+
 // Position dropdowns
 console.log(`🔍 Initial timestampPosition value: ${timestampPosition.value}`);
 console.log(`🔍 Initial titlePosition value: ${titlePosition.value}`);
@@ -1464,6 +1476,8 @@ socket.on("streamStatus", (status) => {
     showTimestamp.checked = status.config.showTimestamp || false;
     remoteOverlayEnabled.checked = status.config.remoteOverlayEnabled || false;
     overlayUrl.value = status.config.overlayUrl || "";
+    overlayZoom.value = status.config.overlayZoom || 100;
+    overlayZoomValue.textContent = overlayZoom.value + "%";
 
     // Set position dropdowns and update custom dropdown displays
     timestampPosition.value = status.config.timestampPosition || "bottom-right";
@@ -1498,6 +1512,7 @@ socket.on("streamStatus", (status) => {
       overlayFontSize: status.config.overlayFontSize || 32,
       overlayColor: status.config.overlayColor || "white",
       overlayBackground: status.config.overlayBackground || "transparent",
+      overlayZoom: status.config.overlayZoom || 100,
     };
     drawOverlay();
   }
