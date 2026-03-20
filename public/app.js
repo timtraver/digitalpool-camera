@@ -1427,10 +1427,10 @@ socket.on("overlayResult", (result) => {
       // Stop and restart the stream
       socket.emit("stopStream");
 
-      // Wait a moment for cleanup, then restart
+      // Wait for cleanup (stopStream waits 2s + kill + 0.5s), then restart
       setTimeout(() => {
         socket.emit("startStream");
-      }, 1000);
+      }, 4000);
     }
   } else {
     alert(`Overlay error: ${result.error}`);
