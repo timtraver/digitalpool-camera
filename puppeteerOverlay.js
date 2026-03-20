@@ -41,33 +41,40 @@ class PuppeteerOverlay extends EventEmitter {
   async initialize(serverPort = 3000, pngPath = "/tmp/graphics-overlay.png") {
     this.pngPath = pngPath;
 
-    console.log("🌐 Initializing HTML overlay renderer (wkhtmltoimage + ImageMagick)...");
+    console.log("🌐 Initializing overlay renderer...");
+
+    // Always create a placeholder PNG first so GStreamer can start immediately.
+    // The real overlay will replace it once Puppeteer renders the first screenshot.
+    this._createPlaceholderPNG(this.pngPath);
 
     try {
-      // Verify wkhtmltoimage is available
-      await this._execPromise("which", ["wkhtmltoimage"]);
-      console.log("  ✅ wkhtmltoimage found");
-
-      // Verify ImageMagick convert is available
-      await this._execPromise("which", ["convert"]);
-      console.log("  ✅ ImageMagick convert found");
-
-      // Load the HTML template
+      // Try to load local HTML template (for local overlay mode)
       const templatePath = path.join(__dirname, "public", "overlay.html");
-      this._templateHtml = fs.readFileSync(templatePath, "utf8");
-      console.log("  ✅ Overlay HTML template loaded");
+      if (fs.existsSync(templatePath)) {
+        this._templateHtml = fs.readFileSync(templatePath, "utf8");
+        console.log("  ✅ Overlay HTML template loaded");
+      }
+
+      // Check for wkhtmltoimage (optional — only needed for local mode)
+      try {
+        await this._execPromise("which", ["wkhtmltoimage"]);
+        console.log("  ✅ wkhtmltoimage found (local overlay mode available)");
+      } catch (e) {
+        console.log("  ℹ️  wkhtmltoimage not found (URL overlay mode only)");
+      }
 
       this.isRunning = true;
 
-      console.log("✅ HTML overlay renderer ready");
+      console.log("✅ Overlay renderer ready");
       console.log(`  📐 Output size: ${this.width}x${this.height}`);
       console.log(`  📁 PNG output: ${this.pngPath}`);
 
       this.emit("ready");
     } catch (err) {
       console.error("❌ Failed to initialize overlay renderer:", err.message);
-      this._createPlaceholderPNG(this.pngPath);
-      throw err;
+      // Placeholder already created above
+      this.isRunning = true; // Still mark as running so URL mode can work
+      this.emit("ready");
     }
   }
 

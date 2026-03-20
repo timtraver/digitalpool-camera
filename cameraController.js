@@ -238,17 +238,43 @@ class CameraController {
     const otherControls = [];
     const ptzSettings = [];
 
+    // Auto/manual mode controls must be applied BEFORE their dependent manual controls.
+    // E.g., white_balance_automatic=0 must be set before red_balance, blue_balance,
+    // white_balance_temperature. auto_exposure must be set to manual before
+    // exposure_time_absolute. focus_automatic_continuous=0 before focus_absolute.
+    const autoModeControls = [
+      "white_balance_automatic",
+      "auto_exposure",
+      "focus_automatic_continuous",
+    ];
+    const autoControls = [];
+
     // Categorize controls
     for (const [controlName, value] of Object.entries(this.config)) {
       if (ptzControls.includes(controlName)) {
         ptzSettings.push([controlName, value]);
+      } else if (autoModeControls.includes(controlName)) {
+        autoControls.push([controlName, value]);
       } else {
         otherControls.push([controlName, value]);
       }
     }
 
-    // Apply non-PTZ controls first
-    // console.log("  📷 Applying image quality and exposure settings...");
+    // Apply auto-mode controls first (disable auto before setting manual values)
+    for (const [controlName, value] of autoControls) {
+      if (this.controls[controlName]) {
+        try {
+          const result = await this.setControl(controlName, value, false);
+          results.push({ control: controlName, ...result });
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        } catch (error) {
+          console.error(`❌ Failed to apply ${controlName}:`, error.message);
+          results.push({ control: controlName, success: false, error: error.message });
+        }
+      }
+    }
+
+    // Then apply non-PTZ manual controls
     for (const [controlName, value] of otherControls) {
       if (this.controls[controlName]) {
         try {
