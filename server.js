@@ -784,8 +784,9 @@ app.get("/video/stream", async (req, res) => {
   // Always need a ! after videoconvert
   gstArgs.push("!");
 
-  // Add overlays if enabled (using EXACT same structure as streaming pipeline)
-  if (config.overlayEnabled) {
+  // Add overlays if any individual overlay is enabled (using EXACT same structure as streaming pipeline)
+  const hasAnyOverlay = config.overlayEnabled || config.showTimestamp;
+  if (hasAnyOverlay) {
 
     // Add timestamp overlay if enabled (matches streamController.js exactly)
     if (config.showTimestamp) {
@@ -817,8 +818,8 @@ app.get("/video/stream", async (req, res) => {
       gstArgs.push(...timestampArgs);
     }
 
-    // Add custom text overlay 1 (main title) - matches streamController.js exactly
-    if (config.overlayText) {
+    // Add custom text overlay 1 (main title) - only if Title checkbox is enabled
+    if (config.overlayEnabled && config.overlayText) {
       const position = config.titlePosition || config.overlayPosition || "bottom-left";
       const [vpos, hpos] = position.split("-");
       const valign = vpos === "bottom" ? "bottom" : vpos === "center" ? "center" : "top";

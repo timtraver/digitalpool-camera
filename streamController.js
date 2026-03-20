@@ -506,7 +506,6 @@ class StreamController extends EventEmitter {
       framerate,
       bitrate,
       overlayText,
-      showTimestamp,
     } = this.streamConfig;
 
     console.log("🎨 Graphics overlay enabled - using PNG overlay (gdkpixbufoverlay)");
@@ -525,6 +524,12 @@ class StreamController extends EventEmitter {
 
     // Use the PNG overlay helper script
     const scriptPath = path.join(__dirname, 'png-overlay-helper.sh');
+
+    // Only pass overlay text if the Title checkbox is enabled
+    const effectiveOverlayText = this.streamConfig.overlayEnabled ? (overlayText || "") : "";
+    // Only pass timestamp if the Timestamp checkbox is enabled
+    const effectiveShowTimestamp = this.streamConfig.showTimestamp ? "true" : "false";
+
     const scriptArgs = [
       this.cameraDevice,
       width.toString(),
@@ -533,8 +538,8 @@ class StreamController extends EventEmitter {
       bitrate.toString(),
       srtPort,
       pngPath,
-      overlayText || "",
-      showTimestamp ? "true" : "false",
+      effectiveOverlayText,
+      effectiveShowTimestamp,
       scaledFontSize.toString(),
       overlayColor.toString(),
       overlayBackground,
@@ -675,8 +680,9 @@ class StreamController extends EventEmitter {
       "!",
     ];
 
-    // Add overlays if enabled
-    if (this.streamConfig.overlayEnabled) {
+    // Add overlays if any individual overlay is enabled
+    const hasAnyOverlay = this.streamConfig.overlayEnabled || this.streamConfig.showTimestamp;
+    if (hasAnyOverlay) {
       // Convert to format suitable for textoverlay
       pipeline.push("videoconvert", "!");
 
@@ -714,8 +720,8 @@ class StreamController extends EventEmitter {
         pipeline.push(...timestampArgs);
       }
 
-      // Add custom text overlay 1 (main title)
-      if (this.streamConfig.overlayText || this.streamConfig.customText1) {
+      // Add custom text overlay 1 (main title) - only if Title checkbox is enabled
+      if (this.streamConfig.overlayEnabled && (this.streamConfig.overlayText || this.streamConfig.customText1)) {
         const text =
           this.streamConfig.overlayText || this.streamConfig.customText1;
 
