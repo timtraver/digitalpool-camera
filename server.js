@@ -4,6 +4,7 @@ const http = require("http");
 const socketIO = require("socket.io");
 const { spawn } = require("child_process");
 const path = require("path");
+const os = require("os");
 const CameraController = require("./cameraController");
 const StreamController = require("./streamController");
 
@@ -350,6 +351,21 @@ app.get("/api/status", (req, res) => {
   });
 });
 
+// API endpoint to get device IP addresses
+app.get("/api/network", (req, res) => {
+  const interfaces = os.networkInterfaces();
+  const addresses = [];
+  for (const [name, nets] of Object.entries(interfaces)) {
+    for (const net of nets) {
+      // Skip loopback and internal addresses
+      if (!net.internal && net.family === "IPv4") {
+        addresses.push({ interface: name, address: net.address });
+      }
+    }
+  }
+  res.json({ success: true, addresses });
+});
+
 // API endpoint to get current scoreboard
 app.get("/api/scoreboard", (req, res) => {
   res.json({
@@ -684,6 +700,15 @@ app.get("/video/stream", async (req, res) => {
     return;
   }
 
+  // If streaming is active, don't try to access camera for idle preview
+  if (streamController.isStreaming) {
+    console.log(
+      "⚠️  Stream is active - preview should use HLS at /video/hls/playlist.m3u8",
+    );
+    res.status(503).send("Stream active - use HLS preview");
+    return;
+  }
+
   // Kill the previous idle preview process if it exists
   if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
     console.log("🔄 Killing previous idle preview to start new one with updated settings");
@@ -699,15 +724,6 @@ app.get("/video/stream", async (req, res) => {
     Connection: "keep-alive",
     "Access-Control-Allow-Origin": "*",
   });
-
-  // If streaming is active, use HLS preview instead of trying to access camera
-  if (streamController.isStreaming) {
-    console.log(
-      "⚠️  Stream is active - preview should use HLS at /video/hls/playlist.m3u8",
-    );
-    res.status(503).end("Stream active - use HLS preview");
-    return;
-  }
 
   // Check if camera is busy and try to clean up
   const { execSync } = require("child_process");

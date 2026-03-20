@@ -1531,3 +1531,22 @@ async function loadStreamConfig() {
 
 // Load stream config on page load
 loadStreamConfig();
+
+// Fetch and display device IP address
+async function loadDeviceIp() {
+  try {
+    const response = await fetch("/api/network");
+    const data = await response.json();
+    const ipSpan = document.getElementById("deviceIpAddress");
+    if (data.success && data.addresses.length > 0) {
+      ipSpan.textContent = data.addresses.map(a => a.address).join(", ");
+    } else {
+      ipSpan.textContent = "Unknown";
+    }
+  } catch (error) {
+    console.error("❌ Error loading device IP:", error);
+    const ipSpan = document.getElementById("deviceIpAddress");
+    if (ipSpan) ipSpan.textContent = "Error";
+  }
+}
+loadDeviceIp();
