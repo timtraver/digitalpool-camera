@@ -517,6 +517,11 @@ class StreamController extends EventEmitter {
 
     // Scale font size the same way the text-only pipeline does (1.5x for 1080p)
     const scaledFontSize = Math.round((this.streamConfig.overlayFontSize || 32) * 1.5);
+    const overlayColor = this._colorToInt(this.streamConfig.overlayColor || "white");
+    const overlayBackground = this.streamConfig.overlayBackground || "transparent";
+    const timestampFormat = this.streamConfig.timestampFormat || "%Y-%m-%d %H:%M:%S";
+    const titlePosition = this.streamConfig.titlePosition || "top-left";
+    const timestampPosition = this.streamConfig.timestampPosition || "bottom-right";
 
     // Use the PNG overlay helper script
     const scriptPath = path.join(__dirname, 'png-overlay-helper.sh');
@@ -531,6 +536,11 @@ class StreamController extends EventEmitter {
       overlayText || "",
       showTimestamp ? "true" : "false",
       scaledFontSize.toString(),
+      overlayColor.toString(),
+      overlayBackground,
+      timestampFormat,
+      titlePosition,
+      timestampPosition,
     ];
 
     return {
@@ -692,7 +702,7 @@ class StreamController extends EventEmitter {
           `halignment=${halign}`,
           `font-desc=Sans Bold ${scaledFontSize}`,
           `color=${this._colorToInt(this.streamConfig.overlayColor)}`,
-          'time-format="%Y-%m-%d %H:%M:%S"', // Show date and time
+          `time-format="${this.streamConfig.timestampFormat || '%Y-%m-%d %H:%M:%S'}"`,
         ];
 
         // Only add shaded background if not transparent

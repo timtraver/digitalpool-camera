@@ -13,6 +13,11 @@ PNG_PATH=${7:-"/tmp/graphics-overlay.png"}
 OVERLAY_TEXT=${8:-""}
 SHOW_TIMESTAMP=${9:-"false"}
 FONT_SIZE=${10:-48}
+OVERLAY_COLOR=${11:-4294967295}
+OVERLAY_BACKGROUND=${12:-"transparent"}
+TIMESTAMP_FORMAT=${13:-"%Y-%m-%d %H:%M:%S"}
+TITLE_POSITION=${14:-"top-left"}
+TIMESTAMP_POSITION=${15:-"bottom-right"}
 
 echo "🎨 Starting stream with dynamic PNG graphics overlay (Python GStreamer)..."
 echo "Camera: $CAMERA_DEVICE"
@@ -28,5 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Use Python GStreamer script for dynamic overlay reloading
 exec python3 "$SCRIPT_DIR/gst-overlay-pipeline.py" \
   "$CAMERA_DEVICE" "$WIDTH" "$HEIGHT" "$FRAMERATE" "$BITRATE" "$SRT_PORT" \
-  "$PNG_PATH" "$OVERLAY_TEXT" "$SHOW_TIMESTAMP" "$FONT_SIZE"
+  "$PNG_PATH" "$OVERLAY_TEXT" "$SHOW_TIMESTAMP" "$FONT_SIZE" \
+  "$OVERLAY_COLOR" "$OVERLAY_BACKGROUND" "$TIMESTAMP_FORMAT" \
+  "$TITLE_POSITION" "$TIMESTAMP_POSITION"
 

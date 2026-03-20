@@ -796,7 +796,7 @@ app.get("/video/stream", async (req, res) => {
         `halignment=${halign}`,
         `font-desc=Sans Bold ${scaledFontSize}`,
         `color=${colorToInt(config.overlayColor)}`,
-        'time-format="%Y-%m-%d %H:%M:%S"', // Show date and time
+        `time-format="${config.timestampFormat || '%Y-%m-%d %H:%M:%S'}"`,
       ];
 
       // Add shaded background based on background setting
@@ -1025,7 +1025,7 @@ io.on("connection", (socket) => {
     socket.emit("streamResult", result);
   });
 
-  socket.on("updateOverlay", (overlayConfig) => {
+  socket.on("updateOverlay", async (overlayConfig) => {
     const result = streamController.updateOverlay(overlayConfig);
 
     // Also update gameState with overlay configuration for node-graphics-stream.js
@@ -1037,6 +1037,23 @@ io.on("connection", (socket) => {
     }
     if (overlayConfig.overlayBackground !== undefined) {
       gameState.overlayBackground = overlayConfig.overlayBackground;
+    }
+
+    // Handle remote overlay enable/disable
+    if (puppeteerOverlay) {
+      const wantsRemote = overlayConfig.remoteOverlayEnabled &&
+        overlayConfig.overlayUrl && overlayConfig.overlayUrl.trim();
+      if (wantsRemote) {
+        // Enable remote overlay
+        if (!puppeteerOverlay.isRunning) {
+          await puppeteerOverlay.initialize(PORT);
+        }
+        puppeteerOverlay.setOverlayUrl(overlayConfig.overlayUrl);
+        puppeteerOverlay.startPeriodicRefresh();
+      } else if (overlayConfig.remoteOverlayEnabled === false) {
+        // Remote overlay was explicitly turned off — clear the PNG
+        puppeteerOverlay.setOverlayUrl(null);
+      }
     }
 
     // Write updated state to JSON file

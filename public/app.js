@@ -743,6 +743,7 @@ const overlayText = document.getElementById("overlayText");
 const showTimestamp = document.getElementById("showTimestamp");
 const overlayUrl = document.getElementById("overlayUrl");
 const timestampPosition = document.getElementById("timestampPosition");
+const timestampFormat = document.getElementById("timestampFormat");
 const titlePosition = document.getElementById("titlePosition");
 const overlayFontSize = document.getElementById("overlayFontSize");
 const fontSizeValue = document.getElementById("fontSizeValue");
@@ -1294,6 +1295,7 @@ function applyOverlaySettings() {
     remoteOverlayEnabled: remoteOverlayEnabled.checked,
     overlayUrl: overlayUrl.value,
     timestampPosition: timestampPosition.value,
+    timestampFormat: timestampFormat.value,
     titlePosition: titlePosition.value,
     overlayFontSize: parseInt(overlayFontSize.value),
     overlayColor: overlayColor.value,
@@ -1346,6 +1348,16 @@ showTimestamp.addEventListener("change", () => {
   updateOverlayVisibility();
   drawOverlay();
   applyOverlaySettings();
+});
+
+// Apply timestamp format changes (debounce)
+let timestampFormatTimeout;
+timestampFormat.addEventListener("input", () => {
+  currentOverlayConfig.timestampFormat = timestampFormat.value;
+  clearTimeout(timestampFormatTimeout);
+  timestampFormatTimeout = setTimeout(() => {
+    applyOverlaySettings();
+  }, 500);
 });
 
 // Apply font size changes after user stops dragging (debounce)
@@ -1433,6 +1445,7 @@ socket.on("streamStatus", (status) => {
 
     // Set position dropdowns and update custom dropdown displays
     timestampPosition.value = status.config.timestampPosition || "bottom-right";
+    timestampFormat.value = status.config.timestampFormat || "%Y-%m-%d %H:%M:%S";
     titlePosition.value = status.config.titlePosition || "top-left";
     updateCustomDropdownDisplay(timestampPosition);
     updateCustomDropdownDisplay(titlePosition);
@@ -1458,6 +1471,7 @@ socket.on("streamStatus", (status) => {
       remoteOverlayEnabled: status.config.remoteOverlayEnabled || false,
       overlayUrl: status.config.overlayUrl || "",
       timestampPosition: status.config.timestampPosition || "bottom-right",
+      timestampFormat: status.config.timestampFormat || "%Y-%m-%d %H:%M:%S",
       titlePosition: status.config.titlePosition || "top-left",
       overlayFontSize: status.config.overlayFontSize || 32,
       overlayColor: status.config.overlayColor || "white",
