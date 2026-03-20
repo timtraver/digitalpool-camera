@@ -59,8 +59,12 @@ if (GraphicsOverlay) {
 
   // Set up a custom drawing function for the scoreboard
   graphicsOverlay.setDrawFunction((ctx, frameNumber) => {
-    // Clear canvas with transparent background
+    // Clear canvas with transparent background (RGBA zeros = fully transparent)
     ctx.clearRect(0, 0, 1920, 1080);
+
+    // Use font families that are commonly available on Linux
+    // DejaVu Sans is widely installed; fall back to sans-serif
+    const fontFamily = "DejaVu Sans, Liberation Sans, sans-serif";
 
     // Draw a pool scoreboard in the top-left corner
     const x = 50;
@@ -68,7 +72,7 @@ if (GraphicsOverlay) {
     const width = 500;
     const height = 200;
 
-    // Semi-transparent background
+    // Semi-transparent background with rounded corners
     ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
     ctx.fillRect(x, y, width, height);
 
@@ -79,15 +83,15 @@ if (GraphicsOverlay) {
 
     // Title
     ctx.fillStyle = "white";
-    ctx.font = "bold 32px Sans";
-    ctx.fillText(`🎱 ${gameState.matchTitle}`, x + 20, y + 45);
+    ctx.font = `bold 32px ${fontFamily}`;
+    ctx.fillText(gameState.matchTitle, x + 20, y + 45);
 
     // Scores (from gameState)
-    ctx.font = "bold 60px Sans";
+    ctx.font = `bold 60px ${fontFamily}`;
     ctx.fillText(`${gameState.player1Score} - ${gameState.player2Score}`, x + 180, y + 130);
 
     // Player names
-    ctx.font = "24px Sans";
+    ctx.font = `24px ${fontFamily}`;
     ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
     ctx.fillText(gameState.player1Name, x + 20, y + 180);
     ctx.fillText(gameState.player2Name, x + width - 120, y + 180);

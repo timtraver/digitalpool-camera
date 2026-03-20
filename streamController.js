@@ -497,6 +497,9 @@ class StreamController extends EventEmitter {
     const srtPort = destination ? destination.split(':')[1] : '8891';
     const pngPath = "/tmp/graphics-overlay.png";
 
+    // Scale font size the same way the text-only pipeline does (1.5x for 1080p)
+    const scaledFontSize = Math.round((this.streamConfig.overlayFontSize || 32) * 1.5);
+
     // Use the PNG overlay helper script
     const scriptPath = path.join(__dirname, 'png-overlay-helper.sh');
     const scriptArgs = [
@@ -509,6 +512,7 @@ class StreamController extends EventEmitter {
       pngPath,
       overlayText || "",
       showTimestamp ? "true" : "false",
+      scaledFontSize.toString(),
     ];
 
     return {
