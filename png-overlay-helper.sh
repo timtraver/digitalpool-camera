@@ -28,10 +28,12 @@ echo "Show Timestamp: $SHOW_TIMESTAMP"
 # Pipeline uses compositor to blend camera (bottom) with PNG overlay (top)
 # multifilesrc with loop=true re-reads the same PNG file at OVERLAY_FPS rate
 # This allows the overlay to update when the PNG file changes on disk
+# IMPORTANT: compositor output caps must be set explicitly to prevent resolution negotiation issues
 exec gst-launch-1.0 -v \
   compositor name=mix \
     sink_0::zorder=0 sink_0::alpha=1.0 \
     sink_1::zorder=1 sink_1::alpha=1.0 \
+  ! video/x-raw,width=$WIDTH,height=$HEIGHT,format=RGBA \
   ! videoconvert \
   $(if [ -n "$OVERLAY_TEXT" ]; then echo "! textoverlay text=\"$OVERLAY_TEXT\" valignment=bottom halignment=left font-desc=\"Sans Bold $FONT_SIZE\" color=4294967295 xpad=20 ypad=20 shaded-background=true"; fi) \
   $(if [ "$SHOW_TIMESTAMP" = "true" ]; then echo "! clockoverlay valignment=bottom halignment=right font-desc=\"Sans Bold $FONT_SIZE\" color=4294967295 time-format=\"%Y-%m-%d %H:%M:%S\" xpad=20 ypad=20 shaded-background=true"; fi) \
