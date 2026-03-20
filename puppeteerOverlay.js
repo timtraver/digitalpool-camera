@@ -20,6 +20,11 @@ class PuppeteerOverlay extends EventEmitter {
     this.height = 1080;
     this._renderInProgress = false;
     this._templateHtml = null;
+    // URL mode
+    this._overlayUrl = null;        // Remote URL to screenshot (null = local HTML mode)
+    this._refreshTimer = null;      // Periodic refresh timer for URL mode
+    this._refreshIntervalMs = 3000; // How often to re-screenshot the URL (ms)
+    this._jsDelay = 2000;           // Time to wait for JS execution before screenshot (ms)
   }
 
   /**
@@ -62,9 +67,67 @@ class PuppeteerOverlay extends EventEmitter {
   }
 
   /**
+   * Set a remote URL as the overlay source.
+   * When set, the overlay will periodically screenshot this URL instead of
+   * generating HTML from local game state. The remote page is expected to
+   * use its own JavaScript to fetch and display scores.
+   * @param {string} url - The URL to screenshot (null/empty to disable URL mode)
+   * @param {object} options - Optional settings
+   * @param {number} options.refreshInterval - How often to re-screenshot (ms, default 3000)
+   * @param {number} options.jsDelay - Time to wait for JS execution before screenshot (ms, default 2000)
+   */
+  setOverlayUrl(url, options = {}) {
+    if (url && url.trim()) {
+      this._overlayUrl = url.trim();
+      this._refreshIntervalMs = options.refreshInterval || 3000;
+      this._jsDelay = options.jsDelay || 2000;
+      console.log(`🌍 Overlay URL mode enabled: ${this._overlayUrl}`);
+      console.log(`   Refresh interval: ${this._refreshIntervalMs}ms, JS delay: ${this._jsDelay}ms`);
+    } else {
+      this._overlayUrl = null;
+      this._stopPeriodicRefresh();
+      console.log("📄 Overlay switched to local HTML mode");
+    }
+  }
+
+  /**
+   * Start periodic refresh for URL mode.
+   * Screenshots the remote URL at the configured interval.
+   */
+  startPeriodicRefresh() {
+    if (!this._overlayUrl) {
+      console.warn("⚠️  Cannot start periodic refresh: no overlay URL set");
+      return;
+    }
+
+    this._stopPeriodicRefresh(); // Clear any existing timer
+
+    console.log(`🔄 Starting periodic overlay refresh every ${this._refreshIntervalMs}ms`);
+
+    // Do an immediate first render
+    this._renderUrlOverlay();
+
+    // Then set up the interval
+    this._refreshTimer = setInterval(() => {
+      this._renderUrlOverlay();
+    }, this._refreshIntervalMs);
+  }
+
+  /**
+   * Stop periodic refresh.
+   */
+  _stopPeriodicRefresh() {
+    if (this._refreshTimer) {
+      clearInterval(this._refreshTimer);
+      this._refreshTimer = null;
+      console.log("⏹️  Periodic overlay refresh stopped");
+    }
+  }
+
+  /**
    * Update the overlay with new game state.
-   * Generates HTML with state baked in, renders with wkhtmltoimage,
-   * then strips green background with ImageMagick.
+   * In local mode: generates HTML with state baked in, renders with wkhtmltoimage.
+   * In URL mode: this is a no-op since the periodic refresh handles rendering.
    * @param {object} gameState - The current game state
    */
   async updateState(gameState) {
@@ -73,7 +136,20 @@ class PuppeteerOverlay extends EventEmitter {
       return;
     }
 
-    // Prevent concurrent renders
+    // In URL mode, the page fetches its own data — periodic refresh handles it
+    if (this._overlayUrl) {
+      console.log("🌍 URL mode active — overlay updates via periodic refresh");
+      return;
+    }
+
+    // Local mode: render HTML with baked-in game state
+    await this._renderLocalOverlay(gameState);
+  }
+
+  /**
+   * Render local HTML overlay with game state baked into the markup.
+   */
+  async _renderLocalOverlay(gameState) {
     if (this._renderInProgress) {
       console.log("⏳ Render already in progress, skipping");
       return;
@@ -95,16 +171,7 @@ class PuppeteerOverlay extends EventEmitter {
       ]);
 
       // Use ImageMagick to make green background transparent
-      // Write to temp file first, then atomically rename to avoid GStreamer reading a half-written file
-      const tempOutput = this.pngPath + ".tmp";
-      await this._execPromise("convert", [
-        this.rawPngPath,
-        "-alpha", "on",
-        "-fuzz", "10%",
-        "-transparent", "rgb(0,255,0)",
-        `PNG32:${tempOutput}`,
-      ]);
-      fs.renameSync(tempOutput, this.pngPath);
+      await this._chromaKeyAndSave();
 
       console.log(`📸 Overlay PNG updated: ${gameState.player1Score} - ${gameState.player2Score}`);
       this.emit("updated", this.pngPath);
@@ -116,10 +183,65 @@ class PuppeteerOverlay extends EventEmitter {
   }
 
   /**
+   * Render a remote URL overlay. Screenshots the URL using wkhtmltoimage
+   * with JavaScript execution enabled, then chroma-keys the green background.
+   */
+  async _renderUrlOverlay() {
+    if (this._renderInProgress) {
+      return; // Skip this cycle, next interval will try again
+    }
+    if (!this._overlayUrl) return;
+
+    this._renderInProgress = true;
+    try {
+      // Render remote URL to PNG with wkhtmltoimage
+      // --enable-javascript: allow JS to execute (fetch scores, etc.)
+      // --javascript-delay: wait for JS to finish before screenshot
+      // --no-stop-slow-scripts: don't kill long-running scripts
+      await this._execPromise("wkhtmltoimage", [
+        "--width", String(this.width),
+        "--height", String(this.height),
+        "--quality", "100",
+        "--enable-javascript",
+        "--javascript-delay", String(this._jsDelay),
+        "--no-stop-slow-scripts",
+        this._overlayUrl,
+        this.rawPngPath,
+      ]);
+
+      // Use ImageMagick to make green background transparent
+      await this._chromaKeyAndSave();
+
+      console.log(`📸 URL overlay PNG updated from: ${this._overlayUrl}`);
+      this.emit("updated", this.pngPath);
+    } catch (err) {
+      console.error("❌ Failed to render URL overlay:", err.message);
+    } finally {
+      this._renderInProgress = false;
+    }
+  }
+
+  /**
+   * Chroma-key green background to transparent and save atomically.
+   */
+  async _chromaKeyAndSave() {
+    const tempOutput = this.pngPath + ".tmp";
+    await this._execPromise("convert", [
+      this.rawPngPath,
+      "-alpha", "on",
+      "-fuzz", "10%",
+      "-transparent", "rgb(0,255,0)",
+      `PNG32:${tempOutput}`,
+    ]);
+    fs.renameSync(tempOutput, this.pngPath);
+  }
+
+  /**
    * Stop the overlay renderer and clean up temp files.
    */
   async stop() {
     console.log("🛑 Stopping overlay renderer...");
+    this._stopPeriodicRefresh();
     this.isRunning = false;
     // Clean up temp files
     for (const f of [this.tempHtmlPath, this.rawPngPath]) {

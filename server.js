@@ -381,6 +381,25 @@ app.post("/api/scoreboard", express.json(), (req, res) => {
   });
 });
 
+// API endpoint to set/change the overlay URL (for remote JS-based overlays)
+app.post("/api/overlay-url", express.json(), (req, res) => {
+  const { url, refreshInterval, jsDelay } = req.body;
+  console.log(`🌍 REST API: Setting overlay URL:`, url || "(disabled)");
+
+  if (puppeteerOverlay) {
+    puppeteerOverlay.setOverlayUrl(url, { refreshInterval, jsDelay });
+    if (url && url.trim()) {
+      puppeteerOverlay.startPeriodicRefresh();
+    }
+  }
+
+  // Also save to stream config so it persists
+  streamController.streamConfig.overlayUrl = url || "";
+  streamController.saveConfig();
+
+  res.json({ success: true, overlayUrl: url || "" });
+});
+
 // API endpoint to get all controls
 app.get("/api/controls", async (req, res) => {
   const result = await camera.getAllControls();
@@ -1308,10 +1327,10 @@ app.use("/graphql", (req, res) => {
 // This ensures the PNG file exists when gdkpixbufoverlay tries to load it
 streamController.on("preparing", async () => {
   if (streamController.streamConfig.skiaGraphicsEnabled) {
-    console.log(`🎨 Preparing Puppeteer overlay (HTML → PNG)...`);
+    console.log(`🎨 Preparing overlay (HTML → PNG)...`);
 
     try {
-      // Initialize Puppeteer if not already running
+      // Initialize overlay renderer if not already running
       if (!puppeteerOverlay) {
         puppeteerOverlay = new PuppeteerOverlay();
       }
@@ -1320,8 +1339,18 @@ streamController.on("preparing", async () => {
         await puppeteerOverlay.initialize(PORT);
       }
 
-      // Generate the initial PNG with current game state
-      await puppeteerOverlay.updateState(gameState);
+      // Check if a remote overlay URL is configured
+      const overlayUrl = streamController.streamConfig.overlayUrl;
+      if (overlayUrl && overlayUrl.trim()) {
+        // URL mode: screenshot a remote page that has its own JS to fetch scores
+        console.log(`🌍 Using remote overlay URL: ${overlayUrl}`);
+        puppeteerOverlay.setOverlayUrl(overlayUrl);
+        puppeteerOverlay.startPeriodicRefresh();
+      } else {
+        // Local mode: generate HTML with baked-in game state
+        puppeteerOverlay.setOverlayUrl(null); // Ensure URL mode is off
+        await puppeteerOverlay.updateState(gameState);
+      }
       console.log("✅ Overlay PNG ready for GStreamer");
     } catch (err) {
       console.error("❌ Failed to prepare overlay:", err.message);
@@ -1329,9 +1358,11 @@ streamController.on("preparing", async () => {
   }
 });
 
-// Stop Puppeteer overlay when stream stops (optional - can keep browser running)
+// Stop periodic refresh when stream stops, but keep renderer ready
 streamController.on("stopped", async () => {
-  // Overlay renderer stays ready between streams for faster restarts.
+  if (puppeteerOverlay) {
+    puppeteerOverlay._stopPeriodicRefresh();
+  }
   console.log("ℹ️  Stream stopped (overlay renderer stays ready for next stream)");
 });
 
