@@ -13,8 +13,8 @@ class StreamController extends EventEmitter {
 
     // Default configuration
     const defaultConfig = {
-      protocol: "rtmp", // 'srt' or 'rtmp'
-      destination: "rtmp://localhost:1935/stream",
+      protocol: "srt", // 'srt', 'rtmp', or 'udp'
+      destination: "",
       width: 1920,
       height: 1080,
       framerate: 30,
@@ -259,11 +259,15 @@ class StreamController extends EventEmitter {
       this.gstProcess.kill("SIGINT");
       this.isStreaming = false;
 
-      // Wait a moment for process to exit
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Wait for process to fully exit and release the camera device
+      // V4L2 devices need time to be released by the kernel after the process exits
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       // Ensure camera is fully released
       await this._killCameraProcesses();
+
+      // Additional wait for kernel to fully release the V4L2 device
+      await new Promise((resolve) => setTimeout(resolve, 500));
 
       // Disable auto-start and save config
       this.streamConfig.autoStart = false;
@@ -332,29 +336,32 @@ class StreamController extends EventEmitter {
         console.log("fuser not available or failed:", err.message);
       }
 
-      // Method 2: Kill all ffmpeg processes (fallback)
+      // Method 2: Kill all GStreamer and ffmpeg processes using the camera (fallback)
       try {
         const { stdout: psOut } = await execPromise(
-          `ps aux | grep ffmpeg | grep -v grep || true`,
+          `ps aux | grep -E '(ffmpeg|gst-launch|gst-launch-1.0)' | grep -v grep || true`,
         );
         if (psOut.trim()) {
-          console.log("Found ffmpeg processes:", psOut);
+          console.log("Found media processes:", psOut);
           const lines = psOut.trim().split("\n");
           for (const line of lines) {
             const parts = line.trim().split(/\s+/);
             if (parts.length > 1) {
               const pid = parts[1];
-              console.log(`Killing ffmpeg process ${pid}...`);
-              try {
-                process.kill(parseInt(pid), "SIGTERM");
-              } catch (err) {
-                console.log(`Could not kill process ${pid}:`, err.message);
+              // Don't kill our own process
+              if (parseInt(pid) !== process.pid) {
+                console.log(`Killing media process ${pid}...`);
+                try {
+                  process.kill(parseInt(pid), "SIGTERM");
+                } catch (err) {
+                  console.log(`Could not kill process ${pid}:`, err.message);
+                }
               }
             }
           }
         }
       } catch (err) {
-        console.log("Could not find ffmpeg processes:", err.message);
+        console.log("Could not find media processes:", err.message);
       }
 
       console.log("Finished checking for camera processes");
