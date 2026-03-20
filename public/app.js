@@ -594,7 +594,7 @@ startStreamBtn.addEventListener("click", async () => {
 
   if (isRestart) {
     console.log("Restarting stream...");
-    setStreamStatus("starting", "Restarting...");
+    setStreamStatus("starting", "Restarting Stream...");
 
     // Stop the stream first
     socket.emit("stopStream");
@@ -633,7 +633,7 @@ startStreamBtn.addEventListener("click", async () => {
     console.log("Starting stream with config:", config);
     socket.emit("startStream", config);
 
-    setStreamStatus("starting", "Starting...");
+    setStreamStatus("starting", "Starting Stream...");
   }
 });
 
@@ -642,7 +642,7 @@ stopStreamBtn.addEventListener("click", () => {
   console.log("Stopping stream");
   socket.emit("stopStream");
 
-  setStreamStatus("starting", "Stopping...");
+  setStreamStatus("starting", "Stopping Stream...");
 });
 
 // Stream result handler
@@ -715,7 +715,7 @@ socket.on("streamStatus", (status) => {
     startStreamBtn.classList.add("btn-restart");
 
     stopStreamBtn.disabled = false;
-    setStreamStatus("live", `LIVE — ${status.config?.protocol?.toUpperCase() || "SRT"}`);
+    setStreamStatus("live", `Streaming LIVE — ${status.config?.protocol?.toUpperCase() || "SRT"}`);
 
     // Switch to TCP preview when streaming
     setTimeout(() => {
