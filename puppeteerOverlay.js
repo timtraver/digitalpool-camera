@@ -2,6 +2,7 @@ const EventEmitter = require("events");
 const { execFile } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const zlib = require("zlib");
 const puppeteer = require("puppeteer-core");
 
 /**
@@ -420,15 +421,61 @@ class PuppeteerOverlay extends EventEmitter {
   }
 
   /**
-   * Create a placeholder transparent PNG so GStreamer doesn't crash
+   * Create a placeholder transparent PNG so GStreamer doesn't crash.
+   * Builds a valid 1x1 RGBA transparent PNG using raw bytes + zlib.
    */
   _createPlaceholderPNG(pngPath) {
-    const transparentPNG = Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAB" +
-      "Nl7BcQAAAABJRU5ErkJggg==",
-      "base64"
-    );
-    fs.writeFileSync(pngPath, transparentPNG);
+    // PNG signature
+    const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+
+    // Helper: build a PNG chunk (type + data + CRC)
+    const makeChunk = (type, data) => {
+      const typeBytes = Buffer.from(type, "ascii");
+      const len = Buffer.alloc(4);
+      len.writeUInt32BE(data.length, 0);
+      const crcInput = Buffer.concat([typeBytes, data]);
+      const crc = Buffer.alloc(4);
+      crc.writeInt32BE(crc32(crcInput), 0);
+      return Buffer.concat([len, typeBytes, data, crc]);
+    };
+
+    // CRC32 (PNG uses this for chunk integrity)
+    const crc32 = (buf) => {
+      let c = 0xffffffff;
+      for (let i = 0; i < buf.length; i++) {
+        c ^= buf[i];
+        for (let j = 0; j < 8; j++) {
+          c = (c >>> 1) ^ (c & 1 ? 0xedb88320 : 0);
+        }
+      }
+      return (c ^ 0xffffffff) | 0;
+    };
+
+    // IHDR: width=1, height=1, bit depth=8, color type=6 (RGBA)
+    const ihdrData = Buffer.alloc(13);
+    ihdrData.writeUInt32BE(1, 0);  // width
+    ihdrData.writeUInt32BE(1, 4);  // height
+    ihdrData[8] = 8;   // bit depth
+    ihdrData[9] = 6;   // color type (RGBA)
+    ihdrData[10] = 0;  // compression
+    ihdrData[11] = 0;  // filter
+    ihdrData[12] = 0;  // interlace
+
+    // IDAT: raw pixel data = filter byte (0) + RGBA (0,0,0,0)
+    const rawData = Buffer.from([0, 0, 0, 0, 0]);
+    const compressed = zlib.deflateSync(rawData);
+
+    // IEND: empty
+    const iendData = Buffer.alloc(0);
+
+    const png = Buffer.concat([
+      signature,
+      makeChunk("IHDR", ihdrData),
+      makeChunk("IDAT", compressed),
+      makeChunk("IEND", iendData),
+    ]);
+
+    fs.writeFileSync(pngPath, png);
     console.log(`📝 Created placeholder transparent PNG at ${pngPath}`);
   }
 
