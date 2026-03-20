@@ -274,19 +274,38 @@ class CameraController {
       }
     }
 
-    // Then apply non-PTZ manual controls
+    // Determine which manual controls to skip based on auto-mode settings.
+    // When auto mode is ON, the camera firmware rejects manual overrides.
+    const skipControls = new Set();
+    const wbAuto = this.config.white_balance_automatic;
+    const expAuto = this.config.auto_exposure;
+    const focusAuto = this.config.focus_automatic_continuous;
+
+    if (wbAuto === 1 || wbAuto === true) {
+      skipControls.add("red_balance");
+      skipControls.add("blue_balance");
+      skipControls.add("white_balance_temperature");
+      console.log("  ℹ️  Auto white balance ON — skipping manual WB controls");
+    }
+    // auto_exposure: 0=Auto, 1=Manual, 3=Aperture Priority
+    if (expAuto === 0 || expAuto === 3) {
+      skipControls.add("exposure_time_absolute");
+      console.log("  ℹ️  Auto exposure ON — skipping manual exposure controls");
+    }
+    if (focusAuto === 1 || focusAuto === true) {
+      skipControls.add("focus_absolute");
+      console.log("  ℹ️  Auto focus ON — skipping manual focus controls");
+    }
+
+    // Then apply non-PTZ manual controls (skipping those blocked by auto modes)
     for (const [controlName, value] of otherControls) {
+      if (skipControls.has(controlName)) {
+        continue; // Auto mode is on, skip this manual control
+      }
       if (this.controls[controlName]) {
         try {
-          // console.log(`  ⚙️  Setting ${controlName} = ${value}`);
           const result = await this.setControl(controlName, value, false);
           results.push({ control: controlName, ...result });
-
-          // if (result.success) {
-          //   console.log(`  ✅ ${controlName} set successfully`);
-          // } else {
-          //   console.log(`  ❌ ${controlName} failed: ${result.error}`);
-          // }
 
           await new Promise((resolve) => setTimeout(resolve, 50));
         } catch (error) {

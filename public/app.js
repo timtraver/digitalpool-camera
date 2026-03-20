@@ -738,7 +738,6 @@ socket.on("connect", () => {
 
 const overlayEnabled = document.getElementById("overlayEnabled");
 const overlayType = document.getElementById("overlayType");
-const textOverlayOptions = document.getElementById("textOverlayOptions");
 const urlOverlayOptions = document.getElementById("urlOverlayOptions");
 const overlayText = document.getElementById("overlayText");
 const showTimestamp = document.getElementById("showTimestamp");
@@ -749,6 +748,10 @@ const overlayFontSize = document.getElementById("overlayFontSize");
 const fontSizeValue = document.getElementById("fontSizeValue");
 const overlayColor = document.getElementById("overlayColor");
 const overlayBackground = document.getElementById("overlayBackground");
+const remoteOverlayEnabled = document.getElementById("remoteOverlayEnabled");
+const titleOptions = document.getElementById("titleOptions");
+const timestampOptions = document.getElementById("timestampOptions");
+const textStyleOptions = document.getElementById("textStyleOptions");
 
 // Initialize custom dropdowns for ALL select elements
 console.log("🎨 Initializing custom dropdowns...");
@@ -758,7 +761,6 @@ createCustomDropdown(timestampPosition);
 createCustomDropdown(titlePosition);
 
 // Overlay style dropdowns
-createCustomDropdown(overlayType);
 createCustomDropdown(overlayColor);
 createCustomDropdown(overlayBackground);
 
@@ -856,7 +858,8 @@ function switchToMJPEGPreview() {
   img.alt = "Camera Stream";
 
   // Pass overlay setting as query parameter
-  const overlaysEnabled = overlayEnabled.checked;
+  // Overlays are enabled if any individual overlay checkbox is on
+  const overlaysEnabled = overlayEnabled.checked || showTimestamp.checked || remoteOverlayEnabled.checked;
   img.src = `/video/stream?overlays=${overlaysEnabled}&t=${Date.now()}`;
 
   // Position absolutely over the old element to prevent layout shift
@@ -944,6 +947,7 @@ let currentOverlayConfig = {
   overlayType: "text",
   overlayText: "",
   showTimestamp: false,
+  remoteOverlayEnabled: false,
   overlayUrl: "",
   timestampPosition: "bottom-right",
   titlePosition: "top-left",
@@ -1012,21 +1016,19 @@ function updateCanvasSize() {
 // setTimeout(() => { if (!canvasInitialized) { initAttempts = 0; initializeCanvas(); } }, 5000);
 // window.addEventListener("resize", () => { updateCanvasSize(); drawOverlay(); });
 
-// Toggle overlay type options
-overlayType.addEventListener("change", () => {
-  const type = overlayType.value;
-  currentOverlayConfig.overlayType = type;
-
-  if (type === "text") {
-    textOverlayOptions.style.display = "block";
-    urlOverlayOptions.style.display = "none";
-  } else if (type === "url") {
-    textOverlayOptions.style.display = "none";
-    urlOverlayOptions.style.display = "block";
-  }
-
-  drawOverlay();
-});
+// Helper: show/hide sub-options based on checkbox state
+function updateOverlayVisibility() {
+  // Title sub-options
+  titleOptions.style.display = overlayEnabled.checked ? "" : "none";
+  // Timestamp sub-options
+  timestampOptions.style.display = showTimestamp.checked ? "" : "none";
+  // Text style section visible if either title or timestamp is on
+  textStyleOptions.style.display =
+    (overlayEnabled.checked || showTimestamp.checked) ? "" : "none";
+  // Remote overlay URL options
+  urlOverlayOptions.style.display = remoteOverlayEnabled.checked ? "" : "none";
+}
+updateOverlayVisibility();
 
 // Canvas overlay redraw disabled - overlays now rendered by GStreamer only
 // setInterval(() => {
@@ -1282,11 +1284,14 @@ function drawTextOverlay() {
 
 // Helper function to apply overlay settings to server
 function applyOverlaySettings() {
+  // Derive overlayType from which checkboxes are active
+  const hasRemote = remoteOverlayEnabled.checked;
   const overlayConfig = {
     overlayEnabled: overlayEnabled.checked,
-    overlayType: overlayType.value,
+    overlayType: hasRemote ? "url" : "text",
     overlayText: overlayText.value,
     showTimestamp: showTimestamp.checked,
+    remoteOverlayEnabled: remoteOverlayEnabled.checked,
     overlayUrl: overlayUrl.value,
     timestampPosition: timestampPosition.value,
     titlePosition: titlePosition.value,
@@ -1301,7 +1306,6 @@ function applyOverlaySettings() {
   // If not streaming, restart the idle preview to apply overlay changes
   if (!isCurrentlyStreaming) {
     console.log("🔄 Restarting idle preview to apply overlay changes...");
-    // Use a small delay to avoid too many rapid restarts
     clearTimeout(window.idlePreviewRestartTimeout);
     window.idlePreviewRestartTimeout = setTimeout(() => {
       switchToMJPEGPreview();
@@ -1312,9 +1316,18 @@ function applyOverlaySettings() {
 // Live preview updates (update preview as user types/changes)
 overlayEnabled.addEventListener("change", () => {
   currentOverlayConfig.overlayEnabled = overlayEnabled.checked;
-  console.log("Overlay enabled changed:", overlayEnabled.checked);
+  console.log("Title overlay changed:", overlayEnabled.checked);
+  updateOverlayVisibility();
   drawOverlay();
-  applyOverlaySettings(); // This will restart idle preview if not streaming
+  applyOverlaySettings();
+});
+
+remoteOverlayEnabled.addEventListener("change", () => {
+  currentOverlayConfig.remoteOverlayEnabled = remoteOverlayEnabled.checked;
+  console.log("Remote overlay changed:", remoteOverlayEnabled.checked);
+  updateOverlayVisibility();
+  drawOverlay();
+  applyOverlaySettings();
 });
 
 // Apply text changes after user stops typing (debounce)
@@ -1330,6 +1343,7 @@ overlayText.addEventListener("input", () => {
 
 showTimestamp.addEventListener("change", () => {
   currentOverlayConfig.showTimestamp = showTimestamp.checked;
+  updateOverlayVisibility();
   drawOverlay();
   applyOverlaySettings();
 });
@@ -1412,9 +1426,9 @@ socket.on("overlayResult", (result) => {
 socket.on("streamStatus", (status) => {
   if (status.config) {
     overlayEnabled.checked = status.config.overlayEnabled || false;
-    overlayType.value = status.config.overlayType || "text";
     overlayText.value = status.config.overlayText || "";
     showTimestamp.checked = status.config.showTimestamp || false;
+    remoteOverlayEnabled.checked = status.config.remoteOverlayEnabled || false;
     overlayUrl.value = status.config.overlayUrl || "";
 
     // Set position dropdowns and update custom dropdown displays
@@ -1432,17 +1446,8 @@ socket.on("streamStatus", (status) => {
     overlayBackground.value = status.config.overlayBackground || "transparent";
     updateCustomDropdownDisplay(overlayBackground);
 
-    overlayType.value = status.config.overlayType || "text";
-    updateCustomDropdownDisplay(overlayType);
-
-    // Toggle overlay type options
-    if (overlayType.value === "text") {
-      textOverlayOptions.style.display = "block";
-      urlOverlayOptions.style.display = "none";
-    } else {
-      textOverlayOptions.style.display = "none";
-      urlOverlayOptions.style.display = "block";
-    }
+    // Update visibility based on loaded state
+    updateOverlayVisibility();
 
     // Update preview overlay
     currentOverlayConfig = {
@@ -1450,6 +1455,7 @@ socket.on("streamStatus", (status) => {
       overlayType: status.config.overlayType || "text",
       overlayText: status.config.overlayText || "",
       showTimestamp: status.config.showTimestamp || false,
+      remoteOverlayEnabled: status.config.remoteOverlayEnabled || false,
       overlayUrl: status.config.overlayUrl || "",
       timestampPosition: status.config.timestampPosition || "bottom-right",
       titlePosition: status.config.titlePosition || "top-left",

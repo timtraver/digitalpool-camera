@@ -153,130 +153,117 @@
             <div class="ptz-controls" style="flex: 1.5">
               <h3>📝 Overlay Settings</h3>
               <div class="overlay-controls">
-                <div class="control-item-compact">
-                  <label>
-                    <input type="checkbox" id="overlayEnabled" />
-                    Enable Overlays
-                  </label>
-                </div>
-
-                <div class="control-item-compact">
-                  <label>Overlay Type:</label>
-                  <select id="overlayType">
-                    <option value="text">Text Overlay</option>
-                    <option value="url">URL Overlay (Dynamic)</option>
-                  </select>
-                </div>
-
-                <!-- Text Overlay Options -->
-                <div id="textOverlayOptions">
-                  <!-- Timestamp Settings -->
-                  <div class="overlay-section">
-                    <div class="control-item-compact">
-                      <label>
-                        <input type="checkbox" id="showTimestamp" />
-                        <strong>Timestamp</strong>
-                      </label>
-                    </div>
-                    <div class="control-item-compact">
-                      <label>Position:</label>
-                      <select id="timestampPosition">
-                        <option value="top-left">Top Left</option>
-                        <option value="top-center">Top Center</option>
-                        <option value="top-right">Top Right</option>
-                        <option value="center">Center</option>
-                        <option value="bottom-left">Bottom Left</option>
-                        <option value="bottom-center">Bottom Center</option>
-                        <option value="bottom-right">Bottom Right</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <!-- Title Text Settings -->
-                  <div class="overlay-section">
-                    <div class="control-item-compact">
-                      <label><strong>Title:</strong></label>
-                      <input
-                        type="text"
-                        id="overlayText"
-                        placeholder="Stream Title"
-                      />
-                    </div>
-                    <div class="control-item-compact">
-                      <label>Position:</label>
-                      <select id="titlePosition">
-                        <option value="top-left">Top Left</option>
-                        <option value="top-center">Top Center</option>
-                        <option value="top-right">Top Right</option>
-                        <option value="center">Center</option>
-                        <option value="bottom-left">Bottom Left</option>
-                        <option value="bottom-center">Bottom Center</option>
-                        <option value="bottom-right">Bottom Right</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <!-- Global Style Settings -->
-                  <div class="overlay-section">
-                    <div class="control-item-compact">
-                      <label>Font Size:</label>
-                      <input
-                        type="range"
-                        id="overlayFontSize"
-                        min="4"
-                        max="64"
-                        value="32"
-                      />
-                      <span id="fontSizeValue">32px</span>
-                    </div>
-
-                    <div class="control-item-compact">
-                      <label>Color:</label>
-                      <select id="overlayColor">
-                        <option value="white">White</option>
-                        <option value="black">Black</option>
-                        <option value="red">Red</option>
-                        <option value="green">Green</option>
-                        <option value="blue">Blue</option>
-                        <option value="yellow">Yellow</option>
-                        <option value="cyan">Cyan</option>
-                        <option value="orange">Orange</option>
-                      </select>
-                    </div>
-
-                    <div class="control-item-compact">
-                      <label>Background:</label>
-                      <select id="overlayBackground">
-                        <option value="transparent">Transparent</option>
-                        <option value="shaded">Shaded</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- URL Overlay Options -->
-                <div id="urlOverlayOptions" style="display: none">
+                <!-- Title Overlay -->
+                <div class="overlay-section">
                   <div class="control-item-compact">
-                    <label>URL:</label>
+                    <label>
+                      <input type="checkbox" id="overlayEnabled" />
+                      <strong>Title</strong>
+                    </label>
                     <input
                       type="text"
-                      id="overlayUrl"
-                      placeholder="https://example.com/overlay.html"
-                      style="flex: 1"
+                      id="overlayText"
+                      placeholder="Stream Title"
+                      style="flex: 1; margin-left: 8px"
                     />
                   </div>
-                  <div style="padding: 4px 0">
-                    <small
-                      style="color: rgba(255, 255, 255, 0.6); font-size: 9px"
-                      >Loaded via proxy to bypass X-Frame-Options
-                      restrictions</small
-                    >
+                  <div class="control-item-compact" id="titleOptions" style="display: none">
+                    <label>Position:</label>
+                    <select id="titlePosition">
+                      <option value="top-left">Top Left</option>
+                      <option value="top-center">Top Center</option>
+                      <option value="top-right">Top Right</option>
+                      <option value="bottom-left">Bottom Left</option>
+                      <option value="bottom-center">Bottom Center</option>
+                      <option value="bottom-right">Bottom Right</option>
+                    </select>
                   </div>
                 </div>
 
-                <!-- Graphics Overlay checkbox removed — URL overlay mode automatically
-                     enables the PNG overlay pipeline when a URL is configured -->
+                <!-- Timestamp Overlay -->
+                <div class="overlay-section">
+                  <div class="control-item-compact">
+                    <label>
+                      <input type="checkbox" id="showTimestamp" />
+                      <strong>Timestamp</strong>
+                    </label>
+                  </div>
+                  <div class="control-item-compact" id="timestampOptions" style="display: none">
+                    <label>Position:</label>
+                    <select id="timestampPosition">
+                      <option value="top-left">Top Left</option>
+                      <option value="top-center">Top Center</option>
+                      <option value="top-right">Top Right</option>
+                      <option value="bottom-left">Bottom Left</option>
+                      <option value="bottom-center">Bottom Center</option>
+                      <option value="bottom-right" selected>Bottom Right</option>
+                    </select>
+                  </div>
+                </div>
+
+                <!-- Text Style (shared by title & timestamp) -->
+                <div class="overlay-section" id="textStyleOptions" style="display: none">
+                  <div class="control-item-compact">
+                    <label>Size:</label>
+                    <input
+                      type="range"
+                      id="overlayFontSize"
+                      min="4"
+                      max="64"
+                      value="32"
+                    />
+                    <span id="fontSizeValue">32px</span>
+                  </div>
+                  <div class="control-item-compact">
+                    <label>Color:</label>
+                    <select id="overlayColor">
+                      <option value="white">White</option>
+                      <option value="black">Black</option>
+                      <option value="red">Red</option>
+                      <option value="green">Green</option>
+                      <option value="blue">Blue</option>
+                      <option value="yellow">Yellow</option>
+                      <option value="cyan">Cyan</option>
+                      <option value="orange">Orange</option>
+                    </select>
+                  </div>
+                  <div class="control-item-compact">
+                    <label>Background:</label>
+                    <select id="overlayBackground">
+                      <option value="transparent">Transparent</option>
+                      <option value="shaded">Shaded</option>
+                    </select>
+                  </div>
+                </div>
+
+                <!-- Remote Overlay -->
+                <div class="overlay-section">
+                  <div class="control-item-compact">
+                    <label>
+                      <input type="checkbox" id="remoteOverlayEnabled" />
+                      <strong>Remote Overlay</strong>
+                    </label>
+                  </div>
+                  <div id="urlOverlayOptions" style="display: none">
+                    <div class="control-item-compact">
+                      <label>URL:</label>
+                      <input
+                        type="text"
+                        id="overlayUrl"
+                        placeholder="https://example.com/overlay"
+                        style="flex: 1"
+                      />
+                    </div>
+                    <div style="padding: 2px 0">
+                      <small style="color: rgba(255, 255, 255, 0.5); font-size: 9px">
+                        Rendered via headless Chromium &amp; composited onto stream
+                      </small>
+                    </div>
+                  </div>
+                </div>
               </div>
+              <!-- hidden fields for backward compat -->
+              <input type="hidden" id="overlayType" value="text" />
             </div>
           </div>
         </div>

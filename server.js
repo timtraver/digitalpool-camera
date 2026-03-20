@@ -676,7 +676,7 @@ app.get("/video/stream", async (req, res) => {
   console.log("New video stream connection requested");
 
   // If graphics/URL overlay is enabled, don't start idle preview (saves memory)
-  const hasUrlOverlay = streamController.streamConfig.overlayType === 'url' &&
+  const hasUrlOverlay = (streamController.streamConfig.remoteOverlayEnabled || streamController.streamConfig.overlayType === 'url') &&
     streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
   if (streamController.streamConfig.skiaGraphicsEnabled || hasUrlOverlay) {
     console.log("⚠️  Idle preview disabled when graphics overlay is enabled (saves memory)");
@@ -1352,7 +1352,7 @@ streamController.on("preparing", async () => {
     console.log("✅ Idle preview killed");
   }
 
-  const hasUrlOverlay = streamController.streamConfig.overlayType === 'url' &&
+  const hasUrlOverlay = (streamController.streamConfig.remoteOverlayEnabled || streamController.streamConfig.overlayType === 'url') &&
     streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
   const needsGraphicsOverlay = streamController.streamConfig.skiaGraphicsEnabled || hasUrlOverlay;
 

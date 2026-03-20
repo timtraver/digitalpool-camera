@@ -643,9 +643,10 @@ class StreamController extends EventEmitter {
 
     // Check if graphics overlay is needed:
     // - Legacy: skiaGraphicsEnabled checkbox (being removed from UI)
-    // - New: URL overlay mode (overlayType === 'url' with a URL set)
+    // - New: Remote overlay checkbox with a URL set
     const needsGraphicsOverlay = this.streamConfig.skiaGraphicsEnabled ||
-      (this.streamConfig.overlayType === 'url' && this.streamConfig.overlayUrl && this.streamConfig.overlayUrl.trim());
+      ((this.streamConfig.remoteOverlayEnabled || this.streamConfig.overlayType === 'url') &&
+        this.streamConfig.overlayUrl && this.streamConfig.overlayUrl.trim());
 
     if (needsGraphicsOverlay) {
       // Use the PNG overlay pipeline (Python GStreamer with gdkpixbufoverlay)
