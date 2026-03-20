@@ -2,11 +2,13 @@ const EventEmitter = require("events");
 const { execFile } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const puppeteer = require("puppeteer-core");
 
 /**
- * HTML Overlay Generator using wkhtmltoimage + ImageMagick
- * Renders an HTML template to PNG using WebKit (wkhtmltoimage),
- * then uses ImageMagick to chroma-key the green background to transparency.
+ * HTML Overlay Generator
+ * - Local mode: uses wkhtmltoimage + ImageMagick chroma-key for local HTML scoreboard
+ * - URL mode: uses Puppeteer (headless Chromium) to screenshot remote pages with
+ *   native transparency (omitBackground: true), supporting modern JS frameworks (React, etc.)
  * The PNG is saved to disk for GStreamer's gdkpixbufoverlay to composite onto the video stream.
  */
 class PuppeteerOverlay extends EventEmitter {
@@ -25,6 +27,9 @@ class PuppeteerOverlay extends EventEmitter {
     this._refreshTimer = null;      // Periodic refresh timer for URL mode
     this._refreshIntervalMs = 3000; // How often to re-screenshot the URL (ms)
     this._jsDelay = 2000;           // Time to wait for JS execution before screenshot (ms)
+    // Puppeteer browser instance (reused across screenshots)
+    this._browser = null;
+    this._page = null;
   }
 
   /**
@@ -86,6 +91,7 @@ class PuppeteerOverlay extends EventEmitter {
     } else {
       this._overlayUrl = null;
       this._stopPeriodicRefresh();
+      this._closeBrowser(); // Clean up Chromium when disabling URL mode
       // Replace the last URL screenshot with a transparent placeholder
       // so GStreamer doesn't keep showing the old (possibly white) image
       this._createPlaceholderPNG(this.pngPath);
@@ -186,10 +192,48 @@ class PuppeteerOverlay extends EventEmitter {
   }
 
   /**
-   * Render a remote URL overlay. Since wkhtmltoimage on unpatched Qt doesn't
-   * support --transparent, we inject a green (#00FF00) background via
-   * --user-style-sheet, then chroma-key the green to transparent with ImageMagick.
-   * This works for any page — overlay elements keep their own styled backgrounds.
+   * Launch (or reuse) headless Chromium via Puppeteer for URL overlay rendering.
+   * The browser stays alive between screenshots for efficiency.
+   */
+  async _ensureBrowser() {
+    if (this._browser && this._browser.connected) return;
+
+    console.log("🚀 Launching headless Chromium for URL overlay...");
+    this._browser = await puppeteer.launch({
+      executablePath: "/snap/bin/chromium",
+      headless: "new",
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--disable-software-rasterizer",
+      ],
+    });
+    this._page = await this._browser.newPage();
+    await this._page.setViewport({ width: this.width, height: this.height });
+    console.log("  ✅ Chromium browser ready");
+  }
+
+  /**
+   * Close the Puppeteer browser instance.
+   */
+  async _closeBrowser() {
+    if (this._page) {
+      try { await this._page.close(); } catch (e) { /* ignore */ }
+      this._page = null;
+    }
+    if (this._browser) {
+      try { await this._browser.close(); } catch (e) { /* ignore */ }
+      this._browser = null;
+      console.log("🛑 Chromium browser closed");
+    }
+  }
+
+  /**
+   * Render a remote URL overlay using Puppeteer (headless Chromium).
+   * Uses waitUntil: 'networkidle0' to wait for React/JS to finish rendering,
+   * and omitBackground: true for native alpha transparency — no chroma-key needed.
    */
   async _renderUrlOverlay() {
     if (this._renderInProgress) {
@@ -199,36 +243,39 @@ class PuppeteerOverlay extends EventEmitter {
 
     this._renderInProgress = true;
     try {
-      // Write a CSS file that forces the page background to green for chroma-keying.
-      // The !important ensures it overrides whatever the page sets.
-      // Overlay elements with their own backgrounds are unaffected.
-      const chromaCss = "/tmp/overlay-chroma-bg.css";
-      fs.writeFileSync(chromaCss, "html, body { background: #00FF00 !important; }\n");
+      await this._ensureBrowser();
 
-      // Render remote URL to PNG with injected green background
-      // --user-style-sheet: injects our green background CSS
-      // --enable-javascript: allow JS to execute (fetch scores, etc.)
-      // --javascript-delay: wait for JS to finish before screenshot
-      // --no-stop-slow-scripts: don't kill long-running scripts
-      await this._execPromise("wkhtmltoimage", [
-        "--width", String(this.width),
-        "--height", String(this.height),
-        "--quality", "100",
-        "--enable-javascript",
-        "--javascript-delay", String(this._jsDelay),
-        "--no-stop-slow-scripts",
-        "--user-style-sheet", chromaCss,
-        this._overlayUrl,
-        this.rawPngPath,
-      ]);
+      // Navigate to the URL and wait for all network requests to settle.
+      // networkidle0 = no network connections for 500ms (React API calls done).
+      // On first load this navigates; on subsequent calls it reloads for fresh data.
+      await this._page.goto(this._overlayUrl, {
+        waitUntil: "networkidle0",
+        timeout: 15000,
+      });
 
-      // Chroma-key green to transparent, then atomic rename
-      await this._chromaKeyAndSave();
+      // Take screenshot with transparent background (no chroma-key needed).
+      // omitBackground: true makes the default white page background transparent.
+      // Overlay elements with their own CSS backgrounds stay opaque.
+      const tempOutput = this.pngPath + ".tmp";
+      await this._page.screenshot({
+        path: tempOutput,
+        type: "png",
+        fullPage: false,
+        omitBackground: true,
+      });
+
+      // Atomic rename so GStreamer doesn't read a half-written file
+      fs.renameSync(tempOutput, this.pngPath);
 
       console.log(`📸 URL overlay PNG updated from: ${this._overlayUrl}`);
       this.emit("updated", this.pngPath);
     } catch (err) {
       console.error("❌ Failed to render URL overlay:", err.message);
+      // If the browser crashed, clean it up so next cycle relaunches
+      if (this._browser && !this._browser.connected) {
+        this._browser = null;
+        this._page = null;
+      }
     } finally {
       this._renderInProgress = false;
     }
@@ -255,6 +302,7 @@ class PuppeteerOverlay extends EventEmitter {
   async stop() {
     console.log("🛑 Stopping overlay renderer...");
     this._stopPeriodicRefresh();
+    await this._closeBrowser();
     this.isRunning = false;
     // Clean up temp files
     for (const f of [this.tempHtmlPath, this.rawPngPath]) {
