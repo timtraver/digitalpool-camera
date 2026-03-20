@@ -50,6 +50,7 @@ gst-launch-1.0 \
   jpegdec ! \
   videoconvert ! \
   video/x-raw,format=RGBA ! \
+  queue max-size-buffers=3 leaky=no ! \
   compositor name=mix sink_0::zorder=0 sink_1::zorder=1 sink_1::alpha=1.0 sink_1::xpos=$OVL_X sink_1::ypos=$OVL_Y ! \
   video/x-raw,width=$WIDTH,height=$HEIGHT ! \
   videoconvert ! \
