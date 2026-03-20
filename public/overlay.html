@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 1920px;
+    height: 1080px;
+    background: transparent;
+    overflow: hidden;
+    font-family: 'DejaVu Sans', 'Liberation Sans', Arial, sans-serif;
+  }
+
+  #scoreboard {
+    position: absolute;
+    top: 40px;
+    left: 40px;
+    background: rgba(0, 0, 0, 0.75);
+    border: 2px solid rgba(255, 255, 255, 0.6);
+    border-radius: 12px;
+    padding: 16px 24px;
+    color: white;
+    min-width: 420px;
+    display: none; /* hidden until state is loaded */
+  }
+
+  #scoreboard.visible { display: block; }
+
+  .match-title {
+    font-size: 20px;
+    font-weight: bold;
+    text-align: center;
+    margin-bottom: 12px;
+    opacity: 0.9;
+    letter-spacing: 0.5px;
+  }
+
+  .players {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .player {
+    flex: 1;
+    text-align: center;
+  }
+
+  .player-name {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .player-score {
+    font-size: 48px;
+    font-weight: bold;
+    line-height: 1;
+  }
+
+  .vs-divider {
+    font-size: 24px;
+    font-weight: bold;
+    opacity: 0.5;
+    padding: 0 4px;
+  }
+</style>
+</head>
+<body>
+  <div id="scoreboard">
+    <div class="match-title" id="matchTitle">Match</div>
+    <div class="players">
+      <div class="player">
+        <div class="player-name" id="player1Name">Player 1</div>
+        <div class="player-score" id="player1Score">0</div>
+      </div>
+      <div class="vs-divider">–</div>
+      <div class="player">
+        <div class="player-name" id="player2Name">Player 2</div>
+        <div class="player-score" id="player2Score">0</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Called by Puppeteer via page.evaluate()
+    function updateState(state) {
+      document.getElementById('matchTitle').textContent = state.matchTitle || 'Match';
+      document.getElementById('player1Name').textContent = state.player1Name || 'Player 1';
+      document.getElementById('player2Name').textContent = state.player2Name || 'Player 2';
+      document.getElementById('player1Score').textContent = state.player1Score ?? 0;
+      document.getElementById('player2Score').textContent = state.player2Score ?? 0;
+      document.getElementById('scoreboard').classList.add('visible');
+    }
+  </script>
+</body>
+</html>
+

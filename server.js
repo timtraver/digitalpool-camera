@@ -7,31 +7,13 @@ const path = require("path");
 const CameraController = require("./cameraController");
 const StreamController = require("./streamController");
 
-// Try to load GraphicsOverlay (optional dependency)
-let GraphicsOverlay = null;
+// Try to load PuppeteerOverlay (HTML-based overlay via headless Chromium)
+let PuppeteerOverlay = null;
 try {
-  GraphicsOverlay = require("./graphicsOverlay");
-  console.log("✅ Graphics overlay module loaded (node-canvas)");
-
-  // Register system fonts explicitly - node-canvas often can't find them via fontconfig
-  try {
-    const { registerFont } = require("canvas");
-    const fs = require("fs");
-    const fontPaths = [
-      { path: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", family: "DejaVu Sans", weight: "normal" },
-      { path: "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", family: "DejaVu Sans", weight: "bold" },
-    ];
-    for (const font of fontPaths) {
-      if (fs.existsSync(font.path)) {
-        registerFont(font.path, { family: font.family, weight: font.weight });
-        console.log(`  📝 Registered font: ${font.family} (${font.weight})`);
-      }
-    }
-  } catch (fontErr) {
-    console.log("⚠️  Could not register fonts:", fontErr.message);
-  }
+  PuppeteerOverlay = require("./puppeteerOverlay");
+  console.log("✅ Puppeteer overlay module loaded");
 } catch (err) {
-  console.log("ℹ️  Graphics overlay not available (install 'canvas' to enable)");
+  console.log("ℹ️  Puppeteer overlay not available:", err.message);
 }
 
 const app = express();
@@ -55,8 +37,8 @@ let cameraInitialized = false;
 // Initialize stream controller
 const streamController = new StreamController(CAMERA_DEVICE);
 
-// Initialize graphics overlay (if available)
-let graphicsOverlay = null;
+// Initialize Puppeteer overlay (if available)
+let puppeteerOverlay = null;
 // Game state for scoreboard (update this from your app)
 let gameState = {
   player1Name: "Player 1",
@@ -70,98 +52,15 @@ let gameState = {
   overlayBackground: "transparent",
 };
 
-if (GraphicsOverlay) {
-  graphicsOverlay = new GraphicsOverlay();
-  // Use 2 FPS to reduce CPU and memory load - scoreboards don't need high framerates
-  graphicsOverlay.initialize(1920, 1080, 2);
-
-  // Set up a custom drawing function for the scoreboard
-  graphicsOverlay.setDrawFunction((ctx, frameNumber) => {
-    // Clear canvas with transparent background (RGBA zeros = fully transparent)
-    ctx.clearRect(0, 0, 1920, 1080);
-
-    // Use font families that are commonly available on Linux
-    // DejaVu Sans is widely installed; fall back to sans-serif
-    const fontFamily = "DejaVu Sans, Liberation Sans, sans-serif";
-
-    // Draw a pool scoreboard in the top-left corner
-    const x = 50;
-    const y = 50;
-    const width = 500;
-    const height = 200;
-
-    // Semi-transparent background with rounded corners
-    ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-    ctx.fillRect(x, y, width, height);
-
-    // Border
-    ctx.strokeStyle = "white";
-    ctx.lineWidth = 3;
-    ctx.strokeRect(x, y, width, height);
-
-    // Title
-    ctx.fillStyle = "white";
-    ctx.font = `bold 32px ${fontFamily}`;
-    ctx.fillText(gameState.matchTitle, x + 20, y + 45);
-
-    // Scores (from gameState)
-    ctx.font = `bold 60px ${fontFamily}`;
-    ctx.fillText(`${gameState.player1Score} - ${gameState.player2Score}`, x + 180, y + 130);
-
-    // Player names
-    ctx.font = `24px ${fontFamily}`;
-    ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
-    ctx.fillText(gameState.player1Name, x + 20, y + 180);
-    ctx.fillText(gameState.player2Name, x + width - 120, y + 180);
-
-    // Log every 30 frames to show activity (every 15 seconds at 2 FPS)
-    if (frameNumber % 30 === 0) {
-      console.log(`🎨 Drawing frame ${frameNumber} | Score: ${gameState.player1Score} - ${gameState.player2Score}`);
-    }
-  });
-
-  console.log("🎨 Graphics overlay initialized (2fps for low CPU usage)");
-  console.log("💡 Update scores via Socket.IO event 'updateScore' or REST API");
-
-  // Write initial game state to JSON file for cairooverlay
-  regenerateOverlay();
-
-  // FOR TESTING: Automatically update scores every 5 seconds
-  let testScoreInterval = setInterval(() => {
-    // Update scores if graphics overlay is enabled (PNG or Cairo mode)
-    const graphicsEnabled = streamController && streamController.streamConfig && streamController.streamConfig.skiaGraphicsEnabled;
-
-    if (graphicsEnabled) {
-      // Increment scores (wrap around at 10)
-      gameState.player1Score = (gameState.player1Score + 1) % 11;
-      if (gameState.player1Score === 0) {
-        gameState.player2Score = (gameState.player2Score + 1) % 11;
-      }
-
-      console.log(`🧪 TEST: Auto-updating scores: ${gameState.player1Score} - ${gameState.player2Score}`);
-
-      // Update the JSON file for cairooverlay to pick up, or regenerate PNG
-      regenerateOverlay();
-    }
-  }, 5000); // Every 5 seconds
-
-  // Clean up interval on exit
-  process.on('SIGINT', () => {
-    clearInterval(testScoreInterval);
-  });
-}
-
 // Function to regenerate the PNG overlay with updated game state
-function regenerateOverlay() {
-  if (graphicsOverlay && graphicsOverlay.isRunning) {
-    // The overlay is already running at 2 FPS, so it will pick up changes automatically
-    // Just log that we're updating
-    console.log(`✅ Scoreboard updated: ${gameState.player1Score} - ${gameState.player2Score}`);
-    // Broadcast to all clients
-    io.emit("scoreUpdated", gameState);
+async function regenerateOverlay() {
+  if (puppeteerOverlay && puppeteerOverlay.isRunning) {
+    await puppeteerOverlay.updateState(gameState);
   }
+  // Broadcast to all clients
+  io.emit("scoreUpdated", gameState);
 
-  // Also write game state to JSON file for cairooverlay Python script
+  // Also write game state to JSON file (for any scripts that need it)
   try {
     const fs = require('fs');
     fs.writeFileSync('/tmp/graphics-overlay-state.json', JSON.stringify(gameState, null, 2));
@@ -1405,71 +1304,52 @@ app.use("/graphql", (req, res) => {
 // Graphics Overlay Integration
 // ============================================================================
 
-// Start graphics overlay BEFORE GStreamer starts (during "preparing" phase)
+// Start Puppeteer overlay BEFORE GStreamer starts (during "preparing" phase)
 // This ensures the PNG file exists when gdkpixbufoverlay tries to load it
 streamController.on("preparing", async () => {
-  if (graphicsOverlay && streamController.streamConfig.skiaGraphicsEnabled) {
-    const overlayType = streamController.streamConfig.overlayType;
+  if (streamController.streamConfig.skiaGraphicsEnabled) {
+    console.log(`🎨 Preparing Puppeteer overlay (HTML → PNG)...`);
 
-    // Only start PNG overlay if NOT using Cairo or Node-Cairo overlay
-    // Cairo/Node-Cairo overlays handle their own drawing via scripts
-    if (overlayType !== 'cairo' && overlayType !== 'node-cairo') {
-      console.log(`🎨 Preparing graphics overlay (PNG mode)...`);
-
-      try {
-        // Use PNG mode - simpler and more reliable than TCP/compositor
-        // This will generate the first frame synchronously so the file exists
-        await graphicsOverlay.start("png");
-        console.log("✅ Graphics overlay ready (PNG file created)");
-      } catch (err) {
-        console.error("❌ Failed to start graphics overlay:", err.message);
-      }
-    } else if (overlayType === 'cairo') {
-      console.log(`🎨 Using Cairo overlay (Python-based dynamic graphics)`);
-      console.log(`💡 Graphics will be drawn by cairo-graphics-stream.py`);
-
-      // Sync gameState with current stream config
-      const config = streamController.streamConfig;
-      if (config.overlayFontSize !== undefined) {
-        gameState.overlayFontSize = config.overlayFontSize;
-      }
-      if (config.overlayColor !== undefined) {
-        gameState.overlayColor = config.overlayColor;
-      }
-      if (config.overlayBackground !== undefined) {
-        gameState.overlayBackground = config.overlayBackground;
+    try {
+      // Initialize Puppeteer if not already running
+      if (!puppeteerOverlay) {
+        puppeteerOverlay = new PuppeteerOverlay();
       }
 
-      // Write the initial game state JSON for Cairo to read
-      regenerateOverlay();
-    } else if (overlayType === 'node-cairo') {
-      console.log(`🎨 Using Node-Cairo overlay (Node.js-based dynamic graphics)`);
-      console.log(`💡 Graphics will be drawn by node-graphics-stream.js`);
-
-      // Sync gameState with current stream config
-      const config = streamController.streamConfig;
-      if (config.overlayFontSize !== undefined) {
-        gameState.overlayFontSize = config.overlayFontSize;
-      }
-      if (config.overlayColor !== undefined) {
-        gameState.overlayColor = config.overlayColor;
-      }
-      if (config.overlayBackground !== undefined) {
-        gameState.overlayBackground = config.overlayBackground;
+      if (!puppeteerOverlay.isRunning) {
+        await puppeteerOverlay.initialize(PORT);
       }
 
-      console.log(`📝 Using font size: ${gameState.overlayFontSize}px`);
-
-      // Write the initial game state JSON for Node script to read
-      regenerateOverlay();
+      // Generate the initial PNG with current game state
+      await puppeteerOverlay.updateState(gameState);
+      console.log("✅ Overlay PNG ready for GStreamer");
+    } catch (err) {
+      console.error("❌ Failed to prepare overlay:", err.message);
     }
   }
 });
 
-// Stop graphics overlay when stream stops
-streamController.on("stopped", () => {
-  if (graphicsOverlay && graphicsOverlay.isRunning) {
-    console.log("🛑 Stopping graphics overlay...");
-    graphicsOverlay.stop();
+// Stop Puppeteer overlay when stream stops (optional - can keep browser running)
+streamController.on("stopped", async () => {
+  // We keep Puppeteer running between streams for faster restarts.
+  // It only gets stopped on server shutdown.
+  console.log("ℹ️  Stream stopped (Puppeteer overlay stays ready for next stream)");
+});
+
+
+// Graceful shutdown - close Puppeteer browser
+process.on("SIGINT", async () => {
+  console.log("\n🛑 Shutting down...");
+  if (puppeteerOverlay) {
+    await puppeteerOverlay.stop();
   }
+  process.exit(0);
+});
+
+process.on("SIGTERM", async () => {
+  console.log("\n🛑 Shutting down...");
+  if (puppeteerOverlay) {
+    await puppeteerOverlay.stop();
+  }
+  process.exit(0);
 });
