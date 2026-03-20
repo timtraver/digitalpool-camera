@@ -1295,7 +1295,7 @@ function applyOverlaySettings() {
     overlayBackground: overlayBackground.value,
     // Graphics overlay
     skiaGraphicsEnabled: document.getElementById("skiaGraphicsEnabled")?.checked || false,
-    overlayType: document.getElementById("skiaGraphicsType")?.value || "node-cairo",
+    overlayType: document.getElementById("skiaGraphicsType")?.value || "png",
   };
 
   console.log("Auto-applying overlay config:", overlayConfig);
@@ -1484,7 +1484,7 @@ socket.on("streamStatus", (status) => {
     }
 
     if (skiaGraphicsType) {
-      skiaGraphicsType.value = status.config.overlayType || "node-cairo";
+      skiaGraphicsType.value = status.config.overlayType || "png";
     }
 
     // Update preview overlay

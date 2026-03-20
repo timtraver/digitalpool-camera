@@ -23,7 +23,7 @@ class StreamController extends EventEmitter {
       autoStart: false, // Auto-start streaming on server startup
       // Overlay settings
       overlayEnabled: false,
-      overlayType: "text", // 'text', 'png', 'cairo', 'node-cairo'
+      overlayType: "png", // 'text', 'png', 'cairo', 'node-cairo'
       overlayText: "",
       showTimestamp: false,
       overlayUrl: "",
