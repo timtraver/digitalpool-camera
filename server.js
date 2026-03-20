@@ -12,6 +12,24 @@ let GraphicsOverlay = null;
 try {
   GraphicsOverlay = require("./graphicsOverlay");
   console.log("✅ Graphics overlay module loaded (node-canvas)");
+
+  // Register system fonts explicitly - node-canvas often can't find them via fontconfig
+  try {
+    const { registerFont } = require("canvas");
+    const fs = require("fs");
+    const fontPaths = [
+      { path: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", family: "DejaVu Sans", weight: "normal" },
+      { path: "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", family: "DejaVu Sans", weight: "bold" },
+    ];
+    for (const font of fontPaths) {
+      if (fs.existsSync(font.path)) {
+        registerFont(font.path, { family: font.family, weight: font.weight });
+        console.log(`  📝 Registered font: ${font.family} (${font.weight})`);
+      }
+    }
+  } catch (fontErr) {
+    console.log("⚠️  Could not register fonts:", fontErr.message);
+  }
 } catch (err) {
   console.log("ℹ️  Graphics overlay not available (install 'canvas' to enable)");
 }
