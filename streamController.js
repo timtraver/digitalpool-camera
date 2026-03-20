@@ -808,6 +808,8 @@ class StreamController extends EventEmitter {
         `tune=zerolatency`,
         `bitrate=${bitrate_kbps}`,
         "key-int-max=30",
+        "threads=0",
+        "sliced-threads=true",
         "!",
         "video/x-h264,stream-format=byte-stream",
         "!",

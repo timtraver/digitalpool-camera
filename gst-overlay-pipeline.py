@@ -84,7 +84,7 @@ def main():
         f'! tee name=t '
         f't. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert '
         f"! video/x-raw,format=I420 "
-        f'! x264enc speed-preset=ultrafast tune=zerolatency bitrate={bitrate_kbps} key-int-max=30 threads=2 '
+        f'! x264enc speed-preset=ultrafast tune=zerolatency bitrate={bitrate_kbps} key-int-max=30 threads=0 sliced-threads=true '
         f"! video/x-h264,stream-format=byte-stream "
         f'! h264parse config-interval=-1 '
         f'! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
