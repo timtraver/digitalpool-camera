@@ -1238,10 +1238,22 @@ server.listen(PORT, async () => {
       console.log("✅ Camera position matches config!");
     }
 
-    // Stop the temporary stream
+    // Stop the temporary stream and wait for it to actually exit
     console.log("🛑 Stopping temporary stream...");
     tempStream.kill("SIGTERM");
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        console.log("⚠️  Temporary stream didn't exit gracefully, sending SIGKILL...");
+        tempStream.kill("SIGKILL");
+        resolve();
+      }, 3000);
+      tempStream.on("close", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+    // Extra wait for the kernel to release the device
+    await new Promise((resolve) => setTimeout(resolve, 1000));
     console.log("✅ Temporary stream stopped");
 
     // Sync pan/tilt position with actual camera position

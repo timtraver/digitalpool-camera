@@ -136,6 +136,15 @@ def main():
     ret = pipeline.set_state(Gst.State.PLAYING)
     if ret == Gst.StateChangeReturn.FAILURE:
         print("❌ Failed to start pipeline")
+        # Check bus for the actual error message
+        bus = pipeline.get_bus()
+        msg = bus.timed_pop_filtered(5 * Gst.SECOND, Gst.MessageType.ERROR)
+        if msg:
+            err, debug = msg.parse_error()
+            print(f"   Error: {err.message}")
+            if debug:
+                print(f"   Debug: {debug}")
+        pipeline.set_state(Gst.State.NULL)
         sys.exit(1)
 
     print("✅ Pipeline started, overlay will auto-reload when PNG changes")

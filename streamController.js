@@ -364,6 +364,24 @@ class StreamController extends EventEmitter {
         console.log("Could not find media processes:", err.message);
       }
 
+      // Verify the device is actually free now
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      try {
+        const { stdout: verifyOut } = await execPromise(
+          `sudo fuser ${this.cameraDevice} 2>&1 || true`,
+        );
+        const stillBusy = verifyOut.trim() && /\d/.test(verifyOut);
+        if (stillBusy) {
+          console.log(`⚠️  Camera still busy after cleanup: ${verifyOut.trim()}`);
+          // Force kill remaining processes
+          await execPromise(`sudo fuser -k ${this.cameraDevice} 2>/dev/null || true`);
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          console.log("🔪 Force-killed remaining camera processes");
+        }
+      } catch (err) {
+        // ignore
+      }
+
       console.log("Finished checking for camera processes");
     } catch (error) {
       console.log("Error checking for camera processes:", error.message);
