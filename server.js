@@ -995,6 +995,16 @@ io.on("connection", (socket) => {
     socket.emit("cameraConfig", { success: true, config: camera.config });
   });
 
+  socket.on("setStartupPosition", () => {
+    const result = camera.saveStartupPosition();
+    socket.emit("startupPositionSet", result);
+  });
+
+  socket.on("getStartupPosition", () => {
+    const position = camera.loadStartupPosition();
+    socket.emit("startupPosition", { position });
+  });
+
   socket.on("resetCameraSettings", async () => {
     const results = await camera.resetToDefaults();
     socket.emit("cameraConfigReset", {
@@ -1229,7 +1239,16 @@ server.listen(PORT, async () => {
       `📍 Current position: pan=${currentPan.value}, tilt=${currentTilt.value}, zoom=${currentZoom.value}`,
     );
 
+    // Apply non-PTZ config settings (brightness, contrast, etc.)
     await camera.applyConfig();
+
+    // Apply startup position for PTZ (if set), overriding last known position
+    const usedStartup = await camera.applyStartupPosition();
+    if (usedStartup) {
+      console.log("📌 Applied startup position (overrides last known PTZ position)");
+    } else {
+      console.log("📌 No startup position set, using last saved PTZ position from config");
+    }
 
     // Wait for camera to finish moving
     console.log("⏳ Waiting for camera to finish moving...");
@@ -1243,25 +1262,6 @@ server.listen(PORT, async () => {
     console.log(
       `📍 Final position: pan=${verifyPan.value}, tilt=${verifyTilt.value}, zoom=${verifyZoom.value}`,
     );
-
-    // Check if position matches config
-    const panMatch =
-      Math.abs(verifyPan.value - camera.config.pan_absolute) < 3600; // Within 1 degree
-    const tiltMatch =
-      Math.abs(verifyTilt.value - camera.config.tilt_absolute) < 3600;
-    const zoomMatch = verifyZoom.value === camera.config.zoom_absolute;
-
-    if (!panMatch || !tiltMatch || !zoomMatch) {
-      console.log("⚠️  Camera position does not match config!");
-      console.log(
-        `   Expected: pan=${camera.config.pan_absolute}, tilt=${camera.config.tilt_absolute}, zoom=${camera.config.zoom_absolute}`,
-      );
-      console.log(
-        `   Actual:   pan=${verifyPan.value}, tilt=${verifyTilt.value}, zoom=${verifyZoom.value}`,
-      );
-    } else {
-      console.log("✅ Camera position matches config!");
-    }
 
     // Stop the temporary stream and wait for it to actually exit
     console.log("🛑 Stopping temporary stream...");

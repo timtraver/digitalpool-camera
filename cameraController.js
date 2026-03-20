@@ -8,6 +8,7 @@ class CameraController {
   constructor(device = "/dev/video2") {
     this.device = device;
     this.configFile = path.join(__dirname, "camera-config.json");
+    this.startupConfigFile = path.join(__dirname, "camera-startup-config.json");
 
     // Track pan/tilt positions since camera doesn't report them reliably
     this.currentPan = 0;
@@ -600,9 +601,74 @@ class CameraController {
   }
 
   /**
-   * Reset camera to home position
+   * Save current PTZ position as the startup position
+   */
+  saveStartupPosition() {
+    const position = {
+      pan_absolute: this.config.pan_absolute || 0,
+      tilt_absolute: this.config.tilt_absolute || 0,
+      zoom_absolute: this.config.zoom_absolute || 0,
+    };
+    try {
+      fs.writeFileSync(this.startupConfigFile, JSON.stringify(position, null, 2), "utf8");
+      console.log("📌 Saved startup position:", position);
+      return { success: true, position };
+    } catch (error) {
+      console.error("❌ Error saving startup position:", error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Load the startup position from file
+   * Returns null if no startup position has been set
+   */
+  loadStartupPosition() {
+    try {
+      if (fs.existsSync(this.startupConfigFile)) {
+        const data = fs.readFileSync(this.startupConfigFile, "utf8");
+        const position = JSON.parse(data);
+        console.log("📌 Loaded startup position:", position);
+        return position;
+      }
+    } catch (error) {
+      console.error("❌ Error loading startup position:", error.message);
+    }
+    return null;
+  }
+
+  /**
+   * Apply the startup position to the camera (pan/tilt/zoom only)
+   */
+  async applyStartupPosition() {
+    const startupPos = this.loadStartupPosition();
+    if (!startupPos) {
+      console.log("📌 No startup position set, using saved config position");
+      return false;
+    }
+    console.log("📌 Applying startup position:", startupPos);
+    await this.setControl("pan_absolute", startupPos.pan_absolute);
+    await this.setControl("tilt_absolute", startupPos.tilt_absolute);
+    await this.setControl("zoom_absolute", startupPos.zoom_absolute);
+    this.currentPan = startupPos.pan_absolute;
+    this.currentTilt = startupPos.tilt_absolute;
+    return true;
+  }
+
+  /**
+   * Reset camera to home position (startup position if set, otherwise 0,0,0)
    */
   async resetPosition() {
+    const startupPos = this.loadStartupPosition();
+    if (startupPos) {
+      console.log("🏠 Resetting to startup position:", startupPos);
+      await this.setControl("pan_absolute", startupPos.pan_absolute);
+      await this.setControl("tilt_absolute", startupPos.tilt_absolute);
+      await this.setControl("zoom_absolute", startupPos.zoom_absolute);
+      this.currentPan = startupPos.pan_absolute;
+      this.currentTilt = startupPos.tilt_absolute;
+      return { success: true, message: "Camera reset to startup position" };
+    }
     await this.setControl("pan_absolute", 0);
     await this.setControl("tilt_absolute", 0);
     // Reset tracked positions

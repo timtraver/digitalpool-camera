@@ -156,6 +156,7 @@ socket.on("connect", () => {
 
   // Request camera configuration on connect
   socket.emit("getCameraConfig");
+  socket.emit("getStartupPosition");
 });
 
 socket.on("disconnect", () => {
@@ -241,46 +242,47 @@ document.getElementById("resetPos").addEventListener("click", () => {
   socket.emit("resetPosition");
 });
 
-// Zoom controls
+// Zoom controls - range slider
 const zoomLevel = document.getElementById("zoomLevel");
+const zoomLevelValue = document.getElementById("zoomLevelValue");
 let currentZoom = 0;
 
 if (zoomLevel) {
-  zoomLevel.addEventListener("change", (e) => {
+  zoomLevel.addEventListener("input", (e) => {
     const value = parseInt(e.target.value);
-    // Clamp value between 0 and 100
-    const clampedValue = Math.max(0, Math.min(100, value));
-    if (value !== clampedValue) {
-      e.target.value = clampedValue;
-    }
-    currentZoom = clampedValue;
-    console.log(`🔍 Zoom level changed to: ${clampedValue}`);
-    socket.emit("zoom", { level: clampedValue });
+    currentZoom = value;
+    if (zoomLevelValue) zoomLevelValue.textContent = value;
+    console.log(`🔍 Zoom level changed to: ${value}`);
+    socket.emit("zoom", { level: value });
   });
 }
 
-const zoomInBtn = document.getElementById("zoomIn");
-const zoomOutBtn = document.getElementById("zoomOut");
+// Startup position controls
+const setStartupBtn = document.getElementById("setStartupPosition");
+const startupPosInfo = document.getElementById("startupPosInfo");
 
-if (zoomInBtn) {
-  zoomInBtn.addEventListener("click", () => {
-    if (currentZoom < 100) {
-      currentZoom++;
-      if (zoomLevel) zoomLevel.value = currentZoom;
-      socket.emit("zoom", { level: currentZoom });
-    }
+if (setStartupBtn) {
+  setStartupBtn.addEventListener("click", () => {
+    socket.emit("setStartupPosition");
   });
 }
 
-if (zoomOutBtn) {
-  zoomOutBtn.addEventListener("click", () => {
-    if (currentZoom > 0) {
-      currentZoom--;
-      if (zoomLevel) zoomLevel.value = currentZoom;
-      socket.emit("zoom", { level: currentZoom });
+socket.on("startupPositionSet", (data) => {
+  if (data.success) {
+    const pos = data.position;
+    if (startupPosInfo) {
+      startupPosInfo.textContent = `Startup: pan=${pos.pan_absolute}, tilt=${pos.tilt_absolute}, zoom=${pos.zoom_absolute}`;
     }
-  });
-}
+    console.log("📌 Startup position saved:", pos);
+  }
+});
+
+socket.on("startupPosition", (data) => {
+  if (data.position && startupPosInfo) {
+    const pos = data.position;
+    startupPosInfo.textContent = `Startup: pan=${pos.pan_absolute}, tilt=${pos.tilt_absolute}, zoom=${pos.zoom_absolute}`;
+  }
+});
 
 // Helper function to create control handlers
 function createSliderControl(controlName, elementId, valueDisplayId) {
@@ -487,9 +489,11 @@ function loadCameraConfigToUI(config) {
   // Zoom control
   if (config.zoom_absolute !== undefined) {
     const zoomLevelInput = document.getElementById("zoomLevel");
+    const zoomValueDisplay = document.getElementById("zoomLevelValue");
     if (zoomLevelInput) {
       zoomLevelInput.value = config.zoom_absolute;
       currentZoom = config.zoom_absolute;
+      if (zoomValueDisplay) zoomValueDisplay.textContent = config.zoom_absolute;
       console.log(`🔍 Loaded zoom level: ${config.zoom_absolute}`);
     }
   }

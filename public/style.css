@@ -277,12 +277,13 @@ header h1 {
 /* Center reset button */
 .btn-control-center {
   position: absolute;
-  width: 36px;
-  height: 36px;
+  width: 42px;
+  height: 42px;
   border: none;
   background: #ef4444;
   color: white;
-  font-size: 20px;
+  font-size: 28px;
+  line-height: 42px;
   border-radius: 50%;
   cursor: pointer;
   transition: all 0.15s;
@@ -291,6 +292,9 @@ header h1 {
   left: 50%;
   transform: translate(-50%, -50%);
   z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* Hover effects - Animate in arrow direction */
