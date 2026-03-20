@@ -186,10 +186,10 @@ class PuppeteerOverlay extends EventEmitter {
   }
 
   /**
-   * Render a remote URL overlay. Uses wkhtmltoimage with --transparent
-   * so the page background becomes alpha-transparent directly in the PNG.
-   * No chroma-keying needed — the remote page just uses normal HTML/CSS
-   * positioning and the empty areas are transparent.
+   * Render a remote URL overlay. Since wkhtmltoimage on unpatched Qt doesn't
+   * support --transparent, we inject a green (#00FF00) background via
+   * --user-style-sheet, then chroma-key the green to transparent with ImageMagick.
+   * This works for any page — overlay elements keep their own styled backgrounds.
    */
   async _renderUrlOverlay() {
     if (this._renderInProgress) {
@@ -199,26 +199,31 @@ class PuppeteerOverlay extends EventEmitter {
 
     this._renderInProgress = true;
     try {
-      // Render remote URL directly to PNG with transparent background
-      // --transparent: makes page background transparent (no chroma-key needed)
+      // Write a CSS file that forces the page background to green for chroma-keying.
+      // The !important ensures it overrides whatever the page sets.
+      // Overlay elements with their own backgrounds are unaffected.
+      const chromaCss = "/tmp/overlay-chroma-bg.css";
+      fs.writeFileSync(chromaCss, "html, body { background: #00FF00 !important; }\n");
+
+      // Render remote URL to PNG with injected green background
+      // --user-style-sheet: injects our green background CSS
       // --enable-javascript: allow JS to execute (fetch scores, etc.)
       // --javascript-delay: wait for JS to finish before screenshot
       // --no-stop-slow-scripts: don't kill long-running scripts
-      const tempOutput = this.pngPath + ".tmp";
       await this._execPromise("wkhtmltoimage", [
         "--width", String(this.width),
         "--height", String(this.height),
         "--quality", "100",
-        "--transparent",
         "--enable-javascript",
         "--javascript-delay", String(this._jsDelay),
         "--no-stop-slow-scripts",
+        "--user-style-sheet", chromaCss,
         this._overlayUrl,
-        tempOutput,
+        this.rawPngPath,
       ]);
 
-      // Atomic rename so GStreamer doesn't read a half-written file
-      fs.renameSync(tempOutput, this.pngPath);
+      // Chroma-key green to transparent, then atomic rename
+      await this._chromaKeyAndSave();
 
       console.log(`📸 URL overlay PNG updated from: ${this._overlayUrl}`);
       this.emit("updated", this.pngPath);
