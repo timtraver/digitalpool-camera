@@ -23,7 +23,7 @@ class StreamController extends EventEmitter {
       autoStart: false, // Auto-start streaming on server startup
       // Overlay settings
       overlayEnabled: false,
-      overlayType: "png", // 'text', 'png', 'cairo', 'node-cairo'
+      overlayType: "text", // 'text' or 'url'
       overlayText: "",
       showTimestamp: false,
       overlayUrl: "",
@@ -623,16 +623,15 @@ class StreamController extends EventEmitter {
       encoder,
     } = this.streamConfig;
 
-    // Check if graphics overlay is enabled
-    if (this.streamConfig.skiaGraphicsEnabled) {
-      // Check overlay type: 'png', 'cairo', or 'node-cairo'
-      if (this.streamConfig.overlayType === 'cairo') {
-        return this._buildCairoOverlayPipeline();
-      } else if (this.streamConfig.overlayType === 'node-cairo') {
-        return this._buildNodeCairoOverlayPipeline();
-      } else {
-        return this._buildPNGOverlayPipeline();
-      }
+    // Check if graphics overlay is needed:
+    // - Legacy: skiaGraphicsEnabled checkbox (being removed from UI)
+    // - New: URL overlay mode (overlayType === 'url' with a URL set)
+    const needsGraphicsOverlay = this.streamConfig.skiaGraphicsEnabled ||
+      (this.streamConfig.overlayType === 'url' && this.streamConfig.overlayUrl && this.streamConfig.overlayUrl.trim());
+
+    if (needsGraphicsOverlay) {
+      // Use the PNG overlay pipeline (Python GStreamer with gdkpixbufoverlay)
+      return this._buildPNGOverlayPipeline();
     }
 
     let pipeline = [

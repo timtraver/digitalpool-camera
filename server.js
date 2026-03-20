@@ -675,8 +675,10 @@ let currentIdlePreviewProcess = null;
 app.get("/video/stream", async (req, res) => {
   console.log("New video stream connection requested");
 
-  // If graphics overlay is enabled, don't start idle preview (saves memory)
-  if (streamController.streamConfig.skiaGraphicsEnabled) {
+  // If graphics/URL overlay is enabled, don't start idle preview (saves memory)
+  const hasUrlOverlay = streamController.streamConfig.overlayType === 'url' &&
+    streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
+  if (streamController.streamConfig.skiaGraphicsEnabled || hasUrlOverlay) {
     console.log("⚠️  Idle preview disabled when graphics overlay is enabled (saves memory)");
     res.status(503).send("Idle preview disabled when graphics overlay is enabled. Start the stream to see preview.");
     return;
@@ -1329,7 +1331,11 @@ app.use("/graphql", (req, res) => {
 // Start Puppeteer overlay BEFORE GStreamer starts (during "preparing" phase)
 // This ensures the PNG file exists when gdkpixbufoverlay tries to load it
 streamController.on("preparing", async () => {
-  if (streamController.streamConfig.skiaGraphicsEnabled) {
+  const hasUrlOverlay = streamController.streamConfig.overlayType === 'url' &&
+    streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
+  const needsGraphicsOverlay = streamController.streamConfig.skiaGraphicsEnabled || hasUrlOverlay;
+
+  if (needsGraphicsOverlay) {
     console.log(`🎨 Preparing overlay (HTML → PNG)...`);
 
     try {

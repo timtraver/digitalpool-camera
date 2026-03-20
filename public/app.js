@@ -1293,9 +1293,6 @@ function applyOverlaySettings() {
     overlayFontSize: parseInt(overlayFontSize.value),
     overlayColor: overlayColor.value,
     overlayBackground: overlayBackground.value,
-    // Graphics overlay
-    skiaGraphicsEnabled: document.getElementById("skiaGraphicsEnabled")?.checked || false,
-    overlayType: document.getElementById("skiaGraphicsType")?.value || "png",
   };
 
   console.log("Auto-applying overlay config:", overlayConfig);
@@ -1390,32 +1387,6 @@ titlePosition.addEventListener("change", () => {
   applyOverlaySettings();
 });
 
-// Graphics Overlay Controls
-const skiaGraphicsEnabled = document.getElementById("skiaGraphicsEnabled");
-const skiaGraphicsType = document.getElementById("skiaGraphicsType");
-const skiaGraphicsTypeControl = document.getElementById("skiaGraphicsTypeControl");
-
-if (skiaGraphicsEnabled) {
-  skiaGraphicsEnabled.addEventListener("change", () => {
-    const enabled = skiaGraphicsEnabled.checked;
-    console.log(`🎨 Graphics overlay ${enabled ? "enabled" : "disabled"}`);
-
-    // Show/hide options
-    if (skiaGraphicsTypeControl) {
-      skiaGraphicsTypeControl.style.display = enabled ? "flex" : "none";
-    }
-
-    applyOverlaySettings();
-  });
-}
-
-if (skiaGraphicsType) {
-  skiaGraphicsType.addEventListener("change", () => {
-    console.log(`🎨 Graphics type changed to: ${skiaGraphicsType.value}`);
-    applyOverlaySettings();
-  });
-}
-
 // Overlay result handler
 socket.on("overlayResult", (result) => {
   console.log("Overlay result:", result);
@@ -1471,20 +1442,6 @@ socket.on("streamStatus", (status) => {
     } else {
       textOverlayOptions.style.display = "none";
       urlOverlayOptions.style.display = "block";
-    }
-
-    // Load graphics overlay settings
-    if (skiaGraphicsEnabled) {
-      skiaGraphicsEnabled.checked = status.config.skiaGraphicsEnabled || false;
-      const enabled = skiaGraphicsEnabled.checked;
-
-      if (skiaGraphicsTypeControl) {
-        skiaGraphicsTypeControl.style.display = enabled ? "flex" : "none";
-      }
-    }
-
-    if (skiaGraphicsType) {
-      skiaGraphicsType.value = status.config.overlayType || "png";
     }
 
     // Update preview overlay

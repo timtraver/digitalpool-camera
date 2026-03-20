@@ -207,7 +207,7 @@ class CameraController {
     console.log("📹 Activating camera device...");
     try {
       // Open the camera device briefly to wake it up
-      const command = `v4l2-ctl -d ${this.device} --list-formats-ext`;
+      const command = `sudo v4l2-ctl -d ${this.device} --list-formats-ext`;
       await execAsync(command);
       console.log("✅ Camera device activated");
 
@@ -370,7 +370,7 @@ class CameraController {
         }
       }
 
-      const command = `v4l2-ctl -d ${this.device} --set-ctrl=${controlName}=${value}`;
+      const command = `sudo v4l2-ctl -d ${this.device} --set-ctrl=${controlName}=${value}`;
       // console.log(`    🔧 Executing: ${command}`);
 
       const { stdout, stderr } = await execAsync(command);
@@ -424,7 +424,7 @@ class CameraController {
         throw new Error(`Unknown control: ${controlName}`);
       }
 
-      const command = `v4l2-ctl -d ${this.device} --get-ctrl=${controlName}`;
+      const command = `sudo v4l2-ctl -d ${this.device} --get-ctrl=${controlName}`;
       const { stdout, stderr } = await execAsync(command);
 
       // Parse output like "brightness: 50"
@@ -452,7 +452,7 @@ class CameraController {
    */
   async getAllControls() {
     try {
-      const command = `v4l2-ctl -d ${this.device} --all`;
+      const command = `sudo v4l2-ctl -d ${this.device} --all`;
       const { stdout, stderr } = await execAsync(command);
 
       return {

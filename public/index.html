@@ -274,28 +274,8 @@
                   </div>
                 </div>
 
-                <!-- Graphics Overlay -->
-                <div class="overlay-section" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1)">
-                  <div class="control-item-compact">
-                    <label>
-                      <input type="checkbox" id="skiaGraphicsEnabled" />
-                      <strong>🎨 Graphics Overlay</strong>
-                    </label>
-                  </div>
-                  <div style="padding: 4px 0">
-                    <small style="color: rgba(255, 255, 255, 0.6); font-size: 9px">
-                      Composites custom scoreboard graphics into the stream
-                    </small>
-                  </div>
-                  <div class="control-item-compact" id="skiaGraphicsTypeControl" style="display: none">
-                    <label>Graphics Type:</label>
-                    <select id="skiaGraphicsType">
-                      <option value="png" selected>PNG Overlay</option>
-                      <option value="node-cairo">Node-Cairo (Compositor)</option>
-                      <option value="cairo">Cairo (Python)</option>
-                    </select>
-                  </div>
-                </div>
+                <!-- Graphics Overlay checkbox removed — URL overlay mode automatically
+                     enables the PNG overlay pipeline when a URL is configured -->
               </div>
             </div>
           </div>
