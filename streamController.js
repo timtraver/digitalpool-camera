@@ -312,7 +312,7 @@ class StreamController extends EventEmitter {
       // Method 1: Use fuser (most reliable for device files)
       try {
         const { stdout: fuserOut } = await execPromise(
-          `fuser ${this.cameraDevice} 2>&1 || true`,
+          `sudo fuser ${this.cameraDevice} 2>&1 || true`,
         );
         if (fuserOut.trim()) {
           console.log("fuser output:", fuserOut);
@@ -321,10 +321,10 @@ class StreamController extends EventEmitter {
           if (match) {
             const pids = match[1].trim().split(/\s+/);
             for (const pid of pids) {
-              if (pid && !isNaN(pid)) {
+              if (pid && !isNaN(pid) && parseInt(pid) !== process.pid) {
                 console.log(`Killing process ${pid} (found by fuser)...`);
                 try {
-                  process.kill(parseInt(pid), "SIGTERM");
+                  await execPromise(`sudo kill -TERM ${pid}`);
                 } catch (err) {
                   console.log(`Could not kill process ${pid}:`, err.message);
                 }

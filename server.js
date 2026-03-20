@@ -1331,6 +1331,15 @@ app.use("/graphql", (req, res) => {
 // Start Puppeteer overlay BEFORE GStreamer starts (during "preparing" phase)
 // This ensures the PNG file exists when gdkpixbufoverlay tries to load it
 streamController.on("preparing", async () => {
+  // Kill idle preview process first — it holds /dev/video2 open
+  if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
+    console.log("🛑 Killing idle preview before starting stream...");
+    currentIdlePreviewProcess.kill("SIGTERM");
+    currentIdlePreviewProcess = null;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    console.log("✅ Idle preview killed");
+  }
+
   const hasUrlOverlay = streamController.streamConfig.overlayType === 'url' &&
     streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
   const needsGraphicsOverlay = streamController.streamConfig.skiaGraphicsEnabled || hasUrlOverlay;
