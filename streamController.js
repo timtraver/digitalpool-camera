@@ -925,6 +925,8 @@ class StreamController extends EventEmitter {
           `device=${audioDevice}`,
           "provide-clock=false", // Use video clock as master
           "!",
+          "audio/x-raw,rate=32000,channels=2,format=S16LE", // Camera mic native format
+          "!",
           "audioconvert",
           "!",
           "audioresample",
@@ -986,6 +988,8 @@ class StreamController extends EventEmitter {
           `device=${audioDevice}`,
           "provide-clock=false",
           "!",
+          "audio/x-raw,rate=32000,channels=2,format=S16LE",
+          "!",
           "audioconvert",
           "!",
           "audioresample",
@@ -1039,6 +1043,8 @@ class StreamController extends EventEmitter {
           "alsasrc",
           `device=${audioDevice}`,
           "provide-clock=false",
+          "!",
+          "audio/x-raw,rate=32000,channels=2,format=S16LE",
           "!",
           "audioconvert",
           "!",

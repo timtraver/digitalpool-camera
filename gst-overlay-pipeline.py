@@ -93,6 +93,7 @@ def main():
         f'! srtsink uri="srt://:{srt_port}" wait-for-connection=false latency=125 '
         + (
             f'alsasrc device={audio_device} provide-clock=false '
+            f'! audio/x-raw,rate=32000,channels=2,format=S16LE '
             f'! audioconvert ! audioresample '
             f'! audio/x-raw,rate=48000,channels=2 '
             f'! voaacenc bitrate=128000 '
