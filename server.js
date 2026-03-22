@@ -27,7 +27,7 @@ const io = socketIO(server, {
 });
 
 const PORT = process.env.PORT || 3000;
-const CAMERA_DEVICE = process.env.CAMERA_DEVICE || "/dev/video2";
+const CAMERA_DEVICE = process.env.CAMERA_DEVICE || "/dev/video0";
 
 // Initialize camera controller
 const camera = new CameraController(CAMERA_DEVICE);
@@ -1368,7 +1368,7 @@ app.use("/graphql", (req, res) => {
 // Start Puppeteer overlay BEFORE GStreamer starts (during "preparing" phase)
 // This ensures the PNG file exists when gdkpixbufoverlay tries to load it
 streamController.on("preparing", async () => {
-  // Kill idle preview process first — it holds /dev/video2 open
+  // Kill idle preview process first — it holds the camera device open
   if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
     console.log("🛑 Killing idle preview before starting stream...");
     currentIdlePreviewProcess.kill("SIGTERM");
