@@ -227,7 +227,11 @@ class PuppeteerOverlay extends EventEmitter {
   }
 
   async _ensureBrowser() {
-    if (this._browser && this._browser.connected) return;
+    // If we already have a working browser + page, reuse it
+    if (this._browser && this._browser.connected && this._page) return;
+
+    // Clean up any leftover browser before launching a new one
+    await this._closeBrowser();
 
     const chromiumPath = this._findChromiumPath();
     console.log(`🚀 Launching headless Chromium for URL overlay (${chromiumPath})...`);
@@ -248,15 +252,27 @@ class PuppeteerOverlay extends EventEmitter {
         "--no-first-run",
       ],
     });
+
+    // If browser disconnects unexpectedly, clean up references
+    this._browser.on("disconnected", () => {
+      console.warn("⚠️  Chromium browser disconnected unexpectedly");
+      this._browser = null;
+      this._page = null;
+    });
+
     this._page = await this._browser.newPage();
     await this._page.setViewport({ width: this.width, height: this.height });
+    this._currentLoadedUrl = null; // Track what URL is loaded
     console.log("  ✅ Chromium browser ready");
   }
 
   /**
-   * Close the Puppeteer browser instance.
+   * Close the Puppeteer browser instance and kill any orphan processes.
    */
   async _closeBrowser() {
+    const pid = this._browser && this._browser.process && this._browser.process()
+      ? this._browser.process().pid : null;
+
     if (this._page) {
       try { await this._page.close(); } catch (e) { /* ignore */ }
       this._page = null;
@@ -266,12 +282,18 @@ class PuppeteerOverlay extends EventEmitter {
       this._browser = null;
       console.log("🛑 Chromium browser closed");
     }
+    this._currentLoadedUrl = null;
+
+    // Safety: kill the process if close() didn't work
+    if (pid) {
+      try { process.kill(pid, "SIGKILL"); } catch (e) { /* already dead */ }
+    }
   }
 
   /**
    * Render a remote URL overlay using Puppeteer (headless Chromium).
-   * Uses waitUntil: 'networkidle0' to wait for React/JS to finish rendering,
-   * and omitBackground: true for native alpha transparency — no chroma-key needed.
+   * First load uses goto() with networkidle0; subsequent refreshes just reload
+   * the same page and re-screenshot, reusing the single browser instance.
    */
   async _renderUrlOverlay() {
     if (this._renderInProgress) {
@@ -283,13 +305,21 @@ class PuppeteerOverlay extends EventEmitter {
     try {
       await this._ensureBrowser();
 
-      // Navigate to the URL and wait for all network requests to settle.
-      // networkidle0 = no network connections for 500ms (React API calls done).
-      // On first load this navigates; on subsequent calls it reloads for fresh data.
-      await this._page.goto(this._overlayUrl, {
-        waitUntil: "networkidle0",
-        timeout: 15000,
-      });
+      // First load: navigate to the URL and wait for JS to finish.
+      // Subsequent refreshes: just reload the page (much lighter than goto).
+      if (this._currentLoadedUrl !== this._overlayUrl) {
+        await this._page.goto(this._overlayUrl, {
+          waitUntil: "networkidle0",
+          timeout: 15000,
+        });
+        this._currentLoadedUrl = this._overlayUrl;
+      } else {
+        // Reload to get fresh data (e.g., updated scores)
+        await this._page.reload({
+          waitUntil: "networkidle0",
+          timeout: 15000,
+        });
+      }
 
       // Apply CSS zoom if not 100%
       if (this._zoom !== 100) {
@@ -299,8 +329,6 @@ class PuppeteerOverlay extends EventEmitter {
       }
 
       // Take screenshot with transparent background (no chroma-key needed).
-      // omitBackground: true makes the default white page background transparent.
-      // Overlay elements with their own CSS backgrounds stay opaque.
       const tempOutput = this.pngPath + ".tmp";
       await this._page.screenshot({
         path: tempOutput,
@@ -316,11 +344,8 @@ class PuppeteerOverlay extends EventEmitter {
       this.emit("updated", this.pngPath);
     } catch (err) {
       console.error("❌ Failed to render URL overlay:", err.message);
-      // If the browser crashed, clean it up so next cycle relaunches
-      if (this._browser && !this._browser.connected) {
-        this._browser = null;
-        this._page = null;
-      }
+      // On any error, tear down the browser so next cycle starts fresh
+      await this._closeBrowser();
     } finally {
       this._renderInProgress = false;
     }
