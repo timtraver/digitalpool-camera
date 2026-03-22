@@ -18,6 +18,7 @@ OVERLAY_BACKGROUND=${12:-"transparent"}
 TIMESTAMP_FORMAT=${13:-"%Y-%m-%d %H:%M:%S"}
 TITLE_POSITION=${14:-"top-left"}
 TIMESTAMP_POSITION=${15:-"bottom-right"}
+AUDIO_DEVICE=${16:-""}
 
 echo "🎨 Starting stream with dynamic PNG graphics overlay (Python GStreamer)..."
 echo "Camera: $CAMERA_DEVICE"
@@ -26,6 +27,7 @@ echo "SRT Port: $SRT_PORT"
 echo "PNG Overlay: $PNG_PATH (auto-reload on change)"
 echo "Text Overlay: $OVERLAY_TEXT"
 echo "Show Timestamp: $SHOW_TIMESTAMP"
+echo "Audio Device: $AUDIO_DEVICE"
 
 # Get the directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,5 +37,5 @@ exec python3 "$SCRIPT_DIR/gst-overlay-pipeline.py" \
   "$CAMERA_DEVICE" "$WIDTH" "$HEIGHT" "$FRAMERATE" "$BITRATE" "$SRT_PORT" \
   "$PNG_PATH" "$OVERLAY_TEXT" "$SHOW_TIMESTAMP" "$FONT_SIZE" \
   "$OVERLAY_COLOR" "$OVERLAY_BACKGROUND" "$TIMESTAMP_FORMAT" \
-  "$TITLE_POSITION" "$TIMESTAMP_POSITION"
+  "$TITLE_POSITION" "$TIMESTAMP_POSITION" "$AUDIO_DEVICE"
 
