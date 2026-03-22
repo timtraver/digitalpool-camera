@@ -308,35 +308,29 @@ class PuppeteerOverlay extends EventEmitter {
     try {
       await this._ensureBrowser();
 
-      // First load: navigate to the URL and wait for JS to finish.
-      // Subsequent refreshes: just reload the page (much lighter than goto).
+      // First load only: navigate to the URL and wait for JS to finish.
+      // After that, NEVER reload — just screenshot the live page.
+      // The overlay page updates itself via JS/fetch/websockets.
       if (this._currentLoadedUrl !== this._overlayUrl) {
-        // First load: wait for all network requests to settle (React/API calls)
+        console.log(`🌍 Navigating to overlay URL: ${this._overlayUrl}`);
         await this._page.goto(this._overlayUrl, {
           waitUntil: "networkidle0",
           timeout: 30000,
         });
         this._currentLoadedUrl = this._overlayUrl;
-        // Wait extra time for JS frameworks to finish rendering
+
+        // Apply CSS zoom once after first load
+        if (this._zoom !== 100) {
+          await this._page.evaluate((zoom) => {
+            document.body.style.zoom = (zoom / 100).toString();
+          }, this._zoom);
+        }
+
+        // Wait extra time for JS frameworks to finish initial render
         await new Promise(r => setTimeout(r, this._jsDelay));
-      } else {
-        // Subsequent refreshes: reload and wait for DOM only (faster, lighter)
-        await this._page.reload({
-          waitUntil: "domcontentloaded",
-          timeout: 15000,
-        });
-        // Brief pause for JS to re-render with fresh data
-        await new Promise(r => setTimeout(r, 1500));
       }
 
-      // Apply CSS zoom if not 100%
-      if (this._zoom !== 100) {
-        await this._page.evaluate((zoom) => {
-          document.body.style.zoom = (zoom / 100).toString();
-        }, this._zoom);
-      }
-
-      // Take screenshot with transparent background (no chroma-key needed).
+      // Just screenshot the current page state — no reload needed
       const tempOutput = this.pngPath + ".tmp";
       await this._page.screenshot({
         path: tempOutput,
