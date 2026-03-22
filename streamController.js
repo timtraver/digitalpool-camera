@@ -992,7 +992,7 @@ class StreamController extends EventEmitter {
       "video/x-raw,width=1280,height=720", // 720p preview (lower bandwidth)
       "!",
       "jpegenc",
-      "quality=85", // Software JPEG at 10fps is low CPU cost
+      "quality=65", // Lower quality to reduce preview bandwidth
       "!",
       "multipartmux",
       "boundary=--jpgboundary",

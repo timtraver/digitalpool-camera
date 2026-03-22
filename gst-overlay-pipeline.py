@@ -94,7 +94,7 @@ def main():
         f'! videorate ! video/x-raw,framerate=10/1 '
         f'! videoconvert ! videoscale '
         f'! video/x-raw,width=1280,height=720 '
-        f'! jpegenc quality=85 '
+        f'! jpegenc quality=65 '
         f'! multipartmux boundary=--jpgboundary '
         f'! tcpserversink host=0.0.0.0 port=8555 sync=false recover-policy=keyframe'
     )

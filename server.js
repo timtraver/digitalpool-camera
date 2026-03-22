@@ -890,7 +890,7 @@ app.get("/video/stream", async (req, res) => {
   // JPEG encode and output (already at 10fps 720p from earlier in pipeline)
   gstArgs.push(
     "jpegenc",
-    "quality=85",
+    "quality=65",
     "!",
     "multipartmux",
     "boundary=frame",
