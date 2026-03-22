@@ -235,6 +235,7 @@ class PuppeteerOverlay extends EventEmitter {
       executablePath: chromiumPath,
       headless: true,
       timeout: 60000, // Allow up to 60s for Chromium to start on ARM64
+      protocolTimeout: 60000,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -245,8 +246,6 @@ class PuppeteerOverlay extends EventEmitter {
         "--disable-background-networking",
         "--disable-sync",
         "--no-first-run",
-        "--no-zygote",
-        "--single-process",
       ],
     });
     this._page = await this._browser.newPage();
