@@ -250,7 +250,6 @@ class PuppeteerOverlay extends EventEmitter {
         "--disable-background-networking",
         "--disable-sync",
         "--no-first-run",
-        "--single-process",           // Reduce memory by using one process
         "--disable-translate",
         "--disable-default-apps",
         "--js-flags=--max-old-space-size=128", // Limit JS heap to 128MB
