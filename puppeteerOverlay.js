@@ -250,6 +250,10 @@ class PuppeteerOverlay extends EventEmitter {
         "--disable-background-networking",
         "--disable-sync",
         "--no-first-run",
+        "--single-process",           // Reduce memory by using one process
+        "--disable-translate",
+        "--disable-default-apps",
+        "--js-flags=--max-old-space-size=128", // Limit JS heap to 128MB
       ],
     });
 
@@ -308,17 +312,22 @@ class PuppeteerOverlay extends EventEmitter {
       // First load: navigate to the URL and wait for JS to finish.
       // Subsequent refreshes: just reload the page (much lighter than goto).
       if (this._currentLoadedUrl !== this._overlayUrl) {
+        // First load: wait for all network requests to settle (React/API calls)
         await this._page.goto(this._overlayUrl, {
           waitUntil: "networkidle0",
-          timeout: 15000,
+          timeout: 30000,
         });
         this._currentLoadedUrl = this._overlayUrl;
+        // Wait extra time for JS frameworks to finish rendering
+        await new Promise(r => setTimeout(r, this._jsDelay));
       } else {
-        // Reload to get fresh data (e.g., updated scores)
+        // Subsequent refreshes: reload and wait for DOM only (faster, lighter)
         await this._page.reload({
-          waitUntil: "networkidle0",
+          waitUntil: "domcontentloaded",
           timeout: 15000,
         });
+        // Brief pause for JS to re-render with fresh data
+        await new Promise(r => setTimeout(r, 1500));
       }
 
       // Apply CSS zoom if not 100%
@@ -344,8 +353,14 @@ class PuppeteerOverlay extends EventEmitter {
       this.emit("updated", this.pngPath);
     } catch (err) {
       console.error("❌ Failed to render URL overlay:", err.message);
-      // On any error, tear down the browser so next cycle starts fresh
-      await this._closeBrowser();
+      // Only tear down the browser if it actually crashed/disconnected.
+      // Recoverable errors (timeouts, navigation failures) should NOT kill
+      // Chromium — restarting it on ARM64 is very expensive (~5-10s).
+      if (this._browser && !this._browser.connected) {
+        console.warn("💀 Chromium crashed — will relaunch on next cycle");
+        this._browser = null;
+        this._page = null;
+      }
     } finally {
       this._renderInProgress = false;
     }
