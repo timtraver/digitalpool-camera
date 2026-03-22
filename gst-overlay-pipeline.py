@@ -97,6 +97,7 @@ def main():
             f'! audioconvert ! audioresample '
             f'! audio/x-raw,rate=48000,channels=2 '
             f'! voaacenc bitrate=128000 '
+            f'! aacparse '
             f'! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 '
             f'! mux. '
             if audio_device else ''
