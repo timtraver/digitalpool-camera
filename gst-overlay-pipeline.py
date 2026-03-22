@@ -91,7 +91,7 @@ def main():
         f'! mpegtsmux alignment=7 '
         f'! srtsink uri="srt://:{srt_port}" wait-for-connection=false latency=125 '
         f't. ! queue max-size-buffers=10 leaky=downstream '
-        f'! videorate ! video/x-raw,framerate=10/1 '
+        f'! videorate ! video/x-raw,framerate=5/1 '
         f'! videoconvert ! videoscale '
         f'! video/x-raw,width=1280,height=720 '
         f'! jpegenc quality=65 '

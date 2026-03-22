@@ -983,7 +983,7 @@ class StreamController extends EventEmitter {
       "!",
       "videorate", // Limit preview framerate to reduce CPU usage
       "!",
-      "video/x-raw,framerate=10/1", // 10fps is plenty for web preview
+      "video/x-raw,framerate=5/1", // 5fps is plenty for web preview
       "!",
       "videoconvert", // Convert from NV12 (or other) to format suitable for videoscale/jpegenc
       "!",

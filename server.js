@@ -782,7 +782,7 @@ app.get("/video/stream", async (req, res) => {
     "!",
     "videorate",
     "!",
-    "video/x-raw,framerate=10/1",
+    "video/x-raw,framerate=5/1",
     "!",
     "videoscale",
     "!",
