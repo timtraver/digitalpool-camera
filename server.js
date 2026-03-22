@@ -780,6 +780,14 @@ app.get("/video/stream", async (req, res) => {
     "!",
     "mppjpegdec",
     "!",
+    "videorate",
+    "!",
+    "video/x-raw,framerate=10/1",
+    "!",
+    "videoscale",
+    "!",
+    "video/x-raw,width=1280,height=720",
+    "!",
     "videoconvert",
   ];
 
@@ -879,16 +887,8 @@ app.get("/video/stream", async (req, res) => {
     }
   }
 
-  // Scale down to 720p, limit to 10fps, and JPEG encode for preview
+  // JPEG encode and output (already at 10fps 720p from earlier in pipeline)
   gstArgs.push(
-    "videorate",
-    "!",
-    "video/x-raw,framerate=10/1",
-    "!",
-    "videoscale",
-    "!",
-    "video/x-raw,width=1280,height=720",
-    "!",
     "jpegenc",
     "quality=85",
     "!",
