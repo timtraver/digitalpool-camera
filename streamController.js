@@ -37,6 +37,9 @@ class StreamController extends EventEmitter {
       // Legacy fields
       timestampFormat: "%Y-%m-%d %H:%M:%S",
       logoPath: "", // Path to logo image overlay
+      // Audio settings
+      audioEnabled: true, // Include audio from camera mic in stream
+      audioDevice: "hw:3,0", // ALSA device for camera microphone
       // Skia graphics overlay
       skiaGraphicsEnabled: false, // Enable Skia graphics overlay
       skiaGraphicsPort: 8556, // Port where Skia graphics server is running
@@ -531,6 +534,8 @@ class StreamController extends EventEmitter {
     // Only pass timestamp if the Timestamp checkbox is enabled
     const effectiveShowTimestamp = this.streamConfig.showTimestamp ? "true" : "false";
 
+    const audioDevice = this.streamConfig.audioEnabled ? (this.streamConfig.audioDevice || "hw:3,0") : "";
+
     const scriptArgs = [
       this.cameraDevice,
       width.toString(),
@@ -547,6 +552,7 @@ class StreamController extends EventEmitter {
       timestampFormat,
       titlePosition,
       timestampPosition,
+      audioDevice,
     ];
 
     return {
@@ -901,6 +907,7 @@ class StreamController extends EventEmitter {
         "leaky=downstream", // Drop old frames if queue is full
         "!",
         "mpegtsmux",
+        "name=mux",
         "alignment=7", // Align packets for better compatibility
         "!",
         "srtsink", // SRT listener mode
@@ -908,6 +915,33 @@ class StreamController extends EventEmitter {
         "wait-for-connection=false", // Don't block pipeline waiting for client
         "latency=125", // Latency in milliseconds
       );
+
+      // Add audio branch into the mux if enabled
+      if (this.streamConfig.audioEnabled) {
+        const audioDevice = this.streamConfig.audioDevice || "hw:3,0";
+        console.log(`🎤 Audio enabled - capturing from ALSA device: ${audioDevice}`);
+        pipeline.push(
+          "alsasrc",
+          `device=${audioDevice}`,
+          "provide-clock=false", // Use video clock as master
+          "!",
+          "audioconvert",
+          "!",
+          "audioresample",
+          "!",
+          "audio/x-raw,rate=48000,channels=2",
+          "!",
+          "voaacenc",
+          "bitrate=128000",
+          "!",
+          "queue",
+          "max-size-buffers=2",
+          "max-size-time=0",
+          "max-size-bytes=0",
+          "!",
+          "mux.", // Feed into the named mpegtsmux
+        );
+      }
     } else if (protocol === "udp") {
       // UDP streaming - lowest latency (200-500ms)
       // Format: udp://HOST:PORT (e.g., udp://192.168.1.100:5000)
@@ -934,6 +968,7 @@ class StreamController extends EventEmitter {
         "max-size-bytes=0",
         "!",
         "mpegtsmux",
+        "name=mux",
         "!",
         "udpsink",
         `host=${udpHost}`,
@@ -941,6 +976,33 @@ class StreamController extends EventEmitter {
         "sync=false", // Don't sync to clock
         "async=false", // Don't wait for preroll
       );
+
+      // Add audio branch into the mux if enabled
+      if (this.streamConfig.audioEnabled) {
+        const audioDevice = this.streamConfig.audioDevice || "hw:3,0";
+        console.log(`🎤 Audio enabled - capturing from ALSA device: ${audioDevice}`);
+        pipeline.push(
+          "alsasrc",
+          `device=${audioDevice}`,
+          "provide-clock=false",
+          "!",
+          "audioconvert",
+          "!",
+          "audioresample",
+          "!",
+          "audio/x-raw,rate=48000,channels=2",
+          "!",
+          "voaacenc",
+          "bitrate=128000",
+          "!",
+          "queue",
+          "max-size-buffers=2",
+          "max-size-time=0",
+          "max-size-bytes=0",
+          "!",
+          "mux.",
+        );
+      }
     } else if (protocol === "rtmp") {
       // For RTMP, push to MediaMTX server
       // If destination is empty or localhost, use local MediaMTX
@@ -961,12 +1023,40 @@ class StreamController extends EventEmitter {
         "leaky=downstream", // Drop old frames if queue is full
         "!",
         "flvmux",
+        "name=mux",
         "streamable=true",
         "!",
         "rtmpsink",
         `location=${rtmpUrl}`,
         "sync=false", // Don't sync to clock for lower latency
       );
+
+      // Add audio branch into the mux if enabled
+      if (this.streamConfig.audioEnabled) {
+        const audioDevice = this.streamConfig.audioDevice || "hw:3,0";
+        console.log(`🎤 Audio enabled - capturing from ALSA device: ${audioDevice}`);
+        pipeline.push(
+          "alsasrc",
+          `device=${audioDevice}`,
+          "provide-clock=false",
+          "!",
+          "audioconvert",
+          "!",
+          "audioresample",
+          "!",
+          "audio/x-raw,rate=48000,channels=2",
+          "!",
+          "voaacenc",
+          "bitrate=128000",
+          "!",
+          "queue",
+          "max-size-buffers=2",
+          "max-size-time=0",
+          "max-size-bytes=0",
+          "!",
+          "mux.",
+        );
+      }
     } else {
       throw new Error(`Unsupported protocol: ${protocol}`);
     }

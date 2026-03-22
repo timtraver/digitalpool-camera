@@ -35,6 +35,7 @@ def main():
     timestamp_format = sys.argv[13] if len(sys.argv) > 13 else "%Y-%m-%d %H:%M:%S"
     title_position = sys.argv[14] if len(sys.argv) > 14 else "top-left"
     timestamp_position = sys.argv[15] if len(sys.argv) > 15 else "bottom-right"
+    audio_device = sys.argv[16] if len(sys.argv) > 16 else ""
 
     bitrate_kbps = bitrate // 1000
 
@@ -88,8 +89,17 @@ def main():
         f"! video/x-h264,stream-format=byte-stream "
         f'! h264parse config-interval=-1 '
         f'! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
-        f'! mpegtsmux alignment=7 '
+        f'! mpegtsmux name=mux alignment=7 '
         f'! srtsink uri="srt://:{srt_port}" wait-for-connection=false latency=125 '
+        + (
+            f'alsasrc device={audio_device} provide-clock=false '
+            f'! audioconvert ! audioresample '
+            f'! audio/x-raw,rate=48000,channels=2 '
+            f'! voaacenc bitrate=128000 '
+            f'! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 '
+            f'! mux. '
+            if audio_device else ''
+        ) +
         f't. ! queue max-size-buffers=10 leaky=downstream '
         f'! videorate ! video/x-raw,framerate=5/1 '
         f'! videoconvert ! videoscale '
