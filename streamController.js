@@ -4,7 +4,7 @@ const fs = require("fs");
 const path = require("path");
 
 class StreamController extends EventEmitter {
-  constructor(cameraDevice = "/dev/video2") {
+  constructor(cameraDevice = "/dev/video0") {
     super();
     this.cameraDevice = cameraDevice;
     this.gstProcess = null;
@@ -19,7 +19,7 @@ class StreamController extends EventEmitter {
       height: 1080,
       framerate: 30,
       bitrate: 5000000, // 5 Mbps
-      encoder: "x264enc", // Software encoder (Orange Pi 5)
+      encoder: "mpph264enc", // Rockchip MPP hardware encoder (Orange Pi 5 / RK3588)
       autoStart: false, // Auto-start streaming on server startup
       // Overlay settings
       overlayEnabled: false,
@@ -802,8 +802,28 @@ class StreamController extends EventEmitter {
     pipeline.push("t.", "!", "queue", "!");
 
     // Encoding pipeline
-    if (encoder === "x264enc") {
-      // Software encoder (Orange Pi 5 / generic Linux)
+    if (encoder === "mpph264enc") {
+      // Rockchip MPP hardware encoder (Orange Pi 5 / RK3588)
+      pipeline.push(
+        "videoconvert",
+        "!",
+        "video/x-raw,format=NV12",
+        "!",
+        "mpph264enc",
+        `bps=${bitrate}`,
+        "bps-max=0",
+        "rc-mode=vbr",
+        "gop=30",
+        "header-mode=each-idr",
+        "!",
+        "video/x-h264,stream-format=byte-stream",
+        "!",
+        "h264parse",
+        "config-interval=-1", // Insert SPS/PPS before every keyframe
+        "!",
+      );
+    } else if (encoder === "x264enc") {
+      // Software encoder (fallback)
       const bitrate_kbps = Math.round(bitrate / 1000);
       pipeline.push(
         "videoconvert",
@@ -821,7 +841,7 @@ class StreamController extends EventEmitter {
         "video/x-h264,stream-format=byte-stream",
         "!",
         "h264parse",
-        "config-interval=-1", // Insert SPS/PPS before every keyframe
+        "config-interval=-1",
         "!",
       );
     } else if (encoder === "nvv4l2h264enc") {
@@ -1060,8 +1080,8 @@ class StreamController extends EventEmitter {
    */
   static async testGStreamer() {
     return new Promise((resolve) => {
-      // Try x264enc first (software encoder, works on Orange Pi 5 and most Linux)
-      const test = spawn("gst-inspect-1.0", ["x264enc"]);
+      // Try mpph264enc first (Rockchip MPP hardware encoder, Orange Pi 5 / RK3588)
+      const test = spawn("gst-inspect-1.0", ["mpph264enc"]);
       let output = "";
 
       test.stdout.on("data", (data) => {
@@ -1072,23 +1092,35 @@ class StreamController extends EventEmitter {
         if (code === 0) {
           resolve({
             success: true,
-            encoder: "x264enc",
-            message: "x264 software encoder available",
+            encoder: "mpph264enc",
+            message: "Rockchip MPP hardware encoder available",
           });
         } else {
-          // Try fallback to nvv4l2h264enc (Jetson)
-          const testNv = spawn("gst-inspect-1.0", ["nvv4l2h264enc"]);
-          testNv.on("close", (nvCode) => {
-            if (nvCode === 0) {
+          // Try x264enc (software fallback)
+          const testX264 = spawn("gst-inspect-1.0", ["x264enc"]);
+          testX264.on("close", (x264Code) => {
+            if (x264Code === 0) {
               resolve({
                 success: true,
-                encoder: "nvv4l2h264enc",
-                message: "NVIDIA hardware encoder available",
+                encoder: "x264enc",
+                message: "x264 software encoder available",
               });
             } else {
-              resolve({
-                success: false,
-                error: "No encoder found (tried x264enc, nvv4l2h264enc)",
+              // Try nvv4l2h264enc (Jetson)
+              const testNv = spawn("gst-inspect-1.0", ["nvv4l2h264enc"]);
+              testNv.on("close", (nvCode) => {
+                if (nvCode === 0) {
+                  resolve({
+                    success: true,
+                    encoder: "nvv4l2h264enc",
+                    message: "NVIDIA hardware encoder available",
+                  });
+                } else {
+                  resolve({
+                    success: false,
+                    error: "No encoder found (tried mpph264enc, x264enc, nvv4l2h264enc)",
+                  });
+                }
               });
             }
           });

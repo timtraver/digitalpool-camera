@@ -205,12 +205,34 @@ class PuppeteerOverlay extends EventEmitter {
    * Launch (or reuse) headless Chromium via Puppeteer for URL overlay rendering.
    * The browser stays alive between screenshots for efficiency.
    */
+  _findChromiumPath() {
+    const { execSync } = require("child_process");
+    const candidates = [
+      "/usr/bin/chromium-browser",
+      "/usr/bin/chromium",
+      "/snap/bin/chromium",
+      "/usr/bin/google-chrome-stable",
+    ];
+    for (const p of candidates) {
+      try {
+        if (fs.existsSync(p)) return p;
+      } catch (e) { /* skip */ }
+    }
+    // Fall back to `which`
+    try {
+      return execSync("which chromium-browser || which chromium", { encoding: "utf-8" }).trim();
+    } catch (e) {
+      return "/usr/bin/chromium-browser"; // best guess
+    }
+  }
+
   async _ensureBrowser() {
     if (this._browser && this._browser.connected) return;
 
-    console.log("🚀 Launching headless Chromium for URL overlay...");
+    const chromiumPath = this._findChromiumPath();
+    console.log(`🚀 Launching headless Chromium for URL overlay (${chromiumPath})...`);
     this._browser = await puppeteer.launch({
-      executablePath: "/snap/bin/chromium",
+      executablePath: chromiumPath,
       headless: "new",
       args: [
         "--no-sandbox",
