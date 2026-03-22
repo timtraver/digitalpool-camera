@@ -233,13 +233,20 @@ class PuppeteerOverlay extends EventEmitter {
     console.log(`🚀 Launching headless Chromium for URL overlay (${chromiumPath})...`);
     this._browser = await puppeteer.launch({
       executablePath: chromiumPath,
-      headless: "new",
+      headless: true,
+      timeout: 60000, // Allow up to 60s for Chromium to start on ARM64
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-gpu",
         "--disable-dev-shm-usage",
         "--disable-software-rasterizer",
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--disable-sync",
+        "--no-first-run",
+        "--no-zygote",
+        "--single-process",
       ],
     });
     this._page = await this._browser.newPage();
