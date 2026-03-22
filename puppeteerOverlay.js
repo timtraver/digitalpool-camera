@@ -237,7 +237,7 @@ class PuppeteerOverlay extends EventEmitter {
     console.log(`🚀 Launching headless Chromium for URL overlay (${chromiumPath})...`);
     this._browser = await puppeteer.launch({
       executablePath: chromiumPath,
-      headless: true,
+      headless: "new", // Use new headless mode (more stable on ARM64)
       timeout: 60000, // Allow up to 60s for Chromium to start on ARM64
       protocolTimeout: 60000,
       args: [
@@ -330,17 +330,23 @@ class PuppeteerOverlay extends EventEmitter {
         await new Promise(r => setTimeout(r, this._jsDelay));
       }
 
-      // Just screenshot the current page state — no reload needed
-      const tempOutput = this.pngPath + ".tmp";
-      await this._page.screenshot({
-        path: tempOutput,
-        type: "png",
-        fullPage: false,
-        omitBackground: true,
+      // Just screenshot the current page state — no reload needed.
+      // We avoid omitBackground:true because it crashes Chromium on ARM64.
+      // Instead, inject a green background and chroma-key it to transparent.
+      await this._page.evaluate(() => {
+        document.body.style.backgroundColor = "rgb(0,255,0)";
+        document.documentElement.style.backgroundColor = "rgb(0,255,0)";
       });
 
-      // Atomic rename so GStreamer doesn't read a half-written file
-      fs.renameSync(tempOutput, this.pngPath);
+      await this._page.screenshot({
+        path: this.rawPngPath,
+        type: "png",
+        fullPage: false,
+        omitBackground: false,
+      });
+
+      // Chroma-key green → transparent using ImageMagick, then atomic rename
+      await this._chromaKeyAndSave();
 
       console.log(`📸 URL overlay PNG updated from: ${this._overlayUrl}`);
       this.emit("updated", this.pngPath);
