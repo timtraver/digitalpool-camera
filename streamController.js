@@ -677,7 +677,9 @@ class StreamController extends EventEmitter {
       "!",
       `image/jpeg,width=${width},height=${height},framerate=${framerate}/1`,
       "!",
-      "jpegdec",
+      "jpegparse",
+      "!",
+      "mppjpegdec",
       "!",
     ];
 

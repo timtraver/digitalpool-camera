@@ -75,7 +75,7 @@ def main():
     pipeline_str = (
         f'v4l2src device={camera_device} do-timestamp=true '
         f'! image/jpeg,width={width},height={height},framerate={framerate}/1 '
-        f'! jpegdec '
+        f'! jpegparse ! mppjpegdec '
         f'! videoconvert '
         f'! gdkpixbufoverlay name=overlay location={png_path} overlay-width={width} overlay-height={height} '
         f'! videoconvert '
