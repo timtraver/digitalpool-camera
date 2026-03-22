@@ -798,7 +798,13 @@ class StreamController extends EventEmitter {
     // TODO: Implement proper compositor using gst-launch-1.0 with multiple sources
 
     // For now, just use the normal pipeline
-    pipeline.push("videoconvert", "!", "tee", "name=t");
+    // When using MPP hardware path without overlays, mppjpegdec outputs NV12 directly
+    // so we can skip videoconvert before the tee to save CPU
+    if (encoder === "mpph264enc" && !hasAnyOverlay) {
+      pipeline.push("video/x-raw,format=NV12", "!", "tee", "name=t");
+    } else {
+      pipeline.push("videoconvert", "!", "tee", "name=t");
+    }
 
     // Branch 1: Encoding pipeline for streaming
     pipeline.push("t.", "!", "queue", "!");
@@ -806,11 +812,11 @@ class StreamController extends EventEmitter {
     // Encoding pipeline
     if (encoder === "mpph264enc") {
       // Rockchip MPP hardware encoder (Orange Pi 5 / RK3588)
+      // When no overlay, NV12 comes directly from mppjpegdec — no videoconvert needed
+      if (hasAnyOverlay) {
+        pipeline.push("videoconvert", "!", "video/x-raw,format=NV12", "!");
+      }
       pipeline.push(
-        "videoconvert",
-        "!",
-        "video/x-raw,format=NV12",
-        "!",
         "mpph264enc",
         `bps=${bitrate}`,
         "bps-max=0",
@@ -974,6 +980,8 @@ class StreamController extends EventEmitter {
       "queue",
       "max-size-buffers=10",
       "leaky=downstream",
+      "!",
+      "videoconvert", // Convert from NV12 (or other) to format suitable for videoscale/jpegenc
       "!",
       "videoscale", // Scale down for lower bandwidth if needed
       "!",
