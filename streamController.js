@@ -981,14 +981,17 @@ class StreamController extends EventEmitter {
       "max-size-buffers=10",
       "leaky=downstream",
       "!",
+      "videorate", // Limit preview framerate to reduce CPU usage
+      "!",
+      "video/x-raw,framerate=10/1", // 10fps is plenty for web preview
+      "!",
       "videoconvert", // Convert from NV12 (or other) to format suitable for videoscale/jpegenc
       "!",
-      "videoscale", // Scale down for lower bandwidth if needed
+      "videoscale", // Scale down for lower bandwidth
       "!",
       "video/x-raw,width=1280,height=720", // 720p preview (lower bandwidth)
       "!",
-      "jpegenc",
-      "quality=75", // Lower quality for preview
+      "mppjpegenc", // Hardware JPEG encoding (Rockchip MPP)
       "!",
       "multipartmux",
       "boundary=--jpgboundary",

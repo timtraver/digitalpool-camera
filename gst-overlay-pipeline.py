@@ -91,9 +91,10 @@ def main():
         f'! mpegtsmux alignment=7 '
         f'! srtsink uri="srt://:{srt_port}" wait-for-connection=false latency=125 '
         f't. ! queue max-size-buffers=10 leaky=downstream '
-        f'! videoscale '
+        f'! videorate ! video/x-raw,framerate=10/1 '
+        f'! videoconvert ! videoscale '
         f'! video/x-raw,width=1280,height=720 '
-        f'! jpegenc quality=75 '
+        f'! mppjpegenc '
         f'! multipartmux boundary=--jpgboundary '
         f'! tcpserversink host=0.0.0.0 port=8555 sync=false recover-policy=keyframe'
     )
