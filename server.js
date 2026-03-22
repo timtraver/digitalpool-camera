@@ -776,7 +776,9 @@ app.get("/video/stream", async (req, res) => {
     // Use same resolution as streaming (1920x1080) so overlays look identical
     `image/jpeg,width=${config.width || 1920},height=${config.height || 1080},framerate=${config.framerate || 30}/1`,
     "!",
-    "jpegdec",
+    "jpegparse",
+    "!",
+    "mppjpegdec",
     "!",
     "videoconvert",
   ];
