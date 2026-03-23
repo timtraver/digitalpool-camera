@@ -265,13 +265,21 @@ class PuppeteerOverlay extends EventEmitter {
       ],
     });
 
-    // Track disconnection silently — no alarming warnings.
-    // The browser may disconnect under CPU pressure from GStreamer;
-    // _ensureBrowser will quietly relaunch it on the next cycle.
+    // Track disconnection and capture exit info for diagnostics.
     this._browserIntentionalClose = false;
+    const browserProcess = this._browser.process();
+    const browserPid = browserProcess ? browserProcess.pid : "unknown";
+    console.log(`  Chromium PID: ${browserPid}`);
+
+    if (browserProcess) {
+      browserProcess.on("exit", (code, signal) => {
+        console.log(`  Chromium PID ${browserPid} exited: code=${code}, signal=${signal}`);
+      });
+    }
+
     this._browser.on("disconnected", () => {
       if (!this._browserIntentionalClose) {
-        console.log("🔄 Chromium exited — will relaunch on next overlay cycle");
+        console.log(`🔄 Chromium (PID ${browserPid}) disconnected — will relaunch`);
       }
       this._browser = null;
       this._page = null;
