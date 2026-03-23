@@ -373,11 +373,14 @@ class PuppeteerOverlay extends EventEmitter {
         type: "png",
         omitBackground: false,
       });
+      console.log(`  📷 Screenshot done (connected: ${this._browser?.connected})`);
 
       // Chroma-key green → transparent using ImageMagick, then atomic rename
       await this._chromaKeyAndSave();
 
-      console.log(`📸 URL overlay PNG updated from: ${this._overlayUrl}`);
+      // DIAGNOSTIC: Check if browser is still connected after the full render cycle
+      const stillConnected = this._browser ? this._browser.connected : false;
+      console.log(`📸 URL overlay PNG updated from: ${this._overlayUrl} (connected: ${stillConnected})`);
       this.emit("updated", this.pngPath);
     } catch (err) {
       // Don't spam logs — browser disconnects are expected under CPU pressure.
