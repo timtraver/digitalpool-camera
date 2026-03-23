@@ -886,6 +886,16 @@ header h1 {
   border-radius: 6px;
   color: white;
 }
+.fmt-text-wide {
+  flex: 1;
+  font-family: monospace;
+  font-size: 12px;
+  padding: 5px 6px;
+  background: #1a1a1a;
+  border: 1px solid #1890ff;
+  border-radius: 6px;
+  color: white;
+}
 
 .overlay-controls .control-item-compact {
   display: flex;

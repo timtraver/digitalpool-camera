@@ -233,12 +233,6 @@
                         </select>
                       </div>
                       <div class="fmt-group">
-                        <label>Fmt:</label>
-                        <input type="text" id="timestampFormat" value="%Y-%m-%d %H:%M:%S" class="fmt-text" title="strftime format: %H:%M:%S = time, %Y-%m-%d = date" />
-                      </div>
-                    </div>
-                    <div class="format-row">
-                      <div class="fmt-group">
                         <label>Size:</label>
                         <input type="number" id="timestampFontSize" min="4" max="120" value="24" class="fmt-number" />
                       </div>
@@ -261,6 +255,12 @@
                           <option value="transparent">None</option>
                           <option value="shaded">Shaded</option>
                         </select>
+                      </div>
+                    </div>
+                    <div class="format-row">
+                      <div class="fmt-group" style="flex: 1">
+                        <label>Format:</label>
+                        <input type="text" id="timestampFormat" value="%Y-%m-%d %H:%M:%S" class="fmt-text-wide" title="strftime format: %H:%M:%S = time, %Y-%m-%d = date" />
                       </div>
                     </div>
                   </div>

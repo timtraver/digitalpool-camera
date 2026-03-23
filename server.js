@@ -1112,14 +1112,38 @@ io.on("connection", (socket) => {
           zoom: overlayConfig.overlayZoom,
         });
         puppeteerOverlay.startPeriodicRefresh();
+
+        // Wait for the first screenshot before restarting the idle preview,
+        // otherwise it will pick up a stale/placeholder PNG
+        if (!streamController.isStreaming) {
+          const waitForFirst = new Promise((resolve) => {
+            const onUpdate = () => { resolve(); };
+            puppeteerOverlay.once("updated", onUpdate);
+            // Timeout after 8s in case the screenshot fails
+            setTimeout(() => { puppeteerOverlay.removeListener("updated", onUpdate); resolve(); }, 8000);
+          });
+          await waitForFirst;
+        }
       }
     } else if (overlayConfig.remoteOverlayEnabled === false && puppeteerOverlay) {
-      // Remote overlay was explicitly turned off — clear the PNG
+      // Remote overlay was explicitly turned off — clear the PNG (writes transparent placeholder)
       puppeteerOverlay.setOverlayUrl(null);
+      // NOTE: Do NOT call regenerateOverlay() here — it would render the local
+      // scoreboard HTML over the transparent placeholder, causing a stale image
     }
 
-    // Write updated state to JSON file
-    regenerateOverlay();
+    // Only regenerate local overlay if we're NOT in remote overlay mode
+    // (otherwise it overwrites the remote PNG with local scoreboard HTML)
+    if (!wantsRemote) {
+      regenerateOverlay();
+    } else {
+      // Still broadcast state and write JSON, just don't render local HTML
+      io.emit("scoreUpdated", gameState);
+      try {
+        const fs = require('fs');
+        fs.writeFileSync('/tmp/graphics-overlay-state.json', JSON.stringify(gameState, null, 2));
+      } catch (err) { /* ignore */ }
+    }
 
     // If NOT streaming, restart the idle preview so changes are visible immediately
     // Debounce to avoid restarting on every keystroke
