@@ -73,34 +73,50 @@ def main():
         ts_valign, ts_halign = parse_position(timestamp_position)
         timestamp_overlay = f'! clockoverlay valignment={ts_valign} halignment={ts_halign} font-desc="Sans Bold {font_size}" color={overlay_color} time-format="{timestamp_format}" xpad=20 ypad=20 {shaded_bg}'
 
+    # Thread architecture (each queue creates a new thread boundary):
+    #   Thread 1: v4l2src → mppjpegdec (capture)
+    #   Thread 2: queue → videoconvert(BGRA) → overlay → tee (overlay compositing)
+    #   Thread 3: queue → videoconvert(NV12) → mpph264enc → h264parse → queue → mux → srtsink (encode+stream)
+    #   Thread 4: queue → audioresample → voaacenc → aacparse → queue → mux. (audio - fully isolated)
+    #   Thread 5: queue → videorate → videoscale → jpegenc → tcpserversink (preview)
     pipeline_str = (
         f'v4l2src device={camera_device} do-timestamp=true '
         f'! image/jpeg,width={width},height={height},framerate={framerate}/1 '
         f'! jpegparse ! mppjpegdec '
+        # Thread boundary: isolate overlay compositing from capture
+        f'! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream '
         f'! videoconvert ! video/x-raw,format=BGRA '
         f'! gdkpixbufoverlay name=overlay location={png_path} overlay-width={width} overlay-height={height} '
         f'{text_overlay}'
         f'{timestamp_overlay}'
         f'! tee name=t '
+        # Encode branch (own thread)
         f't. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
         f'! videoconvert ! video/x-raw,format=NV12 '
         f'! mpph264enc bps={bitrate} bps-max=0 rc-mode=vbr gop=30 header-mode=each-idr '
         f"! video/x-h264,stream-format=byte-stream "
         f'! h264parse config-interval=-1 '
+        # Thread boundary before mux to decouple encoder from network I/O
         f'! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
         f'! mpegtsmux name=mux alignment=7 '
         f'! srtsink uri="srt://:{srt_port}" wait-for-connection=false latency=125 '
         + (
+            # Audio branch: fully isolated in its own thread
+            # The queue right after alsasrc caps ensures audio capture+encode
+            # never competes with video processing for CPU time
             f'alsasrc device={audio_device} provide-clock=false '
             f'! audio/x-raw,rate=32000,channels=2,format=S16LE '
+            f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 '  # 500ms buffer
             f'! audioconvert ! audioresample '
             f'! audio/x-raw,rate=48000,channels=2 '
             f'! voaacenc bitrate=128000 '
             f'! aacparse '
-            f'! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 '
+            # Thread boundary before mux to avoid blocking on mux lock
+            f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 '
             f'! mux. '
             if audio_device else ''
         ) +
+        # Preview branch (own thread, low priority)
         f't. ! queue max-size-buffers=10 leaky=downstream '
         f'! videorate ! video/x-raw,framerate=5/1 '
         f'! videoconvert ! videoscale '

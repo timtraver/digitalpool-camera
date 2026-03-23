@@ -917,6 +917,8 @@ class StreamController extends EventEmitter {
       );
 
       // Add audio branch into the mux if enabled
+      // Thread isolation: queue after caps gives audio its own thread,
+      // so video processing spikes can't starve audio capture/encoding
       if (this.streamConfig.audioEnabled) {
         const audioDevice = this.streamConfig.audioDevice || "hw:3,0";
         console.log(`🎤 Audio enabled - capturing from ALSA device: ${audioDevice}`);
@@ -926,6 +928,11 @@ class StreamController extends EventEmitter {
           "provide-clock=false", // Use video clock as master
           "!",
           "audio/x-raw,rate=32000,channels=2,format=S16LE", // Camera mic native format
+          "!",
+          "queue",              // Thread boundary: isolate audio from video
+          "max-size-buffers=0",
+          "max-size-time=500000000", // 500ms audio buffer
+          "max-size-bytes=0",
           "!",
           "audioconvert",
           "!",
@@ -938,9 +945,9 @@ class StreamController extends EventEmitter {
           "!",
           "aacparse",
           "!",
-          "queue",
-          "max-size-buffers=2",
-          "max-size-time=0",
+          "queue",              // Thread boundary: decouple audio encoder from mux
+          "max-size-buffers=0",
+          "max-size-time=500000000", // 500ms buffer before mux
           "max-size-bytes=0",
           "!",
           "mux.", // Feed into the named mpegtsmux
@@ -982,6 +989,7 @@ class StreamController extends EventEmitter {
       );
 
       // Add audio branch into the mux if enabled
+      // Thread isolation: queue after caps gives audio its own thread
       if (this.streamConfig.audioEnabled) {
         const audioDevice = this.streamConfig.audioDevice || "hw:3,0";
         console.log(`🎤 Audio enabled - capturing from ALSA device: ${audioDevice}`);
@@ -991,6 +999,11 @@ class StreamController extends EventEmitter {
           "provide-clock=false",
           "!",
           "audio/x-raw,rate=32000,channels=2,format=S16LE",
+          "!",
+          "queue",              // Thread boundary: isolate audio from video
+          "max-size-buffers=0",
+          "max-size-time=500000000", // 500ms audio buffer
+          "max-size-bytes=0",
           "!",
           "audioconvert",
           "!",
@@ -1003,9 +1016,9 @@ class StreamController extends EventEmitter {
           "!",
           "aacparse",
           "!",
-          "queue",
-          "max-size-buffers=2",
-          "max-size-time=0",
+          "queue",              // Thread boundary: decouple audio encoder from mux
+          "max-size-buffers=0",
+          "max-size-time=500000000",
           "max-size-bytes=0",
           "!",
           "mux.",
@@ -1040,6 +1053,7 @@ class StreamController extends EventEmitter {
       );
 
       // Add audio branch into the mux if enabled
+      // Thread isolation: queue after caps gives audio its own thread
       if (this.streamConfig.audioEnabled) {
         const audioDevice = this.streamConfig.audioDevice || "hw:3,0";
         console.log(`🎤 Audio enabled - capturing from ALSA device: ${audioDevice}`);
@@ -1049,6 +1063,11 @@ class StreamController extends EventEmitter {
           "provide-clock=false",
           "!",
           "audio/x-raw,rate=32000,channels=2,format=S16LE",
+          "!",
+          "queue",              // Thread boundary: isolate audio from video
+          "max-size-buffers=0",
+          "max-size-time=500000000", // 500ms audio buffer
+          "max-size-bytes=0",
           "!",
           "audioconvert",
           "!",
@@ -1061,9 +1080,9 @@ class StreamController extends EventEmitter {
           "!",
           "aacparse",
           "!",
-          "queue",
-          "max-size-buffers=2",
-          "max-size-time=0",
+          "queue",              // Thread boundary: decouple audio encoder from mux
+          "max-size-buffers=0",
+          "max-size-time=500000000",
           "max-size-bytes=0",
           "!",
           "mux.",
