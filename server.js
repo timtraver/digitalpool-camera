@@ -342,10 +342,6 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-// Test page
-app.get("/test", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "test-stream.html"));
-});
 
 // API endpoint to check server status
 app.get("/api/status", (req, res) => {
