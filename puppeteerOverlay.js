@@ -353,12 +353,12 @@ class PuppeteerOverlay extends EventEmitter {
         });
         this._currentLoadedUrl = this._overlayUrl;
 
-        // Apply zoom and green chroma-key background ONCE after navigation.
-        // We avoid omitBackground:true — it crashes Chromium 114 on ARM64.
-        // Instead, inject a green background and chroma-key it to transparent.
+        // Apply zoom and transparent background ONCE after navigation.
+        // Now that browser stays alive (isConnected fix), omitBackground:true
+        // works correctly — no chroma-key/ImageMagick needed.
         await this._page.evaluate((zoom) => {
-          document.documentElement.style.backgroundColor = "rgb(0,255,0)";
-          document.body.style.backgroundColor = "rgb(0,255,0)";
+          document.documentElement.style.backgroundColor = "transparent";
+          document.body.style.backgroundColor = "transparent";
           if (zoom !== 100) {
             document.body.style.zoom = (zoom / 100).toString();
           }
@@ -368,20 +368,17 @@ class PuppeteerOverlay extends EventEmitter {
         await new Promise(r => setTimeout(r, this._jsDelay));
       }
 
-      // Screenshot the current page state (NO omitBackground — causes crashes)
+      // Screenshot with native transparency — no ImageMagick chroma-key needed
+      const tempPath = this.pngPath + ".tmp";
       await this._page.screenshot({
-        path: this.rawPngPath,
+        path: tempPath,
         type: "png",
-        omitBackground: false,
+        omitBackground: true,
       });
-      console.log(`  📷 Screenshot done (connected: ${this._browser?.isConnected()})`);
+      // Atomic rename so GStreamer never reads a partial file
+      fs.renameSync(tempPath, this.pngPath);
 
-      // Chroma-key green → transparent using ImageMagick, then atomic rename
-      await this._chromaKeyAndSave();
-
-      // DIAGNOSTIC: Check if browser is still connected after the full render cycle
-      const stillConnected = this._browser ? this._browser.isConnected() : false;
-      console.log(`📸 URL overlay PNG updated from: ${this._overlayUrl} (connected: ${stillConnected})`);
+      console.log(`📸 URL overlay PNG updated from: ${this._overlayUrl}`);
       this.emit("updated", this.pngPath);
     } catch (err) {
       // Don't spam logs — browser disconnects are expected under CPU pressure.
