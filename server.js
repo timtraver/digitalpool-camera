@@ -865,7 +865,11 @@ function buildIdlePreviewGstArgs(sinkArgs) {
 /**
  * Start (or restart) the persistent idle preview GStreamer process.
  * Uses tcpserversink on IDLE_PREVIEW_PORT so clients can connect/disconnect freely.
+ * Protected by a mutex to prevent concurrent calls from racing.
  */
+let _idlePreviewStarting = false;
+let _idlePreviewStartQueue = null; // Promise for callers to wait on
+
 async function startPersistentIdlePreview() {
   // Don't start if streaming is active
   if (streamController.isStreaming) {
@@ -873,60 +877,90 @@ async function startPersistentIdlePreview() {
     return;
   }
 
-  // Kill existing idle preview process
-  if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
-    console.log("🔄 Killing previous idle preview to restart with updated settings");
-    currentIdlePreviewProcess.kill("SIGTERM");
-    currentIdlePreviewProcess = null;
-    await new Promise((resolve) => setTimeout(resolve, 400));
+  // If another call is already in progress, wait for it to finish
+  if (_idlePreviewStarting) {
+    console.log("⏳ Idle preview start already in progress — waiting...");
+    if (_idlePreviewStartQueue) {
+      await _idlePreviewStartQueue;
+    }
+    return;
   }
 
-  // Kill any process using the idle preview port
+  _idlePreviewStarting = true;
+  let resolveQueue;
+  _idlePreviewStartQueue = new Promise((r) => { resolveQueue = r; });
+
   try {
-    const { execSync } = require("child_process");
-    execSync(`fuser -k ${IDLE_PREVIEW_PORT}/tcp 2>/dev/null || true`);
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  } catch (e) { /* ignore */ }
-
-  const sinkArgs = [
-    "tcpserversink",
-    "host=0.0.0.0",
-    `port=${IDLE_PREVIEW_PORT}`,
-    "sync=false",
-    "recover-policy=keyframe",
-  ];
-
-  const gstArgs = buildIdlePreviewGstArgs(sinkArgs);
-  console.log(`📹 Starting persistent idle preview on TCP port ${IDLE_PREVIEW_PORT}`);
-  console.log(`📋 GStreamer idle preview args: gst-launch-1.0 ${gstArgs.join(" ")}`);
-
-  const gst = spawn("gst-launch-1.0", gstArgs);
-  currentIdlePreviewProcess = gst;
-  console.log(`📹 Started idle preview process PID: ${gst.pid}`);
-
-  gst.stderr.on("data", (data) => {
-    const msg = data.toString();
-    if (msg.includes("ERROR") || msg.includes("WARN")) {
-      console.error(`GStreamer idle preview: ${msg}`);
-    }
-  });
-
-  gst.on("close", (code) => {
-    console.log(`GStreamer idle preview exited with code ${code}`);
-    if (currentIdlePreviewProcess === gst) {
+    // Kill existing idle preview process
+    if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
+      console.log("🔄 Killing previous idle preview to restart with updated settings");
+      currentIdlePreviewProcess.kill("SIGTERM");
       currentIdlePreviewProcess = null;
+      await new Promise((resolve) => setTimeout(resolve, 400));
     }
-  });
 
-  gst.on("error", (err) => {
-    console.error("Failed to start GStreamer idle preview:", err);
-    if (currentIdlePreviewProcess === gst) {
-      currentIdlePreviewProcess = null;
-    }
-  });
+    // Kill any process using the idle preview port
+    try {
+      const { execSync } = require("child_process");
+      execSync(`fuser -k ${IDLE_PREVIEW_PORT}/tcp 2>/dev/null || true`);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    } catch (e) { /* ignore */ }
 
-  // Wait for the TCP server to start listening
-  await new Promise((resolve) => setTimeout(resolve, 800));
+    // Double-check the port is free
+    try {
+      const { execSync } = require("child_process");
+      const portCheck = execSync(`fuser ${IDLE_PREVIEW_PORT}/tcp 2>/dev/null || true`).toString().trim();
+      if (portCheck) {
+        console.log(`⚠️  Port ${IDLE_PREVIEW_PORT} still in use: ${portCheck}, force killing...`);
+        execSync(`fuser -k ${IDLE_PREVIEW_PORT}/tcp 2>/dev/null || true`);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    } catch (e) { /* ignore */ }
+
+    const sinkArgs = [
+      "tcpserversink",
+      "host=0.0.0.0",
+      `port=${IDLE_PREVIEW_PORT}`,
+      "sync=false",
+      "recover-policy=keyframe",
+    ];
+
+    const gstArgs = buildIdlePreviewGstArgs(sinkArgs);
+    console.log(`📹 Starting persistent idle preview on TCP port ${IDLE_PREVIEW_PORT}`);
+    console.log(`📋 GStreamer idle preview args: gst-launch-1.0 ${gstArgs.join(" ")}`);
+
+    const gst = spawn("gst-launch-1.0", gstArgs);
+    currentIdlePreviewProcess = gst;
+    console.log(`📹 Started idle preview process PID: ${gst.pid}`);
+
+    gst.stderr.on("data", (data) => {
+      const msg = data.toString();
+      if (msg.includes("ERROR") || msg.includes("WARN")) {
+        console.error(`GStreamer idle preview: ${msg}`);
+      }
+    });
+
+    gst.on("close", (code) => {
+      console.log(`GStreamer idle preview exited with code ${code}`);
+      if (currentIdlePreviewProcess === gst) {
+        currentIdlePreviewProcess = null;
+      }
+    });
+
+    gst.on("error", (err) => {
+      console.error("Failed to start GStreamer idle preview:", err);
+      if (currentIdlePreviewProcess === gst) {
+        currentIdlePreviewProcess = null;
+      }
+    });
+
+    // Wait for the TCP server to start listening
+    await new Promise((resolve) => setTimeout(resolve, 800));
+  } finally {
+    _idlePreviewStarting = false;
+    if (resolveQueue) resolveQueue();
+    _idlePreviewStartQueue = null;
+  }
 }
 
 // Video stream endpoint using MJPEG — proxies the persistent idle preview TCP server
