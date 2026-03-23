@@ -34,6 +34,8 @@ const camera = new CameraController(CAMERA_DEVICE);
 
 // Flag to track if camera is fully initialized
 let cameraInitialized = false;
+// Flag to prevent /video/stream from spawning idle preview during boot
+let bootComplete = false;
 
 // Initialize stream controller
 const streamController = new StreamController(CAMERA_DEVICE);
@@ -974,8 +976,10 @@ app.get("/video/stream", async (req, res) => {
     return;
   }
 
-  // If no idle preview process is running, start one
-  if (!currentIdlePreviewProcess || currentIdlePreviewProcess.killed) {
+  // If no idle preview process is running, start one (but not during boot — boot handles it)
+  if (!bootComplete) {
+    console.log("⏳ Boot still in progress — waiting for idle preview to be started by boot sequence");
+  } else if (!currentIdlePreviewProcess || currentIdlePreviewProcess.killed) {
     console.log("📹 No idle preview running — starting persistent idle preview...");
     await startPersistentIdlePreview();
   }
@@ -988,9 +992,10 @@ app.get("/video/stream", async (req, res) => {
   });
 
   // Connect to the persistent idle preview TCP server
+  // During boot, allow more retries since the preview takes time to start
   const net = require("net");
   let retries = 0;
-  const maxRetries = 5;
+  const maxRetries = bootComplete ? 5 : 30;
 
   function connectToPreview() {
     const client = net.connect({ port: IDLE_PREVIEW_PORT, host: "localhost" });
@@ -1012,7 +1017,7 @@ app.get("/video/stream", async (req, res) => {
       if (retries < maxRetries) {
         retries++;
         console.log(`⚠️  Preview TCP connection failed (attempt ${retries}/${maxRetries}): ${err.message}`);
-        setTimeout(connectToPreview, 500);
+        setTimeout(connectToPreview, 1000);
       } else {
         console.error(`❌ Could not connect to idle preview after ${maxRetries} attempts`);
         res.end();
@@ -1429,6 +1434,12 @@ server.listen(PORT, async () => {
       console.error("⚠️  Failed to start remote overlay on boot:", err.message);
     }
   }
+
+  // Boot is complete — allow /video/stream to auto-start idle preview if needed
+  bootComplete = true;
+  console.log("🏁 Boot sequence complete — idle preview requests are now allowed");
+  // Emit one final refresh so any clients that connected during boot reconnect
+  io.emit("refreshIdlePreview");
 });
 
 // Proxy routes for digitalpool.com (MUST be last to not interfere with our API routes)
