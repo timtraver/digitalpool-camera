@@ -1413,7 +1413,10 @@ function applyOverlaySettings() {
   // (the banner will be hidden by the refreshIdlePreview handler once the preview loads)
   if (!isCurrentlyStreaming) {
     const previewStatus = document.getElementById("overlayPreviewStatus");
-    if (previewStatus) previewStatus.style.display = "";
+    if (previewStatus) {
+      previewStatus.style.display = "";
+      console.log("🔄 Showing 'Updating preview' banner immediately");
+    }
   }
 }
 
