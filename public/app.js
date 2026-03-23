@@ -668,7 +668,7 @@ socket.on("refreshIdlePreview", () => {
   if (!isCurrentlyStreaming) {
     console.log("🔄 Refreshing idle preview for overlay changes...");
     const previewStatus = document.getElementById("overlayPreviewStatus");
-    if (previewStatus) previewStatus.style.display = "";
+    if (previewStatus) previewStatus.style.display = "block";
     // Small delay to let the old GStreamer process fully die
     setTimeout(() => {
       switchToMJPEGPreview(() => {
@@ -1414,7 +1414,7 @@ function applyOverlaySettings() {
   if (!isCurrentlyStreaming) {
     const previewStatus = document.getElementById("overlayPreviewStatus");
     if (previewStatus) {
-      previewStatus.style.display = "";
+      previewStatus.style.display = "block";
       console.log("🔄 Showing 'Updating preview' banner immediately");
     }
   }
@@ -1426,6 +1426,10 @@ overlayEnabled.addEventListener("change", () => {
   console.log("Title overlay changed:", overlayEnabled.checked);
   updateOverlayVisibility();
   drawOverlay();
+  if (!isCurrentlyStreaming) {
+    const ps = document.getElementById("overlayPreviewStatus");
+    if (ps) ps.style.display = "block";
+  }
   applyOverlaySettings();
 });
 
@@ -1434,6 +1438,11 @@ remoteOverlayEnabled.addEventListener("change", () => {
   console.log("Remote overlay changed:", remoteOverlayEnabled.checked);
   updateOverlayVisibility();
   drawOverlay();
+  // Show "Updating preview" banner immediately — don't wait for server round-trip
+  if (!isCurrentlyStreaming) {
+    const ps = document.getElementById("overlayPreviewStatus");
+    if (ps) ps.style.display = "block";
+  }
   applyOverlaySettings();
 });
 
@@ -1454,6 +1463,10 @@ showTimestamp.addEventListener("change", () => {
   currentOverlayConfig.showTimestamp = showTimestamp.checked;
   updateOverlayVisibility();
   drawOverlay();
+  if (!isCurrentlyStreaming) {
+    const ps = document.getElementById("overlayPreviewStatus");
+    if (ps) ps.style.display = "block";
+  }
   applyOverlaySettings();
 });
 
