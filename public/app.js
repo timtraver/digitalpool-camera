@@ -713,6 +713,11 @@ socket.on("streamStatus", (status) => {
     }
   }
 
+  // Hide "needs restart" banner when stream is (re)starting
+  if (status.status === "starting" || status.status === "preparing") {
+    overlayNeedsRestart.style.display = "none";
+  }
+
   // Handle granular statuses
   if (status.status === "starting") {
     startStreamBtn.disabled = true;
@@ -760,6 +765,7 @@ socket.on("streamStatus", (status) => {
 
     stopStreamBtn.disabled = true;
     setStreamStatus("idle", "Not Streaming");
+    overlayNeedsRestart.style.display = "none";
 
     // Switch back to MJPEG preview when not streaming
     setTimeout(() => {
@@ -813,6 +819,7 @@ const titleOptions = document.getElementById("titleOptions");
 const timestampOptions = document.getElementById("timestampOptions");
 const titleFormatToggle = document.getElementById("titleFormatToggle");
 const timestampFormatToggle = document.getElementById("timestampFormatToggle");
+const overlayNeedsRestart = document.getElementById("overlayNeedsRestart");
 
 // Initialize custom dropdowns for ALL select elements
 console.log("🎨 Initializing custom dropdowns...");
@@ -1376,16 +1383,12 @@ function applyOverlaySettings() {
     overlayZoom: parseInt(overlayZoom.value),
   };
 
-  console.log("Auto-applying overlay config:", overlayConfig);
+  console.log("Saving overlay config:", overlayConfig);
   socket.emit("updateOverlay", overlayConfig);
 
-  // If not streaming, restart the idle preview to apply overlay changes
-  if (!isCurrentlyStreaming) {
-    console.log("🔄 Restarting idle preview to apply overlay changes...");
-    clearTimeout(window.idlePreviewRestartTimeout);
-    window.idlePreviewRestartTimeout = setTimeout(() => {
-      switchToMJPEGPreview();
-    }, 300);
+  // Show "needs restart" banner if currently streaming
+  if (isCurrentlyStreaming) {
+    overlayNeedsRestart.style.display = "";
   }
 }
 
@@ -1518,21 +1521,8 @@ titlePosition.addEventListener("change", () => {
 
 // Overlay result handler
 socket.on("overlayResult", (result) => {
-  console.log("Overlay result:", result);
-  if (result.success) {
-    // If stream is currently running, auto-restart to apply changes
-    if (isCurrentlyStreaming) {
-      console.log("🔄 Auto-restarting stream to apply overlay changes...");
-
-      // Stop and restart the stream
-      socket.emit("stopStream");
-
-      // Wait for cleanup (stopStream waits 2s + kill + 0.5s), then restart
-      setTimeout(() => {
-        socket.emit("startStream");
-      }, 4000);
-    }
-  } else {
+  console.log("Overlay saved:", result);
+  if (!result.success) {
     alert(`Overlay error: ${result.error}`);
   }
 });
