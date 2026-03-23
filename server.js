@@ -1004,11 +1004,19 @@ app.get("/video/stream", async (req, res) => {
   function connectToPreview() {
     const client = net.connect({ port: IDLE_PREVIEW_PORT, host: "localhost" });
 
+    let totalBytesReceived = 0;
+    let firstDataLogged = false;
+
     client.on("connect", () => {
       console.log(`✅ Connected to idle preview TCP server on port ${IDLE_PREVIEW_PORT}`);
     });
 
     client.on("data", (data) => {
+      totalBytesReceived += data.length;
+      if (!firstDataLogged) {
+        firstDataLogged = true;
+        console.log(`📦 First data from idle preview: ${data.length} bytes (first 50 hex: ${data.slice(0, 50).toString('hex')})`);
+      }
       try {
         res.write(data);
       } catch (err) {
