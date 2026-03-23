@@ -1379,25 +1379,41 @@ server.listen(PORT, async () => {
     // Activate the camera device first (runs v4l2-ctl --list-formats-ext)
     await camera.activateCamera();
 
-    // Warm up the camera by briefly capturing a few frames
-    // Some USB cameras need an actual VIDIOC_STREAMON to initialize video output
-    console.log("📹 Warming up camera with brief v4l2 capture...");
+    // Warm up the camera by running ffmpeg as a background process for a few seconds.
+    // Some USB cameras need an actual VIDIOC_STREAMON + frame delivery to fully
+    // initialize their video output hardware. v4l2-ctl --list-formats-ext only
+    // queries the control interface without starting capture.
+    console.log("📹 Warming up camera with temporary ffmpeg capture (3 seconds)...");
+    const warmupFfmpeg = spawn("ffmpeg", [
+      "-f", "v4l2", "-input_format", "mjpeg", "-video_size", "1920x1080",
+      "-i", CAMERA_DEVICE, "-f", "null", "/dev/null"
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+
+    warmupFfmpeg.stderr.on("data", (data) => {
+      const msg = data.toString().trim();
+      if (msg.includes("frame=") || msg.includes("fps=")) {
+        console.log(`📹 Warmup ffmpeg: ${msg.substring(0, 120)}`);
+      }
+    });
+
+    // Let ffmpeg run for 3 seconds to warm up the camera
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+
+    // Kill ffmpeg and wait for it to fully release the device
+    console.log("🔪 Killing warmup ffmpeg...");
+    warmupFfmpeg.kill("SIGKILL");
+    await new Promise((resolve) => {
+      warmupFfmpeg.on("close", () => resolve());
+      setTimeout(resolve, 2000); // fallback if close event doesn't fire
+    });
+
+    // Make sure the device is truly free
     try {
       const { execSync } = require("child_process");
-      // Use v4l2-ctl stream capture — lighter than ffmpeg and exits cleanly
-      execSync(`v4l2-ctl -d ${CAMERA_DEVICE} --stream-mmap --stream-count=5 2>&1`, { timeout: 5000 });
-      console.log("✅ Camera warmed up via v4l2-ctl stream");
-    } catch (e) {
-      console.log("⚠️  Camera warmup exited:", e.message?.substring(0, 100));
-      // If the warmup timed out or failed, make sure nothing is still holding the device
-      try {
-        const { execSync } = require("child_process");
-        execSync(`fuser -k ${CAMERA_DEVICE} 2>/dev/null || true`);
-        console.log("🔪 Force-killed any leftover processes on camera device");
-      } catch (e2) { /* ignore */ }
-    }
-    // Wait for device to be fully released
+      execSync(`fuser -k ${CAMERA_DEVICE} 2>/dev/null || true`);
+    } catch (e) { /* ignore */ }
     await new Promise((resolve) => setTimeout(resolve, 1000));
+
     // Verify the device is free before proceeding
     try {
       const { execSync } = require("child_process");
@@ -1405,9 +1421,9 @@ server.listen(PORT, async () => {
       if (fuserCheck && /[0-9]/.test(fuserCheck)) {
         console.log(`⚠️  Camera device still busy: ${fuserCheck} — force killing`);
         execSync(`fuser -k ${CAMERA_DEVICE} 2>/dev/null || true`);
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       } else {
-        console.log("✅ Camera device is free");
+        console.log("✅ Camera device is free after warmup");
       }
     } catch (e) { /* ignore */ }
 
