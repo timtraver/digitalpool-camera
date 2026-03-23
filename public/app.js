@@ -671,11 +671,10 @@ socket.on("refreshIdlePreview", () => {
     if (previewStatus) previewStatus.style.display = "";
     // Small delay to let the old GStreamer process fully die
     setTimeout(() => {
-      switchToMJPEGPreview();
-      // Hide status after the new preview has had time to connect
-      setTimeout(() => {
+      switchToMJPEGPreview(() => {
+        // Callback fires when the preview image actually loads
         if (previewStatus) previewStatus.style.display = "none";
-      }, 2000);
+      });
     }, 400);
   }
 });
@@ -929,7 +928,7 @@ function switchToHLSPreview() {
   console.log("📊 Container children:", container.children.length);
 }
 
-function switchToMJPEGPreview() {
+function switchToMJPEGPreview(onLoaded) {
   console.log("🔄 Switching to MJPEG preview...");
   const container = document.querySelector(".video-container");
   const oldElement = document.getElementById("videoStream");
@@ -988,6 +987,7 @@ function switchToMJPEGPreview() {
       }
 
       console.log(`✅ MJPEG preview loaded (overlays: ${overlaysEnabled})`);
+      if (typeof onLoaded === "function") onLoaded();
     }, 350);
   };
 
@@ -1001,6 +1001,7 @@ function switchToMJPEGPreview() {
     if (oldElement) {
       oldElement.style.zIndex = "";
     }
+    if (typeof onLoaded === "function") onLoaded();
   };
 
   // Insert new element into container (will be positioned over old one)
@@ -1406,6 +1407,13 @@ function applyOverlaySettings() {
   // Show "needs restart" banner if currently streaming
   if (isCurrentlyStreaming) {
     overlayNeedsRestart.style.display = "";
+  }
+
+  // Show "Updating preview..." immediately when not streaming
+  // (the banner will be hidden by the refreshIdlePreview handler once the preview loads)
+  if (!isCurrentlyStreaming) {
+    const previewStatus = document.getElementById("overlayPreviewStatus");
+    if (previewStatus) previewStatus.style.display = "";
   }
 }
 

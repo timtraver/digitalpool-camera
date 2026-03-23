@@ -1122,17 +1122,26 @@ io.on("connection", (socket) => {
         });
         puppeteerOverlay.startPeriodicRefresh();
 
-        // Don't block — restart preview immediately (camera feed only),
-        // then auto-restart again when the first screenshot arrives
+        // Wait for the first screenshot before restarting preview,
+        // so the overlay is visible immediately (no flash of camera-only feed)
         if (!streamController.isStreaming) {
-          puppeteerOverlay.once("updated", () => {
-            console.log("📸 First remote screenshot ready — restarting idle preview to show overlay");
+          // Cancel any pending debounce restart — we'll restart once the screenshot is ready
+          clearTimeout(idlePreviewRestartTimer);
+          const restartForOverlay = () => {
+            console.log("📸 Remote screenshot ready — restarting idle preview to show overlay");
             if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
               currentIdlePreviewProcess.kill();
               currentIdlePreviewProcess = null;
             }
             io.emit("refreshIdlePreview");
-          });
+          };
+          const onUpdated = () => { clearTimeout(fallback); restartForOverlay(); };
+          const fallback = setTimeout(() => {
+            puppeteerOverlay.removeListener("updated", onUpdated);
+            console.log("⏱️ Timeout waiting for remote screenshot — restarting preview anyway");
+            restartForOverlay();
+          }, 10000);
+          puppeteerOverlay.once("updated", onUpdated);
         }
       }
     } else if (overlayConfig.remoteOverlayEnabled === false && puppeteerOverlay) {
@@ -1147,9 +1156,9 @@ io.on("connection", (socket) => {
       fs.writeFileSync('/tmp/graphics-overlay-state.json', JSON.stringify(gameState, null, 2));
     } catch (err) { /* ignore */ }
 
-    // If NOT streaming, restart the idle preview so changes are visible immediately
+    // If NOT streaming and NOT waiting for a remote screenshot, restart the idle preview
     // Debounce to avoid restarting on every keystroke
-    if (!streamController.isStreaming) {
+    if (!streamController.isStreaming && !wantsRemote) {
       clearTimeout(idlePreviewRestartTimer);
       idlePreviewRestartTimer = setTimeout(() => {
         console.log(`📋 Debounce fired — config.remoteOverlayEnabled=${streamController.streamConfig.remoteOverlayEnabled}, overlayUrl=${streamController.streamConfig.overlayUrl}`);
