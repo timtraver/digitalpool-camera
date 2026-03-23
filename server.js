@@ -935,10 +935,14 @@ async function startPersistentIdlePreview() {
     currentIdlePreviewProcess = gst;
     console.log(`📹 Started idle preview process PID: ${gst.pid}`);
 
+    gst.stdout.on("data", (data) => {
+      console.log(`GStreamer idle stdout: ${data.toString().trim()}`);
+    });
+
     gst.stderr.on("data", (data) => {
-      const msg = data.toString();
-      if (msg.includes("ERROR") || msg.includes("WARN")) {
-        console.error(`GStreamer idle preview: ${msg}`);
+      const msg = data.toString().trim();
+      if (msg) {
+        console.log(`GStreamer idle stderr: ${msg}`);
       }
     });
 
@@ -1367,9 +1371,21 @@ server.listen(PORT, async () => {
     // Activate the camera device first (runs v4l2-ctl --list-formats-ext)
     await camera.activateCamera();
 
-    // Start the persistent idle preview immediately — this wakes up the camera
-    // AND provides preview to clients right away (no temp stream needed)
-    console.log("📹 Starting persistent idle preview to warm up camera...");
+    // Warm up the camera by briefly capturing a few frames with ffmpeg
+    // Some USB cameras need an actual VIDIOC_STREAMON to initialize video output
+    console.log("📹 Warming up camera with brief ffmpeg capture...");
+    try {
+      const { execSync } = require("child_process");
+      execSync(`ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -i ${CAMERA_DEVICE} -frames:v 5 -f null /dev/null 2>&1`, { timeout: 10000 });
+      console.log("✅ Camera warmed up");
+    } catch (e) {
+      console.log("⚠️  Camera warmup ffmpeg exited (this is normal):", e.message?.substring(0, 100));
+    }
+    // Brief pause after ffmpeg releases the device
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // Start the persistent idle preview
+    console.log("📹 Starting persistent idle preview...");
     await startPersistentIdlePreview();
     console.log("✅ Idle preview started — camera is active");
 
