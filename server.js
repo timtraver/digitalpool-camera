@@ -758,32 +758,30 @@ function buildIdlePreviewGstArgs(sinkArgs) {
   console.log(`📋 Idle preview overlay flags: overlayEnabled=${config.overlayEnabled}, showTimestamp=${config.showTimestamp}, hasRemoteOverlay=${hasRemoteOverlay}, pngExists=${pngExists}, hasAnyOverlay=${hasAnyOverlay}`);
 
   if (hasAnyOverlay) {
-    // Timestamp overlay
-    if (config.showTimestamp) {
-      const tsPosition = config.timestampPosition || "bottom-right";
-      const [vpos, hpos] = tsPosition.split("-");
-      const valign = vpos === "bottom" ? "bottom" : vpos === "center" ? "center" : "top";
-      const halign = hpos === "left" ? "left" : hpos === "right" ? "right" : "center";
-      const tsFontSize = config.timestampFontSize || Math.round((config.overlayFontSize || 32) * 0.75);
-      const scaledFontSize = Math.round(tsFontSize * 1.5);
-      const tsColor = config.timestampColor || config.overlayColor || "white";
-      const timestampArgs = [
-        "clockoverlay",
-        `valignment=${valign}`,
-        `halignment=${halign}`,
-        `font-desc=Sans Bold ${scaledFontSize}`,
-        `color=${colorToInt(tsColor)}`,
-        `time-format="${config.timestampFormat || '%Y-%m-%d %H:%M:%S'}"`,
-      ];
-      const tsBg = config.timestampBackground || config.overlayBackground || "transparent";
-      if (tsBg !== "transparent") {
-        timestampArgs.push("shaded-background=true");
-      }
-      timestampArgs.push("xpad=20", "ypad=20", "!");
-      gstArgs.push(...timestampArgs);
+    // Remote overlay PNG — rendered FIRST so text/timestamp appear on top of it
+    if (hasRemoteOverlay && pngExists) {
+      console.log(`📸 Adding remote overlay PNG to idle preview: ${pngOverlayPath}`);
+      gstArgs.push(
+        "gdkpixbufoverlay",
+        `location=${pngOverlayPath}`,
+        "overlay-width=1280",
+        "overlay-height=720",
+        "!"
+      );
     }
 
-    // Title overlay
+    // Logo overlay
+    if (config.logoPath) {
+      gstArgs.push(
+        "gdkpixbufoverlay",
+        `location=${config.logoPath}`,
+        "offset-x=20",
+        "offset-y=20",
+        "!"
+      );
+    }
+
+    // Title overlay (renders on top of remote PNG)
     if (config.overlayEnabled && config.overlayText) {
       const position = config.titlePosition || config.overlayPosition || "bottom-left";
       const [vpos, hpos] = position.split("-");
@@ -808,6 +806,31 @@ function buildIdlePreviewGstArgs(sinkArgs) {
       gstArgs.push(...textArgs);
     }
 
+    // Timestamp overlay (renders on top of remote PNG)
+    if (config.showTimestamp) {
+      const tsPosition = config.timestampPosition || "bottom-right";
+      const [vpos, hpos] = tsPosition.split("-");
+      const valign = vpos === "bottom" ? "bottom" : vpos === "center" ? "center" : "top";
+      const halign = hpos === "left" ? "left" : hpos === "right" ? "right" : "center";
+      const tsFontSize = config.timestampFontSize || Math.round((config.overlayFontSize || 32) * 0.75);
+      const scaledFontSize = Math.round(tsFontSize * 1.5);
+      const tsColor = config.timestampColor || config.overlayColor || "white";
+      const timestampArgs = [
+        "clockoverlay",
+        `valignment=${valign}`,
+        `halignment=${halign}`,
+        `font-desc=Sans Bold ${scaledFontSize}`,
+        `color=${colorToInt(tsColor)}`,
+        `time-format="${config.timestampFormat || '%Y-%m-%d %H:%M:%S'}"`,
+      ];
+      const tsBg = config.timestampBackground || config.overlayBackground || "transparent";
+      if (tsBg !== "transparent") {
+        timestampArgs.push("shaded-background=true");
+      }
+      timestampArgs.push("xpad=20", "ypad=20", "!");
+      gstArgs.push(...timestampArgs);
+    }
+
     // Custom text 2
     if (config.customText2) {
       const valign = config.overlayPosition === "bottom" ? "bottom" : "center";
@@ -820,29 +843,6 @@ function buildIdlePreviewGstArgs(sinkArgs) {
         `font-desc=Sans ${scaledFontSize}`,
         `color=${colorToInt(config.overlayColor)}`,
         "shaded-background=true",
-        "!"
-      );
-    }
-
-    // Logo overlay
-    if (config.logoPath) {
-      gstArgs.push(
-        "gdkpixbufoverlay",
-        `location=${config.logoPath}`,
-        "offset-x=20",
-        "offset-y=20",
-        "!"
-      );
-    }
-
-    // Remote overlay PNG
-    if (hasRemoteOverlay && pngExists) {
-      console.log(`📸 Adding remote overlay PNG to idle preview: ${pngOverlayPath}`);
-      gstArgs.push(
-        "gdkpixbufoverlay",
-        `location=${pngOverlayPath}`,
-        "overlay-width=1280",
-        "overlay-height=720",
         "!"
       );
     }
