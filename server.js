@@ -1372,9 +1372,25 @@ server.listen(PORT, async () => {
       const overlayZoom = streamController.streamConfig.overlayZoom || 100;
       puppeteerOverlay.setOverlayUrl(streamController.streamConfig.overlayUrl, { zoom: overlayZoom });
       puppeteerOverlay.startPeriodicRefresh();
-      console.log("✅ Remote overlay ready for idle preview");
-      // Restart idle preview to include the overlay PNG
+      console.log("✅ Remote overlay ready — waiting for first screenshot...");
+      // Wait for the first screenshot before restarting preview,
+      // so the PNG file is actually populated (not just the tiny placeholder)
+      await new Promise((resolve) => {
+        const fallback = setTimeout(() => {
+          puppeteerOverlay.removeListener("updated", onReady);
+          console.log("⏱️ Timeout waiting for first screenshot on boot — restarting preview anyway");
+          resolve();
+        }, 15000);
+        const onReady = () => {
+          clearTimeout(fallback);
+          console.log("📸 First screenshot ready on boot");
+          resolve();
+        };
+        puppeteerOverlay.once("updated", onReady);
+      });
+      // Restart idle preview to include the overlay PNG, then tell clients to reconnect
       await startPersistentIdlePreview();
+      io.emit("refreshIdlePreview");
     } catch (err) {
       console.error("⚠️  Failed to start remote overlay on boot:", err.message);
     }
