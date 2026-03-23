@@ -830,6 +830,18 @@ header h1 {
   font-weight: 600;
   text-align: center;
 }
+/* Overlay preview updating status */
+.overlay-preview-status {
+  margin-top: 6px;
+  padding: 5px 10px;
+  background: rgba(18, 199, 255, 0.1);
+  border: 1px solid rgba(18, 199, 255, 0.3);
+  border-radius: 6px;
+  color: #12c7ff;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
 
 /* Collapsible format options row */
 .format-options {

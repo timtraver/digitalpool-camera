@@ -667,9 +667,15 @@ socket.on("streamResult", (result) => {
 socket.on("refreshIdlePreview", () => {
   if (!isCurrentlyStreaming) {
     console.log("🔄 Refreshing idle preview for overlay changes...");
+    const previewStatus = document.getElementById("overlayPreviewStatus");
+    if (previewStatus) previewStatus.style.display = "";
     // Small delay to let the old GStreamer process fully die
     setTimeout(() => {
       switchToMJPEGPreview();
+      // Hide status after the new preview has had time to connect
+      setTimeout(() => {
+        if (previewStatus) previewStatus.style.display = "none";
+      }, 2000);
     }, 400);
   }
 });
@@ -1420,16 +1426,17 @@ remoteOverlayEnabled.addEventListener("change", () => {
   applyOverlaySettings();
 });
 
-// Apply text changes after user stops typing (debounce)
-let textInputTimeout;
+// Apply text changes when user leaves the field or presses Enter
 overlayText.addEventListener("input", () => {
   currentOverlayConfig.overlayText = overlayText.value;
   drawOverlay();
+});
+overlayText.addEventListener("blur", () => {
   if (isCurrentlyStreaming) overlayNeedsRestart.style.display = "";
-  clearTimeout(textInputTimeout);
-  textInputTimeout = setTimeout(() => {
-    applyOverlaySettings();
-  }, 1000);
+  applyOverlaySettings();
+});
+overlayText.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { overlayText.blur(); }
 });
 
 showTimestamp.addEventListener("change", () => {
@@ -1439,15 +1446,16 @@ showTimestamp.addEventListener("change", () => {
   applyOverlaySettings();
 });
 
-// Apply timestamp format changes (debounce)
-let timestampFormatTimeout;
+// Apply timestamp format changes when user leaves the field or presses Enter
 timestampFormat.addEventListener("input", () => {
   currentOverlayConfig.timestampFormat = timestampFormat.value;
+});
+timestampFormat.addEventListener("blur", () => {
   if (isCurrentlyStreaming) overlayNeedsRestart.style.display = "";
-  clearTimeout(timestampFormatTimeout);
-  timestampFormatTimeout = setTimeout(() => {
-    applyOverlaySettings();
-  }, 500);
+  applyOverlaySettings();
+});
+timestampFormat.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { timestampFormat.blur(); }
 });
 
 // Per-element font size changes (debounced)
@@ -1494,16 +1502,17 @@ timestampBackground.addEventListener("change", () => {
   applyOverlaySettings();
 });
 
-// Apply URL changes after user stops typing (debounce)
-let urlInputTimeout;
+// Apply URL changes when user leaves the field or presses Enter
 overlayUrl.addEventListener("input", () => {
   currentOverlayConfig.overlayUrl = overlayUrl.value;
   drawOverlay();
+});
+overlayUrl.addEventListener("blur", () => {
   if (isCurrentlyStreaming) overlayNeedsRestart.style.display = "";
-  clearTimeout(urlInputTimeout);
-  urlInputTimeout = setTimeout(() => {
-    applyOverlaySettings();
-  }, 1000);
+  applyOverlaySettings();
+});
+overlayUrl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { overlayUrl.blur(); }
 });
 
 // Overlay zoom slider
