@@ -1528,6 +1528,8 @@ streamController.on("stopped", async () => {
   // Brief delay to let the streaming process fully release the camera
   await new Promise((resolve) => setTimeout(resolve, 1000));
   await startPersistentIdlePreview();
+  // Tell clients to reconnect to the idle preview
+  io.emit("refreshIdlePreview");
 });
 
 
