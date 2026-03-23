@@ -28,6 +28,7 @@ class StreamController extends EventEmitter {
       showTimestamp: false,
       overlayUrl: "",
       overlayZoom: 100, // Zoom level for remote overlay page (50-200%)
+      remoteOverlayEnabled: false, // Enable remote overlay (Puppeteer screenshot)
       timestampPosition: "bottom-right",
       titlePosition: "top-left",
       overlayFontSize: 32, // Default font size for overlays

@@ -55,7 +55,11 @@ let gameState = {
 
 // Function to regenerate the PNG overlay with updated game state
 async function regenerateOverlay() {
-  if (puppeteerOverlay && puppeteerOverlay.isRunning) {
+  // Never render local scoreboard HTML when remote overlay is active —
+  // the remote URL page handles its own rendering via Puppeteer periodic refresh
+  const isRemote = streamController.streamConfig.remoteOverlayEnabled &&
+    streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
+  if (!isRemote && puppeteerOverlay && puppeteerOverlay.isRunning) {
     await puppeteerOverlay.updateState(gameState);
   }
   // Broadcast to all clients
@@ -407,10 +411,8 @@ app.post("/api/overlay-url", express.json(), async (req, res) => {
     puppeteerOverlay.setOverlayUrl(url, { refreshInterval, jsDelay });
     if (url && url.trim()) {
       puppeteerOverlay.startPeriodicRefresh();
-    } else {
-      // Switching back to local mode — regenerate the local scoreboard overlay
-      await puppeteerOverlay.updateState(gameState);
     }
+    // No local scoreboard rendering — remote overlay handles its own content
   }
 
   // Also save to stream config so it persists
@@ -803,12 +805,18 @@ app.get("/video/stream", async (req, res) => {
   if (hasRemoteOverlay) {
     try {
       const fsStat = require("fs");
-      pngExists = fsStat.existsSync(pngOverlayPath) && fsStat.statSync(pngOverlayPath).size > 100;
-    } catch (e) { /* ignore */ }
+      const exists = fsStat.existsSync(pngOverlayPath);
+      const size = exists ? fsStat.statSync(pngOverlayPath).size : 0;
+      pngExists = exists && size > 100;
+      console.log(`📋 Remote overlay check: exists=${exists}, size=${size}, pngExists=${pngExists}`);
+    } catch (e) {
+      console.log(`📋 Remote overlay check error: ${e.message}`);
+    }
   }
 
   // Add overlays if any individual overlay is enabled (using EXACT same structure as streaming pipeline)
   const hasAnyOverlay = config.overlayEnabled || config.showTimestamp || (hasRemoteOverlay && pngExists);
+  console.log(`📋 Idle preview overlay flags: overlayEnabled=${config.overlayEnabled}, showTimestamp=${config.showTimestamp}, hasRemoteOverlay=${hasRemoteOverlay}, pngExists=${pngExists}, hasAnyOverlay=${hasAnyOverlay}`);
   if (hasAnyOverlay) {
 
     // Add timestamp overlay if enabled (matches streamController.js exactly)
@@ -925,6 +933,7 @@ app.get("/video/stream", async (req, res) => {
   );
 
   console.log(`Starting GStreamer idle preview ${config.overlayEnabled ? "with" : "without"} overlays`);
+  console.log(`📋 GStreamer idle preview args: gst-launch-1.0 ${gstArgs.join(" ")}`);
 
   const gst = spawn("gst-launch-1.0", gstArgs);
 
@@ -1113,49 +1122,44 @@ io.on("connection", (socket) => {
         });
         puppeteerOverlay.startPeriodicRefresh();
 
-        // Wait for the first screenshot before restarting the idle preview,
-        // otherwise it will pick up a stale/placeholder PNG
+        // Don't block — restart preview immediately (camera feed only),
+        // then auto-restart again when the first screenshot arrives
         if (!streamController.isStreaming) {
-          const waitForFirst = new Promise((resolve) => {
-            const onUpdate = () => { resolve(); };
-            puppeteerOverlay.once("updated", onUpdate);
-            // Timeout after 8s in case the screenshot fails
-            setTimeout(() => { puppeteerOverlay.removeListener("updated", onUpdate); resolve(); }, 8000);
+          puppeteerOverlay.once("updated", () => {
+            console.log("📸 First remote screenshot ready — restarting idle preview to show overlay");
+            if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
+              currentIdlePreviewProcess.kill();
+              currentIdlePreviewProcess = null;
+            }
+            io.emit("refreshIdlePreview");
           });
-          await waitForFirst;
         }
       }
     } else if (overlayConfig.remoteOverlayEnabled === false && puppeteerOverlay) {
       // Remote overlay was explicitly turned off — clear the PNG (writes transparent placeholder)
       puppeteerOverlay.setOverlayUrl(null);
-      // NOTE: Do NOT call regenerateOverlay() here — it would render the local
-      // scoreboard HTML over the transparent placeholder, causing a stale image
     }
 
-    // Only regenerate local overlay if we're NOT in remote overlay mode
-    // (otherwise it overwrites the remote PNG with local scoreboard HTML)
-    if (!wantsRemote) {
-      regenerateOverlay();
-    } else {
-      // Still broadcast state and write JSON, just don't render local HTML
-      io.emit("scoreUpdated", gameState);
-      try {
-        const fs = require('fs');
-        fs.writeFileSync('/tmp/graphics-overlay-state.json', JSON.stringify(gameState, null, 2));
-      } catch (err) { /* ignore */ }
-    }
+    // Broadcast state and write JSON (never render local scoreboard HTML)
+    io.emit("scoreUpdated", gameState);
+    try {
+      const fs = require('fs');
+      fs.writeFileSync('/tmp/graphics-overlay-state.json', JSON.stringify(gameState, null, 2));
+    } catch (err) { /* ignore */ }
 
     // If NOT streaming, restart the idle preview so changes are visible immediately
     // Debounce to avoid restarting on every keystroke
     if (!streamController.isStreaming) {
       clearTimeout(idlePreviewRestartTimer);
       idlePreviewRestartTimer = setTimeout(() => {
+        console.log(`📋 Debounce fired — config.remoteOverlayEnabled=${streamController.streamConfig.remoteOverlayEnabled}, overlayUrl=${streamController.streamConfig.overlayUrl}`);
         if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
           console.log("🔄 Restarting idle preview for overlay changes...");
           currentIdlePreviewProcess.kill();
           currentIdlePreviewProcess = null;
         }
         // Tell all clients to refresh their MJPEG preview
+        console.log("📡 Emitting refreshIdlePreview to clients");
         io.emit("refreshIdlePreview");
       }, 800);
     }
@@ -1497,18 +1501,13 @@ streamController.on("preparing", async () => {
         await puppeteerOverlay.initialize(PORT);
       }
 
-      // Check if a remote overlay URL is configured
+      // Remote overlay URL mode only — no local scoreboard rendering
       const overlayUrl = streamController.streamConfig.overlayUrl;
       if (overlayUrl && overlayUrl.trim()) {
-        // URL mode: screenshot a remote page that has its own JS to fetch scores
         const overlayZoom = streamController.streamConfig.overlayZoom || 100;
         console.log(`🌍 Using remote overlay URL: ${overlayUrl} (zoom: ${overlayZoom}%)`);
         puppeteerOverlay.setOverlayUrl(overlayUrl, { zoom: overlayZoom });
         puppeteerOverlay.startPeriodicRefresh();
-      } else {
-        // Local mode: generate HTML with baked-in game state
-        puppeteerOverlay.setOverlayUrl(null); // Ensure URL mode is off
-        await puppeteerOverlay.updateState(gameState);
       }
       console.log("✅ Overlay PNG ready for GStreamer");
     } catch (err) {

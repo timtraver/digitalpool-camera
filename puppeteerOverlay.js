@@ -178,39 +178,13 @@ class PuppeteerOverlay extends EventEmitter {
   }
 
   /**
-   * Render local HTML overlay with game state baked into the markup.
+   * Render local overlay — writes a transparent placeholder.
+   * (Local scoreboard HTML has been removed; only remote URL overlay is supported.)
    */
   async _renderLocalOverlay(gameState) {
-    if (this._renderInProgress) {
-      console.log("⏳ Render already in progress, skipping");
-      return;
-    }
-
-    this._renderInProgress = true;
-    try {
-      // Generate HTML with game state baked in
-      const html = this._generateHtml(gameState);
-      fs.writeFileSync(this.tempHtmlPath, html);
-
-      // Render HTML to PNG with wkhtmltoimage
-      await this._execPromise("wkhtmltoimage", [
-        "--width", String(this.width),
-        "--height", String(this.height),
-        "--quality", "100",
-        this.tempHtmlPath,
-        this.rawPngPath,
-      ]);
-
-      // Use ImageMagick to make green background transparent
-      await this._chromaKeyAndSave();
-
-      console.log(`📸 Overlay PNG updated: ${gameState.player1Score} - ${gameState.player2Score}`);
-      this.emit("updated", this.pngPath);
-    } catch (err) {
-      console.error("❌ Failed to update overlay:", err.message);
-    } finally {
-      this._renderInProgress = false;
-    }
+    console.log("📄 Local overlay mode: writing transparent placeholder (no local scoreboard)");
+    this._createPlaceholderPNG(this.pngPath);
+    this.emit("updated", this.pngPath);
   }
 
   /**
@@ -385,21 +359,6 @@ class PuppeteerOverlay extends EventEmitter {
   }
 
   /**
-   * Chroma-key green background to transparent and save atomically.
-   */
-  async _chromaKeyAndSave() {
-    const tempOutput = this.pngPath + ".tmp";
-    await this._execPromise("convert", [
-      this.rawPngPath,
-      "-alpha", "on",
-      "-fuzz", "10%",
-      "-transparent", "rgb(0,255,0)",
-      `PNG32:${tempOutput}`,
-    ]);
-    fs.renameSync(tempOutput, this.pngPath);
-  }
-
-  /**
    * Stop the overlay renderer and clean up temp files.
    */
   async stop() {
@@ -412,107 +371,6 @@ class PuppeteerOverlay extends EventEmitter {
       try { fs.unlinkSync(f); } catch (e) { /* ignore */ }
     }
     this.emit("stopped");
-  }
-
-  /**
-   * Generate HTML with game state values baked directly into the markup.
-   * This avoids needing JavaScript execution in wkhtmltoimage.
-   */
-  _generateHtml(gameState) {
-    const matchTitle = this._escapeHtml(gameState.matchTitle || "Match");
-    const p1Name = this._escapeHtml(gameState.player1Name || "Player 1");
-    const p2Name = this._escapeHtml(gameState.player2Name || "Player 2");
-    const p1Score = gameState.player1Score ?? 0;
-    const p2Score = gameState.player2Score ?? 0;
-
-    return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body {
-    width: ${this.width}px;
-    height: ${this.height}px;
-    background: #00FF00;
-    overflow: hidden;
-    font-family: 'DejaVu Sans', 'Liberation Sans', Arial, sans-serif;
-  }
-  #scoreboard {
-    position: absolute;
-    top: 40px;
-    left: 40px;
-    background: rgb(20, 20, 20);
-    border: 2px solid #cccccc;
-    border-radius: 12px;
-    padding: 16px 24px;
-    color: white;
-    min-width: 420px;
-  }
-  .match-title {
-    font-size: 20px;
-    font-weight: bold;
-    text-align: center;
-    margin-bottom: 12px;
-    opacity: 0.9;
-    letter-spacing: 0.5px;
-  }
-  .players {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 16px;
-  }
-  .player { flex: 1; text-align: center; }
-  .player-name {
-    font-size: 18px;
-    font-weight: 600;
-    margin-bottom: 6px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 160px;
-    margin-left: auto;
-    margin-right: auto;
-  }
-  .player-score {
-    font-size: 48px;
-    font-weight: bold;
-    line-height: 1;
-  }
-  .vs-divider {
-    font-size: 24px;
-    font-weight: bold;
-    opacity: 0.5;
-    padding: 0 4px;
-  }
-</style>
-</head>
-<body>
-  <div id="scoreboard">
-    <div class="match-title">${matchTitle}</div>
-    <div class="players">
-      <div class="player">
-        <div class="player-name">${p1Name}</div>
-        <div class="player-score">${p1Score}</div>
-      </div>
-      <div class="vs-divider">–</div>
-      <div class="player">
-        <div class="player-name">${p2Name}</div>
-        <div class="player-score">${p2Score}</div>
-      </div>
-    </div>
-  </div>
-</body>
-</html>`;
-  }
-
-  _escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
   }
 
   /**
