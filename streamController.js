@@ -537,6 +537,10 @@ class StreamController extends EventEmitter {
     const scaledTitleFontSize = Math.round(titleFs * 1.5);
     const scaledTsFontSize = Math.round(tsFs * 1.5);
 
+    console.log(`🎨 PNG overlay formatting — Title: size=${titleFs}→${scaledTitleFontSize}, color=${titleColor}, bg=${titleBackground}`);
+    console.log(`🎨 PNG overlay formatting — Timestamp: size=${tsFs}→${scaledTsFontSize}, color=${tsColor}, bg=${tsBackground}`);
+    console.log(`🎨 Raw config values — titleFontSize=${this.streamConfig.titleFontSize}, timestampFontSize=${this.streamConfig.timestampFontSize}, overlayFontSize=${this.streamConfig.overlayFontSize}`);
+
     const timestampFormat = this.streamConfig.timestampFormat || "%Y-%m-%d %H:%M:%S";
     const titlePosition = this.streamConfig.titlePosition || "top-left";
     const timestampPosition = this.streamConfig.timestampPosition || "bottom-right";
@@ -642,6 +646,7 @@ class StreamController extends EventEmitter {
         const scaledFontSize = Math.round(tsFs * 1.5);
         const tsColor = this.streamConfig.timestampColor || this.streamConfig.overlayColor || "white";
         const tsBg = this.streamConfig.timestampBackground || this.streamConfig.overlayBackground || "transparent";
+        console.log(`🎨 Text-only pipeline — Timestamp: size=${tsFs}→${scaledFontSize}, color=${tsColor}, bg=${tsBg}`);
 
         const timestampArgs = [
           "clockoverlay",
