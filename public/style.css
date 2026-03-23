@@ -801,8 +801,8 @@ header h1 {
   border: 1px solid rgba(18, 199, 255, 0.3);
   color: rgba(255, 255, 255, 0.6);
   border-radius: 4px;
-  padding: 2px 6px;
-  font-size: 16px;
+  padding: 3px 7px;
+  font-size: 20px;
   cursor: pointer;
   line-height: 1;
   margin-left: auto;
@@ -894,10 +894,14 @@ header h1 {
 }
 
 .overlay-controls .control-item-compact label {
-  min-width: 60px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: unset;
   font-size: 11px;
   color: rgba(255, 255, 255, 0.85);
   font-weight: 500;
+  white-space: nowrap;
 }
 
 /* Custom Dropdown Styling */
@@ -981,6 +985,7 @@ header h1 {
 }
 
 .overlay-controls input[type="text"],
+.overlay-controls input[type="number"],
 .overlay-controls select {
   flex: 1;
   padding: 3px 6px;
@@ -1000,6 +1005,7 @@ header h1 {
 }
 
 .overlay-controls input[type="text"]:focus,
+.overlay-controls input[type="number"]:focus,
 .overlay-controls select:focus {
   outline: 1px solid #12c7ff;
   outline-offset: 1px;

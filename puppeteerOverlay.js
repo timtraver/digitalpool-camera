@@ -95,7 +95,10 @@ class PuppeteerOverlay extends EventEmitter {
       this._overlayUrl = url.trim();
       if (options.refreshInterval) this._refreshIntervalMs = options.refreshInterval;
       if (options.jsDelay) this._jsDelay = options.jsDelay;
-      if (options.zoom) this._zoom = options.zoom;
+      if (options.zoom && options.zoom !== this._zoom) {
+        this._zoom = options.zoom;
+        this._zoomDirty = true; // Flag to re-apply zoom on next screenshot cycle
+      }
       console.log(`🌍 Overlay URL mode enabled: ${this._overlayUrl}`);
       console.log(`   Refresh interval: ${this._refreshIntervalMs}ms, JS delay: ${this._jsDelay}ms, zoom: ${this._zoom}%`);
     } else {
@@ -335,20 +338,21 @@ class PuppeteerOverlay extends EventEmitter {
           timeout: 30000,
         });
         this._currentLoadedUrl = this._overlayUrl;
-
-        // Apply zoom and transparent background ONCE after navigation.
-        // Now that browser stays alive (isConnected fix), omitBackground:true
-        // works correctly — no chroma-key/ImageMagick needed.
-        await this._page.evaluate((zoom) => {
-          document.documentElement.style.backgroundColor = "transparent";
-          document.body.style.backgroundColor = "transparent";
-          if (zoom !== 100) {
-            document.body.style.zoom = (zoom / 100).toString();
-          }
-        }, this._zoom);
+        this._zoomDirty = true; // Always apply zoom after navigation
 
         // Wait for JS frameworks to finish initial render
         await new Promise(r => setTimeout(r, this._jsDelay));
+      }
+
+      // Apply zoom and transparent background when dirty (after nav or zoom change)
+      if (this._zoomDirty) {
+        console.log(`🔍 Applying zoom: ${this._zoom}%`);
+        await this._page.evaluate((zoom) => {
+          document.documentElement.style.backgroundColor = "transparent";
+          document.body.style.backgroundColor = "transparent";
+          document.body.style.zoom = (zoom / 100).toString();
+        }, this._zoom);
+        this._zoomDirty = false;
       }
 
       // Screenshot with native transparency — no ImageMagick chroma-key needed

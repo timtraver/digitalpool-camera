@@ -1414,6 +1414,7 @@ let textInputTimeout;
 overlayText.addEventListener("input", () => {
   currentOverlayConfig.overlayText = overlayText.value;
   drawOverlay();
+  if (isCurrentlyStreaming) overlayNeedsRestart.style.display = "";
   clearTimeout(textInputTimeout);
   textInputTimeout = setTimeout(() => {
     applyOverlaySettings();
@@ -1431,6 +1432,7 @@ showTimestamp.addEventListener("change", () => {
 let timestampFormatTimeout;
 timestampFormat.addEventListener("input", () => {
   currentOverlayConfig.timestampFormat = timestampFormat.value;
+  if (isCurrentlyStreaming) overlayNeedsRestart.style.display = "";
   clearTimeout(timestampFormatTimeout);
   timestampFormatTimeout = setTimeout(() => {
     applyOverlaySettings();
@@ -1486,6 +1488,7 @@ let urlInputTimeout;
 overlayUrl.addEventListener("input", () => {
   currentOverlayConfig.overlayUrl = overlayUrl.value;
   drawOverlay();
+  if (isCurrentlyStreaming) overlayNeedsRestart.style.display = "";
   clearTimeout(urlInputTimeout);
   urlInputTimeout = setTimeout(() => {
     applyOverlaySettings();
