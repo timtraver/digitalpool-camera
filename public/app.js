@@ -797,11 +797,9 @@ const timestampFormat = document.getElementById("timestampFormat");
 const titlePosition = document.getElementById("titlePosition");
 // Per-element formatting controls
 const titleFontSize = document.getElementById("titleFontSize");
-const titleFontSizeValue = document.getElementById("titleFontSizeValue");
 const titleColor = document.getElementById("titleColor");
 const titleBackground = document.getElementById("titleBackground");
 const timestampFontSize = document.getElementById("timestampFontSize");
-const timestampFontSizeValue = document.getElementById("timestampFontSizeValue");
 const timestampColor = document.getElementById("timestampColor");
 const timestampBackground = document.getElementById("timestampBackground");
 // Hidden backward-compat fields (synced from per-element values)
@@ -1439,7 +1437,6 @@ timestampFormat.addEventListener("input", () => {
 // Per-element font size changes (debounced)
 let titleFontSizeTimeout;
 titleFontSize.addEventListener("input", () => {
-  titleFontSizeValue.textContent = titleFontSize.value + "px";
   currentOverlayConfig.titleFontSize = parseInt(titleFontSize.value);
   currentOverlayConfig.overlayFontSize = parseInt(titleFontSize.value); // sync legacy
   drawOverlay();
@@ -1449,7 +1446,6 @@ titleFontSize.addEventListener("input", () => {
 
 let tsFontSizeTimeout;
 timestampFontSize.addEventListener("input", () => {
-  timestampFontSizeValue.textContent = timestampFontSize.value + "px";
   currentOverlayConfig.timestampFontSize = parseInt(timestampFontSize.value);
   drawOverlay();
   clearTimeout(tsFontSizeTimeout);
@@ -1568,14 +1564,12 @@ socket.on("streamStatus", (status) => {
     const savedTsBg = status.config.timestampBackground || status.config.overlayBackground || "transparent";
 
     titleFontSize.value = savedTitleFontSize;
-    titleFontSizeValue.textContent = savedTitleFontSize + "px";
     titleColor.value = savedTitleColor;
     updateCustomDropdownDisplay(titleColor);
     titleBackground.value = savedTitleBg;
     updateCustomDropdownDisplay(titleBackground);
 
     timestampFontSize.value = savedTsFontSize;
-    timestampFontSizeValue.textContent = savedTsFontSize + "px";
     timestampColor.value = savedTsColor;
     updateCustomDropdownDisplay(timestampColor);
     timestampBackground.value = savedTsBg;
