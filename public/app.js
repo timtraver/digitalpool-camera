@@ -563,6 +563,10 @@ function setStreamStatus(state, text) {
       streamStatusBar.classList.add("status-starting");
       streamStatusText.textContent = "⏳ " + text;
       break;
+    case "stopping":
+      streamStatusBar.classList.add("status-stopping");
+      streamStatusText.textContent = "⏳ " + text;
+      break;
     case "live":
       streamStatusBar.classList.add("status-live");
       streamStatusText.textContent = "🔴 " + text;
@@ -591,6 +595,10 @@ streamProtocol.addEventListener("change", () => {
 startStreamBtn.addEventListener("click", async () => {
   // Check if currently streaming (button shows "Restart")
   const isRestart = !stopStreamBtn.disabled;
+
+  // Disable both buttons immediately during transition
+  startStreamBtn.disabled = true;
+  stopStreamBtn.disabled = true;
 
   if (isRestart) {
     console.log("Restarting stream...");
@@ -627,22 +635,21 @@ startStreamBtn.addEventListener("click", async () => {
     // Only UDP requires a destination (SRT uses server mode, RTMP has default)
     if (config.protocol === "udp" && !config.destination) {
       alert("Please enter a destination URL for UDP (e.g., udp://192.168.1.100:5000)");
+      startStreamBtn.disabled = false;
       return;
     }
 
     console.log("Starting stream with config:", config);
     socket.emit("startStream", config);
-
-    setStreamStatus("starting", "Starting Stream...");
   }
 });
 
 // Stop stream
 stopStreamBtn.addEventListener("click", () => {
   console.log("Stopping stream");
+  startStreamBtn.disabled = true;
+  stopStreamBtn.disabled = true;
   socket.emit("stopStream");
-
-  setStreamStatus("starting", "Stopping Stream...");
 });
 
 // Stream result handler
@@ -704,6 +711,28 @@ socket.on("streamStatus", (status) => {
       previewIndicator.style.display = "block";
       previewIndicator.style.background = "rgba(139, 92, 246, 0.9)";
     }
+  }
+
+  // Handle granular statuses
+  if (status.status === "starting") {
+    startStreamBtn.disabled = true;
+    stopStreamBtn.disabled = true;
+    setStreamStatus("starting", "Starting Stream...");
+    return;
+  }
+
+  if (status.status === "preparing") {
+    startStreamBtn.disabled = true;
+    stopStreamBtn.disabled = true;
+    setStreamStatus("starting", "Preparing Stream...");
+    return;
+  }
+
+  if (status.status === "stopping") {
+    startStreamBtn.disabled = true;
+    stopStreamBtn.disabled = true;
+    setStreamStatus("stopping", "Stopping Stream...");
+    return;
   }
 
   if (status.isStreaming) {

@@ -71,6 +71,11 @@ async function regenerateOverlay() {
 }
 
 // Stream controller event handlers
+streamController.on("preparing", () => {
+  const status = streamController.getStatus();
+  io.emit("streamStatus", { ...status, status: "preparing" });
+});
+
 streamController.on("started", () => {
   const status = streamController.getStatus();
   io.emit("streamStatus", { ...status, status: "started" });
@@ -1027,11 +1032,15 @@ io.on("connection", (socket) => {
   // ============ STREAMING SOCKET EVENTS ============
 
   socket.on("startStream", async (config) => {
+    // Immediately broadcast "starting" to all clients
+    io.emit("streamStatus", { ...streamController.getStatus(), status: "starting" });
     const result = await streamController.startStream(config);
     socket.emit("streamResult", result);
   });
 
   socket.on("stopStream", async () => {
+    // Immediately broadcast "stopping" to all clients
+    io.emit("streamStatus", { ...streamController.getStatus(), status: "stopping" });
     const result = await streamController.stopStream();
     socket.emit("streamResult", result);
 

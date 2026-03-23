@@ -743,6 +743,17 @@ header h1 {
   animation: pulse-dot 1s ease-in-out infinite;
 }
 
+/* Stopping */
+.stream-status-bar.status-stopping {
+  background: rgba(245, 158, 11, 0.2);
+  border: 2px solid rgba(245, 158, 11, 0.6);
+  color: #fbbf24;
+}
+.stream-status-bar.status-stopping .status-dot {
+  background: #f59e0b;
+  animation: pulse-dot 1s ease-in-out infinite;
+}
+
 /* Live / Streaming */
 .stream-status-bar.status-live {
   background: rgba(239, 68, 68, 0.2);

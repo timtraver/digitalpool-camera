@@ -99,7 +99,6 @@ class PuppeteerOverlay extends EventEmitter {
       console.log(`🌍 Overlay URL mode enabled: ${this._overlayUrl}`);
       console.log(`   Refresh interval: ${this._refreshIntervalMs}ms, JS delay: ${this._jsDelay}ms, zoom: ${this._zoom}%`);
     } else {
-      console.log("🔍 setOverlayUrl(null) called — disabling URL mode");
       this._overlayUrl = null;
       this._stopPeriodicRefresh();
       this._closeBrowser(); // Clean up Chromium when disabling URL mode
@@ -267,21 +266,11 @@ class PuppeteerOverlay extends EventEmitter {
       ],
     });
 
-    // Track disconnection and capture exit info for diagnostics.
+    // Track disconnection — silently clean up refs so _ensureBrowser relaunches.
     this._browserIntentionalClose = false;
-    const browserProcess = this._browser.process();
-    const browserPid = browserProcess ? browserProcess.pid : "unknown";
-    console.log(`  Chromium PID: ${browserPid}`);
-
-    if (browserProcess) {
-      browserProcess.on("exit", (code, signal) => {
-        console.log(`  Chromium PID ${browserPid} exited: code=${code}, signal=${signal}`);
-      });
-    }
-
     this._browser.on("disconnected", () => {
       if (!this._browserIntentionalClose) {
-        console.log(`🔄 Chromium (PID ${browserPid}) disconnected — will relaunch`);
+        console.log("🔄 Chromium disconnected — will relaunch on next overlay cycle");
       }
       this._browser = null;
       this._page = null;
@@ -300,12 +289,6 @@ class PuppeteerOverlay extends EventEmitter {
   async _closeBrowser() {
     const pid = this._browser && this._browser.process && this._browser.process()
       ? this._browser.process().pid : null;
-
-    // DIAGNOSTIC: Log who is calling _closeBrowser
-    if (this._browser) {
-      const stack = new Error().stack.split('\n').slice(1, 4).join('\n');
-      console.log(`🔍 _closeBrowser called (PID ${pid}):\n${stack}`);
-    }
 
     // Mark intentional close so the disconnected handler doesn't log
     this._browserIntentionalClose = true;
