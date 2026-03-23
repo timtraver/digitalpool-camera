@@ -1371,18 +1371,37 @@ server.listen(PORT, async () => {
     // Activate the camera device first (runs v4l2-ctl --list-formats-ext)
     await camera.activateCamera();
 
-    // Warm up the camera by briefly capturing a few frames with ffmpeg
+    // Warm up the camera by briefly capturing a few frames
     // Some USB cameras need an actual VIDIOC_STREAMON to initialize video output
-    console.log("📹 Warming up camera with brief ffmpeg capture...");
+    console.log("📹 Warming up camera with brief v4l2 capture...");
     try {
       const { execSync } = require("child_process");
-      execSync(`ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -i ${CAMERA_DEVICE} -frames:v 5 -f null /dev/null 2>&1`, { timeout: 10000 });
-      console.log("✅ Camera warmed up");
+      // Use v4l2-ctl stream capture — lighter than ffmpeg and exits cleanly
+      execSync(`v4l2-ctl -d ${CAMERA_DEVICE} --stream-mmap --stream-count=5 2>&1`, { timeout: 5000 });
+      console.log("✅ Camera warmed up via v4l2-ctl stream");
     } catch (e) {
-      console.log("⚠️  Camera warmup ffmpeg exited (this is normal):", e.message?.substring(0, 100));
+      console.log("⚠️  Camera warmup exited:", e.message?.substring(0, 100));
+      // If the warmup timed out or failed, make sure nothing is still holding the device
+      try {
+        const { execSync } = require("child_process");
+        execSync(`fuser -k ${CAMERA_DEVICE} 2>/dev/null || true`);
+        console.log("🔪 Force-killed any leftover processes on camera device");
+      } catch (e2) { /* ignore */ }
     }
-    // Brief pause after ffmpeg releases the device
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Wait for device to be fully released
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    // Verify the device is free before proceeding
+    try {
+      const { execSync } = require("child_process");
+      const fuserCheck = execSync(`fuser ${CAMERA_DEVICE} 2>&1 || true`).toString().trim();
+      if (fuserCheck && /[0-9]/.test(fuserCheck)) {
+        console.log(`⚠️  Camera device still busy: ${fuserCheck} — force killing`);
+        execSync(`fuser -k ${CAMERA_DEVICE} 2>/dev/null || true`);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      } else {
+        console.log("✅ Camera device is free");
+      }
+    } catch (e) { /* ignore */ }
 
     // Start the persistent idle preview
     console.log("📹 Starting persistent idle preview...");
