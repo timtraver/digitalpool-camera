@@ -690,94 +690,37 @@ app.get("/video/tcp-preview", (req, res) => {
 // Track active idle preview process (only one at a time)
 let currentIdlePreviewProcess = null;
 let idlePreviewRestartTimer = null;
+const IDLE_PREVIEW_PORT = 8554;
 
-// Video stream endpoint using MJPEG
-app.get("/video/stream", async (req, res) => {
-  console.log("New video stream connection requested");
-
-  // If streaming is active, don't try to access camera for idle preview
-  if (streamController.isStreaming) {
-    console.log(
-      "⚠️  Stream is active - preview should use HLS at /video/hls/playlist.m3u8",
-    );
-    res.status(503).send("Stream active - use HLS preview");
-    return;
-  }
-
-  // Kill the previous idle preview process if it exists
-  if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
-    console.log("🔄 Killing previous idle preview to start new one with updated settings");
-    currentIdlePreviewProcess.kill();
-    currentIdlePreviewProcess = null;
-    // Wait a moment for the process to die and release the camera
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
-
-  res.writeHead(200, {
-    "Content-Type": "multipart/x-mixed-replace; boundary=frame",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-    "Access-Control-Allow-Origin": "*",
-  });
-
-  // Check if camera is busy and try to clean up
-  const { execSync } = require("child_process");
-  try {
-    const fuserOutput = execSync(`fuser ${CAMERA_DEVICE} 2>&1`, {
-      encoding: "utf-8",
-      timeout: 1000,
-    });
-
-    if (fuserOutput.includes(":")) {
-      console.log("⚠️  Camera is busy, attempting cleanup...");
-      const pids = fuserOutput
-        .split(":")[1]
-        .trim()
-        .split(/\s+/)
-        .map((p) => p.replace(/\D/g, ""))
-        .filter((p) => p);
-
-      for (const pid of pids) {
-        console.log(`Killing process ${pid} using camera...`);
-        try {
-          execSync(`kill -9 ${pid}`);
-        } catch (e) {
-          // Process might already be dead
-        }
-      }
-
-      // Wait for device to be released
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      console.log("✅ Camera cleanup complete");
-    }
-  } catch (e) {
-    // Camera is free or fuser command failed
-  }
-
-  // Use GStreamer for idle preview with overlay settings from streamController
-  const config = streamController.streamConfig;
-
-  // Helper function to convert color name to GStreamer integer format
-  const colorToInt = (colorName) => {
-    const colors = {
-      white: "0xFFFFFFFF",
-      black: "0xFF000000",
-      red: "0xFFFF0000",
-      green: "0xFF00FF00",
-      blue: "0xFF0000FF",
-      yellow: "0xFFFFFF00",
-      cyan: "0xFF00FFFF",
-      magenta: "0xFFFF00FF",
-    };
-    return colors[colorName?.toLowerCase()] || colors.white;
+// Helper: convert color name to GStreamer integer format
+const colorToInt = (colorName) => {
+  const colors = {
+    white: "0xFFFFFFFF",
+    black: "0xFF000000",
+    red: "0xFFFF0000",
+    green: "0xFF00FF00",
+    blue: "0xFF0000FF",
+    yellow: "0xFFFFFF00",
+    cyan: "0xFF00FFFF",
+    magenta: "0xFFFF00FF",
   };
+  return colors[colorName?.toLowerCase()] || colors.white;
+};
+
+/**
+ * Build GStreamer args for the idle preview pipeline.
+ * @param {string[]} sinkArgs - Sink element args (e.g., tcpserversink or fdsink)
+ * @returns {string[]} Complete gst-launch-1.0 args
+ */
+function buildIdlePreviewGstArgs(sinkArgs) {
+  const config = streamController.streamConfig;
+  const fs = require("fs");
 
   const gstArgs = [
     "v4l2src",
     `device=${CAMERA_DEVICE}`,
     "do-timestamp=true",
     "!",
-    // Use same resolution as streaming (1920x1080) so overlays look identical
     `image/jpeg,width=${config.width || 1920},height=${config.height || 1080},framerate=${config.framerate || 30}/1`,
     "!",
     "jpegparse",
@@ -793,10 +736,8 @@ app.get("/video/stream", async (req, res) => {
     "video/x-raw,width=1280,height=720",
     "!",
     "videoconvert",
+    "!",
   ];
-
-  // Always need a ! after videoconvert
-  gstArgs.push("!");
 
   // Check if the remote overlay PNG exists and should be shown
   const pngOverlayPath = "/tmp/graphics-overlay.png";
@@ -804,9 +745,8 @@ app.get("/video/stream", async (req, res) => {
   let pngExists = false;
   if (hasRemoteOverlay) {
     try {
-      const fsStat = require("fs");
-      const exists = fsStat.existsSync(pngOverlayPath);
-      const size = exists ? fsStat.statSync(pngOverlayPath).size : 0;
+      const exists = fs.existsSync(pngOverlayPath);
+      const size = exists ? fs.statSync(pngOverlayPath).size : 0;
       pngExists = exists && size > 100;
       console.log(`📋 Remote overlay check: exists=${exists}, size=${size}, pngExists=${pngExists}`);
     } catch (e) {
@@ -814,23 +754,19 @@ app.get("/video/stream", async (req, res) => {
     }
   }
 
-  // Add overlays if any individual overlay is enabled (using EXACT same structure as streaming pipeline)
   const hasAnyOverlay = config.overlayEnabled || config.showTimestamp || (hasRemoteOverlay && pngExists);
   console.log(`📋 Idle preview overlay flags: overlayEnabled=${config.overlayEnabled}, showTimestamp=${config.showTimestamp}, hasRemoteOverlay=${hasRemoteOverlay}, pngExists=${pngExists}, hasAnyOverlay=${hasAnyOverlay}`);
-  if (hasAnyOverlay) {
 
-    // Add timestamp overlay if enabled (matches streamController.js exactly)
+  if (hasAnyOverlay) {
+    // Timestamp overlay
     if (config.showTimestamp) {
       const tsPosition = config.timestampPosition || "bottom-right";
       const [vpos, hpos] = tsPosition.split("-");
       const valign = vpos === "bottom" ? "bottom" : vpos === "center" ? "center" : "top";
       const halign = hpos === "left" ? "left" : hpos === "right" ? "right" : "center";
-
-      // Per-element font size (fall back to legacy shared value)
       const tsFontSize = config.timestampFontSize || Math.round((config.overlayFontSize || 32) * 0.75);
       const scaledFontSize = Math.round(tsFontSize * 1.5);
       const tsColor = config.timestampColor || config.overlayColor || "white";
-
       const timestampArgs = [
         "clockoverlay",
         `valignment=${valign}`,
@@ -839,28 +775,23 @@ app.get("/video/stream", async (req, res) => {
         `color=${colorToInt(tsColor)}`,
         `time-format="${config.timestampFormat || '%Y-%m-%d %H:%M:%S'}"`,
       ];
-
       const tsBg = config.timestampBackground || config.overlayBackground || "transparent";
       if (tsBg !== "transparent") {
         timestampArgs.push("shaded-background=true");
       }
-
       timestampArgs.push("xpad=20", "ypad=20", "!");
       gstArgs.push(...timestampArgs);
     }
 
-    // Add custom text overlay 1 (main title) - only if Title checkbox is enabled
+    // Title overlay
     if (config.overlayEnabled && config.overlayText) {
       const position = config.titlePosition || config.overlayPosition || "bottom-left";
       const [vpos, hpos] = position.split("-");
       const valign = vpos === "bottom" ? "bottom" : vpos === "center" ? "center" : "top";
       const halign = hpos === "left" ? "left" : hpos === "right" ? "right" : "center";
-
-      // Per-element font size (fall back to legacy shared value)
       const titleFs = config.titleFontSize || config.overlayFontSize || 32;
       const scaledFontSize = Math.round(titleFs * 1.5);
       const titleClr = config.titleColor || config.overlayColor || "white";
-
       const textArgs = [
         "textoverlay",
         `text="${config.overlayText}"`,
@@ -869,21 +800,18 @@ app.get("/video/stream", async (req, res) => {
         `font-desc=Sans Bold ${scaledFontSize}`,
         `color=${colorToInt(titleClr)}`,
       ];
-
       const titleBg = config.titleBackground || config.overlayBackground || "transparent";
       if (titleBg !== "transparent") {
         textArgs.push("shaded-background=true");
       }
-
       textArgs.push("xpad=20", "ypad=20", "!");
       gstArgs.push(...textArgs);
     }
 
-    // Add custom text overlay 2 (subtitle/secondary text) if provided
+    // Custom text 2
     if (config.customText2) {
       const valign = config.overlayPosition === "bottom" ? "bottom" : "center";
       const scaledFontSize = Math.floor((config.overlayFontSize || 32) * 1.5 * 0.75);
-
       gstArgs.push(
         "textoverlay",
         `text="${config.customText2}"`,
@@ -896,7 +824,7 @@ app.get("/video/stream", async (req, res) => {
       );
     }
 
-    // Add logo overlay if path provided
+    // Logo overlay
     if (config.logoPath) {
       gstArgs.push(
         "gdkpixbufoverlay",
@@ -907,7 +835,7 @@ app.get("/video/stream", async (req, res) => {
       );
     }
 
-    // Add remote overlay PNG (Puppeteer screenshot) if enabled and file exists
+    // Remote overlay PNG
     if (hasRemoteOverlay && pngExists) {
       console.log(`📸 Adding remote overlay PNG to idle preview: ${pngOverlayPath}`);
       gstArgs.push(
@@ -920,7 +848,7 @@ app.get("/video/stream", async (req, res) => {
     }
   }
 
-  // JPEG encode and output (already at 10fps 720p from earlier in pipeline)
+  // JPEG encode and output
   gstArgs.push(
     "jpegenc",
     "quality=65",
@@ -928,31 +856,56 @@ app.get("/video/stream", async (req, res) => {
     "multipartmux",
     "boundary=frame",
     "!",
-    "fdsink",
-    "fd=1"
+    ...sinkArgs
   );
 
-  console.log(`Starting GStreamer idle preview ${config.overlayEnabled ? "with" : "without"} overlays`);
+  return gstArgs;
+}
+
+/**
+ * Start (or restart) the persistent idle preview GStreamer process.
+ * Uses tcpserversink on IDLE_PREVIEW_PORT so clients can connect/disconnect freely.
+ */
+async function startPersistentIdlePreview() {
+  // Don't start if streaming is active
+  if (streamController.isStreaming) {
+    console.log("⚠️  Not starting idle preview — stream is active");
+    return;
+  }
+
+  // Kill existing idle preview process
+  if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
+    console.log("🔄 Killing previous idle preview to restart with updated settings");
+    currentIdlePreviewProcess.kill("SIGTERM");
+    currentIdlePreviewProcess = null;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+
+  // Kill any process using the idle preview port
+  try {
+    const { execSync } = require("child_process");
+    execSync(`fuser -k ${IDLE_PREVIEW_PORT}/tcp 2>/dev/null || true`);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  } catch (e) { /* ignore */ }
+
+  const sinkArgs = [
+    "tcpserversink",
+    "host=0.0.0.0",
+    `port=${IDLE_PREVIEW_PORT}`,
+    "sync=false",
+    "recover-policy=keyframe",
+  ];
+
+  const gstArgs = buildIdlePreviewGstArgs(sinkArgs);
+  console.log(`📹 Starting persistent idle preview on TCP port ${IDLE_PREVIEW_PORT}`);
   console.log(`📋 GStreamer idle preview args: gst-launch-1.0 ${gstArgs.join(" ")}`);
 
   const gst = spawn("gst-launch-1.0", gstArgs);
-
-  // Track this as the current idle preview process
   currentIdlePreviewProcess = gst;
-  console.log(`📹 Started new idle preview process PID: ${gst.pid}`);
-
-  gst.stdout.on("data", (data) => {
-    try {
-      res.write(data);
-    } catch (err) {
-      console.error("Error writing frame:", err.message);
-      gst.kill();
-    }
-  });
+  console.log(`📹 Started idle preview process PID: ${gst.pid}`);
 
   gst.stderr.on("data", (data) => {
     const msg = data.toString();
-    // Only log actual errors, not status messages
     if (msg.includes("ERROR") || msg.includes("WARN")) {
       console.error(`GStreamer idle preview: ${msg}`);
     }
@@ -960,27 +913,90 @@ app.get("/video/stream", async (req, res) => {
 
   gst.on("close", (code) => {
     console.log(`GStreamer idle preview exited with code ${code}`);
-    // Clear the current process if it's this one
     if (currentIdlePreviewProcess === gst) {
       currentIdlePreviewProcess = null;
     }
-    res.end();
   });
 
   gst.on("error", (err) => {
-    console.error("Failed to start GStreamer:", err);
-    // Clear the current process if it's this one
+    console.error("Failed to start GStreamer idle preview:", err);
     if (currentIdlePreviewProcess === gst) {
       currentIdlePreviewProcess = null;
     }
-    res.end();
   });
 
-  req.on("close", () => {
-    console.log("Client disconnected, killing GStreamer idle preview");
-    gst.kill();
-    // Process will be cleared in the 'close' event handler
+  // Wait for the TCP server to start listening
+  await new Promise((resolve) => setTimeout(resolve, 800));
+}
+
+// Video stream endpoint using MJPEG — proxies the persistent idle preview TCP server
+app.get("/video/stream", async (req, res) => {
+  console.log("New video stream connection requested");
+
+  // If streaming is active, don't try to access camera for idle preview
+  if (streamController.isStreaming) {
+    console.log("⚠️  Stream is active - preview should use HLS at /video/hls/playlist.m3u8");
+    res.status(503).send("Stream active - use HLS preview");
+    return;
+  }
+
+  // If no idle preview process is running, start one
+  if (!currentIdlePreviewProcess || currentIdlePreviewProcess.killed) {
+    console.log("📹 No idle preview running — starting persistent idle preview...");
+    await startPersistentIdlePreview();
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "multipart/x-mixed-replace; boundary=frame",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "*",
   });
+
+  // Connect to the persistent idle preview TCP server
+  const net = require("net");
+  let retries = 0;
+  const maxRetries = 5;
+
+  function connectToPreview() {
+    const client = net.connect({ port: IDLE_PREVIEW_PORT, host: "localhost" });
+
+    client.on("connect", () => {
+      console.log(`✅ Connected to idle preview TCP server on port ${IDLE_PREVIEW_PORT}`);
+    });
+
+    client.on("data", (data) => {
+      try {
+        res.write(data);
+      } catch (err) {
+        console.error("Error writing preview frame:", err.message);
+        client.destroy();
+      }
+    });
+
+    client.on("error", (err) => {
+      if (retries < maxRetries) {
+        retries++;
+        console.log(`⚠️  Preview TCP connection failed (attempt ${retries}/${maxRetries}): ${err.message}`);
+        setTimeout(connectToPreview, 500);
+      } else {
+        console.error(`❌ Could not connect to idle preview after ${maxRetries} attempts`);
+        res.end();
+      }
+    });
+
+    client.on("close", () => {
+      console.log("Preview TCP connection closed");
+      try { res.end(); } catch (e) { /* already ended */ }
+    });
+
+    req.on("close", () => {
+      console.log("Client disconnected from preview");
+      client.destroy();
+    });
+  }
+
+  connectToPreview();
 });
 
 // Socket.IO for real-time camera control
@@ -1125,14 +1141,10 @@ io.on("connection", (socket) => {
         // Wait for the first screenshot before restarting preview,
         // so the overlay is visible immediately (no flash of camera-only feed)
         if (!streamController.isStreaming) {
-          // Cancel any pending debounce restart — we'll restart once the screenshot is ready
           clearTimeout(idlePreviewRestartTimer);
-          const restartForOverlay = () => {
+          const restartForOverlay = async () => {
             console.log("📸 Remote screenshot ready — restarting idle preview to show overlay");
-            if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
-              currentIdlePreviewProcess.kill();
-              currentIdlePreviewProcess = null;
-            }
+            await startPersistentIdlePreview();
             io.emit("refreshIdlePreview");
           };
           const onUpdated = () => { clearTimeout(fallback); restartForOverlay(); };
@@ -1160,14 +1172,9 @@ io.on("connection", (socket) => {
     // Debounce to avoid restarting on every keystroke
     if (!streamController.isStreaming && !wantsRemote) {
       clearTimeout(idlePreviewRestartTimer);
-      idlePreviewRestartTimer = setTimeout(() => {
-        console.log(`📋 Debounce fired — config.remoteOverlayEnabled=${streamController.streamConfig.remoteOverlayEnabled}, overlayUrl=${streamController.streamConfig.overlayUrl}`);
-        if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
-          console.log("🔄 Restarting idle preview for overlay changes...");
-          currentIdlePreviewProcess.kill();
-          currentIdlePreviewProcess = null;
-        }
-        // Tell all clients to refresh their MJPEG preview
+      idlePreviewRestartTimer = setTimeout(async () => {
+        console.log(`📋 Debounce fired — restarting idle preview with updated overlay settings`);
+        await startPersistentIdlePreview();
         console.log("📡 Emitting refreshIdlePreview to clients");
         io.emit("refreshIdlePreview");
       }, 800);
@@ -1296,6 +1303,11 @@ server.listen(PORT, async () => {
       // No processes using camera
     }
 
+    // Also free the idle preview TCP port
+    try {
+      execSync(`fuser -k ${IDLE_PREVIEW_PORT}/tcp 2>/dev/null || true`);
+    } catch (e) { /* ignore */ }
+
     // Wait for device to be released
     await new Promise((resolve) => setTimeout(resolve, 1000));
     console.log("✅ Camera resources cleaned up");
@@ -1303,39 +1315,28 @@ server.listen(PORT, async () => {
     console.log("⚠️  Error during cleanup:", error.message);
   }
 
+  // Initialize stream controller (auto-start if configured)
+  try {
+    await streamController.initialize();
+  } catch (error) {
+    console.error("❌ Error initializing stream controller:", error.message);
+  }
+
   // Apply saved camera configuration on startup
   console.log("\n🚀 Initializing camera with saved configuration...");
   try {
-    // Activate the camera device first
+    // Activate the camera device first (runs v4l2-ctl --list-formats-ext)
     await camera.activateCamera();
 
-    // Start a temporary stream to wake up the camera for PTZ commands
-    console.log("📹 Starting temporary stream to activate camera PTZ...");
-    const { spawn } = require("child_process");
-    const tempStream = spawn("gst-launch-1.0", [
-      "v4l2src",
-      `device=${CAMERA_DEVICE}`,
-      "num-buffers=60",
-      "!",
-      "image/jpeg,width=1280,height=720,framerate=30/1",
-      "!",
-      "fakesink",
-    ]);
+    // Start the persistent idle preview immediately — this wakes up the camera
+    // AND provides preview to clients right away (no temp stream needed)
+    console.log("📹 Starting persistent idle preview to warm up camera...");
+    await startPersistentIdlePreview();
+    console.log("✅ Idle preview started — camera is active");
 
-    // Wait for stream to start
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    console.log("✅ Temporary stream started");
-
-    // Check current camera position before applying config
-    console.log("� Checking current camera position...");
-    const currentPan = await camera.getControl("pan_absolute");
-    const currentTilt = await camera.getControl("tilt_absolute");
-    const currentZoom = await camera.getControl("zoom_absolute");
-    console.log(
-      `📍 Current position: pan=${currentPan.value}, tilt=${currentTilt.value}, zoom=${currentZoom.value}`,
-    );
-
-    // Apply non-PTZ config settings (brightness, contrast, etc.)
+    // Apply camera settings while the preview is already running
+    // (v4l2-ctl commands work fine while another process has the camera open)
+    console.log("📸 Applying camera configuration...");
     await camera.applyConfig();
 
     // Apply startup position for PTZ (if set), overriding last known position
@@ -1346,39 +1347,8 @@ server.listen(PORT, async () => {
       console.log("📌 No startup position set, using last saved PTZ position from config");
     }
 
-    // Wait for camera to finish moving
-    console.log("⏳ Waiting for camera to finish moving...");
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-
-    // Verify the position was actually set
-    console.log("🔍 Verifying camera position after config...");
-    const verifyPan = await camera.getControl("pan_absolute");
-    const verifyTilt = await camera.getControl("tilt_absolute");
-    const verifyZoom = await camera.getControl("zoom_absolute");
-    console.log(
-      `📍 Final position: pan=${verifyPan.value}, tilt=${verifyTilt.value}, zoom=${verifyZoom.value}`,
-    );
-
-    // Stop the temporary stream and wait for it to actually exit
-    console.log("🛑 Stopping temporary stream...");
-    tempStream.kill("SIGTERM");
-    await new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        console.log("⚠️  Temporary stream didn't exit gracefully, sending SIGKILL...");
-        tempStream.kill("SIGKILL");
-        resolve();
-      }, 3000);
-      tempStream.on("close", () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-    });
-    // Extra wait for the kernel to release the device
+    // Brief wait for camera to finish moving, then sync position
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    console.log("✅ Temporary stream stopped");
-
-    // Sync pan/tilt position with actual camera position
-    console.log("📍 Syncing pan/tilt position...");
     await camera.syncPosition();
 
     cameraInitialized = true;
@@ -1386,13 +1356,6 @@ server.listen(PORT, async () => {
   } catch (error) {
     console.error("❌ Error initializing camera:", error.message);
     cameraInitialized = true; // Allow commands even if init failed
-  }
-
-  // Initialize stream controller (auto-start if configured)
-  try {
-    await streamController.initialize();
-  } catch (error) {
-    console.error("❌ Error initializing stream controller:", error.message);
   }
 
   // Start Puppeteer overlay on boot if remote overlay is configured
@@ -1410,6 +1373,8 @@ server.listen(PORT, async () => {
       puppeteerOverlay.setOverlayUrl(streamController.streamConfig.overlayUrl, { zoom: overlayZoom });
       puppeteerOverlay.startPeriodicRefresh();
       console.log("✅ Remote overlay ready for idle preview");
+      // Restart idle preview to include the overlay PNG
+      await startPersistentIdlePreview();
     } catch (err) {
       console.error("⚠️  Failed to start remote overlay on boot:", err.message);
     }
@@ -1490,8 +1455,14 @@ streamController.on("preparing", async () => {
     currentIdlePreviewProcess.kill("SIGTERM");
     currentIdlePreviewProcess = null;
     await new Promise((resolve) => setTimeout(resolve, 500));
-    console.log("✅ Idle preview killed");
   }
+  // Also free the TCP port
+  try {
+    const { execSync } = require("child_process");
+    execSync(`fuser -k ${IDLE_PREVIEW_PORT}/tcp 2>/dev/null || true`);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  } catch (e) { /* ignore */ }
+  console.log("✅ Idle preview killed");
 
   const hasUrlOverlay = streamController.streamConfig.remoteOverlayEnabled &&
     streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
@@ -1525,8 +1496,7 @@ streamController.on("preparing", async () => {
   }
 });
 
-// When stream stops, keep periodic refresh running if remote overlay is enabled
-// (so the idle preview can show it too)
+// When stream stops, restart the persistent idle preview and manage Puppeteer refresh
 streamController.on("stopped", async () => {
   const hasRemote = streamController.streamConfig.remoteOverlayEnabled &&
     streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
@@ -1536,6 +1506,12 @@ streamController.on("stopped", async () => {
   } else if (hasRemote) {
     console.log("ℹ️  Stream stopped, remote overlay active — keeping refresh for idle preview");
   }
+
+  // Restart the persistent idle preview so clients see the camera feed again
+  console.log("📹 Stream stopped — restarting persistent idle preview...");
+  // Brief delay to let the streaming process fully release the camera
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  await startPersistentIdlePreview();
 });
 
 
