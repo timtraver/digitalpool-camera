@@ -663,6 +663,17 @@ socket.on("streamResult", (result) => {
   }
 });
 
+// Idle preview refresh — server killed the preview, reconnect with updated settings
+socket.on("refreshIdlePreview", () => {
+  if (!isCurrentlyStreaming) {
+    console.log("🔄 Refreshing idle preview for overlay changes...");
+    // Small delay to let the old GStreamer process fully die
+    setTimeout(() => {
+      switchToMJPEGPreview();
+    }, 400);
+  }
+});
+
 // Preview refresh notification
 socket.on("previewRefreshNeeded", (data) => {
   console.log("Preview refresh needed:", data.message);

@@ -687,6 +687,7 @@ app.get("/video/tcp-preview", (req, res) => {
 
 // Track active idle preview process (only one at a time)
 let currentIdlePreviewProcess = null;
+let idlePreviewRestartTimer = null;
 
 // Video stream endpoint using MJPEG
 app.get("/video/stream", async (req, res) => {
@@ -795,8 +796,19 @@ app.get("/video/stream", async (req, res) => {
   // Always need a ! after videoconvert
   gstArgs.push("!");
 
+  // Check if the remote overlay PNG exists and should be shown
+  const pngOverlayPath = "/tmp/graphics-overlay.png";
+  const hasRemoteOverlay = config.remoteOverlayEnabled && config.overlayUrl && config.overlayUrl.trim();
+  let pngExists = false;
+  if (hasRemoteOverlay) {
+    try {
+      const fsStat = require("fs");
+      pngExists = fsStat.existsSync(pngOverlayPath) && fsStat.statSync(pngOverlayPath).size > 100;
+    } catch (e) { /* ignore */ }
+  }
+
   // Add overlays if any individual overlay is enabled (using EXACT same structure as streaming pipeline)
-  const hasAnyOverlay = config.overlayEnabled || config.showTimestamp;
+  const hasAnyOverlay = config.overlayEnabled || config.showTimestamp || (hasRemoteOverlay && pngExists);
   if (hasAnyOverlay) {
 
     // Add timestamp overlay if enabled (matches streamController.js exactly)
@@ -883,6 +895,18 @@ app.get("/video/stream", async (req, res) => {
         `location=${config.logoPath}`,
         "offset-x=20",
         "offset-y=20",
+        "!"
+      );
+    }
+
+    // Add remote overlay PNG (Puppeteer screenshot) if enabled and file exists
+    if (hasRemoteOverlay && pngExists) {
+      console.log(`📸 Adding remote overlay PNG to idle preview: ${pngOverlayPath}`);
+      gstArgs.push(
+        "gdkpixbufoverlay",
+        `location=${pngOverlayPath}`,
+        "overlay-width=1280",
+        "overlay-height=720",
         "!"
       );
     }
@@ -1072,12 +1096,15 @@ io.on("connection", (socket) => {
       gameState.overlayBackground = overlayConfig.overlayBackground;
     }
 
-    // Handle remote overlay enable/disable
-    if (puppeteerOverlay) {
-      const wantsRemote = overlayConfig.remoteOverlayEnabled &&
-        overlayConfig.overlayUrl && overlayConfig.overlayUrl.trim();
-      if (wantsRemote) {
-        // Enable remote overlay
+    // Handle remote overlay enable/disable (create PuppeteerOverlay if needed)
+    const wantsRemote = overlayConfig.remoteOverlayEnabled &&
+      overlayConfig.overlayUrl && overlayConfig.overlayUrl.trim();
+    if (wantsRemote) {
+      // Create PuppeteerOverlay instance if it doesn't exist yet
+      if (!puppeteerOverlay && PuppeteerOverlay) {
+        puppeteerOverlay = new PuppeteerOverlay();
+      }
+      if (puppeteerOverlay) {
         if (!puppeteerOverlay.isRunning) {
           await puppeteerOverlay.initialize(PORT);
         }
@@ -1085,14 +1112,29 @@ io.on("connection", (socket) => {
           zoom: overlayConfig.overlayZoom,
         });
         puppeteerOverlay.startPeriodicRefresh();
-      } else if (overlayConfig.remoteOverlayEnabled === false) {
-        // Remote overlay was explicitly turned off — clear the PNG
-        puppeteerOverlay.setOverlayUrl(null);
       }
+    } else if (overlayConfig.remoteOverlayEnabled === false && puppeteerOverlay) {
+      // Remote overlay was explicitly turned off — clear the PNG
+      puppeteerOverlay.setOverlayUrl(null);
     }
 
     // Write updated state to JSON file
     regenerateOverlay();
+
+    // If NOT streaming, restart the idle preview so changes are visible immediately
+    // Debounce to avoid restarting on every keystroke
+    if (!streamController.isStreaming) {
+      clearTimeout(idlePreviewRestartTimer);
+      idlePreviewRestartTimer = setTimeout(() => {
+        if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
+          console.log("🔄 Restarting idle preview for overlay changes...");
+          currentIdlePreviewProcess.kill();
+          currentIdlePreviewProcess = null;
+        }
+        // Tell all clients to refresh their MJPEG preview
+        io.emit("refreshIdlePreview");
+      }, 800);
+    }
 
     socket.emit("overlayResult", result);
   });
@@ -1315,6 +1357,26 @@ server.listen(PORT, async () => {
   } catch (error) {
     console.error("❌ Error initializing stream controller:", error.message);
   }
+
+  // Start Puppeteer overlay on boot if remote overlay is configured
+  // (so idle preview can show it even before first stream)
+  const hasRemoteOnBoot = streamController.streamConfig.remoteOverlayEnabled &&
+    streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
+  if (hasRemoteOnBoot && PuppeteerOverlay) {
+    try {
+      console.log("🌍 Remote overlay configured — starting Puppeteer for idle preview...");
+      if (!puppeteerOverlay) {
+        puppeteerOverlay = new PuppeteerOverlay();
+      }
+      await puppeteerOverlay.initialize(PORT);
+      const overlayZoom = streamController.streamConfig.overlayZoom || 100;
+      puppeteerOverlay.setOverlayUrl(streamController.streamConfig.overlayUrl, { zoom: overlayZoom });
+      puppeteerOverlay.startPeriodicRefresh();
+      console.log("✅ Remote overlay ready for idle preview");
+    } catch (err) {
+      console.error("⚠️  Failed to start remote overlay on boot:", err.message);
+    }
+  }
 });
 
 // Proxy routes for digitalpool.com (MUST be last to not interfere with our API routes)
@@ -1431,12 +1493,17 @@ streamController.on("preparing", async () => {
   }
 });
 
-// Stop periodic refresh when stream stops, but keep renderer ready
+// When stream stops, keep periodic refresh running if remote overlay is enabled
+// (so the idle preview can show it too)
 streamController.on("stopped", async () => {
-  if (puppeteerOverlay) {
+  const hasRemote = streamController.streamConfig.remoteOverlayEnabled &&
+    streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
+  if (puppeteerOverlay && !hasRemote) {
     puppeteerOverlay._stopPeriodicRefresh();
+    console.log("ℹ️  Stream stopped, no remote overlay — pausing refresh");
+  } else if (hasRemote) {
+    console.log("ℹ️  Stream stopped, remote overlay active — keeping refresh for idle preview");
   }
-  console.log("ℹ️  Stream stopped (overlay renderer stays ready for next stream)");
 });
 
 
