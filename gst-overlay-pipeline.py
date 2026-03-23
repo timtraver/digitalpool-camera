@@ -97,9 +97,10 @@ def main():
         f"! video/x-h264,stream-format=byte-stream "
         f'! h264parse config-interval=-1 '
         # Thread boundary before mux to decouple encoder from network I/O
-        f'! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
+        # Larger buffer (1s of frames) absorbs spikes from PNG overlay reloads
+        f'! queue max-size-buffers=0 max-size-time=1000000000 max-size-bytes=0 leaky=downstream '
         f'! mpegtsmux name=mux alignment=7 '
-        f'! srtsink uri="srt://:{srt_port}" wait-for-connection=false latency=125 '
+        f'! srtsink uri="srt://:{srt_port}" wait-for-connection=false latency=125 sync=false async=false '
         + (
             # Audio branch: fully isolated in its own thread
             # The queue right after alsasrc caps ensures audio capture+encode
@@ -155,8 +156,8 @@ def main():
             pass  # File doesn't exist yet or was briefly removed during atomic write
         return True  # Keep the timer running
 
-    # Check for PNG updates every 500ms
-    GLib.timeout_add(500, check_png_update)
+    # Check for PNG updates every 2 seconds (screenshot only changes every 5s)
+    GLib.timeout_add(2000, check_png_update)
 
     # Handle pipeline messages
     bus = pipeline.get_bus()

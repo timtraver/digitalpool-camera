@@ -814,8 +814,8 @@ class StreamController extends EventEmitter {
         "t2.",
         "!",
         "queue",
-        "max-size-buffers=2", // Minimal buffering for low latency
-        "max-size-time=0",
+        "max-size-buffers=0", // Use time-based buffering
+        "max-size-time=1000000000", // 1 second buffer to absorb processing spikes
         "max-size-bytes=0",
         "leaky=downstream", // Drop old frames if queue is full
         "!",
@@ -827,6 +827,8 @@ class StreamController extends EventEmitter {
         "uri=srt://:8891", // Listen on all interfaces, port 8891
         "wait-for-connection=false", // Don't block pipeline waiting for client
         "latency=125", // Latency in milliseconds
+        "sync=false", // Don't sync to clock — prevents cascading lag from processing spikes
+        "async=false", // Don't wait for preroll
       );
 
       // Add audio branch into the mux if enabled
