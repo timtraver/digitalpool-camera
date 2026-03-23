@@ -235,24 +235,14 @@ class PuppeteerOverlay extends EventEmitter {
 
     const chromiumPath = this._findChromiumPath();
     console.log(`🚀 Launching headless Chromium for URL overlay (${chromiumPath})...`);
+    // Minimal flags only — proven stable on ARM64 with Chromium 114 + puppeteer-core 20.9
     this._browser = await puppeteer.launch({
       executablePath: chromiumPath,
-      headless: "new", // Use new headless mode (more stable on ARM64)
-      timeout: 60000, // Allow up to 60s for Chromium to start on ARM64
-      protocolTimeout: 60000,
+      headless: true,
       args: [
         "--no-sandbox",
-        "--disable-setuid-sandbox",
         "--disable-gpu",
         "--disable-dev-shm-usage",
-        "--disable-software-rasterizer",
-        "--disable-extensions",
-        "--disable-background-networking",
-        "--disable-sync",
-        "--no-first-run",
-        "--disable-translate",
-        "--disable-default-apps",
-        "--js-flags=--max-old-space-size=128", // Limit JS heap to 128MB
       ],
     });
 
@@ -294,9 +284,10 @@ class PuppeteerOverlay extends EventEmitter {
   }
 
   /**
-   * Render a remote URL overlay using Puppeteer (headless Chromium).
-   * First load uses goto() with networkidle0; subsequent refreshes just reload
-   * the same page and re-screenshot, reusing the single browser instance.
+   * Render a remote URL overlay using Puppeteer (persistent headless Chromium).
+   * The browser stays alive between screenshots. The overlay page maintains its
+   * own WebSocket/subscription for real-time score updates — we just screenshot
+   * the current page state periodically. No reload, no re-navigation.
    */
   async _renderUrlOverlay() {
     if (this._renderInProgress) {
@@ -308,9 +299,8 @@ class PuppeteerOverlay extends EventEmitter {
     try {
       await this._ensureBrowser();
 
-      // First load only: navigate to the URL and wait for JS to finish.
-      // After that, NEVER reload — just screenshot the live page.
-      // The overlay page updates itself via JS/fetch/websockets.
+      // First load only: navigate to the URL and wait for JS/React to render.
+      // After that, NEVER reload — the page updates itself via subscriptions.
       if (this._currentLoadedUrl !== this._overlayUrl) {
         console.log(`🌍 Navigating to overlay URL: ${this._overlayUrl}`);
         await this._page.goto(this._overlayUrl, {
@@ -318,43 +308,24 @@ class PuppeteerOverlay extends EventEmitter {
           timeout: 30000,
         });
         this._currentLoadedUrl = this._overlayUrl;
-
-        // Apply CSS zoom once after first load
-        if (this._zoom !== 100) {
-          await this._page.evaluate((zoom) => {
-            document.body.style.zoom = (zoom / 100).toString();
-          }, this._zoom);
-        }
-
-        // Wait extra time for JS frameworks to finish initial render
-        await new Promise(r => setTimeout(r, this._jsDelay));
       }
 
-      // Just screenshot the current page state — no reload needed.
-      // We avoid omitBackground:true because it crashes Chromium on ARM64.
-      // Instead, inject a green background and chroma-key it to transparent.
-      await this._page.evaluate(() => {
-        document.body.style.backgroundColor = "rgb(0,255,0)";
-        document.documentElement.style.backgroundColor = "rgb(0,255,0)";
-      });
-
+      // Screenshot the current page state (overlay updates via its own subscription)
+      const tempOutput = this.pngPath + ".tmp";
       await this._page.screenshot({
-        path: this.rawPngPath,
+        path: tempOutput,
         type: "png",
-        fullPage: false,
-        omitBackground: false,
+        omitBackground: true, // Transparent background for overlay compositing
       });
 
-      // Chroma-key green → transparent using ImageMagick, then atomic rename
-      await this._chromaKeyAndSave();
+      // Atomic rename so GStreamer doesn't read a half-written file
+      fs.renameSync(tempOutput, this.pngPath);
 
       console.log(`📸 URL overlay PNG updated from: ${this._overlayUrl}`);
       this.emit("updated", this.pngPath);
     } catch (err) {
       console.error("❌ Failed to render URL overlay:", err.message);
-      // Only tear down the browser if it actually crashed/disconnected.
-      // Recoverable errors (timeouts, navigation failures) should NOT kill
-      // Chromium — restarting it on ARM64 is very expensive (~5-10s).
+      // If browser crashed, null refs so _ensureBrowser relaunches next cycle
       if (this._browser && !this._browser.connected) {
         console.warn("💀 Chromium crashed — will relaunch on next cycle");
         this._browser = null;
@@ -558,9 +529,10 @@ class PuppeteerOverlay extends EventEmitter {
   /**
    * Promise wrapper around execFile
    */
-  _execPromise(cmd, args) {
+  _execPromise(cmd, args, opts = {}) {
     return new Promise((resolve, reject) => {
-      execFile(cmd, args, { timeout: 30000 }, (err, stdout, stderr) => {
+      const timeout = opts.timeout || 30000;
+      execFile(cmd, args, { timeout }, (err, stdout, stderr) => {
         if (err) {
           reject(new Error(`${cmd} failed: ${err.message}\n${stderr}`));
         } else {
