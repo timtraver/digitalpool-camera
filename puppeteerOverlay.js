@@ -123,21 +123,30 @@ class PuppeteerOverlay extends EventEmitter {
 
     console.log(`🔄 Starting periodic overlay refresh every ${this._refreshIntervalMs}ms`);
 
-    // Do an immediate first render
-    this._renderUrlOverlay();
+    // Use recursive setTimeout instead of setInterval.
+    // This ensures the next cycle only starts AFTER the current render completes,
+    // preventing timer overlap when renders take longer than the interval.
+    this._refreshActive = true;
+    const scheduleNext = () => {
+      if (!this._refreshActive) return;
+      this._refreshTimer = setTimeout(async () => {
+        if (!this._refreshActive) return;
+        await this._renderUrlOverlay();
+        scheduleNext();
+      }, this._refreshIntervalMs);
+    };
 
-    // Then set up the interval
-    this._refreshTimer = setInterval(() => {
-      this._renderUrlOverlay();
-    }, this._refreshIntervalMs);
+    // Do an immediate first render, then start the cycle
+    this._renderUrlOverlay().then(() => scheduleNext());
   }
 
   /**
    * Stop periodic refresh.
    */
   _stopPeriodicRefresh() {
+    this._refreshActive = false;
     if (this._refreshTimer) {
-      clearInterval(this._refreshTimer);
+      clearTimeout(this._refreshTimer);
       this._refreshTimer = null;
       console.log("⏹️  Periodic overlay refresh stopped");
     }
@@ -236,13 +245,23 @@ class PuppeteerOverlay extends EventEmitter {
     const chromiumPath = this._findChromiumPath();
     console.log(`🚀 Launching headless Chromium for URL overlay (${chromiumPath})...`);
     // Minimal flags only — proven stable on ARM64 with Chromium 114 + puppeteer-core 20.9
+    // pipe:false → use WebSocket transport instead of stdio pipes.
+    // Pipes can be disrupted when the Node process has many child processes
+    // (GStreamer, ImageMagick) competing for stdio resources.
     this._browser = await puppeteer.launch({
       executablePath: chromiumPath,
       headless: true,
+      pipe: false,
       args: [
         "--no-sandbox",
         "--disable-gpu",
         "--disable-dev-shm-usage",
+        "--disable-background-networking",
+        "--disable-extensions",
+        "--disable-sync",
+        "--disable-translate",
+        "--metrics-recording-only",
+        "--no-first-run",
       ],
     });
 
