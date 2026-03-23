@@ -34,6 +34,13 @@ class StreamController extends EventEmitter {
       overlayColor: "white",
       overlayBackground: "transparent",
       overlayBackgroundOpacity: 70,
+      // Per-element formatting
+      titleFontSize: 32,
+      titleColor: "white",
+      titleBackground: "transparent",
+      timestampFontSize: 24,
+      timestampColor: "white",
+      timestampBackground: "transparent",
       // Legacy fields
       timestampFormat: "%Y-%m-%d %H:%M:%S",
       logoPath: "", // Path to logo image overlay

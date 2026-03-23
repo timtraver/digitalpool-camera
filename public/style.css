@@ -800,9 +800,9 @@ header h1 {
   background: none;
   border: 1px solid rgba(18, 199, 255, 0.3);
   color: rgba(255, 255, 255, 0.6);
-  border-radius: 3px;
-  padding: 1px 5px;
-  font-size: 11px;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 16px;
   cursor: pointer;
   line-height: 1;
   margin-left: auto;
@@ -867,20 +867,14 @@ header h1 {
   min-width: 70px;
 }
 .fmt-number {
-  width: 48px;
-  font-size: 10px;
-  padding: 4px 4px;
+  width: 52px;
+  font-size: 11px;
+  padding: 3px 4px;
   background: #1a1a1a;
   border: 1px solid #1890ff;
   border-radius: 6px;
   color: white;
   text-align: center;
-  -moz-appearance: textfield;
-}
-.fmt-number::-webkit-inner-spin-button,
-.fmt-number::-webkit-outer-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
 }
 .fmt-text {
   width: 120px;
