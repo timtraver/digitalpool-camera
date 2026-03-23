@@ -795,8 +795,17 @@ const overlayUrl = document.getElementById("overlayUrl");
 const timestampPosition = document.getElementById("timestampPosition");
 const timestampFormat = document.getElementById("timestampFormat");
 const titlePosition = document.getElementById("titlePosition");
+// Per-element formatting controls
+const titleFontSize = document.getElementById("titleFontSize");
+const titleFontSizeValue = document.getElementById("titleFontSizeValue");
+const titleColor = document.getElementById("titleColor");
+const titleBackground = document.getElementById("titleBackground");
+const timestampFontSize = document.getElementById("timestampFontSize");
+const timestampFontSizeValue = document.getElementById("timestampFontSizeValue");
+const timestampColor = document.getElementById("timestampColor");
+const timestampBackground = document.getElementById("timestampBackground");
+// Hidden backward-compat fields (synced from per-element values)
 const overlayFontSize = document.getElementById("overlayFontSize");
-const fontSizeValue = document.getElementById("fontSizeValue");
 const overlayColor = document.getElementById("overlayColor");
 const overlayBackground = document.getElementById("overlayBackground");
 const remoteOverlayEnabled = document.getElementById("remoteOverlayEnabled");
@@ -804,7 +813,8 @@ const overlayZoom = document.getElementById("overlayZoom");
 const overlayZoomValue = document.getElementById("overlayZoomValue");
 const titleOptions = document.getElementById("titleOptions");
 const timestampOptions = document.getElementById("timestampOptions");
-const textStyleOptions = document.getElementById("textStyleOptions");
+const titleFormatToggle = document.getElementById("titleFormatToggle");
+const timestampFormatToggle = document.getElementById("timestampFormatToggle");
 
 // Initialize custom dropdowns for ALL select elements
 console.log("🎨 Initializing custom dropdowns...");
@@ -813,9 +823,11 @@ console.log("🎨 Initializing custom dropdowns...");
 createCustomDropdown(timestampPosition);
 createCustomDropdown(titlePosition);
 
-// Overlay style dropdowns
-createCustomDropdown(overlayColor);
-createCustomDropdown(overlayBackground);
+// Per-element style dropdowns
+createCustomDropdown(titleColor);
+createCustomDropdown(titleBackground);
+createCustomDropdown(timestampColor);
+createCustomDropdown(timestampBackground);
 
 // Stream control dropdowns
 createCustomDropdown(streamProtocol);
@@ -1004,6 +1016,14 @@ let currentOverlayConfig = {
   overlayUrl: "",
   timestampPosition: "bottom-right",
   titlePosition: "top-left",
+  // Per-element formatting
+  titleFontSize: 32,
+  titleColor: "white",
+  titleBackground: "transparent",
+  timestampFontSize: 24,
+  timestampColor: "white",
+  timestampBackground: "transparent",
+  // Legacy shared (kept for backward compat with server)
   overlayFontSize: 32,
   overlayColor: "white",
   overlayBackground: "transparent",
@@ -1071,18 +1091,23 @@ function updateCanvasSize() {
 
 // Helper: show/hide sub-options based on checkbox state
 function updateOverlayVisibility() {
-  // Title sub-options
-  titleOptions.style.display = overlayEnabled.checked ? "" : "none";
-  // Timestamp sub-options
-  timestampOptions.style.display = showTimestamp.checked ? "" : "none";
-  // Text style section visible if either title or timestamp is on
-  textStyleOptions.style.display =
-    (overlayEnabled.checked || showTimestamp.checked) ? "" : "none";
   // Remote overlay URL options - always visible, but dimmed when unchecked
   urlOverlayOptions.style.opacity = remoteOverlayEnabled.checked ? "1" : "0.4";
   urlOverlayOptions.style.pointerEvents = remoteOverlayEnabled.checked ? "" : "none";
 }
 updateOverlayVisibility();
+
+// Format toggle buttons — click to expand/collapse per-element formatting
+titleFormatToggle.addEventListener("click", () => {
+  const open = titleOptions.style.display === "none";
+  titleOptions.style.display = open ? "" : "none";
+  titleFormatToggle.classList.toggle("active", open);
+});
+timestampFormatToggle.addEventListener("click", () => {
+  const open = timestampOptions.style.display === "none";
+  timestampOptions.style.display = open ? "" : "none";
+  timestampFormatToggle.classList.toggle("active", open);
+});
 
 // Canvas overlay redraw disabled - overlays now rendered by GStreamer only
 // setInterval(() => {
@@ -1207,25 +1232,12 @@ function drawUrlOverlay() {
 function drawTextOverlay() {
   // Scale font size based on canvas width (assuming 1920px base)
   const scale = overlayCanvas.width / 1920 || 1;
-  const fontSize = Math.floor(currentOverlayConfig.overlayFontSize * scale);
-  const smallFontSize = Math.floor(fontSize * 0.75);
   const padding = 20 * scale;
 
-  // console.log("Scale:", scale, "fontSize:", fontSize, "padding:", padding); // Removed - floods console at 5fps
-
-  // Get background color (transparent or shaded)
-  function getBackgroundColor() {
-    switch (currentOverlayConfig.overlayBackground) {
-      case "transparent":
-        return "rgba(0, 0, 0, 0)";
-      case "shaded":
-        return "rgba(0, 0, 0, 0.7)"; // Match GStreamer's shaded-background opacity
-      default:
-        return "rgba(0, 0, 0, 0)";
-    }
+  // Get background color for a given setting
+  function getBackgroundColor(bgSetting) {
+    return bgSetting === "shaded" ? "rgba(0, 0, 0, 0.7)" : "rgba(0, 0, 0, 0)";
   }
-
-  const bgColor = getBackgroundColor();
 
   // Helper function to calculate position from position string
   function getPositionCoords(position) {
@@ -1259,9 +1271,10 @@ function drawTextOverlay() {
     return { xPos, yPos, textAlign, textBaseline };
   }
 
-  // Helper function to draw single text element
-  function drawSingleText(text, font, position) {
+  // Helper function to draw single text element with per-element styling
+  function drawSingleText(text, font, position, color, bgSetting) {
     const { xPos, yPos, textAlign, textBaseline } = getPositionCoords(position);
+    const bgColor = getBackgroundColor(bgSetting);
 
     ctx.textAlign = textAlign;
     ctx.textBaseline = textBaseline;
@@ -1269,7 +1282,7 @@ function drawTextOverlay() {
 
     const metrics = ctx.measureText(text);
     const textWidth = metrics.width;
-    const textHeight = fontSize;
+    const fSize = parseInt(font.match(/([0-9]+)px/)?.[1] || "16");
 
     // Calculate background rectangle
     let bgX, bgY, bgWidth, bgHeight;
@@ -1287,13 +1300,13 @@ function drawTextOverlay() {
 
     if (textBaseline === "top") {
       bgY = yPos - padding / 4;
-      bgHeight = textHeight + padding / 2;
+      bgHeight = fSize + padding / 2;
     } else if (textBaseline === "bottom") {
-      bgY = yPos - textHeight - padding / 4;
-      bgHeight = textHeight + padding / 2;
+      bgY = yPos - fSize - padding / 4;
+      bgHeight = fSize + padding / 2;
     } else {
-      bgY = yPos - textHeight / 2 - padding / 4;
-      bgHeight = textHeight + padding / 2;
+      bgY = yPos - fSize / 2 - padding / 4;
+      bgHeight = fSize + padding / 2;
     }
 
     // Draw background if not transparent
@@ -1303,32 +1316,33 @@ function drawTextOverlay() {
     }
 
     // Draw text
-    ctx.fillStyle = currentOverlayConfig.overlayColor;
+    ctx.fillStyle = color;
     ctx.fillText(text, xPos, yPos);
-
-    // console.log(`Drew text "${text}" at position ${position} (${xPos}, ${yPos})`); // Removed - floods console at 5fps
   }
 
   // Draw timestamp if enabled
   if (currentOverlayConfig.showTimestamp) {
     const now = new Date();
     const timestamp = now.toLocaleString();
-    console.log(
-      `🕐 Drawing timestamp at position: ${currentOverlayConfig.timestampPosition}`,
-    );
+    const tsFontSize = Math.floor((currentOverlayConfig.timestampFontSize || 24) * scale);
     drawSingleText(
       timestamp,
-      `bold ${smallFontSize}px Sans-serif`,
+      `bold ${tsFontSize}px Sans-serif`,
       currentOverlayConfig.timestampPosition,
+      currentOverlayConfig.timestampColor || "white",
+      currentOverlayConfig.timestampBackground || "transparent",
     );
   }
 
   // Draw main text (title)
   if (currentOverlayConfig.overlayText) {
+    const titleFs = Math.floor((currentOverlayConfig.titleFontSize || 32) * scale);
     drawSingleText(
       currentOverlayConfig.overlayText,
-      `bold ${fontSize}px Sans-serif`,
+      `bold ${titleFs}px Sans-serif`,
       currentOverlayConfig.titlePosition,
+      currentOverlayConfig.titleColor || "white",
+      currentOverlayConfig.titleBackground || "transparent",
     );
   }
 
@@ -1350,9 +1364,17 @@ function applyOverlaySettings() {
     timestampPosition: timestampPosition.value,
     timestampFormat: timestampFormat.value,
     titlePosition: titlePosition.value,
-    overlayFontSize: parseInt(overlayFontSize.value),
-    overlayColor: overlayColor.value,
-    overlayBackground: overlayBackground.value,
+    // Per-element formatting
+    titleFontSize: parseInt(titleFontSize.value),
+    titleColor: titleColor.value,
+    titleBackground: titleBackground.value,
+    timestampFontSize: parseInt(timestampFontSize.value),
+    timestampColor: timestampColor.value,
+    timestampBackground: timestampBackground.value,
+    // Legacy shared fields (backward compat)
+    overlayFontSize: parseInt(titleFontSize.value),
+    overlayColor: titleColor.value,
+    overlayBackground: titleBackground.value,
     overlayZoom: parseInt(overlayZoom.value),
   };
 
@@ -1414,26 +1436,48 @@ timestampFormat.addEventListener("input", () => {
   }, 500);
 });
 
-// Apply font size changes after user stops dragging (debounce)
-let fontSizeTimeout;
-overlayFontSize.addEventListener("input", () => {
-  fontSizeValue.textContent = overlayFontSize.value + "px";
-  currentOverlayConfig.overlayFontSize = parseInt(overlayFontSize.value);
+// Per-element font size changes (debounced)
+let titleFontSizeTimeout;
+titleFontSize.addEventListener("input", () => {
+  titleFontSizeValue.textContent = titleFontSize.value + "px";
+  currentOverlayConfig.titleFontSize = parseInt(titleFontSize.value);
+  currentOverlayConfig.overlayFontSize = parseInt(titleFontSize.value); // sync legacy
   drawOverlay();
-  clearTimeout(fontSizeTimeout);
-  fontSizeTimeout = setTimeout(() => {
-    applyOverlaySettings();
-  }, 500);
+  clearTimeout(titleFontSizeTimeout);
+  titleFontSizeTimeout = setTimeout(() => { applyOverlaySettings(); }, 500);
 });
 
-overlayColor.addEventListener("change", () => {
-  currentOverlayConfig.overlayColor = overlayColor.value;
+let tsFontSizeTimeout;
+timestampFontSize.addEventListener("input", () => {
+  timestampFontSizeValue.textContent = timestampFontSize.value + "px";
+  currentOverlayConfig.timestampFontSize = parseInt(timestampFontSize.value);
+  drawOverlay();
+  clearTimeout(tsFontSizeTimeout);
+  tsFontSizeTimeout = setTimeout(() => { applyOverlaySettings(); }, 500);
+});
+
+// Per-element color changes
+titleColor.addEventListener("change", () => {
+  currentOverlayConfig.titleColor = titleColor.value;
+  currentOverlayConfig.overlayColor = titleColor.value; // sync legacy
+  drawOverlay();
+  applyOverlaySettings();
+});
+timestampColor.addEventListener("change", () => {
+  currentOverlayConfig.timestampColor = timestampColor.value;
   drawOverlay();
   applyOverlaySettings();
 });
 
-overlayBackground.addEventListener("change", () => {
-  currentOverlayConfig.overlayBackground = overlayBackground.value;
+// Per-element background changes
+titleBackground.addEventListener("change", () => {
+  currentOverlayConfig.titleBackground = titleBackground.value;
+  currentOverlayConfig.overlayBackground = titleBackground.value; // sync legacy
+  drawOverlay();
+  applyOverlaySettings();
+});
+timestampBackground.addEventListener("change", () => {
+  currentOverlayConfig.timestampBackground = timestampBackground.value;
   drawOverlay();
   applyOverlaySettings();
 });
@@ -1515,14 +1559,32 @@ socket.on("streamStatus", (status) => {
     updateCustomDropdownDisplay(timestampPosition);
     updateCustomDropdownDisplay(titlePosition);
 
-    overlayFontSize.value = status.config.overlayFontSize || 32;
-    fontSizeValue.textContent = overlayFontSize.value + "px";
+    // Per-element formatting — fall back to legacy shared values if per-element not saved yet
+    const savedTitleFontSize = status.config.titleFontSize || status.config.overlayFontSize || 32;
+    const savedTitleColor = status.config.titleColor || status.config.overlayColor || "white";
+    const savedTitleBg = status.config.titleBackground || status.config.overlayBackground || "transparent";
+    const savedTsFontSize = status.config.timestampFontSize || Math.round((status.config.overlayFontSize || 32) * 0.75);
+    const savedTsColor = status.config.timestampColor || status.config.overlayColor || "white";
+    const savedTsBg = status.config.timestampBackground || status.config.overlayBackground || "transparent";
 
-    overlayColor.value = status.config.overlayColor || "white";
-    updateCustomDropdownDisplay(overlayColor);
+    titleFontSize.value = savedTitleFontSize;
+    titleFontSizeValue.textContent = savedTitleFontSize + "px";
+    titleColor.value = savedTitleColor;
+    updateCustomDropdownDisplay(titleColor);
+    titleBackground.value = savedTitleBg;
+    updateCustomDropdownDisplay(titleBackground);
 
-    overlayBackground.value = status.config.overlayBackground || "transparent";
-    updateCustomDropdownDisplay(overlayBackground);
+    timestampFontSize.value = savedTsFontSize;
+    timestampFontSizeValue.textContent = savedTsFontSize + "px";
+    timestampColor.value = savedTsColor;
+    updateCustomDropdownDisplay(timestampColor);
+    timestampBackground.value = savedTsBg;
+    updateCustomDropdownDisplay(timestampBackground);
+
+    // Sync hidden legacy fields
+    overlayFontSize.value = savedTitleFontSize;
+    overlayColor.value = savedTitleColor;
+    overlayBackground.value = savedTitleBg;
 
     // Update visibility based on loaded state
     updateOverlayVisibility();
@@ -1538,9 +1600,15 @@ socket.on("streamStatus", (status) => {
       timestampPosition: status.config.timestampPosition || "bottom-right",
       timestampFormat: status.config.timestampFormat || "%Y-%m-%d %H:%M:%S",
       titlePosition: status.config.titlePosition || "top-left",
-      overlayFontSize: status.config.overlayFontSize || 32,
-      overlayColor: status.config.overlayColor || "white",
-      overlayBackground: status.config.overlayBackground || "transparent",
+      titleFontSize: savedTitleFontSize,
+      titleColor: savedTitleColor,
+      titleBackground: savedTitleBg,
+      timestampFontSize: savedTsFontSize,
+      timestampColor: savedTsColor,
+      timestampBackground: savedTsBg,
+      overlayFontSize: savedTitleFontSize,
+      overlayColor: savedTitleColor,
+      overlayBackground: savedTitleBg,
       overlayZoom: status.config.overlayZoom || 100,
     };
     drawOverlay();

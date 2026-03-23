@@ -518,10 +518,18 @@ class StreamController extends EventEmitter {
     const srtPort = destination ? destination.split(':')[1] : '8891';
     const pngPath = "/tmp/graphics-overlay.png";
 
-    // Scale font size the same way the text-only pipeline does (1.5x for 1080p)
-    const scaledFontSize = Math.round((this.streamConfig.overlayFontSize || 32) * 1.5);
-    const overlayColor = this._colorToInt(this.streamConfig.overlayColor || "white");
-    const overlayBackground = this.streamConfig.overlayBackground || "transparent";
+    // Per-element formatting (fall back to legacy shared values)
+    const titleFs = this.streamConfig.titleFontSize || this.streamConfig.overlayFontSize || 32;
+    const titleColor = this._colorToInt(this.streamConfig.titleColor || this.streamConfig.overlayColor || "white");
+    const titleBackground = this.streamConfig.titleBackground || this.streamConfig.overlayBackground || "transparent";
+    const tsFs = this.streamConfig.timestampFontSize || Math.round((this.streamConfig.overlayFontSize || 32) * 0.75);
+    const tsColor = this._colorToInt(this.streamConfig.timestampColor || this.streamConfig.overlayColor || "white");
+    const tsBackground = this.streamConfig.timestampBackground || this.streamConfig.overlayBackground || "transparent";
+
+    // Scale font sizes the same way the text-only pipeline does (1.5x for 1080p)
+    const scaledTitleFontSize = Math.round(titleFs * 1.5);
+    const scaledTsFontSize = Math.round(tsFs * 1.5);
+
     const timestampFormat = this.streamConfig.timestampFormat || "%Y-%m-%d %H:%M:%S";
     const titlePosition = this.streamConfig.titlePosition || "top-left";
     const timestampPosition = this.streamConfig.timestampPosition || "bottom-right";
@@ -546,13 +554,17 @@ class StreamController extends EventEmitter {
       pngPath,
       effectiveOverlayText,
       effectiveShowTimestamp,
-      scaledFontSize.toString(),
-      overlayColor.toString(),
-      overlayBackground,
+      scaledTitleFontSize.toString(),
+      titleColor.toString(),
+      titleBackground,
       timestampFormat,
       titlePosition,
       timestampPosition,
       audioDevice,
+      // Per-element timestamp formatting (new args)
+      scaledTsFontSize.toString(),
+      tsColor.toString(),
+      tsBackground,
     ];
 
     return {
@@ -608,7 +620,7 @@ class StreamController extends EventEmitter {
       // Convert to format suitable for textoverlay
       pipeline.push("videoconvert", "!");
 
-      // Add timestamp overlay if enabled
+      // Add timestamp overlay if enabled (per-element formatting)
       if (this.streamConfig.showTimestamp) {
         const tsPosition =
           this.streamConfig.timestampPosition || "bottom-right";
@@ -618,23 +630,22 @@ class StreamController extends EventEmitter {
         const halign =
           hpos === "left" ? "left" : hpos === "right" ? "right" : "center";
 
-        // Scale font size for 1920x1080 output (web preview uses scaled size for 1280x720)
-        const scaledFontSize = Math.round(
-          this.streamConfig.overlayFontSize * 1.5,
-        );
+        // Per-element font size (fall back to legacy shared value)
+        const tsFs = this.streamConfig.timestampFontSize || Math.round((this.streamConfig.overlayFontSize || 32) * 0.75);
+        const scaledFontSize = Math.round(tsFs * 1.5);
+        const tsColor = this.streamConfig.timestampColor || this.streamConfig.overlayColor || "white";
+        const tsBg = this.streamConfig.timestampBackground || this.streamConfig.overlayBackground || "transparent";
 
-        // Use clockoverlay to show actual time instead of timeoverlay (stream duration)
         const timestampArgs = [
           "clockoverlay",
           `valignment=${valign}`,
           `halignment=${halign}`,
           `font-desc=Sans Bold ${scaledFontSize}`,
-          `color=${this._colorToInt(this.streamConfig.overlayColor)}`,
+          `color=${this._colorToInt(tsColor)}`,
           `time-format="${this.streamConfig.timestampFormat || '%Y-%m-%d %H:%M:%S'}"`,
         ];
 
-        // Only add shaded background if not transparent
-        if (this.streamConfig.overlayBackground !== "transparent") {
+        if (tsBg !== "transparent") {
           timestampArgs.push("shaded-background=true");
         }
 
@@ -647,7 +658,6 @@ class StreamController extends EventEmitter {
         const text =
           this.streamConfig.overlayText || this.streamConfig.customText1;
 
-        // Parse position (e.g., "bottom-left", "top-center")
         const position =
           this.streamConfig.titlePosition ||
           this.streamConfig.overlayPosition ||
@@ -658,10 +668,11 @@ class StreamController extends EventEmitter {
         const halign =
           hpos === "left" ? "left" : hpos === "right" ? "right" : "center";
 
-        // Scale font size for 1920x1080 output (web preview uses scaled size for 1280x720)
-        const scaledFontSize = Math.round(
-          this.streamConfig.overlayFontSize * 1.5,
-        );
+        // Per-element font size (fall back to legacy shared value)
+        const titleFs = this.streamConfig.titleFontSize || this.streamConfig.overlayFontSize || 32;
+        const scaledFontSize = Math.round(titleFs * 1.5);
+        const titleClr = this.streamConfig.titleColor || this.streamConfig.overlayColor || "white";
+        const titleBg = this.streamConfig.titleBackground || this.streamConfig.overlayBackground || "transparent";
 
         const textArgs = [
           "textoverlay",
@@ -669,11 +680,10 @@ class StreamController extends EventEmitter {
           `valignment=${valign}`,
           `halignment=${halign}`,
           `font-desc=Sans Bold ${scaledFontSize}`,
-          `color=${this._colorToInt(this.streamConfig.overlayColor)}`,
+          `color=${this._colorToInt(titleClr)}`,
         ];
 
-        // Only add shaded background if not transparent
-        if (this.streamConfig.overlayBackground !== "transparent") {
+        if (titleBg !== "transparent") {
           textArgs.push("shaded-background=true");
         }
 

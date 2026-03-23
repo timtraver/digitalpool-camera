@@ -795,6 +795,65 @@ header h1 {
   background: rgba(0, 0, 0, 0.15);
 }
 
+/* Collapsible formatting toggle button */
+.btn-format-toggle {
+  background: none;
+  border: 1px solid rgba(18, 199, 255, 0.3);
+  color: rgba(255, 255, 255, 0.6);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 11px;
+  cursor: pointer;
+  line-height: 1;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.btn-format-toggle:hover {
+  color: #12c7ff;
+  border-color: #12c7ff;
+}
+.btn-format-toggle.active {
+  color: #12c7ff;
+  border-color: #12c7ff;
+  background: rgba(18, 199, 255, 0.1);
+}
+
+/* Collapsible format options row */
+.format-options {
+  margin-top: 4px;
+  padding: 4px 0 0 0;
+  border-top: 1px solid rgba(18, 199, 255, 0.1);
+}
+.format-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 3px;
+}
+.format-row label {
+  font-size: 10px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.7);
+  min-width: unset;
+  white-space: nowrap;
+}
+.format-row select {
+  font-size: 10px;
+  padding: 1px 3px;
+  max-width: 90px;
+}
+.format-row input[type="range"] {
+  width: 60px;
+  min-width: 50px;
+  flex: 0 1 60px;
+}
+.fmt-val {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.6);
+  min-width: 28px;
+}
+
 .overlay-controls .control-item-compact {
   display: flex;
   align-items: center;

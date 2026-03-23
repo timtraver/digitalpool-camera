@@ -36,6 +36,10 @@ def main():
     title_position = sys.argv[14] if len(sys.argv) > 14 else "top-left"
     timestamp_position = sys.argv[15] if len(sys.argv) > 15 else "bottom-right"
     audio_device = sys.argv[16] if len(sys.argv) > 16 else ""
+    # Per-element timestamp formatting (new args, optional for backward compat)
+    ts_font_size = sys.argv[17] if len(sys.argv) > 17 else font_size
+    ts_color = sys.argv[18] if len(sys.argv) > 18 else overlay_color
+    ts_background = sys.argv[19] if len(sys.argv) > 19 else overlay_background
 
     bitrate_kbps = bitrate // 1000
 
@@ -48,8 +52,9 @@ def main():
         halign = {"left": "left", "center": "center", "right": "right"}.get(hpos, "left")
         return valign, halign
 
-    # Shaded background property
-    shaded_bg = "shaded-background=true " if overlay_background != "transparent" else ""
+    # Shaded background properties (per-element)
+    title_shaded_bg = "shaded-background=true " if overlay_background != "transparent" else ""
+    ts_shaded_bg = "shaded-background=true " if ts_background != "transparent" else ""
 
     print(f"🎨 Starting stream with dynamic PNG overlay (Python GStreamer)...")
     print(f"Camera: {camera_device}")
@@ -58,20 +63,20 @@ def main():
     print(f"PNG Overlay: {png_path} (auto-reload on change)")
     print(f"Text Overlay: {overlay_text}")
     print(f"Show Timestamp: {show_timestamp}")
-    print(f"Overlay Color: {overlay_color}")
-    print(f"Overlay Background: {overlay_background}")
+    print(f"Title: color={overlay_color}, size={font_size}, bg={overlay_background}")
+    print(f"Timestamp: color={ts_color}, size={ts_font_size}, bg={ts_background}")
     print(f"Timestamp Format: {timestamp_format}")
 
     # Build pipeline string - same as the shell script but with named overlay element
     text_overlay = ""
     if overlay_text:
         t_valign, t_halign = parse_position(title_position)
-        text_overlay = f'! textoverlay text="{overlay_text}" valignment={t_valign} halignment={t_halign} font-desc="Sans Bold {font_size}" color={overlay_color} xpad=20 ypad=20 {shaded_bg}'
+        text_overlay = f'! textoverlay text="{overlay_text}" valignment={t_valign} halignment={t_halign} font-desc="Sans Bold {font_size}" color={overlay_color} xpad=20 ypad=20 {title_shaded_bg}'
 
     timestamp_overlay = ""
     if show_timestamp == "true":
         ts_valign, ts_halign = parse_position(timestamp_position)
-        timestamp_overlay = f'! clockoverlay valignment={ts_valign} halignment={ts_halign} font-desc="Sans Bold {font_size}" color={overlay_color} time-format="{timestamp_format}" xpad=20 ypad=20 {shaded_bg}'
+        timestamp_overlay = f'! clockoverlay valignment={ts_valign} halignment={ts_halign} font-desc="Sans Bold {ts_font_size}" color={ts_color} time-format="{timestamp_format}" xpad=20 ypad=20 {ts_shaded_bg}'
 
     # Thread architecture (each queue creates a new thread boundary):
     #   Thread 1: v4l2src → mppjpegdec (capture)

@@ -167,17 +167,39 @@
                       placeholder="Stream Title"
                       style="flex: 1; margin-left: 8px"
                     />
+                    <button type="button" class="btn-format-toggle" id="titleFormatToggle" title="Title formatting">⚙</button>
                   </div>
-                  <div class="control-item-compact" id="titleOptions" style="display: none">
-                    <label>Position:</label>
-                    <select id="titlePosition">
-                      <option value="top-left">Top Left</option>
-                      <option value="top-center">Top Center</option>
-                      <option value="top-right">Top Right</option>
-                      <option value="bottom-left">Bottom Left</option>
-                      <option value="bottom-center">Bottom Center</option>
-                      <option value="bottom-right">Bottom Right</option>
-                    </select>
+                  <div class="format-options" id="titleOptions" style="display: none">
+                    <div class="format-row">
+                      <label>Pos:</label>
+                      <select id="titlePosition">
+                        <option value="top-left">Top Left</option>
+                        <option value="top-center">Top Center</option>
+                        <option value="top-right">Top Right</option>
+                        <option value="bottom-left">Bottom Left</option>
+                        <option value="bottom-center">Bottom Center</option>
+                        <option value="bottom-right">Bottom Right</option>
+                      </select>
+                      <label>Size:</label>
+                      <input type="range" id="titleFontSize" min="4" max="64" value="32" />
+                      <span id="titleFontSizeValue" class="fmt-val">32px</span>
+                      <label>Color:</label>
+                      <select id="titleColor">
+                        <option value="white">White</option>
+                        <option value="black">Black</option>
+                        <option value="red">Red</option>
+                        <option value="green">Green</option>
+                        <option value="blue">Blue</option>
+                        <option value="yellow">Yellow</option>
+                        <option value="cyan">Cyan</option>
+                        <option value="orange">Orange</option>
+                      </select>
+                      <label>Bg:</label>
+                      <select id="titleBackground">
+                        <option value="transparent">None</option>
+                        <option value="shaded">Shaded</option>
+                      </select>
+                    </div>
                   </div>
                 </div>
 
@@ -188,56 +210,50 @@
                       <input type="checkbox" id="showTimestamp" />
                       <strong>Timestamp</strong>
                     </label>
+                    <button type="button" class="btn-format-toggle" id="timestampFormatToggle" title="Timestamp formatting">⚙</button>
                   </div>
-                  <div class="control-item-compact" id="timestampOptions" style="display: none">
-                    <label>Position:</label>
-                    <select id="timestampPosition">
-                      <option value="top-left">Top Left</option>
-                      <option value="top-center">Top Center</option>
-                      <option value="top-right">Top Right</option>
-                      <option value="bottom-left">Bottom Left</option>
-                      <option value="bottom-center">Bottom Center</option>
-                      <option value="bottom-right" selected>Bottom Right</option>
-                    </select>
-                    <label>Format:</label>
-                    <input type="text" id="timestampFormat" value="%Y-%m-%d %H:%M:%S" style="width: 180px; font-family: monospace; font-size: 12px;" title="strftime format: %H:%M:%S = time, %Y-%m-%d = date" />
+                  <div class="format-options" id="timestampOptions" style="display: none">
+                    <div class="format-row">
+                      <label>Pos:</label>
+                      <select id="timestampPosition">
+                        <option value="top-left">Top Left</option>
+                        <option value="top-center">Top Center</option>
+                        <option value="top-right">Top Right</option>
+                        <option value="bottom-left">Bottom Left</option>
+                        <option value="bottom-center">Bottom Center</option>
+                        <option value="bottom-right" selected>Bottom Right</option>
+                      </select>
+                      <label>Fmt:</label>
+                      <input type="text" id="timestampFormat" value="%Y-%m-%d %H:%M:%S" style="width: 140px; font-family: monospace; font-size: 10px;" title="strftime format: %H:%M:%S = time, %Y-%m-%d = date" />
+                    </div>
+                    <div class="format-row">
+                      <label>Size:</label>
+                      <input type="range" id="timestampFontSize" min="4" max="64" value="24" />
+                      <span id="timestampFontSizeValue" class="fmt-val">24px</span>
+                      <label>Color:</label>
+                      <select id="timestampColor">
+                        <option value="white">White</option>
+                        <option value="black">Black</option>
+                        <option value="red">Red</option>
+                        <option value="green">Green</option>
+                        <option value="blue">Blue</option>
+                        <option value="yellow">Yellow</option>
+                        <option value="cyan">Cyan</option>
+                        <option value="orange">Orange</option>
+                      </select>
+                      <label>Bg:</label>
+                      <select id="timestampBackground">
+                        <option value="transparent">None</option>
+                        <option value="shaded">Shaded</option>
+                      </select>
+                    </div>
                   </div>
                 </div>
 
-                <!-- Text Style (shared by title & timestamp) -->
-                <div class="overlay-section" id="textStyleOptions" style="display: none">
-                  <div class="control-item-compact">
-                    <label>Size:</label>
-                    <input
-                      type="range"
-                      id="overlayFontSize"
-                      min="4"
-                      max="64"
-                      value="32"
-                    />
-                    <span id="fontSizeValue">32px</span>
-                  </div>
-                  <div class="control-item-compact">
-                    <label>Color:</label>
-                    <select id="overlayColor">
-                      <option value="white">White</option>
-                      <option value="black">Black</option>
-                      <option value="red">Red</option>
-                      <option value="green">Green</option>
-                      <option value="blue">Blue</option>
-                      <option value="yellow">Yellow</option>
-                      <option value="cyan">Cyan</option>
-                      <option value="orange">Orange</option>
-                    </select>
-                  </div>
-                  <div class="control-item-compact">
-                    <label>Background:</label>
-                    <select id="overlayBackground">
-                      <option value="transparent">Transparent</option>
-                      <option value="shaded">Shaded</option>
-                    </select>
-                  </div>
-                </div>
+                <!-- hidden shared fields for backward compat -->
+                <input type="hidden" id="overlayFontSize" value="32" />
+                <input type="hidden" id="overlayColor" value="white" />
+                <input type="hidden" id="overlayBackground" value="transparent" />
 
                 <!-- Remote Overlay -->
                 <div class="overlay-section">

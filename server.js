@@ -806,22 +806,22 @@ app.get("/video/stream", async (req, res) => {
       const valign = vpos === "bottom" ? "bottom" : vpos === "center" ? "center" : "top";
       const halign = hpos === "left" ? "left" : hpos === "right" ? "right" : "center";
 
-      // Use EXACT same font size as streaming (scaled by 1.5x for 1920x1080)
-      const scaledFontSize = Math.round((config.overlayFontSize || 32) * 1.5);
+      // Per-element font size (fall back to legacy shared value)
+      const tsFontSize = config.timestampFontSize || Math.round((config.overlayFontSize || 32) * 0.75);
+      const scaledFontSize = Math.round(tsFontSize * 1.5);
+      const tsColor = config.timestampColor || config.overlayColor || "white";
 
       const timestampArgs = [
         "clockoverlay",
         `valignment=${valign}`,
         `halignment=${halign}`,
         `font-desc=Sans Bold ${scaledFontSize}`,
-        `color=${colorToInt(config.overlayColor)}`,
+        `color=${colorToInt(tsColor)}`,
         `time-format="${config.timestampFormat || '%Y-%m-%d %H:%M:%S'}"`,
       ];
 
-      // Add shaded background based on background setting
-      // Note: GStreamer's clockoverlay doesn't support custom opacity, only on/off
-      const bgSetting = config.overlayBackground || "transparent";
-      if (bgSetting !== "transparent") {
+      const tsBg = config.timestampBackground || config.overlayBackground || "transparent";
+      if (tsBg !== "transparent") {
         timestampArgs.push("shaded-background=true");
       }
 
@@ -836,8 +836,10 @@ app.get("/video/stream", async (req, res) => {
       const valign = vpos === "bottom" ? "bottom" : vpos === "center" ? "center" : "top";
       const halign = hpos === "left" ? "left" : hpos === "right" ? "right" : "center";
 
-      // Use EXACT same font size as streaming (scaled by 1.5x for 1920x1080)
-      const scaledFontSize = Math.round((config.overlayFontSize || 32) * 1.5);
+      // Per-element font size (fall back to legacy shared value)
+      const titleFs = config.titleFontSize || config.overlayFontSize || 32;
+      const scaledFontSize = Math.round(titleFs * 1.5);
+      const titleClr = config.titleColor || config.overlayColor || "white";
 
       const textArgs = [
         "textoverlay",
@@ -845,13 +847,11 @@ app.get("/video/stream", async (req, res) => {
         `valignment=${valign}`,
         `halignment=${halign}`,
         `font-desc=Sans Bold ${scaledFontSize}`,
-        `color=${colorToInt(config.overlayColor)}`,
+        `color=${colorToInt(titleClr)}`,
       ];
 
-      // Add shaded background based on background setting
-      // Note: GStreamer's textoverlay doesn't support custom opacity, only on/off
-      const bgSetting = config.overlayBackground || "transparent";
-      if (bgSetting !== "transparent") {
+      const titleBg = config.titleBackground || config.overlayBackground || "transparent";
+      if (titleBg !== "transparent") {
         textArgs.push("shaded-background=true");
       }
 
