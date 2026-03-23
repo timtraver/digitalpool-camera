@@ -93,9 +93,9 @@ class PuppeteerOverlay extends EventEmitter {
   setOverlayUrl(url, options = {}) {
     if (url && url.trim()) {
       this._overlayUrl = url.trim();
-      this._refreshIntervalMs = options.refreshInterval || 3000;
-      this._jsDelay = options.jsDelay || 2000;
-      this._zoom = options.zoom || 100;
+      if (options.refreshInterval) this._refreshIntervalMs = options.refreshInterval;
+      if (options.jsDelay) this._jsDelay = options.jsDelay;
+      if (options.zoom) this._zoom = options.zoom;
       console.log(`🌍 Overlay URL mode enabled: ${this._overlayUrl}`);
       console.log(`   Refresh interval: ${this._refreshIntervalMs}ms, JS delay: ${this._jsDelay}ms, zoom: ${this._zoom}%`);
     } else {
@@ -246,11 +246,17 @@ class PuppeteerOverlay extends EventEmitter {
       ],
     });
 
-    // If browser disconnects unexpectedly, clean up references
+    // Track disconnection silently — no alarming warnings.
+    // The browser may disconnect under CPU pressure from GStreamer;
+    // _ensureBrowser will quietly relaunch it on the next cycle.
+    this._browserIntentionalClose = false;
     this._browser.on("disconnected", () => {
-      console.warn("⚠️  Chromium browser disconnected unexpectedly");
+      if (!this._browserIntentionalClose) {
+        console.log("🔄 Chromium exited — will relaunch on next overlay cycle");
+      }
       this._browser = null;
       this._page = null;
+      this._currentLoadedUrl = null;
     });
 
     this._page = await this._browser.newPage();
@@ -265,6 +271,9 @@ class PuppeteerOverlay extends EventEmitter {
   async _closeBrowser() {
     const pid = this._browser && this._browser.process && this._browser.process()
       ? this._browser.process().pid : null;
+
+    // Mark intentional close so the disconnected handler doesn't log
+    this._browserIntentionalClose = true;
 
     if (this._page) {
       try { await this._page.close(); } catch (e) { /* ignore */ }
@@ -308,28 +317,45 @@ class PuppeteerOverlay extends EventEmitter {
           timeout: 30000,
         });
         this._currentLoadedUrl = this._overlayUrl;
+
+        // Apply zoom and green chroma-key background ONCE after navigation.
+        // We avoid omitBackground:true — it crashes Chromium 114 on ARM64.
+        // Instead, inject a green background and chroma-key it to transparent.
+        await this._page.evaluate((zoom) => {
+          document.documentElement.style.backgroundColor = "rgb(0,255,0)";
+          document.body.style.backgroundColor = "rgb(0,255,0)";
+          if (zoom !== 100) {
+            document.body.style.zoom = (zoom / 100).toString();
+          }
+        }, this._zoom);
+
+        // Wait for JS frameworks to finish initial render
+        await new Promise(r => setTimeout(r, this._jsDelay));
       }
 
-      // Screenshot the current page state (overlay updates via its own subscription)
-      const tempOutput = this.pngPath + ".tmp";
+      // Screenshot the current page state (NO omitBackground — causes crashes)
       await this._page.screenshot({
-        path: tempOutput,
+        path: this.rawPngPath,
         type: "png",
-        omitBackground: true, // Transparent background for overlay compositing
+        omitBackground: false,
       });
 
-      // Atomic rename so GStreamer doesn't read a half-written file
-      fs.renameSync(tempOutput, this.pngPath);
+      // Chroma-key green → transparent using ImageMagick, then atomic rename
+      await this._chromaKeyAndSave();
 
       console.log(`📸 URL overlay PNG updated from: ${this._overlayUrl}`);
       this.emit("updated", this.pngPath);
     } catch (err) {
-      console.error("❌ Failed to render URL overlay:", err.message);
-      // If browser crashed, null refs so _ensureBrowser relaunches next cycle
-      if (this._browser && !this._browser.connected) {
-        console.warn("💀 Chromium crashed — will relaunch on next cycle");
+      // Don't spam logs — browser disconnects are expected under CPU pressure.
+      // _ensureBrowser will silently relaunch on the next cycle.
+      if (!this._browser || !this._browser.connected) {
+        // Browser died — next cycle will relaunch via _ensureBrowser
         this._browser = null;
         this._page = null;
+        this._currentLoadedUrl = null;
+      } else {
+        // Browser is still alive but something else failed
+        console.error("❌ Overlay render error:", err.message);
       }
     } finally {
       this._renderInProgress = false;

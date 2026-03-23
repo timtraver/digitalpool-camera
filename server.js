@@ -1076,7 +1076,9 @@ io.on("connection", (socket) => {
         if (!puppeteerOverlay.isRunning) {
           await puppeteerOverlay.initialize(PORT);
         }
-        puppeteerOverlay.setOverlayUrl(overlayConfig.overlayUrl);
+        puppeteerOverlay.setOverlayUrl(overlayConfig.overlayUrl, {
+          zoom: overlayConfig.overlayZoom,
+        });
         puppeteerOverlay.startPeriodicRefresh();
       } else if (overlayConfig.remoteOverlayEnabled === false) {
         // Remote overlay was explicitly turned off — clear the PNG
