@@ -238,7 +238,8 @@ class PuppeteerOverlay extends EventEmitter {
 
   async _ensureBrowser() {
     // If we already have a working browser + page, reuse it
-    if (this._browser && this._browser.connected && this._page) return;
+    // NOTE: Puppeteer 20.x uses isConnected() method, NOT .connected property
+    if (this._browser && this._browser.isConnected() && this._page) return;
 
     // Clean up any leftover browser before launching a new one
     await this._closeBrowser();
@@ -373,19 +374,19 @@ class PuppeteerOverlay extends EventEmitter {
         type: "png",
         omitBackground: false,
       });
-      console.log(`  📷 Screenshot done (connected: ${this._browser?.connected})`);
+      console.log(`  📷 Screenshot done (connected: ${this._browser?.isConnected()})`);
 
       // Chroma-key green → transparent using ImageMagick, then atomic rename
       await this._chromaKeyAndSave();
 
       // DIAGNOSTIC: Check if browser is still connected after the full render cycle
-      const stillConnected = this._browser ? this._browser.connected : false;
+      const stillConnected = this._browser ? this._browser.isConnected() : false;
       console.log(`📸 URL overlay PNG updated from: ${this._overlayUrl} (connected: ${stillConnected})`);
       this.emit("updated", this.pngPath);
     } catch (err) {
       // Don't spam logs — browser disconnects are expected under CPU pressure.
       // _ensureBrowser will silently relaunch on the next cycle.
-      if (!this._browser || !this._browser.connected) {
+      if (!this._browser || !this._browser.isConnected()) {
         // Browser died — next cycle will relaunch via _ensureBrowser
         this._browser = null;
         this._page = null;
