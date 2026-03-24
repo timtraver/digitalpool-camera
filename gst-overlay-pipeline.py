@@ -91,8 +91,10 @@ def main():
         audio_mux_target = 'mux.'
     elif protocol == "rtmp":
         # RTMP: use flvmux → rtmpsink
+        # Extra h264parse enforces monotonic DTS to prevent "too many reordered frames" errors
         rtmp_url = destination if destination else "rtmp://localhost:1935/stream"
         output_sink = (
+            f'! h264parse ! video/x-h264,stream-format=byte-stream '
             f'! flvmux name=mux streamable=true '
             f'! rtmpsink location={rtmp_url} sync=false async=false '
         )

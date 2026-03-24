@@ -990,6 +990,11 @@ class StreamController extends EventEmitter {
         "max-size-buffers=0",
         "max-size-time=1000000000", // 1 second buffer
         "max-size-bytes=0",
+        "leaky=downstream", // Drop stale frames to prevent timestamp buildup
+        "!",
+        "h264parse", // Re-parse to enforce monotonic DTS before flvmux
+        "!",
+        "video/x-h264,stream-format=byte-stream",
         "!",
         "flvmux",
         "name=mux",
