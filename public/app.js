@@ -586,13 +586,10 @@ function setStreamStatus(state, text) {
 // Update placeholder based on protocol
 streamProtocol.addEventListener("change", () => {
   const protocol = streamProtocol.value;
-  if (protocol === "udp") {
-    streamDestination.placeholder =
-      "udp://192.168.1.100:5000 or 192.168.1.100:5000";
-  } else if (protocol === "srt") {
+  if (protocol === "srt") {
     streamDestination.placeholder = "Leave empty (server mode on port 8891)";
   } else if (protocol === "rtmp") {
-    streamDestination.placeholder = "rtmp://server/live/stream (or leave empty for local)";
+    streamDestination.placeholder = "rtmp://server:1935/live/stream (or leave empty for local)";
   }
 });
 
@@ -637,12 +634,7 @@ startStreamBtn.addEventListener("click", async () => {
       framerate: 30,
     };
 
-    // Only UDP requires a destination (SRT uses server mode, RTMP has default)
-    if (config.protocol === "udp" && !config.destination) {
-      alert("Please enter a destination URL for UDP (e.g., udp://192.168.1.100:5000)");
-      startStreamBtn.disabled = false;
-      return;
-    }
+
 
     console.log("Starting stream with config:", config);
     socket.emit("startStream", config);
@@ -1706,9 +1698,7 @@ async function loadStreamConfig() {
       if (data.config.protocol === "srt") {
         streamDestination.placeholder = "Leave empty (server mode on port 8891)";
       } else if (data.config.protocol === "rtmp") {
-        streamDestination.placeholder = "rtmp://server/live/stream (or leave empty for local)";
-      } else if (data.config.protocol === "udp") {
-        streamDestination.placeholder = "udp://192.168.1.100:5000 or 192.168.1.100:5000";
+        streamDestination.placeholder = "rtmp://server:1935/live/stream (or leave empty for local)";
       }
     }
   } catch (error) {

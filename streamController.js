@@ -13,7 +13,7 @@ class StreamController extends EventEmitter {
 
     // Default configuration
     const defaultConfig = {
-      protocol: "srt", // 'srt', 'rtmp', or 'udp'
+      protocol: "srt", // 'srt' or 'rtmp'
       destination: "",
       width: 1920,
       height: 1080,
