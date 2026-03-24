@@ -91,10 +91,14 @@ def main():
         audio_mux_target = 'mux.'
     elif protocol == "rtmp":
         # RTMP: use flvmux → rtmpsink
-        # Extra h264parse enforces monotonic DTS to prevent "too many reordered frames" errors
+        # Do NOT add a second h264parse here. The h264parse config-interval=-1 upstream
+        # will negotiate stream-format=avc,alignment=au directly with flvmux through the
+        # queue (caps negotiation is transparent to queues). A second parse re-splits
+        # SPS+PPS+IDR access units into separate NAL buffers with identical DTS values,
+        # which causes MediaMTX to drop readers with "DTS is not monotonically increasing".
         rtmp_url = destination if destination else "rtmp://localhost:1935/stream"
         output_sink = (
-            f'! h264parse ! video/x-h264,stream-format=avc '
+            f'! video/x-h264,stream-format=avc,alignment=au '
             f'! flvmux name=mux streamable=true '
             f'! rtmpsink location={rtmp_url} sync=false async=false '
         )

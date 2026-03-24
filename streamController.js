@@ -992,9 +992,11 @@ class StreamController extends EventEmitter {
         "max-size-bytes=0",
         // No leaky — dropping encoded H264 frames causes DTS duplicates/gaps
         "!",
-        "h264parse", // Re-parse to enforce monotonic DTS before flvmux
-        "!",
-        "video/x-h264,stream-format=avc", // flvmux requires avc (length-prefixed), not byte-stream (Annex B)
+        // Do NOT add a second h264parse here. The h264parse config-interval=-1 upstream
+        // negotiates stream-format=avc,alignment=au directly with flvmux through the
+        // queue. A second parse re-splits SPS+PPS+IDR into separate NAL buffers that all
+        // share the same DTS, causing MediaMTX "DTS not monotonically increasing" drops.
+        "video/x-h264,stream-format=avc,alignment=au", // negotiate avc+AU back to the upstream h264parse
         "!",
         "flvmux",
         "name=mux",
