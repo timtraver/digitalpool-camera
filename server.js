@@ -1001,8 +1001,27 @@ app.get("/video/stream", async (req, res) => {
   let retries = 0;
   const maxRetries = bootComplete ? 5 : 30;
 
+  // Track the current active TCP client so req.on("close") can always destroy it.
+  // The listener is registered ONCE here — not inside the retry loop — to avoid
+  // the MaxListenersExceededWarning that occurs when a new listener is added on
+  // every recursive connectToPreview() call.
+  let currentClient = null;
+  let reqClosed = false;
+
+  req.on("close", () => {
+    console.log("Client disconnected from preview");
+    reqClosed = true;
+    if (currentClient) {
+      currentClient.destroy();
+    }
+  });
+
   function connectToPreview() {
+    // If the HTTP client already disconnected, stop retrying.
+    if (reqClosed) return;
+
     const client = net.connect({ port: IDLE_PREVIEW_PORT, host: "localhost" });
+    currentClient = client;
 
     let totalBytesReceived = 0;
     let firstDataLogged = false;
@@ -1026,24 +1045,21 @@ app.get("/video/stream", async (req, res) => {
     });
 
     client.on("error", (err) => {
+      if (reqClosed) return; // HTTP client already gone — stop silently
       if (retries < maxRetries) {
         retries++;
         console.log(`⚠️  Preview TCP connection failed (attempt ${retries}/${maxRetries}): ${err.message}`);
         setTimeout(connectToPreview, 1000);
       } else {
         console.error(`❌ Could not connect to idle preview after ${maxRetries} attempts`);
-        res.end();
+        try { res.end(); } catch (e) { /* already ended */ }
       }
     });
 
     client.on("close", () => {
+      if (reqClosed) return; // req.on("close") already handled this
       console.log("Preview TCP connection closed");
       try { res.end(); } catch (e) { /* already ended */ }
-    });
-
-    req.on("close", () => {
-      console.log("Client disconnected from preview");
-      client.destroy();
     });
   }
 
