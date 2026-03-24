@@ -159,7 +159,15 @@ def main():
             # never competes with video processing for CPU time
             f'alsasrc device={audio_device} provide-clock=false '
             f'! audio/x-raw,rate=32000,channels=2,format=S16LE '
-            f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 '  # 500ms buffer
+            # Thread boundary queue — leaky=downstream is critical.
+            # USB mic crystal runs 50-200 ppm off system clock. At 200 ppm the 500ms queue
+            # fills in ~42 min and blocks alsasrc, stalling mpegtsmux and delaying SRT output.
+            # Reduced to 200ms + leaky=downstream so it drains before accumulation builds up.
+            f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream '
+            # audiorate: proper fix for USB clock drift. Inserts silence or drops samples
+            # to keep audio timestamps locked to the pipeline clock. Eliminates the
+            # progressive timestamp drift that causes mpegtsmux to stall over time.
+            f'! audiorate '
             f'! audioconvert ! audioresample '
             f'! audio/x-raw,rate=48000,channels=2 '
             f'! voaacenc bitrate=128000 '

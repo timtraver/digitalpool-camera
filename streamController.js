@@ -888,14 +888,25 @@ class StreamController extends EventEmitter {
         pipeline.push(
           "alsasrc",
           `device=${audioDevice}`,
-          "provide-clock=false", // Use video clock as master
+          "provide-clock=false", // Use pipeline clock as master, not USB device clock
           "!",
           "audio/x-raw,rate=32000,channels=2,format=S16LE", // Camera mic native format
           "!",
-          "queue",              // Thread boundary: isolate audio from video
+          // Thread boundary: isolate audio capture from the rest of the pipeline.
+          // MUST be leaky=downstream: the USB mic crystal runs 50-200 ppm off from the
+          // system clock. At 200 ppm this queue (500ms = 16,000 samples) fills in ~42 min
+          // and blocks alsasrc → stalls mpegtsmux → delays SRT output progressively.
+          "queue",
           "max-size-buffers=0",
-          "max-size-time=500000000", // 500ms audio buffer
+          "max-size-time=200000000", // 200ms — tighter cap so drift is drained sooner
           "max-size-bytes=0",
+          "leaky=downstream",        // Drop oldest audio instead of blocking capture
+          "!",
+          // audiorate: the authoritative fix for USB clock drift.
+          // Compares incoming audio timestamps against the pipeline clock and inserts
+          // silence or drops samples to stay perfectly in sync. Eliminates timestamp
+          // accumulation that mpegtsmux would otherwise stall on.
+          "audiorate",
           "!",
           "audioconvert",
           "!",
