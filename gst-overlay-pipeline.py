@@ -140,11 +140,10 @@ def main():
         # Encode branch (own thread)
         f't. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
         f'! videoconvert ! video/x-raw,format=NV12 '
-        # CBR for SRT: constant bitrate keeps SRT's retransmit buffer from overflowing.
-        # gop=15 (0.5s at 30fps): faster visual recovery when any packet loss does occur.
-        + (f'! mpph264enc bps={bitrate} bps-max={bitrate} rc-mode=cbr gop=15 header-mode=each-idr profile=baseline '
-           if protocol == "srt" else
-           f'! mpph264enc bps={bitrate} bps-max=0 rc-mode=vbr gop=15 header-mode=each-idr profile=baseline ')
+        # Constrained VBR: bps_max=1.6x target allows the encoder to burst for high-motion
+        # frames (fast pool shots) rather than raising quantizer and pixelating.
+        # SRT latency=500ms absorbs the short bursts; average bitrate stays near bps target.
+        + f'! mpph264enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=15 header-mode=each-idr profile=baseline '
         + f"! video/x-h264,stream-format=byte-stream "
         f'! h264parse config-interval=-1 '
         # Thread boundary before mux to decouple encoder from network I/O

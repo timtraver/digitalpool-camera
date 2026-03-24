@@ -782,8 +782,11 @@ class StreamController extends EventEmitter {
       pipeline.push(
         "mpph264enc",
         `bps=${bitrate}`,
-        `bps-max=${bitrate}`,    // Hard cap prevents VBR bursts from overflowing SRT buffer
-        protocol === "srt" ? "rc-mode=cbr" : "rc-mode=vbr", // CBR for SRT: constant bitrate avoids SRT buffer overflow
+        // Allow bursts up to 1.6x target for motion headroom. Pure CBR (bps-max=bps) forces
+        // the encoder to raise quantizer on high-motion frames (fast pool shots) causing
+        // pixelation. SRT latency=500ms absorbs short bursts; average stays at target bps.
+        `bps-max=${Math.round(bitrate * 1.6)}`,
+        "rc-mode=vbr",          // VBR with bps-max cap = constrained VBR — best quality/stability tradeoff
         "gop=15",               // Keyframe every 0.5s — faster recovery from any packet loss
         "header-mode=each-idr",
         "profile=baseline", // No B-frames — required for RTMP/FLV and better for low-latency
