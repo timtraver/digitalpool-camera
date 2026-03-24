@@ -987,10 +987,9 @@ class StreamController extends EventEmitter {
         "t2.",
         "!",
         "queue",
-        "max-size-buffers=2", // Minimal buffering for low latency
-        "max-size-time=0",
+        "max-size-buffers=0",
+        "max-size-time=1000000000", // 1 second buffer
         "max-size-bytes=0",
-        "leaky=downstream", // Drop old frames if queue is full
         "!",
         "flvmux",
         "name=mux",

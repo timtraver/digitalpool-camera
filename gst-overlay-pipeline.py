@@ -94,7 +94,7 @@ def main():
         rtmp_url = destination if destination else "rtmp://localhost:1935/stream"
         output_sink = (
             f'! flvmux name=mux streamable=true '
-            f'! rtmpsink location={rtmp_url} sync=false '
+            f'! rtmpsink location={rtmp_url} sync=false async=false '
         )
         audio_mux_target = 'mux.'
     elif protocol == "udp":
