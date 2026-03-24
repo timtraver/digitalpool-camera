@@ -866,8 +866,7 @@ class StreamController extends EventEmitter {
         "!",
         "mpegtsmux",
         "name=mux",
-        "alignment=7",         // Align packets for better compatibility
-        "max-delay=200000000", // 200 ms max A/V sync wait — default 700 ms grows with audio clock drift
+        "alignment=7", // Align packets for better compatibility
         "!",
         "srtsink", // SRT listener mode
         "uri=srt://:8891", // Listen on all interfaces, port 8891

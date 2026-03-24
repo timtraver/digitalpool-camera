@@ -86,10 +86,7 @@ def main():
         # latency=500ms: larger retransmit window prevents packet drops from VBR bursts or jitter
         srt_uri = destination if destination else "srt://:8891"
         output_sink = (
-            # max-delay=200ms: default 700ms causes mpegtsmux to buffer and hold A/V data
-            # while it waits for perfectly-matched timestamps. As audio clock drifts from
-            # the system clock over time, this buffer grows and delays SRT output.
-            f'! mpegtsmux name=mux alignment=7 max-delay=200000000 '
+            f'! mpegtsmux name=mux alignment=7 '
             f'! srtsink uri="{srt_uri}" wait-for-connection=false latency=500 sync=false async=false '
         )
         audio_mux_target = 'mux.'
