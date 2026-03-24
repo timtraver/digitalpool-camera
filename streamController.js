@@ -759,7 +759,18 @@ class StreamController extends EventEmitter {
     }
 
     // Branch 1: Encoding pipeline for streaming
-    pipeline.push("t.", "!", "queue", "!");
+    // IMPORTANT: must be limited + leaky. Default queue (200 buf / 10 MB, non-leaky) blocks the
+    // entire capture chain when the encoder is momentarily slow (e.g. thermal throttle), which
+    // causes kernel V4L2 buffer overflows and frame drops at the driver level.
+    pipeline.push(
+      "t.", "!",
+      "queue",
+      "max-size-buffers=2",   // Only 2 raw NV12 frames — encoder must keep up
+      "max-size-time=0",      // Disable time limit (use buffer count only)
+      "max-size-bytes=0",     // Disable byte limit (use buffer count only)
+      "leaky=downstream",     // Drop oldest raw frame on overflow rather than blocking capture
+      "!",
+    );
 
     // Encoding pipeline
     if (encoder === "mpph264enc") {
@@ -855,7 +866,8 @@ class StreamController extends EventEmitter {
         "!",
         "mpegtsmux",
         "name=mux",
-        "alignment=7", // Align packets for better compatibility
+        "alignment=7",         // Align packets for better compatibility
+        "max-delay=200000000", // 200 ms max A/V sync wait — default 700 ms grows with audio clock drift
         "!",
         "srtsink", // SRT listener mode
         "uri=srt://:8891", // Listen on all interfaces, port 8891
@@ -894,10 +906,19 @@ class StreamController extends EventEmitter {
           "!",
           "aacparse",
           "!",
-          "queue",              // Thread boundary: decouple audio encoder from mux
+          // Final audio queue before mux — MUST be leaky=upstream.
+          // The USB camera mic (hw:3,0) has its own crystal oscillator and drifts
+          // 50-200 ppm from the system clock. With provide-clock=false, audio samples
+          // arrive slightly faster or slower than the pipeline clock expects.
+          // Without leaky, this queue fills over ~30-45 min and BLOCKS the entire
+          // audio chain, which stalls mpegtsmux and progressively delays SRT output.
+          // leaky=upstream drops the newest (not-yet-queued) audio packet on overflow,
+          // causing an infrequent ~21 ms audio glitch rather than a pipeline stall.
+          "queue",
           "max-size-buffers=0",
-          "max-size-time=500000000", // 500ms buffer before mux
+          "max-size-time=200000000", // 200 ms — tight leash so drift can't accumulate
           "max-size-bytes=0",
+          "leaky=upstream",          // Drop newest audio on overflow, never block
           "!",
           "mux.", // Feed into the named mpegtsmux
         );

@@ -86,7 +86,10 @@ def main():
         # latency=500ms: larger retransmit window prevents packet drops from VBR bursts or jitter
         srt_uri = destination if destination else "srt://:8891"
         output_sink = (
-            f'! mpegtsmux name=mux alignment=7 '
+            # max-delay=200ms: default 700ms causes mpegtsmux to buffer and hold A/V data
+            # while it waits for perfectly-matched timestamps. As audio clock drifts from
+            # the system clock over time, this buffer grows and delays SRT output.
+            f'! mpegtsmux name=mux alignment=7 max-delay=200000000 '
             f'! srtsink uri="{srt_uri}" wait-for-connection=false latency=500 sync=false async=false '
         )
         audio_mux_target = 'mux.'
@@ -165,8 +168,13 @@ def main():
             f'! audio/x-raw,rate=48000,channels=2 '
             f'! voaacenc bitrate=128000 '
             f'! aacparse '
-            # Thread boundary before mux to avoid blocking on mux lock
-            f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 '
+            # Final audio queue before mux — leaky=upstream is critical.
+            # USB camera mic runs on its own crystal oscillator (50-200 ppm drift from
+            # system clock). Without leaky, this queue fills over ~30-45 min and blocks
+            # the audio chain, stalling mpegtsmux and progressively delaying SRT output.
+            # leaky=upstream drops the newest arriving audio packet on overflow (a brief
+            # ~21 ms audio glitch) rather than blocking the pipeline.
+            f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=upstream '
             f'! {audio_mux_target} '
             if audio_device else ''
         ) +
