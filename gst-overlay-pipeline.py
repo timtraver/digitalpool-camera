@@ -133,7 +133,7 @@ def main():
         # Encode branch (own thread)
         f't. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
         f'! videoconvert ! video/x-raw,format=NV12 '
-        f'! mpph264enc bps={bitrate} bps-max=0 rc-mode=vbr gop=30 header-mode=each-idr '
+        f'! mpph264enc bps={bitrate} bps-max=0 rc-mode=vbr gop=30 header-mode=each-idr profile=baseline '
         f"! video/x-h264,stream-format=byte-stream "
         f'! h264parse config-interval=-1 '
         # Thread boundary before mux to decouple encoder from network I/O

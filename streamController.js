@@ -775,6 +775,7 @@ class StreamController extends EventEmitter {
         "rc-mode=vbr",
         "gop=30",
         "header-mode=each-idr",
+        "profile=baseline", // No B-frames — required for RTMP/FLV and better for low-latency
         "!",
         "video/x-h264,stream-format=byte-stream",
         "!",
