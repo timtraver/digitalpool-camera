@@ -1383,7 +1383,7 @@ server.listen(PORT, async () => {
     // Some USB cameras need an actual VIDIOC_STREAMON + frame delivery to fully
     // initialize their video output hardware. v4l2-ctl --list-formats-ext only
     // queries the control interface without starting capture.
-    console.log("📹 Warming up camera with temporary ffmpeg capture (3 seconds)...");
+    console.log("📹 Warming up camera with temporary ffmpeg capture (1.5 seconds)...");
     const warmupFfmpeg = spawn("ffmpeg", [
       "-f", "v4l2", "-input_format", "mjpeg", "-video_size", "1920x1080",
       "-i", CAMERA_DEVICE, "-f", "null", "/dev/null"
@@ -1399,8 +1399,9 @@ server.listen(PORT, async () => {
       console.error(`📹 Warmup ffmpeg spawn error: ${err.message}`);
     });
 
-    // Let ffmpeg run for 3 seconds to warm up the camera
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    // Let ffmpeg run for 1.5 seconds to warm up the camera
+    // (camera produces valid frames within ~0.5s, 1.5s gives plenty of margin)
+    await new Promise((resolve) => setTimeout(resolve, 1500));
 
     // Kill ffmpeg and wait for it to fully release the device
     console.log("🔪 Killing warmup ffmpeg...");
@@ -1415,7 +1416,7 @@ server.listen(PORT, async () => {
       const { execSync } = require("child_process");
       execSync(`fuser -k ${CAMERA_DEVICE} 2>/dev/null || true`);
     } catch (e) { /* ignore */ }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 300));
 
     // Verify the device is free before proceeding
     try {
