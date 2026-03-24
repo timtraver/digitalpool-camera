@@ -994,7 +994,7 @@ class StreamController extends EventEmitter {
         "!",
         "h264parse", // Re-parse to enforce monotonic DTS before flvmux
         "!",
-        "video/x-h264,stream-format=byte-stream",
+        "video/x-h264,stream-format=avc", // flvmux requires avc (length-prefixed), not byte-stream (Annex B)
         "!",
         "flvmux",
         "name=mux",
