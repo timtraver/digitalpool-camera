@@ -1389,11 +1389,14 @@ server.listen(PORT, async () => {
       "-i", CAMERA_DEVICE, "-f", "null", "/dev/null"
     ], { stdio: ["ignore", "pipe", "pipe"] });
 
+    warmupFfmpeg.stdout.on("data", (data) => {
+      console.log(`📹 Warmup ffmpeg stdout: ${data.toString().trim().substring(0, 200)}`);
+    });
     warmupFfmpeg.stderr.on("data", (data) => {
-      const msg = data.toString().trim();
-      if (msg.includes("frame=") || msg.includes("fps=")) {
-        console.log(`📹 Warmup ffmpeg: ${msg.substring(0, 120)}`);
-      }
+      console.log(`📹 Warmup ffmpeg stderr: ${data.toString().trim().substring(0, 200)}`);
+    });
+    warmupFfmpeg.on("error", (err) => {
+      console.error(`📹 Warmup ffmpeg spawn error: ${err.message}`);
     });
 
     // Let ffmpeg run for 3 seconds to warm up the camera
