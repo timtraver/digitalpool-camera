@@ -1459,49 +1459,53 @@ server.listen(PORT, async () => {
     cameraInitialized = true; // Allow commands even if init failed
   }
 
-  // Start Puppeteer overlay on boot if remote overlay is configured
-  // (so idle preview can show it even before first stream)
+  // Boot is complete — allow /video/stream to auto-start idle preview if needed
+  // Do this BEFORE Puppeteer so clients can see video immediately
+  bootComplete = true;
+  console.log("🏁 Boot sequence complete — idle preview is live");
+  io.emit("refreshIdlePreview");
+
+  // Start Puppeteer overlay ASYNCHRONOUSLY — don't block the preview
+  // When the first screenshot arrives, restart the preview with the overlay
   const hasRemoteOnBoot = streamController.streamConfig.remoteOverlayEnabled &&
     streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
   if (hasRemoteOnBoot && PuppeteerOverlay) {
-    try {
-      console.log("🌍 Remote overlay configured — starting Puppeteer for idle preview...");
-      if (!puppeteerOverlay) {
-        puppeteerOverlay = new PuppeteerOverlay();
+    // Fire and forget — this runs in the background
+    (async () => {
+      try {
+        console.log("🌍 Remote overlay configured — starting Puppeteer in background...");
+        if (!puppeteerOverlay) {
+          puppeteerOverlay = new PuppeteerOverlay();
+        }
+        await puppeteerOverlay.initialize(PORT);
+        const overlayZoom = streamController.streamConfig.overlayZoom || 100;
+        puppeteerOverlay.setOverlayUrl(streamController.streamConfig.overlayUrl, { zoom: overlayZoom });
+        puppeteerOverlay.startPeriodicRefresh();
+        console.log("✅ Remote overlay started — will restart preview when first screenshot is ready...");
+        // Wait for the first screenshot, then restart preview with overlay
+        await new Promise((resolve) => {
+          const fallback = setTimeout(() => {
+            puppeteerOverlay.removeListener("updated", onReady);
+            console.log("⏱️ Timeout waiting for first screenshot — preview continues without overlay");
+            resolve();
+          }, 30000);
+          const onReady = () => {
+            clearTimeout(fallback);
+            console.log("📸 First screenshot ready — restarting preview with overlay");
+            resolve();
+          };
+          puppeteerOverlay.once("updated", onReady);
+        });
+        // Only restart if we're not currently streaming
+        if (!streamController.isStreaming) {
+          await startPersistentIdlePreview();
+          io.emit("refreshIdlePreview");
+        }
+      } catch (err) {
+        console.error("⚠️  Failed to start remote overlay on boot:", err.message);
       }
-      await puppeteerOverlay.initialize(PORT);
-      const overlayZoom = streamController.streamConfig.overlayZoom || 100;
-      puppeteerOverlay.setOverlayUrl(streamController.streamConfig.overlayUrl, { zoom: overlayZoom });
-      puppeteerOverlay.startPeriodicRefresh();
-      console.log("✅ Remote overlay ready — waiting for first screenshot...");
-      // Wait for the first screenshot before restarting preview,
-      // so the PNG file is actually populated (not just the tiny placeholder)
-      await new Promise((resolve) => {
-        const fallback = setTimeout(() => {
-          puppeteerOverlay.removeListener("updated", onReady);
-          console.log("⏱️ Timeout waiting for first screenshot on boot — restarting preview anyway");
-          resolve();
-        }, 15000);
-        const onReady = () => {
-          clearTimeout(fallback);
-          console.log("📸 First screenshot ready on boot");
-          resolve();
-        };
-        puppeteerOverlay.once("updated", onReady);
-      });
-      // Restart idle preview to include the overlay PNG, then tell clients to reconnect
-      await startPersistentIdlePreview();
-      io.emit("refreshIdlePreview");
-    } catch (err) {
-      console.error("⚠️  Failed to start remote overlay on boot:", err.message);
-    }
+    })();
   }
-
-  // Boot is complete — allow /video/stream to auto-start idle preview if needed
-  bootComplete = true;
-  console.log("🏁 Boot sequence complete — idle preview requests are now allowed");
-  // Emit one final refresh so any clients that connected during boot reconnect
-  io.emit("refreshIdlePreview");
 });
 
 // Proxy routes for digitalpool.com (MUST be last to not interfere with our API routes)
