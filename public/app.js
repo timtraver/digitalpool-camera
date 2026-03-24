@@ -185,6 +185,11 @@ socket.on("cameraConfigReset", (data) => {
   if (data.success && data.config) {
     console.log("🔄 Camera reset to defaults:", data.config);
     loadCameraConfigToUI(data.config);
+    // Clear the startup/home position display since it was also reset
+    const startupPosInfo = document.getElementById("startupPosInfo");
+    if (startupPosInfo) {
+      startupPosInfo.textContent = "No home position set";
+    }
     alert("All camera settings have been reset to defaults!");
   }
 });

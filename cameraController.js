@@ -389,7 +389,29 @@ class CameraController {
     console.log("🔄 Resetting camera to default values...");
     this.config = this.getDefaults();
     this.saveConfig();
+
+    // Also clear the startup/home position so it resets to 0,0,0
+    this.clearStartupPosition();
+
+    // Reset tracked positions to defaults
+    this.currentPan = 0;
+    this.currentTilt = 0;
+
     return await this.applyConfig();
+  }
+
+  /**
+   * Clear the saved startup/home position
+   */
+  clearStartupPosition() {
+    try {
+      if (fs.existsSync(this.startupConfigFile)) {
+        fs.unlinkSync(this.startupConfigFile);
+        console.log("📌 Cleared startup position file:", this.startupConfigFile);
+      }
+    } catch (error) {
+      console.error("❌ Error clearing startup position:", error.message);
+    }
   }
 
   /**
