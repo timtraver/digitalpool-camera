@@ -765,9 +765,20 @@ socket.on("streamStatus", (status) => {
     stopStreamBtn.disabled = false;
     setStreamStatus("live", `Streaming LIVE — ${status.config?.protocol?.toUpperCase() || "SRT"}`);
 
-    // Switch to TCP preview when streaming
-    setTimeout(() => {
-      switchToHLSPreview(); // Function now switches to TCP preview
+    // Switch to TCP preview when streaming.
+    // Cancel any stale pending switch first so we never queue two connections.
+    if (_tcpPreviewTimeout) {
+      clearTimeout(_tcpPreviewTimeout);
+      _tcpPreviewTimeout = null;
+    }
+    // Also cancel any pending MJPEG switch that might race with us.
+    if (_mjpegPreviewTimeout) {
+      clearTimeout(_mjpegPreviewTimeout);
+      _mjpegPreviewTimeout = null;
+    }
+    _tcpPreviewTimeout = setTimeout(() => {
+      _tcpPreviewTimeout = null;
+      switchToHLSPreview(); // Function switches to MJPEG-over-TCP on port 8555
     }, 2000); // Wait for GStreamer TCP server to start (has retry logic)
   } else {
     // Change Restart button back to Start button
@@ -781,8 +792,18 @@ socket.on("streamStatus", (status) => {
     setStreamStatus("idle", "Not Streaming");
     overlayNeedsRestart.style.display = "none";
 
-    // Switch back to MJPEG preview when not streaming
-    setTimeout(() => {
+    // Switch back to MJPEG preview when not streaming.
+    // Cancel any stale TCP preview switch that might be pending.
+    if (_tcpPreviewTimeout) {
+      clearTimeout(_tcpPreviewTimeout);
+      _tcpPreviewTimeout = null;
+    }
+    if (_mjpegPreviewTimeout) {
+      clearTimeout(_mjpegPreviewTimeout);
+      _mjpegPreviewTimeout = null;
+    }
+    _mjpegPreviewTimeout = setTimeout(() => {
+      _mjpegPreviewTimeout = null;
       switchToMJPEGPreview();
     }, 500);
   }
@@ -864,6 +885,11 @@ console.log("🚀 app.js loaded!");
 
 // Video preview switching functions
 let hlsPlayer = null;
+
+// Pending preview-switch timeout handles — only one of each should ever be queued
+// at a time, so we cancel any stale timer before scheduling a new one.
+let _tcpPreviewTimeout = null;
+let _mjpegPreviewTimeout = null;
 
 function switchToHLSPreview() {
   console.log("🔄 Switching to TCP preview (MJPEG over TCP)...");
