@@ -45,9 +45,18 @@ class PuppeteerOverlay extends EventEmitter {
 
     console.log("🌐 Initializing overlay renderer...");
 
-    // Always create a placeholder PNG first so GStreamer can start immediately.
-    // The real overlay will replace it once Puppeteer renders the first screenshot.
-    this._createPlaceholderPNG(this.pngPath);
+    // Create a placeholder PNG only if one doesn't already exist (or is too small).
+    // This prevents overwriting a valid overlay PNG from a previous session during boot.
+    try {
+      const existingSize = fs.existsSync(this.pngPath) ? fs.statSync(this.pngPath).size : 0;
+      if (existingSize <= 100) {
+        this._createPlaceholderPNG(this.pngPath);
+      } else {
+        console.log(`📋 Keeping existing overlay PNG (${existingSize} bytes)`);
+      }
+    } catch (e) {
+      this._createPlaceholderPNG(this.pngPath);
+    }
 
     try {
       // Try to load local HTML template (for local overlay mode)
