@@ -139,8 +139,11 @@ def main():
         f"! video/x-h264,stream-format=byte-stream "
         f'! h264parse config-interval=-1 '
         # Thread boundary before mux to decouple encoder from network I/O
-        # Larger buffer (1s of frames) absorbs spikes from PNG overlay reloads
-        f'! queue max-size-buffers=0 max-size-time=1000000000 max-size-bytes=0 leaky=downstream '
+        # Larger buffer absorbs spikes from PNG overlay reloads
+        # No leaky for RTMP — dropping encoded H264 frames causes DTS duplicates/gaps
+        + (f'! queue max-size-buffers=0 max-size-time=2000000000 max-size-bytes=0 '
+           if protocol == "rtmp" else
+           f'! queue max-size-buffers=0 max-size-time=1000000000 max-size-bytes=0 leaky=downstream ')
         + output_sink +
         (
             # Audio branch: fully isolated in its own thread

@@ -988,9 +988,9 @@ class StreamController extends EventEmitter {
         "!",
         "queue",
         "max-size-buffers=0",
-        "max-size-time=1000000000", // 1 second buffer
+        "max-size-time=2000000000", // 2 second buffer to absorb processing spikes
         "max-size-bytes=0",
-        "leaky=downstream", // Drop stale frames to prevent timestamp buildup
+        // No leaky — dropping encoded H264 frames causes DTS duplicates/gaps
         "!",
         "h264parse", // Re-parse to enforce monotonic DTS before flvmux
         "!",
