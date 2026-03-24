@@ -730,6 +730,13 @@ socket.on("streamStatus", (status) => {
     startStreamBtn.disabled = true;
     stopStreamBtn.disabled = true;
     setStreamStatus("starting", "Restarting Stream...");
+    // Cancel the existing TCP preview img RIGHT NOW so that when GStreamer
+    // dies and the HTTP response ends, the img's onerror retry logic does
+    // NOT open a new /video/tcp-preview connection during the restart.
+    cancelCurrentPreviewImg();
+    // Also discard any queued preview-switch timers.
+    if (_tcpPreviewTimeout) { clearTimeout(_tcpPreviewTimeout); _tcpPreviewTimeout = null; }
+    if (_mjpegPreviewTimeout) { clearTimeout(_mjpegPreviewTimeout); _mjpegPreviewTimeout = null; }
     return;
   }
 
@@ -891,6 +898,22 @@ let hlsPlayer = null;
 let _tcpPreviewTimeout = null;
 let _mjpegPreviewTimeout = null;
 
+/**
+ * Mark the current preview img element as cancelled so its internal onerror
+ * retry loop stops opening new connections, then clear its src.
+ * Call this before any operation that will replace or restart the stream.
+ */
+function cancelCurrentPreviewImg() {
+  for (const id of ["videoStream", "videoStreamNew"]) {
+    const el = document.getElementById(id);
+    if (el) {
+      el._cancelled = true;
+      el.src = "";
+      el.remove();
+    }
+  }
+}
+
 function switchToHLSPreview() {
   console.log("🔄 Switching to TCP preview (MJPEG over TCP)...");
   const container = document.querySelector(".video-container");
@@ -899,18 +922,9 @@ function switchToHLSPreview() {
   console.log("📦 Container:", container);
   console.log("🗑️  Old element:", oldElement);
 
-  // Clean up any in-flight MJPEG transition element
-  const staleNew = document.getElementById("videoStreamNew");
-  if (staleNew) {
-    staleNew.src = "";
-    staleNew.remove();
-  }
-
-  if (oldElement) {
-    oldElement.src = ""; // stop the MJPEG connection
-    oldElement.remove();
-    console.log("✅ Removed old element");
-  }
+  // Cancel and remove any existing preview elements (including in-flight transitions).
+  // Setting _cancelled=true stops their internal onerror retry timers from firing.
+  cancelCurrentPreviewImg();
 
   // Destroy HLS player if it exists
   if (hlsPlayer) {
@@ -932,14 +946,17 @@ function switchToHLSPreview() {
 
   console.log("🖼️  Created new img element with src:", previewUrl);
 
-  // Add error handler to retry if TCP server isn't ready yet
+  // Retry if TCP server isn't ready yet — but ONLY if this element hasn't
+  // been cancelled (i.e. the stream wasn't restarted before the timer fired).
   let retryCount = 0;
   img.onerror = function(e) {
+    if (img._cancelled) return; // stream restarted — don't open another connection
     retryCount++;
     console.error(`❌ TCP preview error (attempt ${retryCount}/5):`, e);
     if (retryCount < 5) {
       console.log(`⚠️  TCP preview not ready, retrying (${retryCount}/5)...`);
       setTimeout(() => {
+        if (img._cancelled) return; // double-check before the delayed src assignment
         const newUrl = "/video/tcp-preview?t=" + Date.now();
         console.log("🔄 Retrying with URL:", newUrl);
         img.src = newUrl;
