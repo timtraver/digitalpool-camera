@@ -1373,75 +1373,31 @@ server.listen(PORT, async () => {
     console.error("❌ Error initializing stream controller:", error.message);
   }
 
-  // Apply saved camera configuration on startup
-  console.log("\n🚀 Initializing camera with saved configuration...");
+  // Start idle preview IMMEDIATELY — GStreamer's v4l2src does VIDIOC_STREAMON
+  // which warms up the camera. No separate ffmpeg warmup needed.
+  // The first few frames may be garbage but jpegparse will skip them gracefully.
+  console.log("\n🚀 Starting idle preview as first boot action...");
   try {
-    // Activate the camera device first (runs v4l2-ctl --list-formats-ext)
     await camera.activateCamera();
-
-    // Warm up the camera by running ffmpeg as a background process for a few seconds.
-    // Some USB cameras need an actual VIDIOC_STREAMON + frame delivery to fully
-    // initialize their video output hardware. v4l2-ctl --list-formats-ext only
-    // queries the control interface without starting capture.
-    console.log("📹 Warming up camera with temporary ffmpeg capture (1.5 seconds)...");
-    const warmupFfmpeg = spawn("ffmpeg", [
-      "-f", "v4l2", "-input_format", "mjpeg", "-video_size", "1920x1080",
-      "-i", CAMERA_DEVICE, "-f", "null", "/dev/null"
-    ], { stdio: ["ignore", "pipe", "pipe"] });
-
-    warmupFfmpeg.stdout.on("data", (data) => {
-      console.log(`📹 Warmup ffmpeg stdout: ${data.toString().trim().substring(0, 200)}`);
-    });
-    warmupFfmpeg.stderr.on("data", (data) => {
-      console.log(`📹 Warmup ffmpeg stderr: ${data.toString().trim().substring(0, 200)}`);
-    });
-    warmupFfmpeg.on("error", (err) => {
-      console.error(`📹 Warmup ffmpeg spawn error: ${err.message}`);
-    });
-
-    // Let ffmpeg run for 1.5 seconds to warm up the camera
-    // (camera produces valid frames within ~0.5s, 1.5s gives plenty of margin)
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
-    // Kill ffmpeg and wait for it to fully release the device
-    console.log("🔪 Killing warmup ffmpeg...");
-    warmupFfmpeg.kill("SIGKILL");
-    await new Promise((resolve) => {
-      warmupFfmpeg.on("close", () => resolve());
-      setTimeout(resolve, 2000); // fallback if close event doesn't fire
-    });
-
-    // Make sure the device is truly free
-    try {
-      const { execSync } = require("child_process");
-      execSync(`fuser -k ${CAMERA_DEVICE} 2>/dev/null || true`);
-    } catch (e) { /* ignore */ }
-    await new Promise((resolve) => setTimeout(resolve, 300));
-
-    // Verify the device is free before proceeding
-    try {
-      const { execSync } = require("child_process");
-      const fuserCheck = execSync(`fuser ${CAMERA_DEVICE} 2>&1 || true`).toString().trim();
-      if (fuserCheck && /[0-9]/.test(fuserCheck)) {
-        console.log(`⚠️  Camera device still busy: ${fuserCheck} — force killing`);
-        execSync(`fuser -k ${CAMERA_DEVICE} 2>/dev/null || true`);
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      } else {
-        console.log("✅ Camera device is free after warmup");
-      }
-    } catch (e) { /* ignore */ }
-
-    // Start the persistent idle preview
     console.log("📹 Starting persistent idle preview...");
     await startPersistentIdlePreview();
     console.log("✅ Idle preview started — camera is active");
+  } catch (error) {
+    console.error("❌ Error starting idle preview:", error.message);
+  }
 
-    // Apply camera settings while the preview is already running
-    // (v4l2-ctl commands work fine while another process has the camera open)
+  // Boot is complete — allow /video/stream to auto-start idle preview if needed
+  // Signal clients IMMEDIATELY so they can start showing video
+  bootComplete = true;
+  console.log("🏁 Boot sequence complete — idle preview is live");
+  io.emit("refreshIdlePreview");
+
+  // Apply camera config and PTZ in the background — doesn't block video
+  // (v4l2-ctl commands work fine while GStreamer has the camera open)
+  try {
     console.log("📸 Applying camera configuration...");
     await camera.applyConfig();
 
-    // Apply startup position for PTZ (if set), overriding last known position
     const usedStartup = await camera.applyStartupPosition();
     if (usedStartup) {
       console.log("📌 Applied startup position (overrides last known PTZ position)");
@@ -1459,12 +1415,6 @@ server.listen(PORT, async () => {
     console.error("❌ Error initializing camera:", error.message);
     cameraInitialized = true; // Allow commands even if init failed
   }
-
-  // Boot is complete — allow /video/stream to auto-start idle preview if needed
-  // Do this BEFORE Puppeteer so clients can see video immediately
-  bootComplete = true;
-  console.log("🏁 Boot sequence complete — idle preview is live");
-  io.emit("refreshIdlePreview");
 
   // Start Puppeteer overlay ASYNCHRONOUSLY — don't block the preview
   // When the first screenshot arrives, restart the preview with the overlay
