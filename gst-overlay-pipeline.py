@@ -16,8 +16,8 @@ from gi.repository import Gst, GLib
 Gst.init(None)
 
 def main():
-    if len(sys.argv) < 7:
-        print(f"Usage: {sys.argv[0]} CAMERA_DEVICE WIDTH HEIGHT FRAMERATE BITRATE SRT_PORT [PNG_PATH] [OVERLAY_TEXT] [SHOW_TIMESTAMP] [FONT_SIZE] [COLOR] [BACKGROUND] [TIMESTAMP_FORMAT] [TITLE_POS] [TIMESTAMP_POS]")
+    if len(sys.argv) < 8:
+        print(f"Usage: {sys.argv[0]} CAMERA_DEVICE WIDTH HEIGHT FRAMERATE BITRATE PROTOCOL DESTINATION [PNG_PATH] [OVERLAY_TEXT] [SHOW_TIMESTAMP] [FONT_SIZE] [COLOR] [BACKGROUND] [TIMESTAMP_FORMAT] [TITLE_POS] [TIMESTAMP_POS]")
         sys.exit(1)
 
     camera_device = sys.argv[1]
@@ -25,21 +25,22 @@ def main():
     height = int(sys.argv[3])
     framerate = int(sys.argv[4])
     bitrate = int(sys.argv[5])
-    srt_port = sys.argv[6]
-    png_path = sys.argv[7] if len(sys.argv) > 7 else "/tmp/graphics-overlay.png"
-    overlay_text = sys.argv[8] if len(sys.argv) > 8 else ""
-    show_timestamp = sys.argv[9] if len(sys.argv) > 9 else "false"
-    font_size = sys.argv[10] if len(sys.argv) > 10 else "48"
-    overlay_color = sys.argv[11] if len(sys.argv) > 11 else "4294967295"
-    overlay_background = sys.argv[12] if len(sys.argv) > 12 else "transparent"
-    timestamp_format = sys.argv[13] if len(sys.argv) > 13 else "%Y-%m-%d %H:%M:%S"
-    title_position = sys.argv[14] if len(sys.argv) > 14 else "top-left"
-    timestamp_position = sys.argv[15] if len(sys.argv) > 15 else "bottom-right"
-    audio_device = sys.argv[16] if len(sys.argv) > 16 else ""
+    protocol = sys.argv[6]        # 'srt', 'rtmp', or 'udp'
+    destination = sys.argv[7]     # Full destination URL
+    png_path = sys.argv[8] if len(sys.argv) > 8 else "/tmp/graphics-overlay.png"
+    overlay_text = sys.argv[9] if len(sys.argv) > 9 else ""
+    show_timestamp = sys.argv[10] if len(sys.argv) > 10 else "false"
+    font_size = sys.argv[11] if len(sys.argv) > 11 else "48"
+    overlay_color = sys.argv[12] if len(sys.argv) > 12 else "4294967295"
+    overlay_background = sys.argv[13] if len(sys.argv) > 13 else "transparent"
+    timestamp_format = sys.argv[14] if len(sys.argv) > 14 else "%Y-%m-%d %H:%M:%S"
+    title_position = sys.argv[15] if len(sys.argv) > 15 else "top-left"
+    timestamp_position = sys.argv[16] if len(sys.argv) > 16 else "bottom-right"
+    audio_device = sys.argv[17] if len(sys.argv) > 17 else ""
     # Per-element timestamp formatting (new args, optional for backward compat)
-    ts_font_size = sys.argv[17] if len(sys.argv) > 17 else font_size
-    ts_color = sys.argv[18] if len(sys.argv) > 18 else overlay_color
-    ts_background = sys.argv[19] if len(sys.argv) > 19 else overlay_background
+    ts_font_size = sys.argv[18] if len(sys.argv) > 18 else font_size
+    ts_color = sys.argv[19] if len(sys.argv) > 19 else overlay_color
+    ts_background = sys.argv[20] if len(sys.argv) > 20 else overlay_background
 
     bitrate_kbps = bitrate // 1000
 
@@ -59,7 +60,8 @@ def main():
     print(f"🎨 Starting stream with dynamic PNG overlay (Python GStreamer)...")
     print(f"Camera: {camera_device}")
     print(f"Resolution: {width}x{height}@{framerate}fps")
-    print(f"SRT Port: {srt_port}")
+    print(f"Protocol: {protocol}")
+    print(f"Destination: {destination}")
     print(f"PNG Overlay: {png_path} (auto-reload on change)")
     print(f"Text Overlay: {overlay_text}")
     print(f"Show Timestamp: {show_timestamp}")
@@ -78,10 +80,43 @@ def main():
         ts_valign, ts_halign = parse_position(timestamp_position)
         timestamp_overlay = f'! clockoverlay valignment={ts_valign} halignment={ts_halign} font-desc="Sans Bold {ts_font_size}" color={ts_color} time-format="{timestamp_format}" xpad=20 ypad=20 {ts_shaded_bg}'
 
+    # Build protocol-specific output sink
+    if protocol == "srt":
+        # SRT: use mpegtsmux → srtsink (listener mode)
+        srt_uri = destination if destination else "srt://:8891"
+        output_sink = (
+            f'! mpegtsmux name=mux alignment=7 '
+            f'! srtsink uri="{srt_uri}" wait-for-connection=false latency=125 sync=false async=false '
+        )
+        audio_mux_target = 'mux.'
+    elif protocol == "rtmp":
+        # RTMP: use flvmux → rtmpsink
+        rtmp_url = destination if destination else "rtmp://localhost:1935/stream"
+        output_sink = (
+            f'! flvmux name=mux streamable=true '
+            f'! rtmpsink location={rtmp_url} sync=false '
+        )
+        audio_mux_target = 'mux.'
+    elif protocol == "udp":
+        # UDP: use mpegtsmux → udpsink
+        # Parse host:port from destination like udp://HOST:PORT
+        udp_dest = destination.replace("udp://", "")
+        udp_parts = udp_dest.split(":")
+        udp_host = udp_parts[0] if len(udp_parts) > 0 else "127.0.0.1"
+        udp_port = udp_parts[1] if len(udp_parts) > 1 else "5000"
+        output_sink = (
+            f'! mpegtsmux name=mux '
+            f'! udpsink host={udp_host} port={udp_port} sync=false async=false '
+        )
+        audio_mux_target = 'mux.'
+    else:
+        print(f"❌ Unsupported protocol: {protocol}")
+        sys.exit(1)
+
     # Thread architecture (each queue creates a new thread boundary):
     #   Thread 1: v4l2src → mppjpegdec (capture)
     #   Thread 2: queue → videoconvert(BGRA) → overlay → tee (overlay compositing)
-    #   Thread 3: queue → videoconvert(NV12) → mpph264enc → h264parse → queue → mux → srtsink (encode+stream)
+    #   Thread 3: queue → videoconvert(NV12) → mpph264enc → h264parse → queue → mux → sink (encode+stream)
     #   Thread 4: queue → audioresample → voaacenc → aacparse → queue → mux. (audio - fully isolated)
     #   Thread 5: queue → videorate → videoscale → jpegenc → tcpserversink (preview)
     pipeline_str = (
@@ -104,9 +139,8 @@ def main():
         # Thread boundary before mux to decouple encoder from network I/O
         # Larger buffer (1s of frames) absorbs spikes from PNG overlay reloads
         f'! queue max-size-buffers=0 max-size-time=1000000000 max-size-bytes=0 leaky=downstream '
-        f'! mpegtsmux name=mux alignment=7 '
-        f'! srtsink uri="srt://:{srt_port}" wait-for-connection=false latency=125 sync=false async=false '
-        + (
+        + output_sink +
+        (
             # Audio branch: fully isolated in its own thread
             # The queue right after alsasrc caps ensures audio capture+encode
             # never competes with video processing for CPU time
@@ -119,7 +153,7 @@ def main():
             f'! aacparse '
             # Thread boundary before mux to avoid blocking on mux lock
             f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 '
-            f'! mux. '
+            f'! {audio_mux_target} '
             if audio_device else ''
         ) +
         # Preview branch (own thread, low priority)

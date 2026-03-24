@@ -522,8 +522,17 @@ class StreamController extends EventEmitter {
 
     console.log("🎨 Graphics overlay enabled - using PNG overlay (gdkpixbufoverlay)");
 
-    // Extract port from destination
-    const srtPort = destination ? destination.split(':')[1] : '8891';
+    const protocol = this.streamConfig.protocol || "srt";
+    // Build the full destination URL based on protocol
+    let effectiveDestination = destination || "";
+    if (!effectiveDestination) {
+      if (protocol === "srt") {
+        effectiveDestination = "srt://:8891";
+      } else if (protocol === "rtmp") {
+        effectiveDestination = "rtmp://localhost:1935/stream";
+      }
+      // UDP requires explicit destination (validated earlier)
+    }
     const pngPath = "/tmp/graphics-overlay.png";
 
     // Per-element formatting (fall back to legacy shared values)
@@ -562,7 +571,8 @@ class StreamController extends EventEmitter {
       height.toString(),
       framerate.toString(),
       bitrate.toString(),
-      srtPort,
+      protocol,
+      effectiveDestination,
       pngPath,
       effectiveOverlayText,
       effectiveShowTimestamp,
