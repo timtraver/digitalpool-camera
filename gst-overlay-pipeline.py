@@ -83,10 +83,11 @@ def main():
     # Build protocol-specific output sink
     if protocol == "srt":
         # SRT: use mpegtsmux → srtsink (listener mode)
+        # latency=500ms: larger retransmit window prevents packet drops from VBR bursts or jitter
         srt_uri = destination if destination else "srt://:8891"
         output_sink = (
             f'! mpegtsmux name=mux alignment=7 '
-            f'! srtsink uri="{srt_uri}" wait-for-connection=false latency=125 sync=false async=false '
+            f'! srtsink uri="{srt_uri}" wait-for-connection=false latency=500 sync=false async=false '
         )
         audio_mux_target = 'mux.'
     elif protocol == "rtmp":
@@ -139,8 +140,12 @@ def main():
         # Encode branch (own thread)
         f't. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
         f'! videoconvert ! video/x-raw,format=NV12 '
-        f'! mpph264enc bps={bitrate} bps-max=0 rc-mode=vbr gop=30 header-mode=each-idr profile=baseline '
-        f"! video/x-h264,stream-format=byte-stream "
+        # CBR for SRT: constant bitrate keeps SRT's retransmit buffer from overflowing.
+        # gop=15 (0.5s at 30fps): faster visual recovery when any packet loss does occur.
+        + (f'! mpph264enc bps={bitrate} bps-max={bitrate} rc-mode=cbr gop=15 header-mode=each-idr profile=baseline '
+           if protocol == "srt" else
+           f'! mpph264enc bps={bitrate} bps-max=0 rc-mode=vbr gop=15 header-mode=each-idr profile=baseline ')
+        + f"! video/x-h264,stream-format=byte-stream "
         f'! h264parse config-interval=-1 '
         # Thread boundary before mux to decouple encoder from network I/O
         # Larger buffer absorbs spikes from PNG overlay reloads

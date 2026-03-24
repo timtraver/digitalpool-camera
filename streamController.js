@@ -771,9 +771,9 @@ class StreamController extends EventEmitter {
       pipeline.push(
         "mpph264enc",
         `bps=${bitrate}`,
-        "bps-max=0",
-        "rc-mode=vbr",
-        "gop=30",
+        `bps-max=${bitrate}`,    // Hard cap prevents VBR bursts from overflowing SRT buffer
+        protocol === "srt" ? "rc-mode=cbr" : "rc-mode=vbr", // CBR for SRT: constant bitrate avoids SRT buffer overflow
+        "gop=15",               // Keyframe every 0.5s — faster recovery from any packet loss
         "header-mode=each-idr",
         "profile=baseline", // No B-frames — required for RTMP/FLV and better for low-latency
         "!",
@@ -860,7 +860,7 @@ class StreamController extends EventEmitter {
         "srtsink", // SRT listener mode
         "uri=srt://:8891", // Listen on all interfaces, port 8891
         "wait-for-connection=false", // Don't block pipeline waiting for client
-        "latency=125", // Latency in milliseconds
+        "latency=500", // Latency in ms — larger window gives SRT room to retransmit instead of dropping
         "sync=false", // Don't sync to clock — prevents cascading lag from processing spikes
         "async=false", // Don't wait for preroll
       );
