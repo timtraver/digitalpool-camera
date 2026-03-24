@@ -36,6 +36,8 @@ const camera = new CameraController(CAMERA_DEVICE);
 let cameraInitialized = false;
 // Flag to prevent /video/stream from spawning idle preview during boot
 let bootComplete = false;
+// Flag to suppress intermediate "stopped" events during an atomic restart
+let isRestartInProgress = false;
 
 // Initialize stream controller
 const streamController = new StreamController(CAMERA_DEVICE);
@@ -88,6 +90,9 @@ streamController.on("started", () => {
 });
 
 streamController.on("stopped", (code) => {
+  // During an atomic restart don't tell clients the stream stopped —
+  // they will see "restarting" → "preparing" → "started" instead.
+  if (isRestartInProgress) return;
   const status = streamController.getStatus();
   io.emit("streamStatus", { ...status, status: "stopped", code });
 });
@@ -1164,6 +1169,29 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Atomic restart: stop → start without showing the idle preview in between.
+  // The "stopped" broadcast and idle-preview restart are suppressed while
+  // isRestartInProgress is true, so the browser stays on "Restarting…" the
+  // whole time and never opens a redundant MJPEG preview connection.
+  socket.on("restartStream", async (config) => {
+    console.log("🔄 Restarting stream...");
+    isRestartInProgress = true;
+    io.emit("streamStatus", { ...streamController.getStatus(), status: "restarting" });
+
+    // Stop the running stream
+    if (streamController.isStreaming) {
+      io.emit("streamStatus", { ...streamController.getStatus(), status: "stopping" });
+      await streamController.stopStream();
+    }
+
+    // Start the new stream — clear the flag first so normal "started"/"stopped"
+    // events are broadcast correctly going forward.
+    isRestartInProgress = false;
+    io.emit("streamStatus", { ...streamController.getStatus(), status: "starting" });
+    const result = await streamController.startStream(config);
+    socket.emit("streamResult", result);
+  });
+
   socket.on("getStreamStatus", () => {
     const status = streamController.getStatus();
     socket.emit("streamStatus", status);
@@ -1592,6 +1620,13 @@ streamController.on("preparing", async () => {
 
 // When stream stops, restart the persistent idle preview and manage Puppeteer refresh
 streamController.on("stopped", async () => {
+  // During an atomic restart, skip the idle preview restart — the restartStream
+  // handler will start a new stream immediately instead.
+  if (isRestartInProgress) {
+    console.log("🔄 Restart in progress — skipping idle preview restart");
+    return;
+  }
+
   const hasRemote = streamController.streamConfig.remoteOverlayEnabled &&
     streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
   if (puppeteerOverlay && !hasRemote) {

@@ -604,25 +604,19 @@ startStreamBtn.addEventListener("click", async () => {
 
   if (isRestart) {
     console.log("Restarting stream...");
-    setStreamStatus("starting", "Restarting Stream...");
-
-    // Stop the stream first
-    socket.emit("stopStream");
-
-    // Wait for stream to stop, then start again
-    setTimeout(() => {
-      const config = {
-        protocol: streamProtocol.value,
-        destination: streamDestination.value,
-        bitrate: parseInt(streamBitrate.value),
-        width: 1920,
-        height: 1080,
-        framerate: 30,
-      };
-
-      console.log("Starting stream after restart with config:", config);
-      socket.emit("startStream", config);
-    }, 1500); // Wait 1.5 seconds for clean shutdown
+    // Let the server handle the full stop→start cycle atomically.
+    // The browser stays on "Restarting…" the whole time; no intermediate
+    // MJPEG preview is opened, so there's no double-stream issue.
+    const config = {
+      protocol: streamProtocol.value,
+      destination: streamDestination.value,
+      bitrate: parseInt(streamBitrate.value),
+      width: 1920,
+      height: 1080,
+      framerate: 30,
+    };
+    console.log("Restarting stream with config:", config);
+    socket.emit("restartStream", config);
   } else {
     // Normal start
     const config = {
@@ -732,6 +726,13 @@ socket.on("streamStatus", (status) => {
   }
 
   // Handle granular statuses
+  if (status.status === "restarting") {
+    startStreamBtn.disabled = true;
+    stopStreamBtn.disabled = true;
+    setStreamStatus("starting", "Restarting Stream...");
+    return;
+  }
+
   if (status.status === "starting") {
     startStreamBtn.disabled = true;
     stopStreamBtn.disabled = true;
