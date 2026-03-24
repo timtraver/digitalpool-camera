@@ -875,7 +875,15 @@ function switchToHLSPreview() {
   console.log("📦 Container:", container);
   console.log("🗑️  Old element:", oldElement);
 
+  // Clean up any in-flight MJPEG transition element
+  const staleNew = document.getElementById("videoStreamNew");
+  if (staleNew) {
+    staleNew.src = "";
+    staleNew.remove();
+  }
+
   if (oldElement) {
+    oldElement.src = ""; // stop the MJPEG connection
     oldElement.remove();
     console.log("✅ Removed old element");
   }
@@ -936,6 +944,15 @@ function switchToMJPEGPreview(onLoaded) {
   if (hlsPlayer) {
     hlsPlayer.destroy();
     hlsPlayer = null;
+  }
+
+  // Clean up any in-flight transition elements from a previous call
+  // (prevents duplicate frames when refreshIdlePreview fires multiple times)
+  const staleNew = document.getElementById("videoStreamNew");
+  if (staleNew) {
+    console.log("🧹 Removing stale in-flight preview element");
+    staleNew.src = ""; // stop the old MJPEG connection
+    staleNew.remove();
   }
 
   // Create new img element for MJPEG with temporary ID
