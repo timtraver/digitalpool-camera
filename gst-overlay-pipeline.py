@@ -25,7 +25,7 @@ def main():
     height = int(sys.argv[3])
     framerate = int(sys.argv[4])
     bitrate = int(sys.argv[5])
-    protocol = sys.argv[6]        # 'srt', 'rtmp', or 'udp'
+    protocol = sys.argv[6]        # 'srt' or 'rtmp'
     destination = sys.argv[7]     # Full destination URL
     png_path = sys.argv[8] if len(sys.argv) > 8 else "/tmp/graphics-overlay.png"
     overlay_text = sys.argv[9] if len(sys.argv) > 9 else ""
@@ -104,18 +104,6 @@ def main():
             f'! rtmpsink location={rtmp_url} sync=false async=false '
         )
         audio_mux_target = 'mux.'
-    elif protocol == "udp":
-        # UDP: use mpegtsmux → udpsink
-        # Parse host:port from destination like udp://HOST:PORT
-        udp_dest = destination.replace("udp://", "")
-        udp_parts = udp_dest.split(":")
-        udp_host = udp_parts[0] if len(udp_parts) > 0 else "127.0.0.1"
-        udp_port = udp_parts[1] if len(udp_parts) > 1 else "5000"
-        output_sink = (
-            f'! mpegtsmux name=mux '
-            f'! udpsink host={udp_host} port={udp_port} sync=false async=false '
-        )
-        audio_mux_target = 'mux.'
     else:
         print(f"❌ Unsupported protocol: {protocol}")
         sys.exit(1)
@@ -155,30 +143,23 @@ def main():
         + output_sink +
         (
             # Audio branch: fully isolated in its own thread
-            # The queue right after alsasrc caps ensures audio capture+encode
-            # never competes with video processing for CPU time
             f'alsasrc device={audio_device} provide-clock=false do-timestamp=true '
+            f'buffer-time=50000 latency-time=25000 '
             f'! audio/x-raw,rate=32000,channels=2,format=S16LE '
-            # Thread boundary queue — leaky=downstream is critical.
-            # USB mic crystal runs 50-200 ppm off system clock. At 200 ppm the 500ms queue
-            # fills in ~42 min and blocks alsasrc, stalling mpegtsmux and delaying SRT output.
-            # Reduced to 200ms + leaky=downstream so it drains before accumulation builds up.
-            f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream '
-            # audiorate: proper fix for USB clock drift. Inserts silence or drops samples
-            # to keep audio timestamps locked to the pipeline clock. Eliminates the
-            # progressive timestamp drift that causes mpegtsmux to stall over time.
+            # Small thread-isolation queue — not leaky so audiorate sees every buffer.
+            f'! queue max-size-buffers=5 max-size-time=0 max-size-bytes=0 '
+            # audiorate: corrects USB clock drift by inserting silence or dropping samples
+            # to keep audio timestamps locked to the pipeline clock.
             f'! audiorate '
             f'! audioconvert ! audioresample '
             f'! audio/x-raw,rate=48000,channels=2 '
             f'! voaacenc bitrate=128000 '
             f'! aacparse '
-            # Final audio queue before mux — leaky=upstream is critical.
-            # USB camera mic runs on its own crystal oscillator (50-200 ppm drift from
-            # system clock). Without leaky, this queue fills over ~30-45 min and blocks
-            # the audio chain, stalling mpegtsmux and progressively delaying SRT output.
-            # leaky=upstream drops the newest arriving audio packet on overflow (a brief
-            # ~21 ms audio glitch) rather than blocking the pipeline.
-            f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=upstream '
+            # Final audio queue before mux.
+            # leaky=downstream drops the OLDEST buffer when full — mux always gets current
+            # timestamps. leaky=upstream (old) was wrong: it dropped NEW audio, leaving the
+            # mux waiting for current timestamps after a video encoder stall.
+            f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream '
             f'! {audio_mux_target} '
             if audio_device else ''
         ) +

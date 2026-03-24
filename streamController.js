@@ -128,15 +128,8 @@ class StreamController extends EventEmitter {
     // Merge config
     this.streamConfig = { ...this.streamConfig, ...config };
 
-    // For RTMP, destination is optional (defaults to local nginx)
-    // For SRT server mode, destination is not needed (Jetson acts as server)
-    // For UDP, destination is required
-    if (
-      this.streamConfig.protocol === "udp" &&
-      !this.streamConfig.destination
-    ) {
-      return { success: false, error: "No destination URL specified for UDP (e.g., udp://192.168.1.100:5000)" };
-    }
+    // For RTMP, destination is optional (defaults to local MediaMTX)
+    // For SRT server mode, destination is not needed (device acts as server)
 
     try {
       // Kill any ffmpeg processes using the camera device
@@ -531,7 +524,6 @@ class StreamController extends EventEmitter {
       } else if (protocol === "rtmp") {
         effectiveDestination = "rtmp://localhost:1935/stream";
       }
-      // UDP requires explicit destination (validated earlier)
     }
     const pngPath = "/tmp/graphics-overlay.png";
 
@@ -848,7 +840,7 @@ class StreamController extends EventEmitter {
     // Add another tee after encoding to split H.264 for output and preview
     pipeline.push("tee", "name=t2");
 
-    // Branch 2a: Output stream (RTMP, SRT, or UDP) - from t2 (H.264)
+    // Branch 2a: Output stream (SRT or RTMP) - from t2 (H.264)
     if (protocol === "srt") {
       // SRT streaming - low latency with error correction
       // Use srtsink as listener - device acts as server, OBS connects as client
@@ -890,23 +882,20 @@ class StreamController extends EventEmitter {
           `device=${audioDevice}`,
           "provide-clock=false", // Don't let USB device clock become the pipeline clock
           "do-timestamp=true",   // Stamp each buffer with pipeline clock time, not USB hardware clock
+          "buffer-time=50000",   // 50ms ALSA buffer (µs) — tight so do-timestamp stays accurate
+          "latency-time=25000",  // 25ms period — how often ALSA delivers chunks to the pipeline
           "!",
           "audio/x-raw,rate=32000,channels=2,format=S16LE", // Camera mic native format
           "!",
-          // Thread boundary: isolate audio capture from the rest of the pipeline.
-          // MUST be leaky=downstream: the USB mic crystal runs 50-200 ppm off from the
-          // system clock. At 200 ppm this queue (500ms = 16,000 samples) fills in ~42 min
-          // and blocks alsasrc → stalls mpegtsmux → delays SRT output progressively.
+          // Small thread-isolation queue — not leaky so audiorate sees every buffer.
+          // audiorate handles all rate correction; this queue is only a thread boundary.
           "queue",
-          "max-size-buffers=0",
-          "max-size-time=200000000", // 200ms — tighter cap so drift is drained sooner
+          "max-size-buffers=5",
+          "max-size-time=0",
           "max-size-bytes=0",
-          "leaky=downstream",        // Drop oldest audio instead of blocking capture
           "!",
-          // audiorate: the authoritative fix for USB clock drift.
-          // Compares incoming audio timestamps against the pipeline clock and inserts
-          // silence or drops samples to stay perfectly in sync. Eliminates timestamp
-          // accumulation that mpegtsmux would otherwise stall on.
+          // audiorate: corrects USB clock drift by inserting silence or dropping samples
+          // to keep audio timestamps locked to the pipeline clock.
           "audiorate",
           "!",
           "audioconvert",
@@ -920,92 +909,18 @@ class StreamController extends EventEmitter {
           "!",
           "aacparse",
           "!",
-          // Final audio queue before mux — MUST be leaky=upstream.
-          // The USB camera mic (hw:3,0) has its own crystal oscillator and drifts
-          // 50-200 ppm from the system clock. With provide-clock=false, audio samples
-          // arrive slightly faster or slower than the pipeline clock expects.
-          // Without leaky, this queue fills over ~30-45 min and BLOCKS the entire
-          // audio chain, which stalls mpegtsmux and progressively delays SRT output.
-          // leaky=upstream drops the newest (not-yet-queued) audio packet on overflow,
-          // causing an infrequent ~21 ms audio glitch rather than a pipeline stall.
+          // Final audio queue before mux.
+          // leaky=downstream drops the OLDEST buffer when full, so mpegtsmux always
+          // receives the most current audio timestamps. leaky=upstream (old setting) was
+          // wrong: it dropped NEW audio, leaving the mux waiting for current timestamps
+          // after a video encoder stall, causing progressive lag accumulation.
           "queue",
           "max-size-buffers=0",
-          "max-size-time=200000000", // 200 ms — tight leash so drift can't accumulate
+          "max-size-time=200000000", // 200ms
           "max-size-bytes=0",
-          "leaky=upstream",          // Drop newest audio on overflow, never block
+          "leaky=downstream",        // Drop oldest — mux always gets current timestamps
           "!",
           "mux.", // Feed into the named mpegtsmux
-        );
-      }
-    } else if (protocol === "udp") {
-      // UDP streaming - lowest latency (200-500ms)
-      // Format: udp://HOST:PORT (e.g., udp://192.168.1.100:5000)
-      // Sends raw MPEG-TS over UDP
-
-      // Validate destination
-      if (!destination || destination.trim() === "") {
-        throw new Error(
-          "UDP destination is required (e.g., udp://192.168.1.100:5000)",
-        );
-      }
-
-      const udpHost = this._parseUdpHost(destination);
-      const udpPort = this._parseUdpPort(destination);
-
-      console.log(`📡 UDP destination: ${udpHost}:${udpPort}`);
-
-      pipeline.push(
-        "t2.",
-        "!",
-        "queue",
-        "max-size-buffers=0", // No buffering for absolute minimum latency
-        "max-size-time=0",
-        "max-size-bytes=0",
-        "!",
-        "mpegtsmux",
-        "name=mux",
-        "!",
-        "udpsink",
-        `host=${udpHost}`,
-        `port=${udpPort}`,
-        "sync=false", // Don't sync to clock
-        "async=false", // Don't wait for preroll
-      );
-
-      // Add audio branch into the mux if enabled
-      // Thread isolation: queue after caps gives audio its own thread
-      if (this.streamConfig.audioEnabled) {
-        const audioDevice = this.streamConfig.audioDevice || "hw:3,0";
-        console.log(`🎤 Audio enabled - capturing from ALSA device: ${audioDevice}`);
-        pipeline.push(
-          "alsasrc",
-          `device=${audioDevice}`,
-          "provide-clock=false",
-          "!",
-          "audio/x-raw,rate=32000,channels=2,format=S16LE",
-          "!",
-          "queue",              // Thread boundary: isolate audio from video
-          "max-size-buffers=0",
-          "max-size-time=500000000", // 500ms audio buffer
-          "max-size-bytes=0",
-          "!",
-          "audioconvert",
-          "!",
-          "audioresample",
-          "!",
-          "audio/x-raw,rate=48000,channels=2",
-          "!",
-          "voaacenc",
-          "bitrate=128000",
-          "!",
-          "aacparse",
-          "!",
-          "queue",              // Thread boundary: decouple audio encoder from mux
-          "max-size-buffers=0",
-          "max-size-time=500000000",
-          "max-size-bytes=0",
-          "!",
-          "mux.",
         );
       }
     } else if (protocol === "rtmp") {
@@ -1043,21 +958,27 @@ class StreamController extends EventEmitter {
       );
 
       // Add audio branch into the mux if enabled
-      // Thread isolation: queue after caps gives audio its own thread
       if (this.streamConfig.audioEnabled) {
         const audioDevice = this.streamConfig.audioDevice || "hw:3,0";
         console.log(`🎤 Audio enabled - capturing from ALSA device: ${audioDevice}`);
         pipeline.push(
           "alsasrc",
           `device=${audioDevice}`,
-          "provide-clock=false",
+          "provide-clock=false", // Don't let USB device clock become the pipeline clock
+          "do-timestamp=true",   // Stamp each buffer with pipeline clock time, not USB hardware clock
+          "buffer-time=50000",   // 50ms ALSA buffer (µs) — tight so do-timestamp stays accurate
+          "latency-time=25000",  // 25ms period — how often ALSA delivers chunks to the pipeline
           "!",
           "audio/x-raw,rate=32000,channels=2,format=S16LE",
           "!",
-          "queue",              // Thread boundary: isolate audio from video
-          "max-size-buffers=0",
-          "max-size-time=500000000", // 500ms audio buffer
+          // Small thread-isolation queue — not leaky so audiorate sees every buffer.
+          "queue",
+          "max-size-buffers=5",
+          "max-size-time=0",
           "max-size-bytes=0",
+          "!",
+          // audiorate: corrects USB clock drift by inserting silence or dropping samples
+          "audiorate",
           "!",
           "audioconvert",
           "!",
@@ -1070,10 +991,12 @@ class StreamController extends EventEmitter {
           "!",
           "aacparse",
           "!",
-          "queue",              // Thread boundary: decouple audio encoder from mux
+          // leaky=downstream drops the OLDEST buffer when full — mux always gets current timestamps
+          "queue",
           "max-size-buffers=0",
-          "max-size-time=500000000",
+          "max-size-time=200000000", // 200ms
           "max-size-bytes=0",
+          "leaky=downstream",
           "!",
           "mux.",
         );
@@ -1155,36 +1078,6 @@ class StreamController extends EventEmitter {
       }
     }
     return "localhost";
-  }
-
-  /**
-   * Parse UDP destination to extract host
-   * Format: udp://HOST:PORT or HOST:PORT
-   */
-  _parseUdpHost(destination) {
-    try {
-      const url = new URL(destination);
-      return url.hostname || "127.0.0.1";
-    } catch (e) {
-      // If not a valid URL, assume it's just HOST:PORT
-      const parts = destination.split(":");
-      return parts[0] || "127.0.0.1";
-    }
-  }
-
-  /**
-   * Parse UDP destination to extract port
-   * Format: udp://HOST:PORT or HOST:PORT
-   */
-  _parseUdpPort(destination) {
-    try {
-      const url = new URL(destination);
-      return url.port || "5000";
-    } catch (e) {
-      // If not a valid URL, assume it's just HOST:PORT
-      const parts = destination.split(":");
-      return parts[1] || "5000";
-    }
   }
 
   /**
