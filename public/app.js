@@ -546,6 +546,7 @@ document.addEventListener("keydown", (e) => {
 const streamProtocol = document.getElementById("streamProtocol");
 const streamDestination = document.getElementById("streamDestination");
 const streamBitrate = document.getElementById("streamBitrate");
+const audioEnabledCheckbox = document.getElementById("audioEnabled");
 const startStreamBtn = document.getElementById("startStream");
 const stopStreamBtn = document.getElementById("stopStream");
 const streamStatusText = document.getElementById("streamStatusText");
@@ -611,6 +612,7 @@ startStreamBtn.addEventListener("click", async () => {
       protocol: streamProtocol.value,
       destination: streamDestination.value,
       bitrate: parseInt(streamBitrate.value),
+      audioEnabled: audioEnabledCheckbox.checked,
       width: 1920,
       height: 1080,
       framerate: 30,
@@ -623,6 +625,7 @@ startStreamBtn.addEventListener("click", async () => {
       protocol: streamProtocol.value,
       destination: streamDestination.value,
       bitrate: parseInt(streamBitrate.value),
+      audioEnabled: audioEnabledCheckbox.checked,
       width: 1920,
       height: 1080,
       framerate: 30,
@@ -1716,6 +1719,7 @@ async function loadStreamConfig() {
       streamProtocol.value = data.config.protocol || "rtmp";
       streamDestination.value = data.config.destination || "";
       streamBitrate.value = data.config.bitrate || 5000000;
+      audioEnabledCheckbox.checked = data.config.audioEnabled !== false; // default true
 
       // Update custom dropdowns
       const protocolDropdown = streamProtocol.parentElement.querySelector(

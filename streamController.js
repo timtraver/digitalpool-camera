@@ -888,7 +888,8 @@ class StreamController extends EventEmitter {
         pipeline.push(
           "alsasrc",
           `device=${audioDevice}`,
-          "provide-clock=false", // Use pipeline clock as master, not USB device clock
+          "provide-clock=false", // Don't let USB device clock become the pipeline clock
+          "do-timestamp=true",   // Stamp each buffer with pipeline clock time, not USB hardware clock
           "!",
           "audio/x-raw,rate=32000,channels=2,format=S16LE", // Camera mic native format
           "!",

@@ -157,7 +157,7 @@ def main():
             # Audio branch: fully isolated in its own thread
             # The queue right after alsasrc caps ensures audio capture+encode
             # never competes with video processing for CPU time
-            f'alsasrc device={audio_device} provide-clock=false '
+            f'alsasrc device={audio_device} provide-clock=false do-timestamp=true '
             f'! audio/x-raw,rate=32000,channels=2,format=S16LE '
             # Thread boundary queue — leaky=downstream is critical.
             # USB mic crystal runs 50-200 ppm off system clock. At 200 ppm the 500ms queue
