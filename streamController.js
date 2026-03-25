@@ -221,6 +221,14 @@ class StreamController extends EventEmitter {
 
       this.gstProcess.stderr.on("data", (data) => {
         const message = data.toString();
+
+        // Suppress high-frequency operational messages that add no debugging value.
+        // "Overlay PNG reloaded" fires every time Puppeteer updates the screenshot
+        // (every ~5s) — logging it every time floods the console and stream log.
+        if (message.includes("Overlay PNG reloaded")) {
+          return; // silently discard
+        }
+
         console.error(`GStreamer stderr: ${message}`);
 
         // Only emit as error if it's an actual error (contains ERROR, WARNING, or CRITICAL)
@@ -282,20 +290,17 @@ class StreamController extends EventEmitter {
           "-analyzeduration", "0",  // skip stream analysis — stream format is already known
           // ── Video input: video-only MPEG-TS piped from GStreamer stdout ─────
           //
-          // CRITICAL — use_wallclock_as_timestamps:
-          // GStreamer's MPEG-TS packets carry PTS values from GStreamer's internal
-          // pipeline clock. ffmpeg's ALSA audio capture uses the ALSA hardware clock.
-          // These two clocks are independent and drift apart at 0.01–0.05% per hour.
-          // Without this flag, ffmpeg's muxer sees audio falling behind video PTS
-          // and buffers more and more video packets waiting for audio to "catch up".
-          // Over 8 hours that accumulates into minutes of latency, and the thread
-          // queue fills up (→ blocking warning) because the muxer is holding video.
+          // NOTE — no use_wallclock_as_timestamps here:
+          // That flag causes A/V sync problems. When ffmpeg is spawned, ALSA audio
+          // capture begins at t=0, but GStreamer's hardware encoder (MPP) takes 1-2
+          // seconds to initialize. With wallclock stamping, the first video packet
+          // arrives stamped at wall t=1-2s while audio has been at t=0 for 1-2
+          // seconds — instant sync offset visible to the viewer.
           //
-          // With this flag, ffmpeg replaces GStreamer's PTS with actual wall-clock
-          // time when each packet arrives at the pipe. Audio (ALSA) is also a
-          // wall-clock source, so both streams share the same clock domain and the
-          // muxer never needs to buffer video waiting for audio.
-          "-use_wallclock_as_timestamps", "1",
+          // Instead, ffmpeg is deferred (see below): it is not spawned until the
+          // very first video chunk arrives from GStreamer's pipe. Both ALSA and video
+          // therefore start at approximately the same real-world moment, and
+          // aresample=async handles any residual USB clock drift long-term.
           "-thread_queue_size", "4096",  // raised from 512 — eliminates blocking warning
           "-f", "mpegts",
           "-i", "pipe:0",
@@ -308,7 +313,7 @@ class StreamController extends EventEmitter {
           "-map", "1:a:0",  // audio from ALSA
           // ── Video: passthrough — no re-encode ───────────────────────────────
           "-c:v", "copy",
-          // ── Audio: AAC + async resampler absorbs any residual jitter ────────
+          // ── Audio: AAC + async resampler absorbs any residual USB clock jitter
           // async=1000: can stretch/compress up to 1000 samples/sec (~20ms/sec).
           // Over 8 hours that's >500 seconds of drift correction capacity —
           // more than enough for any real USB hardware clock drift.
@@ -320,24 +325,49 @@ class StreamController extends EventEmitter {
           "srt://0.0.0.0:8891?mode=listener&latency=500000",
         ];
 
-        console.log("Starting ffmpeg with args:", ffmpegArgs.join(" "));
-        this.ffmpegProcess = spawn("ffmpeg", ffmpegArgs, {
-          stdio: ["pipe", "pipe", "pipe"],
-        });
+        // ── Deferred ffmpeg spawn ───────────────────────────────────────────────
+        // GStreamer's hardware encoder (MPP) takes 1-2 seconds to produce its
+        // first frame. If we spawn ffmpeg immediately, ALSA starts recording at
+        // t=0 but video doesn't arrive until t=1-2s, creating an A/V offset that
+        // is visible to the viewer from the very first second of the stream.
+        //
+        // Solution: pause GStreamer's stdout stream and wait for the first data
+        // event. The moment GStreamer sends its first video chunk we spawn ffmpeg
+        // (so ALSA starts at the same instant as video), write that first chunk
+        // into ffmpeg's stdin manually, then switch to pipe() for all subsequent
+        // chunks. Both streams begin at ~t=0 relative to each other → no offset.
+        const gstStdout = this.gstProcess.stdout;
+        gstStdout.pause(); // hold data in the OS pipe buffer until ffmpeg is ready
 
-        // Pipe GStreamer's stdout (video-only MPEG-TS) into ffmpeg's stdin
-        this.gstProcess.stdout.pipe(this.ffmpegProcess.stdin);
+        const spawnFfmpegOnFirstChunk = (firstChunk) => {
+          console.log("Starting ffmpeg with args:", ffmpegArgs.join(" "));
+          this.ffmpegProcess = spawn("ffmpeg", ffmpegArgs, {
+            stdio: ["pipe", "pipe", "pipe"],
+          });
 
-        this.ffmpegProcess.stderr.on("data", (data) => {
-          const msg = data.toString();
-          console.log(`ffmpeg: ${msg}`);
-          this.emit("log", msg);
-        });
+          // Write the first chunk that triggered the spawn, then pipe the rest
+          this.ffmpegProcess.stdin.write(firstChunk);
+          gstStdout.pipe(this.ffmpegProcess.stdin);
+          gstStdout.resume();
 
-        this.ffmpegProcess.on("close", (code) => {
-          console.log(`ffmpeg exited with code ${code}`);
-          this.ffmpegProcess = null;
-        });
+          this.ffmpegProcess.stderr.on("data", (data) => {
+            const msg = data.toString();
+            console.log(`ffmpeg: ${msg}`);
+            this.emit("log", msg);
+          });
+
+          this.ffmpegProcess.stdin.on("error", (err) => {
+            // ffmpeg stdin closes when ffmpeg exits — suppress EPIPE noise
+            if (err.code !== "EPIPE") console.error(`ffmpeg stdin error: ${err.message}`);
+          });
+
+          this.ffmpegProcess.on("close", (code) => {
+            console.log(`ffmpeg exited with code ${code}`);
+            this.ffmpegProcess = null;
+          });
+        };
+
+        gstStdout.once("data", spawnFfmpegOnFirstChunk);
       }
 
       this.isStreaming = true;
