@@ -171,10 +171,11 @@ class StreamController extends EventEmitter {
 
       const gstArgs = this._buildGStreamerPipeline();
 
-      // Hybrid mode: GStreamer outputs video-only MPEG-TS to stdout,
-      // and a separate ffmpeg process adds ALSA audio + sends SRT.
-      // Applies to BOTH the direct gst-launch path and the compositor (Python) script
-      // path — the Python script also uses fdsink fd=1 when audio is enabled for SRT.
+      // Unified sync mode: GStreamer outputs a complete audio+video MPEG-TS to
+      // stdout (fdsink fd=1), and a separate ffmpeg process forwards it to SRT.
+      // ffmpeg performs NO encoding or clock decisions — it is a pure transport
+      // layer. All sync is guaranteed by the shared GStreamer pipeline clock.
+      // Applies to BOTH the direct gst-launch path and the Python compositor path.
       const useFfmpegAudio =
         this.streamConfig.protocol === "srt" &&
         this.streamConfig.audioEnabled;
@@ -184,9 +185,9 @@ class StreamController extends EventEmitter {
         console.log("Starting GStreamer with compositor script...");
         console.log("Script args:", gstArgs.scriptArgs.join(" "));
 
-        // In hybrid mode the Python script writes video-only MPEG-TS to stdout (fd=1)
-        // so stdout must be a pipe, not inherited. In non-hybrid mode we still pipe so
-        // the stderr log listener works; Python now writes all diagnostics to stderr.
+        // In SRT+audio mode the Python script writes a full audio+video MPEG-TS
+        // to stdout (fdsink fd=1). Always pipe stdout so ffmpeg can read it;
+        // all Python diagnostics go to stderr (captured by the stderr handler below).
         const compositorOpts = useFfmpegAudio
           ? { stdio: ["ignore", "pipe", "pipe"] }
           : { stdio: ["ignore", "pipe", "pipe"] }; // always pipe — diagnostics on stderr
@@ -287,10 +288,17 @@ class StreamController extends EventEmitter {
           // ── Input: complete audio+video MPEG-TS from GStreamer stdout ────────
           // GStreamer handles camera capture, audiomixer sync, AAC encoding, and
           // mpegtsmux muxing. ffmpeg receives a ready-to-forward MPEG-TS stream.
+          // probesize/analyzeduration must be large enough to detect BOTH the
+          // video PID and audio PID in the PAT/PMT tables. The old value of 32
+          // bytes was sufficient for video-only MPEG-TS, but a multi-stream TS
+          // requires at least one full PAT packet (188 bytes) plus one full PMT
+          // packet (188 bytes) = 376 bytes. Use 500000 (≈2700 TS packets) to
+          // give ffmpeg ample room to parse both PIDs even if mpegtsmux pads
+          // them with null packets during encoder warm-up.
           "-fflags", "+nobuffer+discardcorrupt",
           "-flags", "low_delay",
-          "-probesize", "32",       // MPEG-TS sync byte is detectable in 32 bytes
-          "-analyzeduration", "0",  // skip analysis — stream format is already known
+          "-probesize", "500000",
+          "-analyzeduration", "500000",
           "-thread_queue_size", "4096",
           "-f", "mpegts",
           "-i", "pipe:0",
@@ -300,56 +308,48 @@ class StreamController extends EventEmitter {
           "srt://0.0.0.0:8891?mode=listener&latency=500000",
         ];
 
-        // ── Deferred ffmpeg spawn ───────────────────────────────────────────────
-        // GStreamer's hardware encoder (MPP) takes 1-2 seconds to initialize
-        // before the first MPEG-TS packet arrives on stdout. Spawning ffmpeg
-        // immediately would open the SRT listener port before any stream data
-        // is ready, which can cause OBS to connect and then immediately stall.
+        // ── Immediate ffmpeg spawn ────────────────────────────────────────────
+        // Previously ffmpeg was spawned only on the first data chunk from
+        // GStreamer stdout (deferred spawn). That worked when audio was in
+        // ffmpeg — the first data event fired as soon as the video encoder
+        // produced its first frame, and ffmpeg needed to start ALSA at that
+        // exact instant to avoid an A/V offset.
         //
-        // Solution: wait for the first data event from GStreamer's stdout.
-        // The moment the first complete MPEG-TS chunk arrives (audio+video,
-        // already muxed by GStreamer), ffmpeg is spawned and that chunk is
-        // written into its stdin. pipe() handles everything after that.
+        // Now that audio lives inside GStreamer (audiomixer → mpegtsmux),
+        // mpegtsmux only outputs to fdsink/stdout AFTER both audio AND video
+        // pads have delivered at least one buffer. During the 1-2 second video
+        // encoder warm-up, audio buffers pile up (and are dropped by the leaky
+        // queue). The "first data" event can take up to 2+ seconds to fire —
+        // but the once() listener only starts flowing after it's attached, so
+        // there's a window where GStreamer is writing but Node hasn't attached
+        // the pipe yet and the OS pipe buffer can fill and apply back-pressure.
         //
-        // IMPORTANT: do NOT call gstStdout.pause() before attaching the once()
-        // listener. Calling pause() explicitly sets Node.js's internal
-        // _readableState.flowing = false. When a 'data' listener is then added,
-        // Node.js checks `if (flowing !== false) resume()` — and because flowing
-        // IS false, it skips resume(). The stream stays permanently paused, the
-        // once() listener never fires, ffmpeg never spawns, and SRT never starts.
-        // The OS pipe's 64 KB buffer is more than enough to hold the first chunk
-        // in the few microseconds between the once() callback and pipe() setup.
-        const gstStdout = this.gstProcess.stdout;
+        // Fix: spawn ffmpeg immediately. ffmpeg waits on pipe:0 for MPEG-TS
+        // sync bytes. GStreamer's stdout is piped to ffmpeg's stdin right away.
+        // No timing race — ffmpeg starts the SRT listener and buffers until
+        // GStreamer begins outputting muxed TS packets.
+        console.log("Starting ffmpeg with args:", ffmpegArgs.join(" "));
+        this.ffmpegProcess = spawn("ffmpeg", ffmpegArgs, {
+          stdio: ["pipe", "pipe", "pipe"],
+        });
 
-        const spawnFfmpegOnFirstChunk = (firstChunk) => {
-          console.log("Starting ffmpeg with args:", ffmpegArgs.join(" "));
-          this.ffmpegProcess = spawn("ffmpeg", ffmpegArgs, {
-            stdio: ["pipe", "pipe", "pipe"],
-          });
+        this.gstProcess.stdout.pipe(this.ffmpegProcess.stdin);
 
-          // Write the first chunk that triggered the spawn, then pipe the rest.
-          // pipe() handles backpressure and calls resume() internally.
-          this.ffmpegProcess.stdin.write(firstChunk);
-          gstStdout.pipe(this.ffmpegProcess.stdin);
+        this.ffmpegProcess.stderr.on("data", (data) => {
+          const msg = data.toString();
+          console.log(`ffmpeg: ${msg}`);
+          this.emit("log", msg);
+        });
 
-          this.ffmpegProcess.stderr.on("data", (data) => {
-            const msg = data.toString();
-            console.log(`ffmpeg: ${msg}`);
-            this.emit("log", msg);
-          });
+        this.ffmpegProcess.stdin.on("error", (err) => {
+          // ffmpeg stdin closes when ffmpeg exits — suppress EPIPE noise
+          if (err.code !== "EPIPE") console.error(`ffmpeg stdin error: ${err.message}`);
+        });
 
-          this.ffmpegProcess.stdin.on("error", (err) => {
-            // ffmpeg stdin closes when ffmpeg exits — suppress EPIPE noise
-            if (err.code !== "EPIPE") console.error(`ffmpeg stdin error: ${err.message}`);
-          });
-
-          this.ffmpegProcess.on("close", (code) => {
-            console.log(`ffmpeg exited with code ${code}`);
-            this.ffmpegProcess = null;
-          });
-        };
-
-        gstStdout.once("data", spawnFfmpegOnFirstChunk);
+        this.ffmpegProcess.on("close", (code) => {
+          console.log(`ffmpeg exited with code ${code}`);
+          this.ffmpegProcess = null;
+        });
       }
 
       this.isStreaming = true;
