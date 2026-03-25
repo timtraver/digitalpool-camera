@@ -268,36 +268,46 @@ class StreamController extends EventEmitter {
         const ffmpegArgs = [
           "-loglevel", "warning",
           // ── Low-latency input flags ─────────────────────────────────────────
-          // Without these, ffmpeg buffers ~5 MB of MPEG-TS from the pipe before
-          // starting to decode/output, causing the ~5-second delay. These flags
-          // tell ffmpeg to start immediately with minimal probing.
-          "-fflags", "+nobuffer",       // disable input buffering
-          "-flags", "low_delay",        // prefer low-delay decoding paths
-          "-avioflags", "direct",       // bypass libavformat's I/O buffer
-          "-probesize", "32",           // probe only 32 bytes (MPEG-TS sync bytes)
-          "-analyzeduration", "0",      // skip stream analysis entirely
+          "-fflags", "+nobuffer+discardcorrupt",
+          "-flags", "low_delay",
+          "-probesize", "32",       // probe only 32 bytes (MPEG-TS needs just the 0x47 sync byte)
+          "-analyzeduration", "0",  // skip stream analysis — stream format is already known
           // ── Video input: video-only MPEG-TS piped from GStreamer stdout ─────
-          "-thread_queue_size", "512",
+          //
+          // CRITICAL — use_wallclock_as_timestamps:
+          // GStreamer's MPEG-TS packets carry PTS values from GStreamer's internal
+          // pipeline clock. ffmpeg's ALSA audio capture uses the ALSA hardware clock.
+          // These two clocks are independent and drift apart at 0.01–0.05% per hour.
+          // Without this flag, ffmpeg's muxer sees audio falling behind video PTS
+          // and buffers more and more video packets waiting for audio to "catch up".
+          // Over 8 hours that accumulates into minutes of latency, and the thread
+          // queue fills up (→ blocking warning) because the muxer is holding video.
+          //
+          // With this flag, ffmpeg replaces GStreamer's PTS with actual wall-clock
+          // time when each packet arrives at the pipe. Audio (ALSA) is also a
+          // wall-clock source, so both streams share the same clock domain and the
+          // muxer never needs to buffer video waiting for audio.
+          "-use_wallclock_as_timestamps", "1",
+          "-thread_queue_size", "4096",  // raised from 512 — eliminates blocking warning
           "-f", "mpegts",
           "-i", "pipe:0",
           // ── Audio input: ALSA USB mic ───────────────────────────────────────
-          // Capture at the mic's native 32kHz; ffmpeg resamples to 48kHz for AAC.
-          "-thread_queue_size", "512",
+          "-thread_queue_size", "4096",
           "-f", "alsa", "-ac", "2", "-ar", "32000",
           "-i", audioDevice,
           // ── Stream mapping ──────────────────────────────────────────────────
           "-map", "0:v:0",  // video from pipe
           "-map", "1:a:0",  // audio from ALSA
-          // ── Video: passthrough — no re-encode, timestamps preserved ─────────
+          // ── Video: passthrough — no re-encode ───────────────────────────────
           "-c:v", "copy",
-          // ── Audio: AAC encode + async resampler for A/V sync compensation ──
-          // aresample=async=1000: the resampler may stretch/squeeze up to 1000 samples
-          // per second to keep audio timestamps locked to the video clock. This
-          // absorbs USB mic clock drift without any audible artefacts.
+          // ── Audio: AAC + async resampler absorbs any residual jitter ────────
+          // async=1000: can stretch/compress up to 1000 samples/sec (~20ms/sec).
+          // Over 8 hours that's >500 seconds of drift correction capacity —
+          // more than enough for any real USB hardware clock drift.
           "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
           "-af", "aresample=async=1000",
           // ── Output: MPEG-TS over SRT, listener mode ─────────────────────────
-          "-max_delay", "0",  // don't add extra output buffering
+          "-max_delay", "0",
           "-f", "mpegts",
           "srt://0.0.0.0:8891?mode=listener&latency=500000",
         ];
