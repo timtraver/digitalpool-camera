@@ -86,23 +86,16 @@ def main():
     if protocol == "srt":
         srt_uri = destination if destination else "srt://:8891"
         if audio_device:
-            # HYBRID MODE: GStreamer outputs video-only MPEG-TS to stdout.
-            # Node.js pipes stdout into a separate ffmpeg process that captures
-            # ALSA audio and muxes it with the video before sending SRT.
-            #
-            # Why: mpegtsmux is a SYNCHRONIZING muxer — it holds video output until
-            # audio timestamps align. USB mic clock drift eventually causes audio to
-            # stall, which stalls video through the mux → pixelation. No queue tuning
-            # can fix this; it is inherent to how mpegtsmux works.
-            #
-            # With ffmpeg handling audio independently, USB mic issues can NEVER
-            # block the video path.
-            print(f"🎤 SRT hybrid mode — video-only MPEG-TS to stdout, ffmpeg adds audio", file=sys.stderr)
+            # GStreamer handles audio via audiomixer → mpegtsmux → fdsink.
+            # Both audio and video share the pipeline clock → automatic A/V sync.
+            # audiomixer fills USB mic gaps with silence so mpegtsmux never stalls.
+            # FFmpeg receives the complete audio+video MPEG-TS and only forwards to SRT.
+            print(f"🎤 SRT mode — audiomixer in GStreamer pipeline (pipeline clock sync)", file=sys.stderr)
             output_sink = (
                 f'! mpegtsmux name=mux alignment=7 '
                 f'! fdsink fd=1 sync=false async=false '
             )
-            audio_mux_target = None  # Audio is handled by ffmpeg, not GStreamer
+            audio_mux_target = 'mux.'  # Audio goes into GStreamer mux via audiomixer
         else:
             # No audio — GStreamer handles SRT directly (stable, no muxer sync issue)
             output_sink = (
@@ -162,10 +155,15 @@ def main():
            f'! queue max-size-buffers=0 max-size-time=1000000000 max-size-bytes=0 leaky=downstream ')
         + output_sink +
         (
-            # Audio branch: only when audio_device is set AND we're NOT in hybrid mode.
-            # In hybrid mode (SRT + audio_device set), audio_mux_target is None because
-            # ffmpeg handles audio capture and muxing externally — GStreamer outputs
-            # video-only MPEG-TS to stdout (fdsink fd=1) for ffmpeg to consume.
+            # Audio branch: audiomixer → voaacenc → mux.
+            # audiomixer runs at a fixed pipeline-clock rate and fills any USB mic gap
+            # with silence — mpegtsmux always sees continuous audio → no video stall.
+            # Both streams share the single pipeline clock → automatic A/V sync.
+            f'audiomixer name=amix latency=200000000 '
+            f'! voaacenc bitrate=128000 '
+            f'! aacparse '
+            f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream '
+            f'! {audio_mux_target} '
             f'alsasrc device={audio_device} provide-clock=false do-timestamp=true '
             f'buffer-time=50000 latency-time=25000 '
             f'! audio/x-raw,rate=32000,channels=2,format=S16LE '
@@ -173,10 +171,7 @@ def main():
             f'! audiorate '
             f'! audioconvert ! audioresample '
             f'! audio/x-raw,rate=48000,channels=2 '
-            f'! voaacenc bitrate=128000 '
-            f'! aacparse '
-            f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream '
-            f'! {audio_mux_target} '
+            f'! amix. '
             if audio_device and audio_mux_target else ''
         ) +
         # Preview branch (own thread, low priority)
