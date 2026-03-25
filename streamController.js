@@ -331,13 +331,21 @@ class StreamController extends EventEmitter {
         // t=0 but video doesn't arrive until t=1-2s, creating an A/V offset that
         // is visible to the viewer from the very first second of the stream.
         //
-        // Solution: pause GStreamer's stdout stream and wait for the first data
-        // event. The moment GStreamer sends its first video chunk we spawn ffmpeg
-        // (so ALSA starts at the same instant as video), write that first chunk
-        // into ffmpeg's stdin manually, then switch to pipe() for all subsequent
-        // chunks. Both streams begin at ~t=0 relative to each other → no offset.
+        // Solution: wait for the first data event from GStreamer's stdout. The
+        // moment GStreamer sends its first video chunk we spawn ffmpeg (so ALSA
+        // starts at the same instant as video), write that first chunk into
+        // ffmpeg's stdin manually, then switch to pipe() for all subsequent chunks.
+        // Both streams begin at ~t=0 relative to each other → no offset.
+        //
+        // IMPORTANT: do NOT call gstStdout.pause() before attaching the once()
+        // listener. Calling pause() explicitly sets Node.js's internal
+        // _readableState.flowing = false. When a 'data' listener is then added,
+        // Node.js checks `if (flowing !== false) resume()` — and because flowing
+        // IS false, it skips resume(). The stream stays permanently paused, the
+        // once() listener never fires, ffmpeg never spawns, and SRT never starts.
+        // The OS pipe's 64 KB buffer is more than enough to hold the first chunk
+        // in the few microseconds between the once() callback and pipe() setup.
         const gstStdout = this.gstProcess.stdout;
-        gstStdout.pause(); // hold data in the OS pipe buffer until ffmpeg is ready
 
         const spawnFfmpegOnFirstChunk = (firstChunk) => {
           console.log("Starting ffmpeg with args:", ffmpegArgs.join(" "));
@@ -345,10 +353,10 @@ class StreamController extends EventEmitter {
             stdio: ["pipe", "pipe", "pipe"],
           });
 
-          // Write the first chunk that triggered the spawn, then pipe the rest
+          // Write the first chunk that triggered the spawn, then pipe the rest.
+          // pipe() handles backpressure and calls resume() internally.
           this.ffmpegProcess.stdin.write(firstChunk);
           gstStdout.pipe(this.ffmpegProcess.stdin);
-          gstStdout.resume();
 
           this.ffmpegProcess.stderr.on("data", (data) => {
             const msg = data.toString();
