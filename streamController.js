@@ -8,6 +8,7 @@ class StreamController extends EventEmitter {
     super();
     this.cameraDevice = cameraDevice;
     this.gstProcess = null;
+    this.ffmpegProcess = null; // Separate ffmpeg process for SRT+audio hybrid
     this.isStreaming = false;
     this.configFile = path.join(__dirname, "stream-config.json");
 
@@ -170,6 +171,13 @@ class StreamController extends EventEmitter {
 
       const gstArgs = this._buildGStreamerPipeline();
 
+      // Hybrid mode: GStreamer outputs video-only MPEG-TS to stdout,
+      // and a separate ffmpeg process adds ALSA audio + sends SRT.
+      // Only applies to the direct gst-launch path (not compositor script).
+      const useFfmpegAudio = !gstArgs.useCompositorScript &&
+        this.streamConfig.protocol === "srt" &&
+        this.streamConfig.audioEnabled;
+
       // Check if we're using the compositor helper script
       if (gstArgs.useCompositorScript) {
         console.log("Starting GStreamer with compositor script...");
@@ -185,13 +193,23 @@ class StreamController extends EventEmitter {
         }
       } else {
         console.log("Starting GStreamer with pipeline:", gstArgs.join(" "));
-        this.gstProcess = spawn("gst-launch-1.0", gstArgs);
+        if (useFfmpegAudio) {
+          // stdout is binary MPEG-TS destined for ffmpeg — must be a pipe, not inherited
+          this.gstProcess = spawn("gst-launch-1.0", gstArgs, {
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+        } else {
+          this.gstProcess = spawn("gst-launch-1.0", gstArgs);
+        }
       }
 
-      this.gstProcess.stdout.on("data", (data) => {
-        console.log(`GStreamer stdout: ${data}`);
-        this.emit("log", data.toString());
-      });
+      if (!useFfmpegAudio) {
+        // In hybrid mode stdout is raw binary MPEG-TS — do not attach a text listener
+        this.gstProcess.stdout.on("data", (data) => {
+          console.log(`GStreamer stdout: ${data}`);
+          this.emit("log", data.toString());
+        });
+      }
 
       this.gstProcess.stderr.on("data", (data) => {
         const message = data.toString();
@@ -218,6 +236,13 @@ class StreamController extends EventEmitter {
         this.isStreaming = false;
         this.gstProcess = null;
 
+        // When GStreamer exits its stdout pipe closes, which causes ffmpeg to see EOF
+        // on stdin and exit naturally. Kill explicitly in case it hangs.
+        if (this.ffmpegProcess) {
+          try { this.ffmpegProcess.kill("SIGINT"); } catch (_) {}
+          this.ffmpegProcess = null;
+        }
+
         // If GStreamer failed (non-zero exit code), ensure camera is released
         if (code !== 0 && code !== null) {
           console.error(`❌ GStreamer failed with exit code ${code}`);
@@ -232,6 +257,53 @@ class StreamController extends EventEmitter {
 
         this.emit("stopped", code);
       });
+
+      // Spawn ffmpeg for SRT+audio hybrid: reads video-only MPEG-TS from GStreamer's
+      // stdout and adds ALSA audio. ffmpeg manages audio/video timing independently so
+      // USB mic clock drift can NEVER stall the video path.
+      if (useFfmpegAudio) {
+        const audioDevice = this.streamConfig.audioDevice || "hw:3,0";
+        console.log(`🎤 SRT hybrid mode — ffmpeg adding audio from ALSA: ${audioDevice}`);
+
+        const ffmpegArgs = [
+          "-loglevel", "warning",
+          // Video input: video-only MPEG-TS piped from GStreamer stdout
+          "-thread_queue_size", "512",
+          "-f", "mpegts", "-i", "pipe:0",
+          // Audio input: ALSA USB mic
+          "-thread_queue_size", "512",
+          "-f", "alsa", "-ac", "2", "-ar", "32000", "-i", audioDevice,
+          // Stream mapping
+          "-map", "0:v:0",   // video from pipe
+          "-map", "1:a:0",   // audio from ALSA
+          // Video: pure passthrough — no re-encode, zero extra latency
+          "-c:v", "copy",
+          // Audio: AAC encode, resample to 48kHz
+          "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
+          // Output: MPEG-TS over SRT in listener mode (OBS connects as client)
+          "-f", "mpegts",
+          "srt://0.0.0.0:8891?mode=listener&latency=500000",
+        ];
+
+        console.log("Starting ffmpeg with args:", ffmpegArgs.join(" "));
+        this.ffmpegProcess = spawn("ffmpeg", ffmpegArgs, {
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+
+        // Pipe GStreamer's stdout (video-only MPEG-TS) into ffmpeg's stdin
+        this.gstProcess.stdout.pipe(this.ffmpegProcess.stdin);
+
+        this.ffmpegProcess.stderr.on("data", (data) => {
+          const msg = data.toString();
+          console.log(`ffmpeg: ${msg}`);
+          this.emit("log", msg);
+        });
+
+        this.ffmpegProcess.on("close", (code) => {
+          console.log(`ffmpeg exited with code ${code}`);
+          this.ffmpegProcess = null;
+        });
+      }
 
       this.isStreaming = true;
       this.emit("started");
@@ -262,6 +334,14 @@ class StreamController extends EventEmitter {
 
     try {
       this.gstProcess.kill("SIGINT");
+
+      // In hybrid mode, killing GStreamer closes the pipe → ffmpeg sees EOF → exits.
+      // Kill explicitly here too in case it doesn't exit on its own.
+      if (this.ffmpegProcess) {
+        try { this.ffmpegProcess.kill("SIGINT"); } catch (_) {}
+        this.ffmpegProcess = null;
+      }
+
       this.isStreaming = false;
 
       // Wait for process to fully exit and release the camera device
@@ -863,69 +943,35 @@ class StreamController extends EventEmitter {
         "name=mux",
         "alignment=7", // Align packets for better compatibility
         "!",
-        "srtsink", // SRT listener mode
-        "uri=srt://:8891", // Listen on all interfaces, port 8891
-        "wait-for-connection=false", // Don't block pipeline waiting for client
-        "latency=500", // Latency in ms — larger window gives SRT room to retransmit instead of dropping
-        "sync=false", // Don't sync to clock — prevents cascading lag from processing spikes
-        "async=false", // Don't wait for preroll
       );
 
-      // Add audio branch into the mux if enabled
-      // Thread isolation: queue after caps gives audio its own thread,
-      // so video processing spikes can't starve audio capture/encoding
       if (this.streamConfig.audioEnabled) {
-        const audioDevice = this.streamConfig.audioDevice || "hw:3,0";
-        console.log(`🎤 Audio enabled - capturing from ALSA device: ${audioDevice}`);
+        // HYBRID MODE: GStreamer outputs video-only MPEG-TS to stdout.
+        // A separate ffmpeg process reads it, adds ALSA audio, and sends SRT.
+        //
+        // Why: mpegtsmux is a SYNCHRONIZING muxer — it holds video output until audio
+        // timestamps align. USB mic clock drift eventually causes audio to stall, which
+        // stalls video through the mux, causing pixelation. No queue tuning can fix this;
+        // it is inherent to how mpegtsmux works.
+        //
+        // ffmpeg manages audio/video sync completely independently: audio issues never
+        // block the video path. startStream() spawns the ffmpeg process and pipes stdout.
         pipeline.push(
-          "alsasrc",
-          `device=${audioDevice}`,
-          "provide-clock=false", // Don't let USB device clock become the pipeline clock
-          "do-timestamp=true",   // Stamp each buffer with pipeline clock time, not USB hardware clock
-          "buffer-time=50000",   // 50ms ALSA buffer (µs) — tight so do-timestamp stays accurate
-          "latency-time=25000",  // 25ms period — how often ALSA delivers chunks to the pipeline
-          "!",
-          "audio/x-raw,rate=32000,channels=2,format=S16LE", // Camera mic native format
-          "!",
-          // Thread-isolation queue before audiorate — MUST be leaky=downstream.
-          // If this queue fills and blocks, alsasrc stalls. alsasrc stalled means audiorate
-          // gets no input and produces nothing. mpegtsmux then waits indefinitely for audio,
-          // which stalls video too — causing pixelation. leaky=downstream ensures alsasrc
-          // is NEVER blocked. audiorate fills any resulting gaps with silence automatically.
-          "queue",
-          "max-size-buffers=2",
-          "max-size-time=0",
-          "max-size-bytes=0",
-          "leaky=downstream",
-          "!",
-          // audiorate: corrects USB clock drift and fills timestamp gaps with silence.
-          // When the upstream queue drops old buffers, audiorate sees a gap and inserts
-          // silence so mpegtsmux always has audio data — video is never held waiting.
-          "audiorate",
-          "!",
-          "audioconvert",
-          "!",
-          "audioresample",
-          "!",
-          "audio/x-raw,rate=48000,channels=2",
-          "!",
-          "voaacenc",
-          "bitrate=128000",
-          "!",
-          "aacparse",
-          "!",
-          // Final audio queue before mux.
-          // leaky=downstream drops the OLDEST buffer when full, so mpegtsmux always
-          // receives the most current audio timestamps. leaky=upstream (old setting) was
-          // wrong: it dropped NEW audio, leaving the mux waiting for current timestamps
-          // after a video encoder stall, causing progressive lag accumulation.
-          "queue",
-          "max-size-buffers=0",
-          "max-size-time=200000000", // 200ms
-          "max-size-bytes=0",
-          "leaky=downstream",        // Drop oldest — mux always gets current timestamps
-          "!",
-          "mux.", // Feed into the named mpegtsmux
+          "fdsink",
+          "fd=1",      // stdout — piped to ffmpeg by Node.js
+          "sync=false",
+          "async=false",
+        );
+        // No audio branch in GStreamer — ffmpeg handles ALSA capture and AAC encoding.
+      } else {
+        // No audio — GStreamer handles SRT directly (known stable path)
+        pipeline.push(
+          "srtsink",
+          "uri=srt://:8891",
+          "wait-for-connection=false",
+          "latency=500",
+          "sync=false",
+          "async=false",
         );
       }
     } else if (protocol === "rtmp") {
