@@ -173,8 +173,9 @@ class StreamController extends EventEmitter {
 
       // Hybrid mode: GStreamer outputs video-only MPEG-TS to stdout,
       // and a separate ffmpeg process adds ALSA audio + sends SRT.
-      // Only applies to the direct gst-launch path (not compositor script).
-      const useFfmpegAudio = !gstArgs.useCompositorScript &&
+      // Applies to BOTH the direct gst-launch path and the compositor (Python) script
+      // path — the Python script also uses fdsink fd=1 when audio is enabled for SRT.
+      const useFfmpegAudio =
         this.streamConfig.protocol === "srt" &&
         this.streamConfig.audioEnabled;
 
@@ -183,13 +184,20 @@ class StreamController extends EventEmitter {
         console.log("Starting GStreamer with compositor script...");
         console.log("Script args:", gstArgs.scriptArgs.join(" "));
 
+        // In hybrid mode the Python script writes video-only MPEG-TS to stdout (fd=1)
+        // so stdout must be a pipe, not inherited. In non-hybrid mode we still pipe so
+        // the stderr log listener works; Python now writes all diagnostics to stderr.
+        const compositorOpts = useFfmpegAudio
+          ? { stdio: ["ignore", "pipe", "pipe"] }
+          : { stdio: ["ignore", "pipe", "pipe"] }; // always pipe — diagnostics on stderr
+
         // Check if scriptPath is a Python script, Node script, or bash script
         if (gstArgs.scriptPath === 'python3' || gstArgs.scriptPath === 'node') {
           // For Python/Node scripts, spawn the interpreter directly with script as first arg
-          this.gstProcess = spawn(gstArgs.scriptPath, gstArgs.scriptArgs);
+          this.gstProcess = spawn(gstArgs.scriptPath, gstArgs.scriptArgs, compositorOpts);
         } else {
           // For bash scripts, spawn bash with script path
-          this.gstProcess = spawn("bash", [gstArgs.scriptPath, ...gstArgs.scriptArgs]);
+          this.gstProcess = spawn("bash", [gstArgs.scriptPath, ...gstArgs.scriptArgs], compositorOpts);
         }
       } else {
         console.log("Starting GStreamer with pipeline:", gstArgs.join(" "));

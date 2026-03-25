@@ -17,7 +17,7 @@ Gst.init(None)
 
 def main():
     if len(sys.argv) < 8:
-        print(f"Usage: {sys.argv[0]} CAMERA_DEVICE WIDTH HEIGHT FRAMERATE BITRATE PROTOCOL DESTINATION [PNG_PATH] [OVERLAY_TEXT] [SHOW_TIMESTAMP] [FONT_SIZE] [COLOR] [BACKGROUND] [TIMESTAMP_FORMAT] [TITLE_POS] [TIMESTAMP_POS]")
+        print(f"Usage: {sys.argv[0]} CAMERA_DEVICE WIDTH HEIGHT FRAMERATE BITRATE PROTOCOL DESTINATION [PNG_PATH] [OVERLAY_TEXT] [SHOW_TIMESTAMP] [FONT_SIZE] [COLOR] [BACKGROUND] [TIMESTAMP_FORMAT] [TITLE_POS] [TIMESTAMP_POS]", file=sys.stderr)
         sys.exit(1)
 
     camera_device = sys.argv[1]
@@ -57,17 +57,19 @@ def main():
     title_shaded_bg = "shaded-background=true " if overlay_background != "transparent" else ""
     ts_shaded_bg = "shaded-background=true " if ts_background != "transparent" else ""
 
-    print(f"🎨 Starting stream with dynamic PNG overlay (Python GStreamer)...")
-    print(f"Camera: {camera_device}")
-    print(f"Resolution: {width}x{height}@{framerate}fps")
-    print(f"Protocol: {protocol}")
-    print(f"Destination: {destination}")
-    print(f"PNG Overlay: {png_path} (auto-reload on change)")
-    print(f"Text Overlay: {overlay_text}")
-    print(f"Show Timestamp: {show_timestamp}")
-    print(f"Title: color={overlay_color}, size={font_size}, bg={overlay_background}")
-    print(f"Timestamp: color={ts_color}, size={ts_font_size}, bg={ts_background}")
-    print(f"Timestamp Format: {timestamp_format}")
+    # All diagnostic output goes to stderr so stdout is reserved for clean binary
+    # MPEG-TS data when running in hybrid SRT+audio mode (fdsink fd=1 → ffmpeg pipe).
+    print(f"🎨 Starting stream with dynamic PNG overlay (Python GStreamer)...", file=sys.stderr)
+    print(f"Camera: {camera_device}", file=sys.stderr)
+    print(f"Resolution: {width}x{height}@{framerate}fps", file=sys.stderr)
+    print(f"Protocol: {protocol}", file=sys.stderr)
+    print(f"Destination: {destination}", file=sys.stderr)
+    print(f"PNG Overlay: {png_path} (auto-reload on change)", file=sys.stderr)
+    print(f"Text Overlay: {overlay_text}", file=sys.stderr)
+    print(f"Show Timestamp: {show_timestamp}", file=sys.stderr)
+    print(f"Title: color={overlay_color}, size={font_size}, bg={overlay_background}", file=sys.stderr)
+    print(f"Timestamp: color={ts_color}, size={ts_font_size}, bg={ts_background}", file=sys.stderr)
+    print(f"Timestamp Format: {timestamp_format}", file=sys.stderr)
 
     # Build pipeline string - same as the shell script but with named overlay element
     text_overlay = ""
@@ -82,14 +84,32 @@ def main():
 
     # Build protocol-specific output sink
     if protocol == "srt":
-        # SRT: use mpegtsmux → srtsink (listener mode)
-        # latency=500ms: larger retransmit window prevents packet drops from VBR bursts or jitter
         srt_uri = destination if destination else "srt://:8891"
-        output_sink = (
-            f'! mpegtsmux name=mux alignment=7 '
-            f'! srtsink uri="{srt_uri}" wait-for-connection=false latency=500 sync=false async=false '
-        )
-        audio_mux_target = 'mux.'
+        if audio_device:
+            # HYBRID MODE: GStreamer outputs video-only MPEG-TS to stdout.
+            # Node.js pipes stdout into a separate ffmpeg process that captures
+            # ALSA audio and muxes it with the video before sending SRT.
+            #
+            # Why: mpegtsmux is a SYNCHRONIZING muxer — it holds video output until
+            # audio timestamps align. USB mic clock drift eventually causes audio to
+            # stall, which stalls video through the mux → pixelation. No queue tuning
+            # can fix this; it is inherent to how mpegtsmux works.
+            #
+            # With ffmpeg handling audio independently, USB mic issues can NEVER
+            # block the video path.
+            print(f"🎤 SRT hybrid mode — video-only MPEG-TS to stdout, ffmpeg adds audio", file=sys.stderr)
+            output_sink = (
+                f'! mpegtsmux name=mux alignment=7 '
+                f'! fdsink fd=1 sync=false async=false '
+            )
+            audio_mux_target = None  # Audio is handled by ffmpeg, not GStreamer
+        else:
+            # No audio — GStreamer handles SRT directly (stable, no muxer sync issue)
+            output_sink = (
+                f'! mpegtsmux name=mux alignment=7 '
+                f'! srtsink uri="{srt_uri}" wait-for-connection=false latency=500 sync=false async=false '
+            )
+            audio_mux_target = 'mux.'
     elif protocol == "rtmp":
         # RTMP: use flvmux → rtmpsink
         # Do NOT add a second h264parse here. The h264parse config-interval=-1 upstream
@@ -105,7 +125,7 @@ def main():
         )
         audio_mux_target = 'mux.'
     else:
-        print(f"❌ Unsupported protocol: {protocol}")
+        print(f"❌ Unsupported protocol: {protocol}", file=sys.stderr)
         sys.exit(1)
 
     # Thread architecture (each queue creates a new thread boundary):
@@ -142,26 +162,22 @@ def main():
            f'! queue max-size-buffers=0 max-size-time=1000000000 max-size-bytes=0 leaky=downstream ')
         + output_sink +
         (
-            # Audio branch: fully isolated in its own thread
+            # Audio branch: only when audio_device is set AND we're NOT in hybrid mode.
+            # In hybrid mode (SRT + audio_device set), audio_mux_target is None because
+            # ffmpeg handles audio capture and muxing externally — GStreamer outputs
+            # video-only MPEG-TS to stdout (fdsink fd=1) for ffmpeg to consume.
             f'alsasrc device={audio_device} provide-clock=false do-timestamp=true '
             f'buffer-time=50000 latency-time=25000 '
             f'! audio/x-raw,rate=32000,channels=2,format=S16LE '
-            # Thread-isolation queue before audiorate — MUST be leaky=downstream.
-            # A blocked alsasrc → no audiorate output → mux waits for audio → video stalls.
-            # audiorate fills gaps from dropped buffers with silence — mux never waits.
             f'! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
             f'! audiorate '
             f'! audioconvert ! audioresample '
             f'! audio/x-raw,rate=48000,channels=2 '
             f'! voaacenc bitrate=128000 '
             f'! aacparse '
-            # Final audio queue before mux.
-            # leaky=downstream drops the OLDEST buffer when full — mux always gets current
-            # timestamps. leaky=upstream (old) was wrong: it dropped NEW audio, leaving the
-            # mux waiting for current timestamps after a video encoder stall.
             f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream '
             f'! {audio_mux_target} '
-            if audio_device else ''
+            if audio_device and audio_mux_target else ''
         ) +
         # Preview branch (own thread, low priority)
         f't. ! queue max-size-buffers=10 leaky=downstream '
@@ -173,7 +189,7 @@ def main():
         f'! tcpserversink host=0.0.0.0 port=8555 sync=false recover-policy=keyframe'
     )
 
-    print(f"\nPipeline: {pipeline_str}\n")
+    print(f"\nPipeline: {pipeline_str}\n", file=sys.stderr)
 
     pipeline = Gst.parse_launch(pipeline_str)
     overlay_element = pipeline.get_by_name("overlay")
@@ -197,7 +213,7 @@ def main():
             if current_mtime != last_mtime:
                 last_mtime = current_mtime
                 overlay_element.set_property("location", png_path)
-                print(f"🔄 Overlay PNG reloaded (mtime changed)")
+                print(f"🔄 Overlay PNG reloaded (mtime changed)", file=sys.stderr)
         except OSError:
             pass  # File doesn't exist yet or was briefly removed during atomic write
         return True  # Keep the timer running
@@ -214,42 +230,42 @@ def main():
     def on_message(bus, message):
         t = message.type
         if t == Gst.MessageType.EOS:
-            print("🛑 End of stream")
+            print("🛑 End of stream", file=sys.stderr)
             loop.quit()
         elif t == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
-            print(f"❌ GStreamer error: {err.message}")
+            print(f"❌ GStreamer error: {err.message}", file=sys.stderr)
             if debug:
-                print(f"   Debug: {debug}")
+                print(f"   Debug: {debug}", file=sys.stderr)
             loop.quit()
         elif t == Gst.MessageType.STATE_CHANGED:
             if message.src == pipeline:
                 old, new, pending = message.parse_state_changed()
-                print(f"Pipeline state: {old.value_nick} → {new.value_nick}")
+                print(f"Pipeline state: {old.value_nick} → {new.value_nick}", file=sys.stderr)
 
     bus.connect("message", on_message)
 
     # Start pipeline
     ret = pipeline.set_state(Gst.State.PLAYING)
     if ret == Gst.StateChangeReturn.FAILURE:
-        print("❌ Failed to start pipeline")
+        print("❌ Failed to start pipeline", file=sys.stderr)
         # Check bus for the actual error message
         bus = pipeline.get_bus()
         msg = bus.timed_pop_filtered(5 * Gst.SECOND, Gst.MessageType.ERROR)
         if msg:
             err, debug = msg.parse_error()
-            print(f"   Error: {err.message}")
+            print(f"   Error: {err.message}", file=sys.stderr)
             if debug:
-                print(f"   Debug: {debug}")
+                print(f"   Debug: {debug}", file=sys.stderr)
         pipeline.set_state(Gst.State.NULL)
         sys.exit(1)
 
-    print("✅ Pipeline started, overlay will auto-reload when PNG changes")
+    print("✅ Pipeline started, overlay will auto-reload when PNG changes", file=sys.stderr)
 
     try:
         loop.run()
     except KeyboardInterrupt:
-        print("\n🛑 Interrupted")
+        print("\n🛑 Interrupted", file=sys.stderr)
     finally:
         pipeline.set_state(Gst.State.NULL)
 
