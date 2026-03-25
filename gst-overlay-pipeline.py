@@ -131,7 +131,7 @@ def main():
         # Constrained VBR: bps_max=1.6x target allows the encoder to burst for high-motion
         # frames (fast pool shots) rather than raising quantizer and pixelating.
         # SRT latency=500ms absorbs the short bursts; average bitrate stays near bps target.
-        + f'! mpph264enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=15 header-mode=each-idr profile=baseline '
+        + f'! mpph264enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr profile=baseline '
         + f"! video/x-h264,stream-format=byte-stream "
         f'! h264parse config-interval=-1 '
         # Thread boundary before mux to decouple encoder from network I/O
@@ -146,10 +146,10 @@ def main():
             f'alsasrc device={audio_device} provide-clock=false do-timestamp=true '
             f'buffer-time=50000 latency-time=25000 '
             f'! audio/x-raw,rate=32000,channels=2,format=S16LE '
-            # Small thread-isolation queue — not leaky so audiorate sees every buffer.
-            f'! queue max-size-buffers=5 max-size-time=0 max-size-bytes=0 '
-            # audiorate: corrects USB clock drift by inserting silence or dropping samples
-            # to keep audio timestamps locked to the pipeline clock.
+            # Thread-isolation queue before audiorate — MUST be leaky=downstream.
+            # A blocked alsasrc → no audiorate output → mux waits for audio → video stalls.
+            # audiorate fills gaps from dropped buffers with silence — mux never waits.
+            f'! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
             f'! audiorate '
             f'! audioconvert ! audioresample '
             f'! audio/x-raw,rate=48000,channels=2 '

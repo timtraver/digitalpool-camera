@@ -779,7 +779,7 @@ class StreamController extends EventEmitter {
         // pixelation. SRT latency=500ms absorbs short bursts; average stays at target bps.
         `bps-max=${Math.round(bitrate * 1.6)}`,
         "rc-mode=vbr",          // VBR with bps-max cap = constrained VBR — best quality/stability tradeoff
-        "gop=15",               // Keyframe every 0.5s — faster recovery from any packet loss
+        "gop=5",                // Keyframe every ~167ms — fast recovery from any dropped frame
         "header-mode=each-idr",
         "profile=baseline", // No B-frames — required for RTMP/FLV and better for low-latency
         "!",
@@ -887,15 +887,20 @@ class StreamController extends EventEmitter {
           "!",
           "audio/x-raw,rate=32000,channels=2,format=S16LE", // Camera mic native format
           "!",
-          // Small thread-isolation queue — not leaky so audiorate sees every buffer.
-          // audiorate handles all rate correction; this queue is only a thread boundary.
+          // Thread-isolation queue before audiorate — MUST be leaky=downstream.
+          // If this queue fills and blocks, alsasrc stalls. alsasrc stalled means audiorate
+          // gets no input and produces nothing. mpegtsmux then waits indefinitely for audio,
+          // which stalls video too — causing pixelation. leaky=downstream ensures alsasrc
+          // is NEVER blocked. audiorate fills any resulting gaps with silence automatically.
           "queue",
-          "max-size-buffers=5",
+          "max-size-buffers=2",
           "max-size-time=0",
           "max-size-bytes=0",
+          "leaky=downstream",
           "!",
-          // audiorate: corrects USB clock drift by inserting silence or dropping samples
-          // to keep audio timestamps locked to the pipeline clock.
+          // audiorate: corrects USB clock drift and fills timestamp gaps with silence.
+          // When the upstream queue drops old buffers, audiorate sees a gap and inserts
+          // silence so mpegtsmux always has audio data — video is never held waiting.
           "audiorate",
           "!",
           "audioconvert",
@@ -971,13 +976,15 @@ class StreamController extends EventEmitter {
           "!",
           "audio/x-raw,rate=32000,channels=2,format=S16LE",
           "!",
-          // Small thread-isolation queue — not leaky so audiorate sees every buffer.
+          // Thread-isolation queue before audiorate — MUST be leaky=downstream.
+          // A blocked alsasrc → no audiorate output → mux waits for audio → video stalls.
           "queue",
-          "max-size-buffers=5",
+          "max-size-buffers=2",
           "max-size-time=0",
           "max-size-bytes=0",
+          "leaky=downstream",
           "!",
-          // audiorate: corrects USB clock drift by inserting silence or dropping samples
+          // audiorate fills timestamp gaps (from leaky drops) with silence so mux never waits.
           "audiorate",
           "!",
           "audioconvert",
