@@ -267,20 +267,37 @@ class StreamController extends EventEmitter {
 
         const ffmpegArgs = [
           "-loglevel", "warning",
-          // Video input: video-only MPEG-TS piped from GStreamer stdout
+          // ── Low-latency input flags ─────────────────────────────────────────
+          // Without these, ffmpeg buffers ~5 MB of MPEG-TS from the pipe before
+          // starting to decode/output, causing the ~5-second delay. These flags
+          // tell ffmpeg to start immediately with minimal probing.
+          "-fflags", "+nobuffer",       // disable input buffering
+          "-flags", "low_delay",        // prefer low-delay decoding paths
+          "-avioflags", "direct",       // bypass libavformat's I/O buffer
+          "-probesize", "32",           // probe only 32 bytes (MPEG-TS sync bytes)
+          "-analyzeduration", "0",      // skip stream analysis entirely
+          // ── Video input: video-only MPEG-TS piped from GStreamer stdout ─────
           "-thread_queue_size", "512",
-          "-f", "mpegts", "-i", "pipe:0",
-          // Audio input: ALSA USB mic
+          "-f", "mpegts",
+          "-i", "pipe:0",
+          // ── Audio input: ALSA USB mic ───────────────────────────────────────
+          // Capture at the mic's native 32kHz; ffmpeg resamples to 48kHz for AAC.
           "-thread_queue_size", "512",
-          "-f", "alsa", "-ac", "2", "-ar", "32000", "-i", audioDevice,
-          // Stream mapping
-          "-map", "0:v:0",   // video from pipe
-          "-map", "1:a:0",   // audio from ALSA
-          // Video: pure passthrough — no re-encode, zero extra latency
+          "-f", "alsa", "-ac", "2", "-ar", "32000",
+          "-i", audioDevice,
+          // ── Stream mapping ──────────────────────────────────────────────────
+          "-map", "0:v:0",  // video from pipe
+          "-map", "1:a:0",  // audio from ALSA
+          // ── Video: passthrough — no re-encode, timestamps preserved ─────────
           "-c:v", "copy",
-          // Audio: AAC encode, resample to 48kHz
+          // ── Audio: AAC encode + async resampler for A/V sync compensation ──
+          // aresample=async=1000: the resampler may stretch/squeeze up to 1000 samples
+          // per second to keep audio timestamps locked to the video clock. This
+          // absorbs USB mic clock drift without any audible artefacts.
           "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
-          // Output: MPEG-TS over SRT in listener mode (OBS connects as client)
+          "-af", "aresample=async=1000",
+          // ── Output: MPEG-TS over SRT, listener mode ─────────────────────────
+          "-max_delay", "0",  // don't add extra output buffering
           "-f", "mpegts",
           "srt://0.0.0.0:8891?mode=listener&latency=500000",
         ];
