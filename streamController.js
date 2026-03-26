@@ -298,6 +298,21 @@ class StreamController extends EventEmitter {
           // ── Input 1: video-only MPEG-TS from GStreamer stdout ────────────────
           // GStreamer outputs H.264 in a single-stream MPEG-TS via fdsink fd=1.
           // probesize=32 is enough because there is only ONE PID to detect.
+          //
+          // use_wallclock_as_timestamps: CRITICAL for long-run stability.
+          // Without this, video PTS comes from GStreamer's pipeline clock (system
+          // monotonic clock), while ALSA audio PTS comes from USB hardware sample
+          // count. The USB mic oscillator runs ~0.1-0.15% faster than the system
+          // clock — about 58 extra samples/second at 48 kHz. Over 8 hours this
+          // produces ~35 seconds of buffered-ahead audio that ffmpeg can't drain.
+          // Every time max_interleave_delta is hit and ffmpeg forces a flush, it
+          // emits non-monotonic DTS, OBS buffers to reorder, and latency grows.
+          //
+          // With use_wallclock_as_timestamps=1, video PTS is stamped by the
+          // same system wall clock that anchors ALSA timestamps. Both streams
+          // now share one clock reference. aresample=async corrects the small
+          // residual USB drift continuously — no accumulation is possible.
+          "-use_wallclock_as_timestamps", "1",
           "-fflags", "+nobuffer+discardcorrupt",
           "-flags", "low_delay",
           "-probesize", "32",
