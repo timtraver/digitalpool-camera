@@ -86,16 +86,22 @@ def main():
     if protocol == "srt":
         srt_uri = destination if destination else "srt://:8891"
         if audio_device:
-            # GStreamer handles audio via audiomixer → mpegtsmux → fdsink.
-            # Both audio and video share the pipeline clock → automatic A/V sync.
-            # audiomixer fills USB mic gaps with silence so mpegtsmux never stalls.
-            # FFmpeg receives the complete audio+video MPEG-TS and only forwards to SRT.
-            print(f"🎤 SRT mode — audiomixer in GStreamer pipeline (pipeline clock sync)", file=sys.stderr)
+            # Hybrid mode: GStreamer outputs VIDEO-ONLY MPEG-TS to stdout (fdsink fd=1).
+            # ffmpeg (spawned by Node.js) captures ALSA audio and muxes it with the
+            # incoming video before forwarding to SRT.
+            #
+            # Why no audio in the GStreamer mux:
+            # mpegtsmux stalls video output whenever a USB mic underrun creates a gap
+            # in the audio timestamp stream — even a 10 ms stall produces pixelation.
+            # With video as the only mux input there is nothing to wait for and video
+            # flows uninterrupted. ffmpeg's aresample=async=1000 corrects USB clock
+            # drift continuously so A/V sync stays tight over hours-long sessions.
+            print(f"🎤 SRT hybrid mode — video-only GStreamer mux, audio via ffmpeg ALSA", file=sys.stderr)
             output_sink = (
                 f'! mpegtsmux name=mux alignment=7 '
                 f'! fdsink fd=1 sync=false async=false '
             )
-            audio_mux_target = 'mux.'  # Audio goes into GStreamer mux via audiomixer
+            audio_mux_target = None  # No audio in GStreamer mux — ffmpeg handles it
         else:
             # No audio — GStreamer handles SRT directly (stable, no muxer sync issue)
             output_sink = (
@@ -124,9 +130,9 @@ def main():
     # Thread architecture (each queue creates a new thread boundary):
     #   Thread 1: v4l2src → mppjpegdec (capture)
     #   Thread 2: queue → videoconvert(BGRA) → overlay → tee (overlay compositing)
-    #   Thread 3: queue → videoconvert(NV12) → mpph264enc → h264parse → queue → mux → sink (encode+stream)
-    #   Thread 4: queue → audioresample → voaacenc → aacparse → queue → mux. (audio - fully isolated)
-    #   Thread 5: queue → videorate → videoscale → jpegenc → tcpserversink (preview)
+    #   Thread 3: queue → videoconvert(NV12) → mpph264enc → h264parse → queue → mux → fdsink (encode+stream)
+    #   Thread 4: queue → videorate → videoscale → jpegenc → tcpserversink (preview)
+    #   Audio is handled by ffmpeg (ALSA capture) outside this pipeline.
     pipeline_str = (
         f'v4l2src device={camera_device} do-timestamp=true '
         f'! image/jpeg,width={width},height={height},framerate={framerate}/1 '

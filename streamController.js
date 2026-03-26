@@ -281,74 +281,88 @@ class StreamController extends EventEmitter {
       // pure copy/transport layer. All sync happens inside GStreamer via the shared
       // pipeline clock.
       if (useFfmpegAudio) {
-        console.log(`📡 SRT transport mode — ffmpeg forwarding GStreamer MPEG-TS to SRT :8891`);
+        console.log(`📡 SRT hybrid mode — ffmpeg muxing ALSA audio + GStreamer video → SRT :8891`);
+
+        const audioDevice = this.streamConfig.audioDevice || "hw:3,0";
 
         const ffmpegArgs = [
           "-loglevel", "warning",
-          // ── Input: complete audio+video MPEG-TS from GStreamer stdout ────────
-          // GStreamer handles camera capture, audiomixer sync, AAC encoding, and
-          // mpegtsmux muxing. ffmpeg receives a ready-to-forward MPEG-TS stream.
-          // probesize/analyzeduration must be large enough to detect BOTH the
-          // video PID and audio PID in the PAT/PMT tables. The old value of 32
-          // bytes was sufficient for video-only MPEG-TS, but a multi-stream TS
-          // requires at least one full PAT packet (188 bytes) plus one full PMT
-          // packet (188 bytes) = 376 bytes. Use 500000 (≈2700 TS packets) to
-          // give ffmpeg ample room to parse both PIDs even if mpegtsmux pads
-          // them with null packets during encoder warm-up.
+          // ── Input 0: ALSA audio ──────────────────────────────────────────────
+          // Capture starts the instant ffmpeg spawns (deferred until first video
+          // chunk — see below). This aligns audio t=0 with video t=0.
+          "-f", "alsa",
+          "-ar", "48000",
+          "-ac", "2",
+          "-thread_queue_size", "4096",
+          "-i", audioDevice,
+          // ── Input 1: video-only MPEG-TS from GStreamer stdout ────────────────
+          // GStreamer outputs H.264 in a single-stream MPEG-TS via fdsink fd=1.
+          // probesize=32 is enough because there is only ONE PID to detect.
           "-fflags", "+nobuffer+discardcorrupt",
           "-flags", "low_delay",
-          "-probesize", "500000",
-          "-analyzeduration", "500000",
+          "-probesize", "32",
+          "-analyzeduration", "0",
           "-thread_queue_size", "4096",
           "-f", "mpegts",
           "-i", "pipe:0",
-          // ── Output: copy to SRT listener (no re-encode) ─────────────────────
-          "-c", "copy",
+          // ── Output: mux + encode + SRT ───────────────────────────────────────
+          "-map", "1:v",         // video from GStreamer (input 1)
+          "-map", "0:a",         // audio from ALSA     (input 0)
+          "-c:v", "copy",        // pass H.264 through unchanged
+          "-c:a", "aac",
+          "-b:a", "128k",
+          // aresample=async=1000: continuously resamples audio to match the
+          // video timestamp timeline. Corrects both the initial offset from
+          // overlay-processing latency (~30-80 ms) and ongoing USB clock drift
+          // (~0.01-0.1%). Max correction = 1000 samples/s ≈ 2% at 48 kHz —
+          // far exceeds any realistic USB clock deviation.
+          "-af", "aresample=async=1000",
           "-f", "mpegts",
           "srt://0.0.0.0:8891?mode=listener&latency=500000",
         ];
 
-        // ── Immediate ffmpeg spawn ────────────────────────────────────────────
-        // Previously ffmpeg was spawned only on the first data chunk from
-        // GStreamer stdout (deferred spawn). That worked when audio was in
-        // ffmpeg — the first data event fired as soon as the video encoder
-        // produced its first frame, and ffmpeg needed to start ALSA at that
-        // exact instant to avoid an A/V offset.
+        // ── Deferred ffmpeg spawn ────────────────────────────────────────────
+        // GStreamer's MPP hardware encoder takes 1-2 s to produce its first
+        // frame. If ffmpeg spawned immediately, ALSA would start recording at
+        // t=0 while video doesn't arrive until t=1-2 s — a permanent A/V offset
+        // baked in from the very first second.
         //
-        // Now that audio lives inside GStreamer (audiomixer → mpegtsmux),
-        // mpegtsmux only outputs to fdsink/stdout AFTER both audio AND video
-        // pads have delivered at least one buffer. During the 1-2 second video
-        // encoder warm-up, audio buffers pile up (and are dropped by the leaky
-        // queue). The "first data" event can take up to 2+ seconds to fire —
-        // but the once() listener only starts flowing after it's attached, so
-        // there's a window where GStreamer is writing but Node hasn't attached
-        // the pipe yet and the OS pipe buffer can fill and apply back-pressure.
+        // Fix: attach a once("data") listener to GStreamer's stdout. The moment
+        // the first video chunk arrives, ffmpeg spawns and ALSA starts at that
+        // exact instant. Both streams begin at ~t=0 relative to each other.
+        // aresample=async handles any residual drift from that point forward.
         //
-        // Fix: spawn ffmpeg immediately. ffmpeg waits on pipe:0 for MPEG-TS
-        // sync bytes. GStreamer's stdout is piped to ffmpeg's stdin right away.
-        // No timing race — ffmpeg starts the SRT listener and buffers until
-        // GStreamer begins outputting muxed TS packets.
-        console.log("Starting ffmpeg with args:", ffmpegArgs.join(" "));
-        this.ffmpegProcess = spawn("ffmpeg", ffmpegArgs, {
-          stdio: ["pipe", "pipe", "pipe"],
-        });
+        // NOTE: do NOT call gstStdout.pause() before attaching the listener.
+        // pause() sets _readableState.flowing = false; a subsequent "data"
+        // listener checks `if (flowing !== false) resume()` and skips resume,
+        // leaving the stream permanently paused → once() never fires → ffmpeg
+        // never spawns → SRT port never opens.
+        const gstStdout = this.gstProcess.stdout;
 
-        this.gstProcess.stdout.pipe(this.ffmpegProcess.stdin);
+        gstStdout.once("data", (firstChunk) => {
+          console.log("Starting ffmpeg with args:", ffmpegArgs.join(" "));
+          this.ffmpegProcess = spawn("ffmpeg", ffmpegArgs, {
+            stdio: ["pipe", "pipe", "pipe"],
+          });
 
-        this.ffmpegProcess.stderr.on("data", (data) => {
-          const msg = data.toString();
-          console.log(`ffmpeg: ${msg}`);
-          this.emit("log", msg);
-        });
+          // Write the first chunk manually, then hand off to pipe().
+          this.ffmpegProcess.stdin.write(firstChunk);
+          gstStdout.pipe(this.ffmpegProcess.stdin);
 
-        this.ffmpegProcess.stdin.on("error", (err) => {
-          // ffmpeg stdin closes when ffmpeg exits — suppress EPIPE noise
-          if (err.code !== "EPIPE") console.error(`ffmpeg stdin error: ${err.message}`);
-        });
+          this.ffmpegProcess.stderr.on("data", (data) => {
+            const msg = data.toString();
+            console.log(`ffmpeg: ${msg}`);
+            this.emit("log", msg);
+          });
 
-        this.ffmpegProcess.on("close", (code) => {
-          console.log(`ffmpeg exited with code ${code}`);
-          this.ffmpegProcess = null;
+          this.ffmpegProcess.stdin.on("error", (err) => {
+            if (err.code !== "EPIPE") console.error(`ffmpeg stdin error: ${err.message}`);
+          });
+
+          this.ffmpegProcess.on("close", (code) => {
+            console.log(`ffmpeg exited with code ${code}`);
+            this.ffmpegProcess = null;
+          });
         });
       }
 
@@ -993,76 +1007,30 @@ class StreamController extends EventEmitter {
       );
 
       if (this.streamConfig.audioEnabled) {
-        // GStreamer handles audio via audiomixer → mpegtsmux → fdsink.
-        // Both audio and video share the pipeline clock → automatic A/V sync.
-        // No two independent clocks → no drift, no wallclock hacks needed.
+        // Hybrid mode: GStreamer outputs VIDEO-ONLY MPEG-TS to stdout.
+        // ffmpeg captures audio from ALSA and muxes it with the incoming video,
+        // then forwards everything to the SRT listener.
         //
-        // Why audiomixer instead of alsasrc → mpegtsmux directly:
-        // mpegtsmux is a SYNCHRONIZING muxer — if audio stalls (USB mic clock
-        // drift, brief ALSA underrun) it holds video output waiting for audio
-        // timestamps to align. audiomixer generates CONTINUOUS output at a fixed
-        // rate and fills any USB mic gap with silence so mpegtsmux always sees
-        // an uninterrupted audio stream → video is never blocked → no pixelation.
+        // Why video-only in the GStreamer mux:
+        // mpegtsmux is a SYNCHRONIZING muxer. When audio is one of its inputs,
+        // even a brief USB mic stall (ALSA underrun, USB clock drift) causes it
+        // to freeze video output while waiting for the next audio timestamp to
+        // align — producing pixelation. With a single video-only input, mpegtsmux
+        // never has to wait for anything and video flows without interruption.
         //
-        // FFmpeg receives the complete audio+video MPEG-TS on stdin and forwards
-        // it to SRT unchanged. It makes no clock decisions.
-        const audioDevice = this.streamConfig.audioDevice || "hw:3,0";
-        console.log(`🎤 Audio via audiomixer in GStreamer pipeline (device: ${audioDevice})`);
+        // A/V sync is maintained by:
+        //   1. Deferred ffmpeg spawn: ALSA starts the instant GStreamer's first
+        //      video chunk arrives, so both streams begin at ~t=0.
+        //   2. aresample=async=1000: ffmpeg continuously resamples audio to
+        //      match video timestamps, correcting USB clock drift on an ongoing
+        //      basis without any accumulated offset.
+        console.log(`🎤 Audio via ffmpeg ALSA (hybrid mode — video-only GStreamer mux)`);
 
         pipeline.push(
           "fdsink",
-          "fd=1",      // stdout — piped to ffmpeg (transport-only) by Node.js
+          "fd=1",      // stdout — video-only MPEG-TS piped to ffmpeg by Node.js
           "sync=false",
           "async=false",
-        );
-
-        // ── Audio branch: audiomixer acts as a live silence-filling source ────
-        // audiomixer sits BEFORE voaacenc. It always produces output at the
-        // correct pipeline-clock rate. When alsasrc has a gap, audiomixer fills
-        // it with silence. mpegtsmux therefore never has to wait for audio.
-        pipeline.push(
-          // Mixer first (named so alsasrc chain can reference it as amix.)
-          "audiomixer",
-          "name=amix",
-          "latency=200000000",     // 200 ms: output silence if no input within this window
-          "!",
-          "voaacenc",
-          "bitrate=128000",
-          "!",
-          "aacparse",
-          "!",
-          "queue",
-          "max-size-buffers=0",
-          "max-size-time=200000000", // 200 ms hold buffer
-          "max-size-bytes=0",
-          "leaky=downstream",
-          "!",
-          "mux.",
-          // alsasrc chain feeds into audiomixer's first request sink pad (amix.)
-          "alsasrc",
-          `device=${audioDevice}`,
-          "provide-clock=false",   // Pipeline clock is master — not the USB hardware clock
-          "do-timestamp=true",     // Stamp buffers with pipeline clock time
-          "buffer-time=50000",     // 50 ms ALSA buffer (µs)
-          "latency-time=25000",    // 25 ms ALSA period
-          "!",
-          "audio/x-raw,rate=32000,channels=2,format=S16LE",
-          "!",
-          "queue",
-          "max-size-buffers=2",
-          "max-size-time=0",
-          "max-size-bytes=0",
-          "leaky=downstream",      // Drop oldest if alsasrc outruns audiomixer
-          "!",
-          "audiorate",             // Fill timestamp gaps from leaky drops with silence
-          "!",
-          "audioconvert",
-          "!",
-          "audioresample",
-          "!",
-          "audio/x-raw,rate=48000,channels=2",
-          "!",
-          "amix.",                 // Connect into the audiomixer sink pad
         );
       } else {
         // No audio — GStreamer handles SRT directly (known stable path)
