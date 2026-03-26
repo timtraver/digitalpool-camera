@@ -317,6 +317,15 @@ class StreamController extends EventEmitter {
           // (~0.01-0.1%). Max correction = 1000 samples/s ≈ 2% at 48 kHz —
           // far exceeds any realistic USB clock deviation.
           "-af", "aresample=async=1000",
+          // ── Mux output tuning ────────────────────────────────────────────────
+          // max_interleave_delta caps how long ffmpeg buffers the "ahead" stream
+          // while waiting for the "behind" stream to catch up in DTS order.
+          // Default is 10 s — far too large. With ALSA and GStreamer on independent
+          // clocks, the delta slowly widens and the buffer fills, adding latency
+          // every few minutes. Capping at 1 s forces output sooner and stops the
+          // accumulation. muxdelay=0 eliminates the per-packet mux buffering delay.
+          "-max_interleave_delta", "1000000",  // 1 second cap (µs)
+          "-muxdelay", "0",
           "-f", "mpegts",
           "srt://0.0.0.0:8891?mode=listener&latency=500000",
         ];
@@ -996,7 +1005,7 @@ class StreamController extends EventEmitter {
         "!",
         "queue",
         "max-size-buffers=0", // Use time-based buffering
-        "max-size-time=1000000000", // 1 second buffer to absorb processing spikes
+        "max-size-time=500000000", // 500 ms buffer — enough to absorb encoding spikes without adding latency
         "max-size-bytes=0",
         "leaky=downstream", // Drop old frames if queue is full
         "!",

@@ -158,7 +158,10 @@ def main():
         # No leaky for RTMP — dropping encoded H264 frames causes DTS duplicates/gaps
         + (f'! queue max-size-buffers=0 max-size-time=2000000000 max-size-bytes=0 '
            if protocol == "rtmp" else
-           f'! queue max-size-buffers=0 max-size-time=1000000000 max-size-bytes=0 leaky=downstream ')
+           # SRT: 500 ms is enough to absorb PNG overlay reload CPU spikes.
+           # Reducing from 1 s trims the initial GStreamer-side latency contribution
+           # so ffmpeg's mux interleave buffer has less initial depth to accumulate on.
+           f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream ')
         + output_sink +
         (
             # Audio branch: audiomixer → voaacenc → mux.
