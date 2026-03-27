@@ -288,8 +288,11 @@ class StreamController extends EventEmitter {
         const ffmpegArgs = [
           "-loglevel", "warning",
           // ── Input 0: ALSA audio ──────────────────────────────────────────────
-          // Capture starts the instant ffmpeg spawns (deferred until first video
-          // chunk — see below). This aligns audio t=0 with video t=0.
+          // use_wallclock_as_timestamps: replaces ALSA's sample-count-based PTS
+          // (which ticks at the USB hardware oscillator rate, ~0.12% faster than
+          // the system clock) with the actual system wall clock time at which each
+          // audio chunk is read. This anchors audio to the same reference as video.
+          "-use_wallclock_as_timestamps", "1",
           "-f", "alsa",
           "-ar", "48000",
           "-ac", "2",
@@ -300,18 +303,22 @@ class StreamController extends EventEmitter {
           // probesize=32 is enough because there is only ONE PID to detect.
           //
           // use_wallclock_as_timestamps: CRITICAL for long-run stability.
-          // Without this, video PTS comes from GStreamer's pipeline clock (system
-          // monotonic clock), while ALSA audio PTS comes from USB hardware sample
-          // count. The USB mic oscillator runs ~0.1-0.15% faster than the system
-          // clock — about 58 extra samples/second at 48 kHz. Over 8 hours this
-          // produces ~35 seconds of buffered-ahead audio that ffmpeg can't drain.
-          // Every time max_interleave_delta is hit and ffmpeg forces a flush, it
-          // emits non-monotonic DTS, OBS buffers to reorder, and latency grows.
+          // GStreamer's pipeline clock (system monotonic) and ALSA's USB hardware
+          // oscillator (~0.12% faster) are independent clocks. Without this flag,
+          // video PTS comes from GStreamer (relative, starts near 0) while audio
+          // PTS comes from USB sample count (also relative, also starts near 0)
+          // but drifts apart at ~58 samples/sec. Over 8 hours: ~35 s of buffered
+          // audio that ffmpeg can't drain → periodic forced flushes → non-monotonic
+          // DTS → OBS buffers to reorder → latency accumulates.
           //
-          // With use_wallclock_as_timestamps=1, video PTS is stamped by the
-          // same system wall clock that anchors ALSA timestamps. Both streams
-          // now share one clock reference. aresample=async corrects the small
-          // residual USB drift continuously — no accumulation is possible.
+          // With use_wallclock_as_timestamps=1 on BOTH inputs, both streams are
+          // stamped with the absolute system wall clock at the moment each chunk
+          // is read. They share the same time origin (~the same Unix second, since
+          // ALSA capture starts the instant ffmpeg spawns on the first video chunk).
+          // The MPEG-TS muxer normalizes both relative to the minimum PTS across
+          // all streams — A/V stays locked, and USB clock drift is corrected by
+          // the wall clock reference on each audio chunk rather than accumulating.
+          // aresample=async handles any residual jitter.
           "-use_wallclock_as_timestamps", "1",
           "-fflags", "+nobuffer+discardcorrupt",
           "-flags", "low_delay",
