@@ -176,8 +176,14 @@ class StreamController extends EventEmitter {
       // ffmpeg performs NO encoding or clock decisions — it is a pure transport
       // layer. All sync is guaranteed by the shared GStreamer pipeline clock.
       // Applies to BOTH the direct gst-launch path and the Python compositor path.
+      // Hybrid mode applies to both SRT and RTMP when audio is enabled.
+      // Both suffer from the same USB mic oscillator drift (~0.12% faster than
+      // system clock). The GStreamer-native paths (mpegtsmux/flvmux with alsasrc)
+      // accumulate that drift and produce growing latency over time. The ffmpeg
+      // hybrid path anchors both inputs to wall clock and uses aresample=async
+      // to correct residual jitter — eliminating accumulation entirely.
       const useFfmpegAudio =
-        this.streamConfig.protocol === "srt" &&
+        (this.streamConfig.protocol === "srt" || this.streamConfig.protocol === "rtmp") &&
         this.streamConfig.audioEnabled;
 
       // Check if we're using the compositor helper script
@@ -275,13 +281,15 @@ class StreamController extends EventEmitter {
         this.emit("stopped", code);
       });
 
-      // Spawn ffmpeg for SRT transport: reads complete audio+video MPEG-TS from
-      // GStreamer's stdout (which now includes audiomixer-muxed audio) and forwards
-      // it to the SRT listener. ffmpeg makes NO clock decisions here — it is a
-      // pure copy/transport layer. All sync happens inside GStreamer via the shared
-      // pipeline clock.
+      // Spawn ffmpeg for hybrid A/V mux: reads video-only MPEG-TS from GStreamer's
+      // stdout and muxes it with ALSA audio capture. Both inputs use
+      // -use_wallclock_as_timestamps so they share the same system wall clock
+      // reference. aresample=async=1000 corrects residual USB oscillator jitter
+      // continuously — no drift accumulation is possible regardless of run length.
+      // Applies to both SRT (→ mpegts) and RTMP (→ flv) when audio is enabled.
       if (useFfmpegAudio) {
-        console.log(`📡 SRT hybrid mode — ffmpeg muxing ALSA audio + GStreamer video → SRT :8891`);
+        const protocol = this.streamConfig.protocol;
+        console.log(`📡 Hybrid mode — ffmpeg muxing ALSA audio + GStreamer video → ${protocol.toUpperCase()}`);
 
         const audioDevice = this.streamConfig.audioDevice || "hw:3,0";
 
@@ -348,8 +356,16 @@ class StreamController extends EventEmitter {
           // accumulation. muxdelay=0 eliminates the per-packet mux buffering delay.
           "-max_interleave_delta", "1000000",  // 1 second cap (µs)
           "-muxdelay", "0",
-          "-f", "mpegts",
-          "srt://0.0.0.0:8891?mode=listener&latency=500000",
+          // ── Protocol-specific output ─────────────────────────────────────────
+          // SRT:  MPEG-TS container, listener mode — OBS connects as SRT client
+          // RTMP: FLV container, pushed to MediaMTX (or configured RTMP server)
+          ...(protocol === "srt"
+            ? ["-f", "mpegts", "srt://0.0.0.0:8891?mode=listener&latency=500000"]
+            : ["-f", "flv", (
+                this.streamConfig.destination && this.streamConfig.destination.trim() !== ""
+                  ? this.streamConfig.destination.trim()
+                  : "rtmp://localhost:1935/stream"
+              )]),
         ];
 
         // ── Deferred ffmpeg spawn ────────────────────────────────────────────
@@ -1075,8 +1091,6 @@ class StreamController extends EventEmitter {
         );
       }
     } else if (protocol === "rtmp") {
-      // For RTMP, push to MediaMTX server
-      // If destination is empty or localhost, use local MediaMTX
       const rtmpUrl =
         destination && destination.trim() !== ""
           ? destination
@@ -1084,74 +1098,63 @@ class StreamController extends EventEmitter {
 
       console.log(`📡 RTMP destination: ${rtmpUrl}`);
 
-      pipeline.push(
-        "t2.",
-        "!",
-        "queue",
-        "max-size-buffers=0",
-        "max-size-time=2000000000", // 2 second buffer to absorb processing spikes
-        "max-size-bytes=0",
-        // No leaky — dropping encoded H264 frames causes DTS duplicates/gaps
-        "!",
-        // Do NOT add a second h264parse here. The h264parse config-interval=-1 upstream
-        // negotiates stream-format=avc,alignment=au directly with flvmux through the
-        // queue. A second parse re-splits SPS+PPS+IDR into separate NAL buffers that all
-        // share the same DTS, causing MediaMTX "DTS not monotonically increasing" drops.
-        "video/x-h264,stream-format=avc,alignment=au", // negotiate avc+AU back to the upstream h264parse
-        "!",
-        "flvmux",
-        "name=mux",
-        "streamable=true",
-        "!",
-        "rtmpsink",
-        `location=${rtmpUrl}`,
-        "sync=false", // Don't sync to clock for lower latency
-      );
-
-      // Add audio branch into the mux if enabled
       if (this.streamConfig.audioEnabled) {
-        const audioDevice = this.streamConfig.audioDevice || "hw:3,0";
-        console.log(`🎤 Audio enabled - capturing from ALSA device: ${audioDevice}`);
+        // ── RTMP hybrid mode ──────────────────────────────────────────────────
+        // GStreamer outputs VIDEO-ONLY MPEG-TS to stdout (fdsink fd=1).
+        // ffmpeg (spawned by Node.js) captures ALSA audio and muxes it with the
+        // video before pushing the FLV stream to the RTMP server.
+        //
+        // This is identical in principle to the SRT hybrid path and fixes the
+        // exact same root cause: the USB mic oscillator runs ~0.12% faster than
+        // the system clock. In GStreamer's flvmux path that drift accumulates
+        // over hours (causing the 1-hour delay). ffmpeg's wall-clock timestamps
+        // on both inputs anchors them to the same reference so no accumulation
+        // is possible, and aresample=async=1000 corrects residual jitter.
+        console.log(`🎤 Audio via ffmpeg ALSA (RTMP hybrid mode — video-only GStreamer mux)`);
+
         pipeline.push(
-          "alsasrc",
-          `device=${audioDevice}`,
-          "provide-clock=false", // Don't let USB device clock become the pipeline clock
-          "do-timestamp=true",   // Stamp each buffer with pipeline clock time, not USB hardware clock
-          "buffer-time=50000",   // 50ms ALSA buffer (µs) — tight so do-timestamp stays accurate
-          "latency-time=25000",  // 25ms period — how often ALSA delivers chunks to the pipeline
-          "!",
-          "audio/x-raw,rate=32000,channels=2,format=S16LE",
-          "!",
-          // Thread-isolation queue before audiorate — MUST be leaky=downstream.
-          // A blocked alsasrc → no audiorate output → mux waits for audio → video stalls.
-          "queue",
-          "max-size-buffers=2",
-          "max-size-time=0",
-          "max-size-bytes=0",
-          "leaky=downstream",
-          "!",
-          // audiorate fills timestamp gaps (from leaky drops) with silence so mux never waits.
-          "audiorate",
-          "!",
-          "audioconvert",
-          "!",
-          "audioresample",
-          "!",
-          "audio/x-raw,rate=48000,channels=2",
-          "!",
-          "voaacenc",
-          "bitrate=128000",
-          "!",
-          "aacparse",
-          "!",
-          // leaky=downstream drops the OLDEST buffer when full — mux always gets current timestamps
+          "t2.", "!",
           "queue",
           "max-size-buffers=0",
-          "max-size-time=200000000", // 200ms
+          "max-size-time=500000000", // 500 ms — matches SRT hybrid; mpegtsmux is video-only so leaky is safe
           "max-size-bytes=0",
-          "leaky=downstream",
+          "leaky=downstream",        // leaky is fine with a single-stream mux (no A/V wait)
           "!",
-          "mux.",
+          "mpegtsmux",
+          "name=mux",
+          "alignment=7",             // Align TS packets for clean handoff to ffmpeg
+          "!",
+          "fdsink",
+          "fd=1",                    // stdout — video-only MPEG-TS piped to ffmpeg by Node.js
+          "sync=false",
+          "async=false",
+        );
+        // No GStreamer audio branch — ffmpeg handles ALSA capture and muxing
+      } else {
+        // ── RTMP no-audio mode ────────────────────────────────────────────────
+        // No USB clock drift to worry about (no audio clock). GStreamer handles
+        // RTMP directly via flvmux. Note: do NOT add a second h264parse here —
+        // the upstream h264parse config-interval=-1 negotiates stream-format=avc,
+        // alignment=au directly with flvmux through the queue. A second parse
+        // re-splits SPS+PPS+IDR into buffers with identical DTS values, causing
+        // MediaMTX to drop readers with "DTS not monotonically increasing".
+        pipeline.push(
+          "t2.", "!",
+          "queue",
+          "max-size-buffers=0",
+          "max-size-time=2000000000", // 2 s — absorbs encoding spikes without audio latency concern
+          "max-size-bytes=0",
+          // No leaky — dropping encoded H264 frames causes DTS duplicates/gaps in flvmux
+          "!",
+          "video/x-h264,stream-format=avc,alignment=au",
+          "!",
+          "flvmux",
+          "name=mux",
+          "streamable=true",
+          "!",
+          "rtmpsink",
+          `location=${rtmpUrl}`,
+          "sync=false",
         );
       }
     } else {

@@ -110,19 +110,37 @@ def main():
             )
             audio_mux_target = 'mux.'
     elif protocol == "rtmp":
-        # RTMP: use flvmux → rtmpsink
-        # Do NOT add a second h264parse here. The h264parse config-interval=-1 upstream
-        # will negotiate stream-format=avc,alignment=au directly with flvmux through the
-        # queue (caps negotiation is transparent to queues). A second parse re-splits
-        # SPS+PPS+IDR access units into separate NAL buffers with identical DTS values,
-        # which causes MediaMTX to drop readers with "DTS is not monotonically increasing".
         rtmp_url = destination if destination else "rtmp://localhost:1935/stream"
-        output_sink = (
-            f'! video/x-h264,stream-format=avc,alignment=au '
-            f'! flvmux name=mux streamable=true '
-            f'! rtmpsink location={rtmp_url} sync=false async=false '
-        )
-        audio_mux_target = 'mux.'
+        if audio_device:
+            # Hybrid mode: GStreamer outputs VIDEO-ONLY MPEG-TS to stdout (fdsink fd=1).
+            # ffmpeg (spawned by Node.js) captures ALSA audio and muxes it with the
+            # incoming video before pushing to the RTMP server as FLV.
+            #
+            # This is the same fix that eliminated the 35-second SRT drift overnight:
+            # the USB mic oscillator runs ~0.12% faster than the system clock.
+            # In GStreamer's flvmux path that drift accumulates continuously
+            # (producing the 1-hour delay the user observed). ffmpeg's
+            # -use_wallclock_as_timestamps on both inputs anchors them to the
+            # same wall clock so no accumulation is possible, and aresample=async
+            # corrects residual jitter on each audio chunk.
+            print(f"🎤 RTMP hybrid mode — video-only GStreamer mux, audio via ffmpeg ALSA → RTMP", file=sys.stderr)
+            output_sink = (
+                f'! mpegtsmux name=mux alignment=7 '
+                f'! fdsink fd=1 sync=false async=false '
+            )
+            audio_mux_target = None  # No audio in GStreamer mux — ffmpeg handles it
+        else:
+            # No audio — GStreamer handles RTMP directly via flvmux (no drift to worry about).
+            # Do NOT add a second h264parse here. The h264parse config-interval=-1 upstream
+            # negotiates stream-format=avc,alignment=au directly with flvmux through the
+            # queue. A second parse re-splits SPS+PPS+IDR access units into separate NAL
+            # buffers with identical DTS values, causing MediaMTX to drop readers.
+            output_sink = (
+                f'! video/x-h264,stream-format=avc,alignment=au '
+                f'! flvmux name=mux streamable=true '
+                f'! rtmpsink location={rtmp_url} sync=false async=false '
+            )
+            audio_mux_target = None  # No audio
     else:
         print(f"❌ Unsupported protocol: {protocol}", file=sys.stderr)
         sys.exit(1)
@@ -153,14 +171,14 @@ def main():
         + f'! mpph264enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr profile=baseline '
         + f"! video/x-h264,stream-format=byte-stream "
         f'! h264parse config-interval=-1 '
-        # Thread boundary before mux to decouple encoder from network I/O
-        # Larger buffer absorbs spikes from PNG overlay reloads
-        # No leaky for RTMP — dropping encoded H264 frames causes DTS duplicates/gaps
+        # Thread boundary before mux to decouple encoder from network I/O.
+        # RTMP without audio still uses flvmux (which requires DTS monotonicity) —
+        # no leaky, 2s buffer. All other paths use mpegtsmux with a single video-only
+        # input so leaky=downstream is safe and 500ms is sufficient.
         + (f'! queue max-size-buffers=0 max-size-time=2000000000 max-size-bytes=0 '
-           if protocol == "rtmp" else
-           # SRT: 500 ms is enough to absorb PNG overlay reload CPU spikes.
-           # Reducing from 1 s trims the initial GStreamer-side latency contribution
-           # so ffmpeg's mux interleave buffer has less initial depth to accumulate on.
+           if protocol == "rtmp" and not audio_device else
+           # SRT or RTMP+audio (mpegtsmux, video-only): 500 ms absorbs PNG overlay
+           # reload CPU spikes; leaky is safe since mpegtsmux never waits on audio.
            f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream ')
         + output_sink +
         (
