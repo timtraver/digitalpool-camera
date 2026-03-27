@@ -308,7 +308,12 @@ class StreamController extends EventEmitter {
           "-i", audioDevice,
           // ── Input 1: video-only MPEG-TS from GStreamer stdout ────────────────
           // GStreamer outputs H.264 in a single-stream MPEG-TS via fdsink fd=1.
-          // probesize=32 is enough because there is only ONE PID to detect.
+          // SRT: probesize=32 is enough because there is only ONE PID to detect
+          // and ffmpeg is just passing through the MPEG-TS without inspecting H.264.
+          // RTMP/FLV: ffmpeg must parse the MPEG-TS PMT to extract the H.264 SPS/PPS
+          // and build the AVC sequence header for the FLV container. A much larger
+          // probesize ensures ffmpeg reads enough of the stream to locate and fully
+          // parse the PMT before it starts outputting FLV packets.
           //
           // use_wallclock_as_timestamps: CRITICAL for long-run stability.
           // GStreamer's pipeline clock (system monotonic) and ALSA's USB hardware
@@ -330,8 +335,9 @@ class StreamController extends EventEmitter {
           "-use_wallclock_as_timestamps", "1",
           "-fflags", "+nobuffer+discardcorrupt",
           "-flags", "low_delay",
-          "-probesize", "32",
-          "-analyzeduration", "0",
+          ...(protocol === "rtmp"
+            ? ["-probesize", "1048576", "-analyzeduration", "500000"]  // FLV needs H.264 PMT parsed before output
+            : ["-probesize", "32", "-analyzeduration", "0"]),          // SRT passthrough: 32 bytes is enough
           "-thread_queue_size", "4096",
           "-f", "mpegts",
           "-i", "pipe:0",
@@ -974,7 +980,12 @@ class StreamController extends EventEmitter {
         "video/x-h264,stream-format=byte-stream",
         "!",
         "h264parse",
-        "config-interval=-1", // Insert SPS/PPS before every keyframe
+        // RTMP+audio hybrid: config-interval=0 — SPS/PPS go only into the MPEG-TS PMT.
+        // ffmpeg reads them once from the PMT and emits ONE AVC sequence header in the FLV.
+        // With config-interval=-1 ffmpeg sees inline SPS/PPS before EVERY IDR and emits a
+        // new sequence header + IDR NALU with the same DTS → MediaMTX drops the connection.
+        // All other paths use -1 so OBS/players can resync after packet loss.
+        `config-interval=${protocol === "rtmp" && this.streamConfig.audioEnabled ? "0" : "-1"}`,
         "!",
       );
     } else if (encoder === "x264enc") {
@@ -996,7 +1007,7 @@ class StreamController extends EventEmitter {
         "video/x-h264,stream-format=byte-stream",
         "!",
         "h264parse",
-        "config-interval=-1",
+        `config-interval=${protocol === "rtmp" && this.streamConfig.audioEnabled ? "0" : "-1"}`,
         "!",
       );
     } else if (encoder === "nvv4l2h264enc") {
@@ -1017,7 +1028,7 @@ class StreamController extends EventEmitter {
         "video/x-h264,stream-format=byte-stream",
         "!",
         "h264parse",
-        "config-interval=-1",
+        `config-interval=${protocol === "rtmp" && this.streamConfig.audioEnabled ? "0" : "-1"}`,
         "!",
       );
     } else if (encoder === "omxh264enc") {

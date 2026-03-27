@@ -170,7 +170,13 @@ def main():
         # SRT latency=500ms absorbs the short bursts; average bitrate stays near bps target.
         + f'! mpph264enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr profile=baseline '
         + f"! video/x-h264,stream-format=byte-stream "
-        f'! h264parse config-interval=-1 '
+        # RTMP+audio hybrid: config-interval=0 — SPS/PPS go only into the MPEG-TS PMT.
+        # ffmpeg reads them once at startup and writes ONE AVC sequence header in FLV.
+        # With config-interval=-1, ffmpeg sees inline SPS/PPS before every IDR and
+        # emits a sequence header + IDR NALU with identical DTS → MediaMTX drops the
+        # connection with "DTS is not monotonically increasing".
+        # All other paths use -1 so OBS/players can resync after any packet loss.
+        + f'! h264parse config-interval={"0" if protocol == "rtmp" and audio_device else "-1"} '
         # Thread boundary before mux to decouple encoder from network I/O.
         # RTMP without audio still uses flvmux (which requires DTS monotonicity) —
         # no leaky, 2s buffer. All other paths use mpegtsmux with a single video-only
