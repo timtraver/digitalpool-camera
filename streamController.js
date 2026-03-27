@@ -355,6 +355,17 @@ class StreamController extends EventEmitter {
           "-map", "1:v",         // video from GStreamer (input 1)
           "-map", "0:a",         // audio from ALSA     (input 0)
           "-c:v", "copy",        // pass H.264 through unchanged
+          // RTMP+audio hybrid: strip inline SPS/PPS (NAL types 7 & 8) from the
+          // H.264 byte-stream BEFORE ffmpeg's internal h264_annexb_to_mp4 BSF runs.
+          // With header-mode=each-idr the encoder prepends SPS+PPS before every IDR.
+          // When ffmpeg converts Annex B → AVCC for FLV it sees those inline headers
+          // and emits a new AVC sequence header tag + IDR tag with the SAME DTS —
+          // MediaMTX drops the connection: "DTS is not monotonically increasing".
+          // filter_units strips types 7 (SPS) and 8 (PPS) so the annexb→mp4 BSF
+          // only sees the IDR NALU; the sequence header was already written once at
+          // startup from the MPEG-TS PMT extradata, so DTS always strictly advances.
+          // SRT does not use this filter — inline SPS/PPS help OBS resync mid-stream.
+          ...(protocol === "rtmp" ? ["-bsf:v", "filter_units=remove_types=7-8"] : []),
           "-c:a", "aac",
           "-b:a", "128k",
           // aresample=async=1000: continuously resamples audio to match the
@@ -984,18 +995,7 @@ class StreamController extends EventEmitter {
         `bps-max=${Math.round(bitrate * 1.6)}`,
         "rc-mode=vbr",          // VBR with bps-max cap = constrained VBR — best quality/stability tradeoff
         "gop=5",                // Keyframe every ~167ms — fast recovery from any dropped frame
-        // RTMP+audio hybrid: header-mode=none — encoder outputs IDR frames with NO inline
-        // SPS/PPS. The SPS/PPS still exist in the GStreamer caps (codec_data) which
-        // mpegtsmux places in the MPEG-TS PMT. ffmpeg reads the PMT once at startup and
-        // emits exactly ONE AVC sequence header in the FLV stream, so every subsequent
-        // IDR frame gets a unique DTS and MediaMTX never sees the "DTS not monotonically
-        // increasing" duplicate-timestamp error.
-        //
-        // All other paths: header-mode=each-idr — SPS/PPS are prepended to every IDR.
-        // For SRT: helps OBS resync without reconnecting if it misses the initial PMT.
-        // For RTMP no-audio: flvmux reads SPS/PPS from the AVCC caps (stream-format=avc
-        //   negotiated via the caps filter), so inline SPS/PPS are harmless there.
-        `header-mode=${protocol === "rtmp" && this.streamConfig.audioEnabled ? "none" : "each-idr"}`,
+        "header-mode=each-idr", // SPS/PPS prepended to every IDR in the bitstream
         "profile=baseline", // No B-frames — required for RTMP/FLV and better for low-latency
         "!",
         "video/x-h264,stream-format=byte-stream",
