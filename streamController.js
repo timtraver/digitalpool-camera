@@ -333,10 +333,20 @@ class StreamController extends EventEmitter {
           // the wall clock reference on each audio chunk rather than accumulating.
           // aresample=async handles any residual jitter.
           "-use_wallclock_as_timestamps", "1",
-          "-fflags", "+nobuffer+discardcorrupt",
-          "-flags", "low_delay",
+          // SRT: +nobuffer keeps latency minimal (we just pass TS packets through).
+          //      +discardcorrupt drops any garbled packet before it reaches the muxer.
+          // RTMP: +nobuffer conflicts with probesize=1048576 — both cannot be satisfied
+          //       simultaneously. +discardcorrupt can also silently drop valid-but-early
+          //       packets during the analysis phase, starving MediaMTX and triggering its
+          //       publish handshake timeout before ffmpeg starts sending FLV data.
+          //       For RTMP we use +genpts so ffmpeg regenerates any missing PTS values
+          //       from DTS during the FLV remux, which is the safest mode for format
+          //       conversion rather than passthrough.
           ...(protocol === "rtmp"
-            ? ["-probesize", "1048576", "-analyzeduration", "500000"]  // FLV needs H.264 PMT parsed before output
+            ? ["-fflags", "+genpts"]
+            : ["-fflags", "+nobuffer+discardcorrupt", "-flags", "low_delay"]),
+          ...(protocol === "rtmp"
+            ? ["-probesize", "1048576", "-analyzeduration", "500000"]  // FLV: parse PMT fully before output
             : ["-probesize", "32", "-analyzeduration", "0"]),          // SRT passthrough: 32 bytes is enough
           "-thread_queue_size", "4096",
           "-f", "mpegts",
