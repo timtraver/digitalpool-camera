@@ -984,7 +984,18 @@ class StreamController extends EventEmitter {
         `bps-max=${Math.round(bitrate * 1.6)}`,
         "rc-mode=vbr",          // VBR with bps-max cap = constrained VBR — best quality/stability tradeoff
         "gop=5",                // Keyframe every ~167ms — fast recovery from any dropped frame
-        "header-mode=each-idr",
+        // RTMP+audio hybrid: header-mode=none — encoder outputs IDR frames with NO inline
+        // SPS/PPS. The SPS/PPS still exist in the GStreamer caps (codec_data) which
+        // mpegtsmux places in the MPEG-TS PMT. ffmpeg reads the PMT once at startup and
+        // emits exactly ONE AVC sequence header in the FLV stream, so every subsequent
+        // IDR frame gets a unique DTS and MediaMTX never sees the "DTS not monotonically
+        // increasing" duplicate-timestamp error.
+        //
+        // All other paths: header-mode=each-idr — SPS/PPS are prepended to every IDR.
+        // For SRT: helps OBS resync without reconnecting if it misses the initial PMT.
+        // For RTMP no-audio: flvmux reads SPS/PPS from the AVCC caps (stream-format=avc
+        //   negotiated via the caps filter), so inline SPS/PPS are harmless there.
+        `header-mode=${protocol === "rtmp" && this.streamConfig.audioEnabled ? "none" : "each-idr"}`,
         "profile=baseline", // No B-frames — required for RTMP/FLV and better for low-latency
         "!",
         "video/x-h264,stream-format=byte-stream",

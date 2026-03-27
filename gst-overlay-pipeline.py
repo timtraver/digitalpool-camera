@@ -168,7 +168,15 @@ def main():
         # Constrained VBR: bps_max=1.6x target allows the encoder to burst for high-motion
         # frames (fast pool shots) rather than raising quantizer and pixelating.
         # SRT latency=500ms absorbs the short bursts; average bitrate stays near bps target.
-        + f'! mpph264enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr profile=baseline '
+        # RTMP+audio hybrid: header-mode=none — encoder outputs IDR frames with no inline
+        # SPS/PPS. They remain available in the GStreamer caps (codec_data), which mpegtsmux
+        # places in the MPEG-TS PMT. ffmpeg reads the PMT once at startup and emits exactly
+        # ONE AVC sequence header in FLV, so each IDR gets a unique DTS and MediaMTX never
+        # sees the duplicate-timestamp "DTS is not monotonically increasing" error.
+        # All other paths: each-idr keeps inline SPS/PPS for OBS mid-stream resync (SRT)
+        # or for flvmux's AVCC negotiation (RTMP no-audio).
+        + f'! mpph264enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 '
+        + f'header-mode={"none" if protocol == "rtmp" and audio_device else "each-idr"} profile=baseline '
         + f"! video/x-h264,stream-format=byte-stream "
         # RTMP+audio hybrid: config-interval=0 — SPS/PPS go only into the MPEG-TS PMT.
         # ffmpeg reads them once at startup and writes ONE AVC sequence header in FLV.
