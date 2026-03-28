@@ -3,6 +3,49 @@ const EventEmitter = require("events");
 const fs = require("fs");
 const path = require("path");
 
+// ── MPEG-TS PTS extractor ────────────────────────────────────────────────────
+// Scans a raw MPEG-TS buffer and returns the first PTS value found in any PES
+// packet, converted from 90 kHz ticks to seconds. Returns null if no PTS is
+// found (e.g. the chunk contains only PAT/PMT/adaptation-only packets).
+//
+// Used at FFmpeg spawn time to compute the -itsoffset needed to align
+// GStreamer's pipeline-clock timestamps with the audio's wall-clock timestamps.
+function extractMpegtsPts(buf) {
+  for (let i = 0; i + 188 <= buf.length; i += 188) {
+    if (buf[i] !== 0x47) continue;                    // MPEG-TS sync byte
+
+    const payloadStart = (buf[i + 1] >> 6) & 1;       // payload_unit_start_indicator
+    if (!payloadStart) continue;
+
+    const adaptCtrl = (buf[i + 3] >> 4) & 0x3;
+    if ((adaptCtrl & 1) === 0) continue;               // no payload in this packet
+
+    // Skip adaptation field if present (adaptation_field_length at byte [i+4])
+    let pOff = i + 4;
+    if (adaptCtrl & 2) pOff += 1 + buf[i + 4];
+
+    // Verify PES start code: 0x000001
+    if (buf[pOff] !== 0x00 || buf[pOff + 1] !== 0x00 || buf[pOff + 2] !== 0x01) continue;
+
+    // PTS_DTS_flags are in byte 7 of the PES header (bits 7-6)
+    if (pOff + 13 >= buf.length) continue;
+    const ptsDtsFlags = (buf[pOff + 7] >> 6) & 0x3;
+    if (ptsDtsFlags < 2) continue;                     // no PTS field
+
+    // PTS is encoded across bytes [pOff+9 … pOff+13] in 5-byte MPEG-TS notation
+    const p = pOff + 9;
+    const pts =
+      ((buf[p]     & 0x0E) >>> 1) * 0x40000000 +      // PTS[32:30] × 2³⁰
+       (buf[p + 1]        ) * 0x400000    +            // PTS[29:22] × 2²²
+      ((buf[p + 2] & 0xFE) >>> 1) * 0x8000   +        // PTS[21:15] × 2¹⁵
+       (buf[p + 3]        ) * 0x80         +           // PTS[14: 7] × 2⁷
+      ((buf[p + 4] & 0xFE) >>> 1);                     // PTS[ 6: 0]
+
+    return pts / 90000; // 90 kHz → seconds
+  }
+  return null;
+}
+
 class StreamController extends EventEmitter {
   constructor(cameraDevice = "/dev/video0") {
     super();
@@ -284,30 +327,39 @@ class StreamController extends EventEmitter {
       // Spawn ffmpeg for hybrid A/V mux: reads video-only MPEG-TS from GStreamer's
       // stdout and muxes it with ALSA audio capture.
       //
-      // IMPORTANT: do NOT use -use_wallclock_as_timestamps on either input.
+      // Timestamp strategy — "wall-clock audio, itsoffset-aligned video":
       //
-      // Why not on video (Input 1 / MPEG-TS pipe):
-      //   GStreamer embeds nanosecond-precision, monotonically increasing timestamps in
-      //   each MPEG-TS packet. When -use_wallclock_as_timestamps is set, ffmpeg replaces
-      //   those embedded timestamps with the wall-clock time at the moment it reads each
-      //   pipe chunk. A single read() call often returns a burst of several video frames,
-      //   and ALL of them receive the SAME millisecond timestamp → duplicate DTS →
-      //   MediaMTX drops the connection: "DTS is not monotonically increasing, was X, now is X".
-      //   The native MPEG-TS timestamps are already correct; using them avoids duplicates.
+      //  Problem A — USB clock drift:
+      //   The USB audio hardware oscillator runs ~0.12% faster than the system
+      //   clock (~58 samples/sec at 48 kHz). Without correction the audio PTS
+      //   advances faster than video PTS, the muxer buffers the "ahead" stream,
+      //   and the RTMP output accumulates ~1 s of extra latency every 15-20 min.
+      //   Fix: -use_wallclock_as_timestamps 1 on the ALSA input anchors audio
+      //   to the system wall clock (av_gettime), eliminating the USB oscillator
+      //   drift entirely.
       //
-      // Why not on audio (Input 0 / ALSA):
-      //   If audio used wall-clock timestamps (Unix epoch, ~1.7×10¹² ms) while video used
-      //   native MPEG-TS timestamps (~0 at spawn), the timestamp gap would be astronomical.
-      //   max_interleave_delta=1s cannot bridge it; the muxer would be unable to interleave
-      //   the two streams and would either fail or produce garbled output.
+      //  Problem B — duplicate DTS when wallclock is applied to video:
+      //   -use_wallclock_as_timestamps on the MPEG-TS pipe causes ffmpeg to
+      //   stamp each chunk with the wall-clock time at the moment it calls
+      //   read(). A single read() often returns a burst of frames that all get
+      //   the SAME millisecond timestamp → duplicate DTS → MediaMTX drops the
+      //   RTMP connection immediately.
+      //   Fix: NEVER apply -use_wallclock_as_timestamps to the video pipe.
+      //   GStreamer's own nanosecond pipeline clock is already monotonic and
+      //   precise; leave it untouched.
       //
-      // A/V sync without wall-clock anchoring:
-      //   Both streams naturally start at ~0 because ffmpeg spawns only when the first video
-      //   chunk arrives (gstStdout.once("data")). ALSA capture also starts at that exact
-      //   instant, so both clocks originate at the same moment. The USB hardware oscillator
-      //   runs ~0.12% faster than the system clock (~58 samples/sec drift at 48 kHz), but
-      //   aresample=async=1000 can correct up to 1000 samples/sec — 17× the drift rate —
-      //   so no accumulation occurs regardless of session length.
+      //  Problem C — mismatched timestamp scales:
+      //   With audio at Unix epoch (~1.74×10⁹ s) and video at GStreamer clock
+      //   (~0–2 s), the two streams are ~1.74 billion seconds apart. The FLV
+      //   muxer normalises by subtracting the minimum PTS, but only after the
+      //   streams are already interleaved. max_interleave_delta=1s can't bridge
+      //   a billion-second gap; the muxer will stall or fail.
+      //   Fix: -itsoffset applied to the video input inside the once("data")
+      //   callback shifts GStreamer's timestamps up into wall-clock territory.
+      //   The offset = Date.now()/1000 − firstPTS_seconds (parsed from the first
+      //   MPEG-TS chunk via extractMpegtsPts). After the shift, video PTS ≈ audio
+      //   PTS; the muxer normalises both to start at ~0 and they track each other
+      //   for the life of the session with no accumulated drift.
       //
       // Applies to both SRT (→ mpegts) and RTMP (→ flv) when audio is enabled.
       if (useFfmpegAudio) {
@@ -316,46 +368,22 @@ class StreamController extends EventEmitter {
 
         const audioDevice = this.streamConfig.audioDevice || "hw:3,0";
 
-        const ffmpegArgs = [
+        // ── Part 1: Audio input args (built now) ────────────────────────────
+        // -use_wallclock_as_timestamps 1 replaces ALSA's USB-clock-derived PTS
+        // with av_gettime() (system wall clock), so audio never drifts relative
+        // to real time regardless of how long the session runs.
+        const ffmpegAudioArgs = [
           "-loglevel", "warning",
-          // ── Input 0: ALSA audio ──────────────────────────────────────────────
-          // Native ALSA sample-count timestamps — start at 0 when capture begins
-          // (which is when ffmpeg spawns, i.e., on first video chunk). USB clock
-          // drift (~58 samples/sec) is handled downstream by aresample=async=1000.
+          "-use_wallclock_as_timestamps", "1",
           "-f", "alsa",
           "-ar", "48000",
           "-ac", "2",
           "-thread_queue_size", "4096",
           "-i", audioDevice,
-          // ── Input 1: video-only MPEG-TS from GStreamer stdout ────────────────
-          // GStreamer outputs H.264 in a single-stream MPEG-TS via fdsink fd=1.
-          // Timestamps come from GStreamer's nanosecond pipeline clock (monotonic).
-          // SRT: probesize=32 is enough because there is only ONE PID to detect
-          // and ffmpeg is just passing through the MPEG-TS without inspecting H.264.
-          // RTMP/FLV: ffmpeg must parse the MPEG-TS PMT to extract the H.264 SPS/PPS
-          // and build the AVC sequence header for the FLV container. A much larger
-          // probesize ensures ffmpeg reads enough of the stream to locate and fully
-          // parse the PMT before it starts outputting FLV packets.
-          //
-          // SRT: +nobuffer keeps latency minimal (we just pass TS packets through).
-          //      +discardcorrupt drops any garbled packet before it reaches the muxer.
-          // RTMP: +nobuffer conflicts with probesize=1048576 — both cannot be satisfied
-          //       simultaneously. +discardcorrupt can also silently drop valid-but-early
-          //       packets during the analysis phase, starving MediaMTX and triggering its
-          //       publish handshake timeout before ffmpeg starts sending FLV data.
-          //       For RTMP we use +genpts so ffmpeg regenerates any missing PTS values
-          //       from DTS during the FLV remux, which is the safest mode for format
-          //       conversion rather than passthrough.
-          ...(protocol === "rtmp"
-            ? ["-fflags", "+genpts"]
-            : ["-fflags", "+nobuffer+discardcorrupt", "-flags", "low_delay"]),
-          ...(protocol === "rtmp"
-            ? ["-probesize", "1048576", "-analyzeduration", "500000"]  // FLV: parse PMT fully before output
-            : ["-probesize", "32", "-analyzeduration", "0"]),          // SRT passthrough: 32 bytes is enough
-          "-thread_queue_size", "4096",
-          "-f", "mpegts",
-          "-i", "pipe:0",
-          // ── Output: mux + encode + SRT ───────────────────────────────────────
+        ];
+
+        // ── Part 2: Output args (built now) ─────────────────────────────────
+        const ffmpegOutputArgs = [
           "-map", "1:v",         // video from GStreamer (input 1)
           "-map", "0:a",         // audio from ALSA     (input 0)
           "-c:v", "copy",        // pass H.264 through unchanged
@@ -372,24 +400,16 @@ class StreamController extends EventEmitter {
           ...(protocol === "rtmp" ? ["-bsf:v", "filter_units=remove_types=7-8"] : []),
           "-c:a", "aac",
           "-b:a", "128k",
-          // aresample=async=1000: continuously resamples audio to match the
-          // video timestamp timeline. Corrects both the initial offset from
-          // overlay-processing latency (~30-80 ms) and ongoing USB clock drift
-          // (~0.01-0.1%). Max correction = 1000 samples/s ≈ 2% at 48 kHz —
-          // far exceeds any realistic USB clock deviation.
+          // aresample=async=1000: safety net for any residual A/V timing jitter
+          // (e.g. initial sub-frame ALSA buffer boundary offset). The USB drift
+          // is now fully handled by wall-clock timestamps on the audio input, so
+          // this filter only needs to absorb minor one-off discontinuities.
           "-af", "aresample=async=1000",
-          // ── Mux output tuning ────────────────────────────────────────────────
-          // max_interleave_delta caps how long ffmpeg buffers the "ahead" stream
-          // while waiting for the "behind" stream to catch up in DTS order.
-          // Default is 10 s — far too large. With ALSA and GStreamer on independent
-          // clocks, the delta slowly widens and the buffer fills, adding latency
-          // every few minutes. Capping at 1 s forces output sooner and stops the
-          // accumulation. muxdelay=0 eliminates the per-packet mux buffering delay.
+          // max_interleave_delta: once both streams share the same timestamp scale
+          // (wall-clock) the interleave delta stays near zero, but we cap at 1 s
+          // as a safety margin. muxdelay=0 removes per-packet mux buffering.
           "-max_interleave_delta", "1000000",  // 1 second cap (µs)
           "-muxdelay", "0",
-          // ── Protocol-specific output ─────────────────────────────────────────
-          // SRT:  MPEG-TS container, listener mode — OBS connects as SRT client
-          // RTMP: FLV container, pushed to MediaMTX (or configured RTMP server)
           ...(protocol === "srt"
             ? ["-f", "mpegts", "srt://0.0.0.0:8891?mode=listener&latency=500000"]
             : ["-f", "flv", (
@@ -401,14 +421,17 @@ class StreamController extends EventEmitter {
 
         // ── Deferred ffmpeg spawn ────────────────────────────────────────────
         // GStreamer's MPP hardware encoder takes 1-2 s to produce its first
-        // frame. If ffmpeg spawned immediately, ALSA would start recording at
-        // t=0 while video doesn't arrive until t=1-2 s — a permanent A/V offset
-        // baked in from the very first second.
+        // frame. Deferring the spawn until the first video chunk arrives ensures
+        // ALSA capture (and its wall-clock timestamps) begins at the same instant
+        // as video, so both streams share the same wall-clock origin and the FLV
+        // muxer normalises them both to start at ~0.
         //
-        // Fix: attach a once("data") listener to GStreamer's stdout. The moment
-        // the first video chunk arrives, ffmpeg spawns and ALSA starts at that
-        // exact instant. Both streams begin at ~t=0 relative to each other.
-        // aresample=async handles any residual drift from that point forward.
+        // Inside the callback we also compute the -itsoffset for the video input:
+        //   1. Read the current wall-clock time (Date.now()/1000).
+        //   2. Parse the first MPEG-TS PTS from the incoming chunk (GStreamer's
+        //      pipeline clock, in seconds since the pipeline entered PLAYING state,
+        //      typically 1-2 s due to encoder warm-up).
+        //   3. itsoffset = wallNow − gstPts  →  after the shift, video PTS ≈ audio PTS.
         //
         // NOTE: do NOT call gstStdout.pause() before attaching the listener.
         // pause() sets _readableState.flowing = false; a subsequent "data"
@@ -418,6 +441,46 @@ class StreamController extends EventEmitter {
         const gstStdout = this.gstProcess.stdout;
 
         gstStdout.once("data", (firstChunk) => {
+          // ── Compute video -itsoffset ───────────────────────────────────────
+          // Parse the GStreamer PTS from the first MPEG-TS chunk so we know
+          // exactly how far ahead of zero the video clock already is.
+          const wallNowSec  = Date.now() / 1000;
+          const gstPtsSec   = extractMpegtsPts(firstChunk);
+          // If parsing fails fall back to wallNow (both start near epoch, muxer
+          // normalises anyway — slight A/V skew at startup only, no ongoing drift).
+          const videoItsOffset = gstPtsSec != null
+            ? (wallNowSec - gstPtsSec).toFixed(6)
+            : wallNowSec.toFixed(6);
+
+          console.log(
+            `🕒 A/V sync — wall:${wallNowSec.toFixed(3)}s` +
+            ` gstPts:${gstPtsSec != null ? gstPtsSec.toFixed(3) : "n/a"}s` +
+            ` itsoffset:${videoItsOffset}s`
+          );
+
+          // ── Part 2: Video input args (built at spawn) ──────────────────────
+          // SRT: probesize=32 is enough because there is only ONE PID to detect
+          //   and ffmpeg is just passing through the MPEG-TS without inspecting H.264.
+          //   +nobuffer keeps latency minimal; +discardcorrupt drops garbled packets.
+          // RTMP/FLV: ffmpeg must parse the MPEG-TS PMT to extract H.264 SPS/PPS
+          //   and build the AVC sequence header for the FLV container. A larger
+          //   probesize ensures ffmpeg reads enough to fully parse the PMT before
+          //   outputting FLV packets. +genpts regenerates missing PTS from DTS.
+          const ffmpegVideoArgs = [
+            "-itsoffset", videoItsOffset,
+            ...(protocol === "rtmp"
+              ? ["-fflags", "+genpts"]
+              : ["-fflags", "+nobuffer+discardcorrupt", "-flags", "low_delay"]),
+            ...(protocol === "rtmp"
+              ? ["-probesize", "1048576", "-analyzeduration", "500000"]
+              : ["-probesize", "32", "-analyzeduration", "0"]),
+            "-thread_queue_size", "4096",
+            "-f", "mpegts",
+            "-i", "pipe:0",
+          ];
+
+          const ffmpegArgs = [...ffmpegAudioArgs, ...ffmpegVideoArgs, ...ffmpegOutputArgs];
+
           console.log("Starting ffmpeg with args:", ffmpegArgs.join(" "));
           this.ffmpegProcess = spawn("ffmpeg", ffmpegArgs, {
             stdio: ["pipe", "pipe", "pipe"],
