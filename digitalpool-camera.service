@@ -1,16 +1,19 @@
 [Unit]
 Description=Digital Pool Camera Control Service
-After=network.target
+After=network.target sound.target
+Wants=sound.target
 
 [Service]
 Type=simple
-User=YOUR_USERNAME
-WorkingDirectory=/path/to/digitalpool-camera
-ExecStart=/usr/bin/node server.js
-Restart=on-failure
-RestartSec=10
-StandardOutput=syslog
-StandardError=syslog
+User=tim
+WorkingDirectory=/home/tim/digitalpool-camera
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=5
+
+# Logging — view with: journalctl -u digitalpool-camera -f
+StandardOutput=journal
+StandardError=journal
 SyslogIdentifier=digitalpool-camera
 
 # Environment variables
