@@ -282,10 +282,33 @@ class StreamController extends EventEmitter {
       });
 
       // Spawn ffmpeg for hybrid A/V mux: reads video-only MPEG-TS from GStreamer's
-      // stdout and muxes it with ALSA audio capture. Both inputs use
-      // -use_wallclock_as_timestamps so they share the same system wall clock
-      // reference. aresample=async=1000 corrects residual USB oscillator jitter
-      // continuously — no drift accumulation is possible regardless of run length.
+      // stdout and muxes it with ALSA audio capture.
+      //
+      // IMPORTANT: do NOT use -use_wallclock_as_timestamps on either input.
+      //
+      // Why not on video (Input 1 / MPEG-TS pipe):
+      //   GStreamer embeds nanosecond-precision, monotonically increasing timestamps in
+      //   each MPEG-TS packet. When -use_wallclock_as_timestamps is set, ffmpeg replaces
+      //   those embedded timestamps with the wall-clock time at the moment it reads each
+      //   pipe chunk. A single read() call often returns a burst of several video frames,
+      //   and ALL of them receive the SAME millisecond timestamp → duplicate DTS →
+      //   MediaMTX drops the connection: "DTS is not monotonically increasing, was X, now is X".
+      //   The native MPEG-TS timestamps are already correct; using them avoids duplicates.
+      //
+      // Why not on audio (Input 0 / ALSA):
+      //   If audio used wall-clock timestamps (Unix epoch, ~1.7×10¹² ms) while video used
+      //   native MPEG-TS timestamps (~0 at spawn), the timestamp gap would be astronomical.
+      //   max_interleave_delta=1s cannot bridge it; the muxer would be unable to interleave
+      //   the two streams and would either fail or produce garbled output.
+      //
+      // A/V sync without wall-clock anchoring:
+      //   Both streams naturally start at ~0 because ffmpeg spawns only when the first video
+      //   chunk arrives (gstStdout.once("data")). ALSA capture also starts at that exact
+      //   instant, so both clocks originate at the same moment. The USB hardware oscillator
+      //   runs ~0.12% faster than the system clock (~58 samples/sec drift at 48 kHz), but
+      //   aresample=async=1000 can correct up to 1000 samples/sec — 17× the drift rate —
+      //   so no accumulation occurs regardless of session length.
+      //
       // Applies to both SRT (→ mpegts) and RTMP (→ flv) when audio is enabled.
       if (useFfmpegAudio) {
         const protocol = this.streamConfig.protocol;
@@ -296,11 +319,9 @@ class StreamController extends EventEmitter {
         const ffmpegArgs = [
           "-loglevel", "warning",
           // ── Input 0: ALSA audio ──────────────────────────────────────────────
-          // use_wallclock_as_timestamps: replaces ALSA's sample-count-based PTS
-          // (which ticks at the USB hardware oscillator rate, ~0.12% faster than
-          // the system clock) with the actual system wall clock time at which each
-          // audio chunk is read. This anchors audio to the same reference as video.
-          "-use_wallclock_as_timestamps", "1",
+          // Native ALSA sample-count timestamps — start at 0 when capture begins
+          // (which is when ffmpeg spawns, i.e., on first video chunk). USB clock
+          // drift (~58 samples/sec) is handled downstream by aresample=async=1000.
           "-f", "alsa",
           "-ar", "48000",
           "-ac", "2",
@@ -308,6 +329,7 @@ class StreamController extends EventEmitter {
           "-i", audioDevice,
           // ── Input 1: video-only MPEG-TS from GStreamer stdout ────────────────
           // GStreamer outputs H.264 in a single-stream MPEG-TS via fdsink fd=1.
+          // Timestamps come from GStreamer's nanosecond pipeline clock (monotonic).
           // SRT: probesize=32 is enough because there is only ONE PID to detect
           // and ffmpeg is just passing through the MPEG-TS without inspecting H.264.
           // RTMP/FLV: ffmpeg must parse the MPEG-TS PMT to extract the H.264 SPS/PPS
@@ -315,24 +337,6 @@ class StreamController extends EventEmitter {
           // probesize ensures ffmpeg reads enough of the stream to locate and fully
           // parse the PMT before it starts outputting FLV packets.
           //
-          // use_wallclock_as_timestamps: CRITICAL for long-run stability.
-          // GStreamer's pipeline clock (system monotonic) and ALSA's USB hardware
-          // oscillator (~0.12% faster) are independent clocks. Without this flag,
-          // video PTS comes from GStreamer (relative, starts near 0) while audio
-          // PTS comes from USB sample count (also relative, also starts near 0)
-          // but drifts apart at ~58 samples/sec. Over 8 hours: ~35 s of buffered
-          // audio that ffmpeg can't drain → periodic forced flushes → non-monotonic
-          // DTS → OBS buffers to reorder → latency accumulates.
-          //
-          // With use_wallclock_as_timestamps=1 on BOTH inputs, both streams are
-          // stamped with the absolute system wall clock at the moment each chunk
-          // is read. They share the same time origin (~the same Unix second, since
-          // ALSA capture starts the instant ffmpeg spawns on the first video chunk).
-          // The MPEG-TS muxer normalizes both relative to the minimum PTS across
-          // all streams — A/V stays locked, and USB clock drift is corrected by
-          // the wall clock reference on each audio chunk rather than accumulating.
-          // aresample=async handles any residual jitter.
-          "-use_wallclock_as_timestamps", "1",
           // SRT: +nobuffer keeps latency minimal (we just pass TS packets through).
           //      +discardcorrupt drops any garbled packet before it reaches the muxer.
           // RTMP: +nobuffer conflicts with probesize=1048576 — both cannot be satisfied
