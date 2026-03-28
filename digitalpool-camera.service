@@ -5,8 +5,8 @@ Wants=sound.target
 
 [Service]
 Type=simple
-User=tim
-WorkingDirectory=/home/tim/digitalpool-camera
+User=ubuntu
+WorkingDirectory=/home/ubuntu/digitalpool-camera
 ExecStart=/usr/bin/npm start
 Restart=always
 RestartSec=5
