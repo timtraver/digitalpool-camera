@@ -94,8 +94,12 @@ def main():
             # mpegtsmux stalls video output whenever a USB mic underrun creates a gap
             # in the audio timestamp stream — even a 10 ms stall produces pixelation.
             # With video as the only mux input there is nothing to wait for and video
-            # flows uninterrupted. ffmpeg's aresample=async=1000 corrects USB clock
-            # drift continuously so A/V sync stays tight over hours-long sessions.
+            # flows uninterrupted.
+            # Clock strategy: GStreamer uses CLOCK_REALTIME (set below) and ffmpeg
+            # uses -use_wallclock_as_timestamps 1 (av_gettime), both reading the
+            # same system wall clock — no drift can accumulate regardless of how
+            # long the session runs. aresample=async=1000 is a safety net for
+            # sub-frame ALSA buffer boundary jitter only.
             print(f"🎤 SRT hybrid mode — video-only GStreamer mux, audio via ffmpeg ALSA", file=sys.stderr)
             output_sink = (
                 f'! mpegtsmux name=mux alignment=7 '
@@ -116,13 +120,13 @@ def main():
             # ffmpeg (spawned by Node.js) captures ALSA audio and muxes it with the
             # incoming video before pushing to the RTMP server as FLV.
             #
-            # This is the same fix that eliminated the 35-second SRT drift overnight:
-            # the USB mic oscillator runs ~0.12% faster than the system clock.
-            # In GStreamer's flvmux path that drift accumulates continuously
-            # (producing the 1-hour delay the user observed). ffmpeg's
-            # -use_wallclock_as_timestamps on both inputs anchors them to the
-            # same wall clock so no accumulation is possible, and aresample=async
-            # corrects residual jitter on each audio chunk.
+            # Clock strategy: GStreamer uses CLOCK_REALTIME (set below) and ffmpeg
+            # uses -use_wallclock_as_timestamps 1 (av_gettime), both reading the
+            # same NTP-corrected system wall clock. The USB mic oscillator runs
+            # ~0.12% faster than the system clock (~764 µs/s drift), but since
+            # both processes share CLOCK_REALTIME as their time base, their PTS
+            # streams stay aligned indefinitely — no accumulation possible.
+            # aresample=async=1000 is a safety net for sub-frame jitter only.
             print(f"🎤 RTMP hybrid mode — video-only GStreamer mux, audio via ffmpeg ALSA → RTMP", file=sys.stderr)
             output_sink = (
                 f'! mpegtsmux name=mux alignment=7 '
@@ -145,6 +149,11 @@ def main():
         print(f"❌ Unsupported protocol: {protocol}", file=sys.stderr)
         sys.exit(1)
 
+    # Determine whether a PNG overlay element is needed.
+    # An empty png_path means the pipeline is being routed through Python purely
+    # for CLOCK_REALTIME (audio sync) — skip gdkpixbufoverlay entirely.
+    has_png_overlay = bool(png_path)
+
     # Thread architecture (each queue creates a new thread boundary):
     #   Thread 1: v4l2src → mppjpegdec (capture)
     #   Thread 2: queue → videoconvert(BGRA) → overlay → tee (overlay compositing)
@@ -165,7 +174,8 @@ def main():
         # Thread boundary: isolate overlay compositing from capture
         f'! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream '
         f'! videoconvert ! video/x-raw,format=BGRA '
-        f'! gdkpixbufoverlay name=overlay location={png_path} overlay-width={width} overlay-height={height} '
+        (f'! gdkpixbufoverlay name=overlay location={png_path} overlay-width={width} overlay-height={height} '
+         if has_png_overlay else '')
         f'{text_overlay}'
         f'{timestamp_overlay}'
         f'! tee name=t '
@@ -227,22 +237,38 @@ def main():
     print(f"\nPipeline: {pipeline_str}\n", file=sys.stderr)
 
     pipeline = Gst.parse_launch(pipeline_str)
+
+    # Force the pipeline onto CLOCK_REALTIME (system wall clock) instead of the
+    # default CLOCK_MONOTONIC (raw hardware oscillator). This matches the time
+    # base used by ffmpeg's -use_wallclock_as_timestamps flag on the ALSA audio
+    # input (av_gettime, which reads CLOCK_REALTIME). When both GStreamer video
+    # and ffmpeg audio share the same wall-clock source, their PTS streams track
+    # each other indefinitely — no accumulated drift regardless of session length.
+    # Without this, GStreamer's oscillator can drift ~764 µs/s (~22 s after 8 h).
+    system_clock = Gst.SystemClock.obtain()
+    system_clock.set_property("clock-type", 1)  # 1 = GST_CLOCK_TYPE_REALTIME
+    pipeline.use_clock(system_clock)
+    print("🕒 Pipeline clock set to CLOCK_REALTIME (matches ffmpeg audio timestamps)", file=sys.stderr)
+
     overlay_element = pipeline.get_by_name("overlay")
 
-    if not overlay_element:
-        print("❌ Could not find overlay element in pipeline")
+    if has_png_overlay and not overlay_element:
+        print("❌ Could not find overlay element in pipeline", file=sys.stderr)
         sys.exit(1)
 
-    # Track PNG file modification time for auto-reload
+    # Track PNG file modification time for auto-reload (only when overlay is active)
     last_mtime = 0
-    try:
-        last_mtime = os.path.getmtime(png_path)
-    except OSError:
-        pass
+    if has_png_overlay:
+        try:
+            last_mtime = os.path.getmtime(png_path)
+        except OSError:
+            pass
 
     def check_png_update():
         """Poll PNG file for changes and reload overlay when modified."""
         nonlocal last_mtime
+        if not overlay_element:
+            return True  # No overlay element — nothing to update
         try:
             current_mtime = os.path.getmtime(png_path)
             if current_mtime != last_mtime:
@@ -253,8 +279,9 @@ def main():
             pass  # File doesn't exist yet or was briefly removed during atomic write
         return True  # Keep the timer running
 
-    # Check for PNG updates every 2 seconds (screenshot only changes every 5s)
-    GLib.timeout_add(2000, check_png_update)
+    # Only poll for PNG updates when the overlay element is present
+    if overlay_element:
+        GLib.timeout_add(2000, check_png_update)
 
     # Handle pipeline messages
     bus = pipeline.get_bus()
@@ -295,7 +322,8 @@ def main():
         pipeline.set_state(Gst.State.NULL)
         sys.exit(1)
 
-    print("✅ Pipeline started, overlay will auto-reload when PNG changes", file=sys.stderr)
+    overlay_msg = " (overlay auto-reloads on PNG change)" if overlay_element else ""
+    print(f"✅ Pipeline started{overlay_msg} [CLOCK_REALTIME — no long-term A/V drift]", file=sys.stderr)
 
     try:
         loop.run()

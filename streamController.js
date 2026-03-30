@@ -214,17 +214,21 @@ class StreamController extends EventEmitter {
 
       const gstArgs = this._buildGStreamerPipeline();
 
-      // Unified sync mode: GStreamer outputs a complete audio+video MPEG-TS to
-      // stdout (fdsink fd=1), and a separate ffmpeg process forwards it to SRT.
-      // ffmpeg performs NO encoding or clock decisions — it is a pure transport
-      // layer. All sync is guaranteed by the shared GStreamer pipeline clock.
-      // Applies to BOTH the direct gst-launch path and the Python compositor path.
-      // Hybrid mode applies to both SRT and RTMP when audio is enabled.
-      // Both suffer from the same USB mic oscillator drift (~0.12% faster than
-      // system clock). The GStreamer-native paths (mpegtsmux/flvmux with alsasrc)
-      // accumulate that drift and produce growing latency over time. The ffmpeg
-      // hybrid path anchors both inputs to wall clock and uses aresample=async
-      // to correct residual jitter — eliminating accumulation entirely.
+      // Hybrid A/V sync strategy (audio-enabled SRT/RTMP):
+      //   GStreamer (Python pipeline) outputs VIDEO-ONLY MPEG-TS to stdout, and a
+      //   separate ffmpeg process captures ALSA audio and muxes both streams.
+      //
+      // Clock unification — the root fix for long-term A/V drift:
+      //   • GStreamer: pipeline clock forced to CLOCK_REALTIME in gst-overlay-pipeline.py
+      //   • ffmpeg audio: -use_wallclock_as_timestamps 1 reads the same av_gettime source
+      //   Both clocks tick at the NTP-corrected wall-clock rate — their PTS streams stay
+      //   aligned indefinitely regardless of session length.
+      //
+      // Why drift happened before this fix:
+      //   GStreamer defaulted to CLOCK_MONOTONIC (raw hardware oscillator on the Orange Pi 5),
+      //   which runs ~764 µs/s faster than CLOCK_REALTIME — producing ~22 s of A/V offset
+      //   after 8 hours. -itsoffset only aligns the clocks at startup; it cannot compensate
+      //   for an ongoing rate difference between two separate clocks.
       const useFfmpegAudio =
         (this.streamConfig.protocol === "srt" || this.streamConfig.protocol === "rtmp") &&
         this.streamConfig.audioEnabled;
@@ -808,7 +812,19 @@ class StreamController extends EventEmitter {
       overlayText,
     } = this.streamConfig;
 
-    console.log("🎨 Graphics overlay enabled - using PNG overlay (gdkpixbufoverlay)");
+    // Check whether a real graphics overlay (PNG) is actually needed.
+    // When called purely for CLOCK_REALTIME (audio-enabled SRT/RTMP without
+    // graphics), we pass an empty pngPath so gst-overlay-pipeline.py skips
+    // the gdkpixbufoverlay element entirely while still applying CLOCK_REALTIME.
+    const needsGraphicsOverlay = this.streamConfig.skiaGraphicsEnabled ||
+      (this.streamConfig.remoteOverlayEnabled &&
+        this.streamConfig.overlayUrl && this.streamConfig.overlayUrl.trim());
+
+    if (needsGraphicsOverlay) {
+      console.log("🎨 Graphics overlay enabled - using PNG overlay (gdkpixbufoverlay)");
+    } else {
+      console.log("🕒 Routing through Python pipeline to apply CLOCK_REALTIME (A/V sync fix)");
+    }
 
     const protocol = this.streamConfig.protocol || "srt";
     // Build the full destination URL based on protocol
@@ -820,7 +836,9 @@ class StreamController extends EventEmitter {
         effectiveDestination = "rtmp://localhost:1935/stream";
       }
     }
-    const pngPath = "/tmp/graphics-overlay.png";
+    // Only pass the real PNG path when graphics overlay is active.
+    // An empty string tells gst-overlay-pipeline.py to skip gdkpixbufoverlay.
+    const pngPath = needsGraphicsOverlay ? "/tmp/graphics-overlay.png" : "";
 
     // Per-element formatting (fall back to legacy shared values)
     const titleFs = this.streamConfig.titleFontSize || this.streamConfig.overlayFontSize || 32;
@@ -904,8 +922,19 @@ class StreamController extends EventEmitter {
       (this.streamConfig.remoteOverlayEnabled &&
         this.streamConfig.overlayUrl && this.streamConfig.overlayUrl.trim());
 
-    if (needsGraphicsOverlay) {
-      // Use the PNG overlay pipeline (Python GStreamer with gdkpixbufoverlay)
+    // Route through the Python GStreamer script when:
+    //   1. Graphics overlay is needed (gdkpixbufoverlay), OR
+    //   2. Audio is enabled on SRT/RTMP — the Python script forces the pipeline
+    //      clock to CLOCK_REALTIME, which matches the time base used by ffmpeg's
+    //      -use_wallclock_as_timestamps flag on the ALSA audio input. Without
+    //      this, GStreamer defaults to CLOCK_MONOTONIC (raw hardware oscillator),
+    //      which drifts ~764 µs/s relative to CLOCK_REALTIME — accumulating
+    //      ~22 seconds of A/V offset after 8 hours.
+    const needsPythonForClock =
+      (protocol === "srt" || protocol === "rtmp") &&
+      this.streamConfig.audioEnabled;
+
+    if (needsGraphicsOverlay || needsPythonForClock) {
       return this._buildPNGOverlayPipeline();
     }
 
