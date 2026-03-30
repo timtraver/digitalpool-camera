@@ -155,6 +155,13 @@ def main():
         f'v4l2src device={camera_device} do-timestamp=true '
         f'! image/jpeg,width={width},height={height},framerate={framerate}/1 '
         f'! jpegparse ! mppjpegdec '
+        # videorate: enforce exactly framerate fps using GStreamer running-time timestamps.
+        # do-timestamp=true stamps each decoded frame with CLOCK_MONOTONIC at arrival time.
+        # The USB camera crystal runs ~0.07% slow, so frames arrive at ~29.979 fps instead
+        # of 30 fps. videorate inserts a duplicate frame once every ~1 428 frames (~48 s)
+        # so the pipeline always emits exactly framerate/1 frames per wall-clock second.
+        # This eliminates the observed 86 s / 33 h drift without re-encoding.
+        f'! videorate ! video/x-raw,framerate={framerate}/1 '
         # Thread boundary: isolate overlay compositing from capture
         f'! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream '
         f'! videoconvert ! video/x-raw,format=BGRA '

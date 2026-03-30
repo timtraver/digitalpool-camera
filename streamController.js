@@ -921,6 +921,21 @@ class StreamController extends EventEmitter {
       "!",
       "mppjpegdec",
       "!",
+      // videorate: enforce exactly framerate fps using GStreamer running-time timestamps.
+      // do-timestamp=true stamps each frame with CLOCK_MONOTONIC at the moment it
+      // arrives from the V4L2 driver. The USB camera's crystal may run slightly slow
+      // (observed ~0.07%), so frames arrive at e.g. 29.979 fps instead of 30 fps —
+      // consecutive timestamps are ~33.356 ms apart instead of 33.333 ms. Without
+      // correction this accumulates: 86 s of latency after 33 hours, or ~2 s per
+      // 45 minutes. videorate inserts a duplicate frame once every ~1 428 frames
+      // (~48 s at 30 fps) so the pipeline always outputs exactly framerate frames
+      // per GStreamer running-time second (wall-clock accurate via NTP-synced
+      // CLOCK_MONOTONIC). After this element, video PTS advance at the correct rate
+      // indefinitely — eliminating all ongoing drift.
+      "videorate",
+      "!",
+      `video/x-raw,framerate=${framerate}/1`,
+      "!",
     ];
 
     // Add overlays if any individual overlay is enabled
