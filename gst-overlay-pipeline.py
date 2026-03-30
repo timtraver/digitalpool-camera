@@ -254,7 +254,7 @@ def main():
     # each other indefinitely — no accumulated drift regardless of session length.
     # Without this, GStreamer's oscillator can drift ~764 µs/s (~22 s after 8 h).
     system_clock = Gst.SystemClock.obtain()
-    system_clock.set_property("clock-type", 1)  # 1 = GST_CLOCK_TYPE_REALTIME
+    system_clock.set_property("clock-type", 0)  # 0 = GST_CLOCK_TYPE_REALTIME (1 = MONOTONIC)
     pipeline.use_clock(system_clock)
     print("🕒 Pipeline clock set to CLOCK_REALTIME (matches ffmpeg audio timestamps)", file=sys.stderr)
 
