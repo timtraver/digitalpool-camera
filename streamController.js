@@ -410,6 +410,11 @@ class StreamController extends EventEmitter {
           // as a safety margin. muxdelay=0 removes per-packet mux buffering.
           "-max_interleave_delta", "1000000",  // 1 second cap (µs)
           "-muxdelay", "0",
+          // flush_packets=1 (RTMP only): force ffmpeg to flush each encoded packet to
+          // the TCP socket immediately. Without this the FLV muxer may hold packets in
+          // its write cache waiting for a full block — over a long session that cache
+          // can grow and become another source of creeping latency.
+          ...(protocol === "rtmp" ? ["-flush_packets", "1"] : []),
           ...(protocol === "srt"
             ? ["-f", "mpegts", "srt://0.0.0.0:8891?mode=listener&latency=500000"]
             : ["-f", "flv", (
@@ -468,8 +473,16 @@ class StreamController extends EventEmitter {
           //   outputting FLV packets. +genpts regenerates missing PTS from DTS.
           const ffmpegVideoArgs = [
             "-itsoffset", videoItsOffset,
+            // +nobuffer: prevent ffmpeg from accumulating an internal demux buffer on
+            // the video pipe — this is the primary guard against latency drift growing
+            // over long sessions (same flag used for SRT).
+            // +genpts: regenerate PTS from DTS — required for FLV/RTMP because some
+            // MPEG-TS packets from GStreamer carry only DTS; without this the FLV muxer
+            // may emit packets with missing/invalid PTS that MediaMTX drops.
+            // low_delay: hint to ffmpeg's demuxer, muxer, and codec threads to minimise
+            // internal buffering at every stage — mirrors the SRT path exactly.
             ...(protocol === "rtmp"
-              ? ["-fflags", "+genpts"]
+              ? ["-fflags", "+genpts+nobuffer", "-flags", "low_delay"]
               : ["-fflags", "+nobuffer+discardcorrupt", "-flags", "low_delay"]),
             ...(protocol === "rtmp"
               ? ["-probesize", "1048576", "-analyzeduration", "500000"]
