@@ -154,6 +154,15 @@ def main():
     # for CLOCK_REALTIME (audio sync) — skip gdkpixbufoverlay entirely.
     has_png_overlay = bool(png_path)
 
+    # Pre-compute the gdkpixbufoverlay fragment so it can be safely interpolated
+    # as a plain f-string variable inside pipeline_str (Python's implicit string
+    # concatenation does not support ternary expressions mid-tuple).
+    png_overlay_element = (
+        f'! gdkpixbufoverlay name=overlay location={png_path} '
+        f'overlay-width={width} overlay-height={height} '
+        if has_png_overlay else ''
+    )
+
     # Thread architecture (each queue creates a new thread boundary):
     #   Thread 1: v4l2src → mppjpegdec (capture)
     #   Thread 2: queue → videoconvert(BGRA) → overlay → tee (overlay compositing)
@@ -174,8 +183,7 @@ def main():
         # Thread boundary: isolate overlay compositing from capture
         f'! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream '
         f'! videoconvert ! video/x-raw,format=BGRA '
-        (f'! gdkpixbufoverlay name=overlay location={png_path} overlay-width={width} overlay-height={height} '
-         if has_png_overlay else '')
+        f'{png_overlay_element}'
         f'{text_overlay}'
         f'{timestamp_overlay}'
         f'! tee name=t '
