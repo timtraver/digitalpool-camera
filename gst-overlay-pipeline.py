@@ -8,12 +8,40 @@ It polls the PNG file's modification time and reloads when it changes.
 
 import sys
 import os
+import time
 import gi
 gi.require_version('Gst', '1.0')
 gi.require_version('GLib', '2.0')
 from gi.repository import Gst, GLib
 
 Gst.init(None)
+
+# ── Force the global system clock to CLOCK_REALTIME immediately after init ──
+# This MUST happen before any pipeline is created, because Gst.parse_launch()
+# may internally query the system clock and cache its clockid.
+# GstSystemClock is a singleton — obtain() always returns the same instance.
+_system_clock = Gst.SystemClock.obtain()
+_clock_type_before = _system_clock.get_property("clock-type")
+_system_clock.set_property("clock-type", Gst.ClockType.REALTIME)
+_clock_type_after = _system_clock.get_property("clock-type")
+
+# Verify by comparing GStreamer clock time against wall time.
+# CLOCK_REALTIME returns epoch-based nanoseconds (~1.7e18), while
+# CLOCK_MONOTONIC returns uptime-based nanoseconds (typically < 1e15).
+_gst_time_ns = _system_clock.get_time()
+_wall_time_ns = int(time.time() * 1e9)
+_delta_s = abs(_gst_time_ns - _wall_time_ns) / 1e9
+
+print(f"🕒 SystemClock clock-type: before={_clock_type_before}, after={_clock_type_after}", file=sys.stderr)
+print(f"🕒 GStreamer clock time : {_gst_time_ns / 1e9:.3f} s", file=sys.stderr)
+print(f"🕒 Wall clock time      : {_wall_time_ns / 1e9:.3f} s", file=sys.stderr)
+print(f"🕒 Delta                : {_delta_s:.3f} s", file=sys.stderr)
+
+if _delta_s > 60:
+    print("⚠️  WARNING: GStreamer clock is NOT using CLOCK_REALTIME — delta too large!", file=sys.stderr)
+    print("⚠️  The clock-type property change may have been ignored by this GStreamer version.", file=sys.stderr)
+else:
+    print("✅ CLOCK_REALTIME confirmed — GStreamer and wall clock are within 60 s", file=sys.stderr)
 
 def main():
     if len(sys.argv) < 8:
@@ -246,17 +274,10 @@ def main():
 
     pipeline = Gst.parse_launch(pipeline_str)
 
-    # Force the pipeline onto CLOCK_REALTIME (system wall clock) instead of the
-    # default CLOCK_MONOTONIC (raw hardware oscillator). This matches the time
-    # base used by ffmpeg's -use_wallclock_as_timestamps flag on the ALSA audio
-    # input (av_gettime, which reads CLOCK_REALTIME). When both GStreamer video
-    # and ffmpeg audio share the same wall-clock source, their PTS streams track
-    # each other indefinitely — no accumulated drift regardless of session length.
-    # Without this, GStreamer's oscillator can drift ~764 µs/s (~22 s after 8 h).
-    system_clock = Gst.SystemClock.obtain()
-    system_clock.set_property("clock-type", 0)  # 0 = GST_CLOCK_TYPE_REALTIME (1 = MONOTONIC)
-    pipeline.use_clock(system_clock)
-    print("🕒 Pipeline clock set to CLOCK_REALTIME (matches ffmpeg audio timestamps)", file=sys.stderr)
+    # Attach the global CLOCK_REALTIME system clock to this pipeline.
+    # The clock-type was already set to REALTIME at module load (above Gst.init).
+    pipeline.use_clock(_system_clock)
+    print(f"🕒 Pipeline clock attached (clock-type={_system_clock.get_property('clock-type')})", file=sys.stderr)
 
     overlay_element = pipeline.get_by_name("overlay")
 
