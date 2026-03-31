@@ -405,13 +405,19 @@ class StreamController extends EventEmitter {
           // pipe read(), they get identical wall-clock DTS. setts bumps any
           // duplicate by 100 ticks (~1.1 ms at 90 kHz) — enough to guarantee
           // strict DTS monotonicity in the FLV container (1 ms resolution).
-          // Escaped commas (\,) are required inside setts expressions because
-          // unescaped commas delimit BSF chain boundaries.
+          //
+          // The expression uses arithmetic + comparison operators (>, *, +)
+          // instead of if()/lte() to avoid commas — ffmpeg's BSF option parser
+          // treats commas as delimiters and no escaping scheme works reliably.
+          //   DTS*(DTS>PREV_OUTDTS)  → keeps DTS when it's already greater
+          //   (PREV_OUTDTS+100)*(1-(DTS>PREV_OUTDTS)) → uses prev+100 otherwise
+          // Variables: PREV_OUTDTS/PREV_OUTPTS = previous *output* timestamps
+          // (uppercase required — setts uses ffmpeg's eval with uppercase vars).
           ...(protocol === "rtmp"
             ? ["-bsf:v",
                "filter_units=remove_types=7-8,setts=" +
-               "dts='if(lte(dts\\,prev_dts)\\,prev_dts+100\\,dts)':" +
-               "pts='if(lte(pts\\,prev_pts)\\,prev_pts+100\\,pts)'"]
+               "dts=DTS*(DTS>PREV_OUTDTS)+(PREV_OUTDTS+100)*(1-(DTS>PREV_OUTDTS)):" +
+               "pts=PTS*(PTS>PREV_OUTPTS)+(PREV_OUTPTS+100)*(1-(PTS>PREV_OUTPTS))"]
             : []),
           "-c:a", "aac",
           "-b:a", "128k",
