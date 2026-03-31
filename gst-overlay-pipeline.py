@@ -354,6 +354,28 @@ def main():
     overlay_msg = " (overlay auto-reloads on PNG change)" if overlay_element else ""
     print(f"✅ Pipeline started{overlay_msg} [CLOCK_REALTIME — no long-term A/V drift]", file=sys.stderr)
 
+    # ── Periodic drift monitor ────────────────────────────────────────────
+    # Every 60 s, log the pipeline's running_time vs wall-clock elapsed time.
+    # If the two diverge by more than ~10 ms/min, the clock fix isn't working.
+    _start_wall = time.time()
+
+    def _log_drift():
+        _ok, position = pipeline.query_position(Gst.Format.TIME)
+        if _ok and position >= 0:
+            wall_elapsed = time.time() - _start_wall
+            gst_elapsed = position / 1e9  # nanoseconds → seconds
+            drift = gst_elapsed - wall_elapsed
+            ppm = (drift / wall_elapsed * 1e6) if wall_elapsed > 0 else 0
+            print(
+                f"🕒 Drift check — GStreamer: {gst_elapsed:.3f}s  "
+                f"Wall: {wall_elapsed:.3f}s  "
+                f"Δ: {drift:+.3f}s  ({ppm:+.1f} ppm)",
+                file=sys.stderr,
+            )
+        return True  # keep timer running
+
+    GLib.timeout_add_seconds(60, _log_drift)
+
     try:
         loop.run()
     except KeyboardInterrupt:

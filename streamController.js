@@ -352,18 +352,14 @@ class StreamController extends EventEmitter {
       //   GStreamer's own nanosecond pipeline clock is already monotonic and
       //   precise; leave it untouched.
       //
-      //  Problem C — mismatched timestamp scales:
-      //   With audio at Unix epoch (~1.74×10⁹ s) and video at GStreamer clock
-      //   (~0–2 s), the two streams are ~1.74 billion seconds apart. The FLV
-      //   muxer normalises by subtracting the minimum PTS, but only after the
-      //   streams are already interleaved. max_interleave_delta=1s can't bridge
-      //   a billion-second gap; the muxer will stall or fail.
-      //   Fix: -itsoffset applied to the video input inside the once("data")
-      //   callback shifts GStreamer's timestamps up into wall-clock territory.
-      //   The offset = Date.now()/1000 − firstPTS_seconds (parsed from the first
-      //   MPEG-TS chunk via extractMpegtsPts). After the shift, video PTS ≈ audio
-      //   PTS; the muxer normalises both to start at ~0 and they track each other
+      //  Problem C — mismatched timestamp scales (SOLVED):
+      //   Both inputs now use -use_wallclock_as_timestamps 1, so audio and
+      //   video share the same epoch and rate (system wall clock / CLOCK_REALTIME).
+      //   The muxer normalises both to start at ~0 and they track each other
       //   for the life of the session with no accumulated drift.
+      //   +genpts on the video input regenerates sequential PTS for frames
+      //   that arrive in the same pipe read() (which would otherwise get
+      //   identical wall-clock timestamps).
       //
       // Applies to both SRT (→ mpegts) and RTMP (→ flv) when audio is enabled.
       if (useFfmpegAudio) {
@@ -432,15 +428,8 @@ class StreamController extends EventEmitter {
         // GStreamer's MPP hardware encoder takes 1-2 s to produce its first
         // frame. Deferring the spawn until the first video chunk arrives ensures
         // ALSA capture (and its wall-clock timestamps) begins at the same instant
-        // as video, so both streams share the same wall-clock origin and the FLV
+        // as video, so both streams share the same wall-clock origin and the
         // muxer normalises them both to start at ~0.
-        //
-        // Inside the callback we also compute the -itsoffset for the video input:
-        //   1. Read the current wall-clock time (Date.now()/1000).
-        //   2. Parse the first MPEG-TS PTS from the incoming chunk (GStreamer's
-        //      pipeline clock, in seconds since the pipeline entered PLAYING state,
-        //      typically 1-2 s due to encoder warm-up).
-        //   3. itsoffset = wallNow − gstPts  →  after the shift, video PTS ≈ audio PTS.
         //
         // NOTE: do NOT call gstStdout.pause() before attaching the listener.
         // pause() sets _readableState.flowing = false; a subsequent "data"
@@ -450,44 +439,41 @@ class StreamController extends EventEmitter {
         const gstStdout = this.gstProcess.stdout;
 
         gstStdout.once("data", (firstChunk) => {
-          // ── Compute video -itsoffset ───────────────────────────────────────
-          // Parse the GStreamer PTS from the first MPEG-TS chunk so we know
-          // exactly how far ahead of zero the video clock already is.
-          const wallNowSec  = Date.now() / 1000;
-          const gstPtsSec   = extractMpegtsPts(firstChunk);
-          // If parsing fails fall back to wallNow (both start near epoch, muxer
-          // normalises anyway — slight A/V skew at startup only, no ongoing drift).
-          const videoItsOffset = gstPtsSec != null
-            ? (wallNowSec - gstPtsSec).toFixed(6)
-            : wallNowSec.toFixed(6);
+          // ── Wall-clock timestamps on BOTH inputs ───────────────────────────
+          // Audio already uses -use_wallclock_as_timestamps 1 (ALSA input).
+          // We now do the same for the video pipe input — ffmpeg ignores the
+          // MPEG-TS PTS from GStreamer and stamps every demuxed video frame
+          // with av_gettime() (CLOCK_REALTIME) at the moment it's read.
+          //
+          // Why: despite forcing GStreamer's pipeline clock to CLOCK_REALTIME,
+          // the rockchip MPP decoder/encoder chain (mppjpegdec → mpph264enc)
+          // appears to re-stamp buffers from its own hardware clock (which
+          // runs at a raw oscillator rate, ~730 ppm off from NTP-corrected
+          // wall time). The MPEG-TS PTS therefore drifts from audio's wall-
+          // clock PTS by ~13 s over 5 h. Using wall-clock timestamps on BOTH
+          // inputs eliminates this drift entirely — both streams share the
+          // same epoch and rate.
+          //
+          // +genpts: regenerate sequential PTS for any frames that arrive in
+          // the same pipe read() and would otherwise get identical wall-clock
+          // timestamps.  The MPEG-TS demuxer + genpts uses the stream's
+          // declared frame rate (30 fps) to space them correctly.
+          //
+          // -itsoffset is no longer needed — both inputs start at the same
+          // wall-clock epoch, so the muxer normalises them to ~0 automatically.
+          console.log(`🕒 A/V sync — wall-clock timestamps on both audio and video inputs`);
 
-          console.log(
-            `🕒 A/V sync — wall:${wallNowSec.toFixed(3)}s` +
-            ` gstPts:${gstPtsSec != null ? gstPtsSec.toFixed(3) : "n/a"}s` +
-            ` itsoffset:${videoItsOffset}s`
-          );
-
-          // ── Part 2: Video input args (built at spawn) ──────────────────────
-          // SRT: probesize=32 is enough because there is only ONE PID to detect
-          //   and ffmpeg is just passing through the MPEG-TS without inspecting H.264.
-          //   +nobuffer keeps latency minimal; +discardcorrupt drops garbled packets.
-          // RTMP/FLV: ffmpeg must parse the MPEG-TS PMT to extract H.264 SPS/PPS
-          //   and build the AVC sequence header for the FLV container. A larger
-          //   probesize ensures ffmpeg reads enough to fully parse the PMT before
-          //   outputting FLV packets. +genpts regenerates missing PTS from DTS.
           const ffmpegVideoArgs = [
-            "-itsoffset", videoItsOffset,
-            // +nobuffer: prevent ffmpeg from accumulating an internal demux buffer on
-            // the video pipe — this is the primary guard against latency drift growing
-            // over long sessions (same flag used for SRT).
-            // +genpts: regenerate PTS from DTS — required for FLV/RTMP because some
-            // MPEG-TS packets from GStreamer carry only DTS; without this the FLV muxer
-            // may emit packets with missing/invalid PTS that MediaMTX drops.
-            // low_delay: hint to ffmpeg's demuxer, muxer, and codec threads to minimise
-            // internal buffering at every stage — mirrors the SRT path exactly.
+            "-use_wallclock_as_timestamps", "1",
+            // +genpts: generate sequential PTS for frames with duplicate wall-
+            // clock timestamps (multiple frames in one pipe read).
+            // +nobuffer: don't accumulate an internal demux buffer — primary
+            // guard against latency growth over long sessions.
+            // +discardcorrupt (SRT only): drop garbled MPEG-TS packets.
+            // low_delay: minimise internal buffering at every stage.
             ...(protocol === "rtmp"
               ? ["-fflags", "+genpts+nobuffer", "-flags", "low_delay"]
-              : ["-fflags", "+nobuffer+discardcorrupt", "-flags", "low_delay"]),
+              : ["-fflags", "+genpts+nobuffer+discardcorrupt", "-flags", "low_delay"]),
             ...(protocol === "rtmp"
               ? ["-probesize", "1048576", "-analyzeduration", "500000"]
               : ["-probesize", "32", "-analyzeduration", "0"]),
