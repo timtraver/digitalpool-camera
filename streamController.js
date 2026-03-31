@@ -406,18 +406,16 @@ class StreamController extends EventEmitter {
           // duplicate by 100 ticks (~1.1 ms at 90 kHz) — enough to guarantee
           // strict DTS monotonicity in the FLV container (1 ms resolution).
           //
-          // The expression uses arithmetic + comparison operators (>, *, +)
-          // instead of if()/lte() to avoid commas — ffmpeg's BSF option parser
-          // treats commas as delimiters and no escaping scheme works reliably.
-          //   DTS*(DTS>PREV_OUTDTS)  → keeps DTS when it's already greater
-          //   (PREV_OUTDTS+100)*(1-(DTS>PREV_OUTDTS)) → uses prev+100 otherwise
-          // Variables: PREV_OUTDTS/PREV_OUTPTS = previous *output* timestamps
-          // (uppercase required — setts uses ffmpeg's eval with uppercase vars).
+          // Uses the identity max(a,b) = (a + b + abs(a - b)) / 2 to compute
+          // max(DTS, PREV_OUTDTS+100) without ANY commas — ffmpeg's BSF option
+          // parser eats commas as delimiters and no escaping works reliably.
+          // abs() is a single-argument function so it needs no commas either.
+          // This ensures DTS is always at least PREV_OUTDTS+100 (monotonic).
           ...(protocol === "rtmp"
             ? ["-bsf:v",
                "filter_units=remove_types=7-8,setts=" +
-               "dts=DTS*(DTS>PREV_OUTDTS)+(PREV_OUTDTS+100)*(1-(DTS>PREV_OUTDTS)):" +
-               "pts=PTS*(PTS>PREV_OUTPTS)+(PREV_OUTPTS+100)*(1-(PTS>PREV_OUTPTS))"]
+               "dts=(DTS+PREV_OUTDTS+100+abs(DTS-PREV_OUTDTS-100))/2:" +
+               "pts=(PTS+PREV_OUTPTS+100+abs(PTS-PREV_OUTPTS-100))/2"]
             : []),
           "-c:a", "aac",
           "-b:a", "128k",
