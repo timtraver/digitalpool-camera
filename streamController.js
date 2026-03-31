@@ -400,15 +400,19 @@ class StreamController extends EventEmitter {
           ...(protocol === "rtmp" ? ["-bsf:v", "filter_units=remove_types=7-8"] : []),
           "-c:a", "aac",
           "-b:a", "128k",
-          // aresample=async=1000: safety net for any residual A/V timing jitter
-          // (e.g. initial sub-frame ALSA buffer boundary offset). The USB drift
-          // is now fully handled by wall-clock timestamps on the audio input, so
-          // this filter only needs to absorb minor one-off discontinuities.
-          "-af", "aresample=async=1000",
-          // max_interleave_delta: once both streams share the same timestamp scale
-          // (wall-clock) the interleave delta stays near zero, but we cap at 1 s
-          // as a safety margin. muxdelay=0 removes per-packet mux buffering.
-          "-max_interleave_delta", "1000000",  // 1 second cap (µs)
+          // aresample: continuously resample audio to stay aligned with video.
+          //   SRT: both inputs use wall-clock timestamps → minimal jitter,
+          //        async=1000 is a light safety net for sub-frame ALSA boundary offset.
+          //   RTMP: video uses original GStreamer PTS (drifts ~400 ppm from wall clock),
+          //        async=1 aggressively resamples every packet to track the drift and
+          //        min_hard_comp=0.1 forces a hard correction if drift exceeds 100 ms.
+          ...(protocol === "rtmp"
+            ? ["-af", "aresample=async=1:min_hard_comp=0.1:comp_duration=0.5"]
+            : ["-af", "aresample=async=1000"]),
+          // max_interleave_delta: cap on how far apart audio and video PTS can be
+          // before the muxer stalls. 1 s is fine for SRT (wall-clock aligned).
+          // RTMP needs a wider window since itsoffset alignment isn't perfect.
+          "-max_interleave_delta", protocol === "rtmp" ? "2000000" : "1000000",
           "-muxdelay", "0",
           // flush_packets=1 (RTMP only): force ffmpeg to flush each encoded packet to
           // the TCP socket immediately. Without this the FLV muxer may hold packets in
@@ -416,7 +420,7 @@ class StreamController extends EventEmitter {
           // can grow and become another source of creeping latency.
           ...(protocol === "rtmp" ? ["-flush_packets", "1"] : []),
           ...(protocol === "srt"
-            ? ["-f", "mpegts", "srt://0.0.0.0:8891?mode=listener&latency=500000"]
+            ? ["-f", "mpegts", "srt://0.0.0.0:8891?mode=listener&latency=200000"]
             : ["-f", "flv", (
                 this.streamConfig.destination && this.streamConfig.destination.trim() !== ""
                   ? this.streamConfig.destination.trim()
@@ -439,48 +443,64 @@ class StreamController extends EventEmitter {
         const gstStdout = this.gstProcess.stdout;
 
         gstStdout.once("data", (firstChunk) => {
-          // ── Wall-clock timestamps on BOTH inputs ───────────────────────────
-          // Audio already uses -use_wallclock_as_timestamps 1 (ALSA input).
-          // We now do the same for the video pipe input — ffmpeg ignores the
-          // MPEG-TS PTS from GStreamer and stamps every demuxed video frame
-          // with av_gettime() (CLOCK_REALTIME) at the moment it's read.
+          // ── Video input args — protocol-dependent strategy ──────────────────
           //
-          // Why: despite forcing GStreamer's pipeline clock to CLOCK_REALTIME,
-          // the rockchip MPP decoder/encoder chain (mppjpegdec → mpph264enc)
-          // appears to re-stamp buffers from its own hardware clock (which
-          // runs at a raw oscillator rate, ~730 ppm off from NTP-corrected
-          // wall time). The MPEG-TS PTS therefore drifts from audio's wall-
-          // clock PTS by ~13 s over 5 h. Using wall-clock timestamps on BOTH
-          // inputs eliminates this drift entirely — both streams share the
-          // same epoch and rate.
+          // SRT (MPEG-TS output):
+          //   Use -use_wallclock_as_timestamps 1 on video, matching audio.
+          //   Both streams share the same wall-clock epoch and rate → zero
+          //   long-term drift. MPEG-TS tolerates duplicate DTS from batched
+          //   pipe reads, so +genpts is enough to keep things clean.
           //
-          // +genpts: regenerate sequential PTS for any frames that arrive in
-          // the same pipe read() and would otherwise get identical wall-clock
-          // timestamps.  The MPEG-TS demuxer + genpts uses the stream's
-          // declared frame rate (30 fps) to space them correctly.
-          //
-          // -itsoffset is no longer needed — both inputs start at the same
-          // wall-clock epoch, so the muxer normalises them to ~0 automatically.
-          console.log(`🕒 A/V sync — wall-clock timestamps on both audio and video inputs`);
+          // RTMP (FLV output):
+          //   FLV requires strictly monotonically increasing DTS. Wall-clock
+          //   timestamps cause duplicate DTS when multiple MPEG-TS packets
+          //   arrive in a single pipe read() → MediaMTX drops the connection.
+          //   Instead, preserve GStreamer's original sequential MPEG-TS PTS
+          //   and use -itsoffset to shift them into the audio's wall-clock
+          //   epoch. aresample=async=1 (set in output args) continuously
+          //   corrects any residual clock drift between the two sources.
 
-          const ffmpegVideoArgs = [
-            "-use_wallclock_as_timestamps", "1",
-            // +genpts: generate sequential PTS for frames with duplicate wall-
-            // clock timestamps (multiple frames in one pipe read).
-            // +nobuffer: don't accumulate an internal demux buffer — primary
-            // guard against latency growth over long sessions.
-            // +discardcorrupt (SRT only): drop garbled MPEG-TS packets.
-            // low_delay: minimise internal buffering at every stage.
-            ...(protocol === "rtmp"
-              ? ["-fflags", "+genpts+nobuffer", "-flags", "low_delay"]
-              : ["-fflags", "+genpts+nobuffer+discardcorrupt", "-flags", "low_delay"]),
-            ...(protocol === "rtmp"
-              ? ["-probesize", "1048576", "-analyzeduration", "500000"]
-              : ["-probesize", "32", "-analyzeduration", "0"]),
-            "-thread_queue_size", "4096",
-            "-f", "mpegts",
-            "-i", "pipe:0",
-          ];
+          let ffmpegVideoArgs;
+
+          if (protocol === "rtmp") {
+            // ── RTMP: keep original MPEG-TS PTS + itsoffset ────────────────
+            const wallNowSec = Date.now() / 1000;
+            const gstPtsSec  = extractMpegtsPts(firstChunk);
+            const videoItsOffset = gstPtsSec != null
+              ? (wallNowSec - gstPtsSec).toFixed(6)
+              : wallNowSec.toFixed(6);
+
+            console.log(
+              `🕒 A/V sync (RTMP) — itsoffset mode: wall=${wallNowSec.toFixed(3)}s` +
+              ` gstPts=${gstPtsSec != null ? gstPtsSec.toFixed(3) : "n/a"}s` +
+              ` itsoffset=${videoItsOffset}s`
+            );
+
+            ffmpegVideoArgs = [
+              "-itsoffset", videoItsOffset,
+              "-fflags", "+genpts+nobuffer",
+              "-flags", "low_delay",
+              "-probesize", "1048576",
+              "-analyzeduration", "500000",
+              "-thread_queue_size", "4096",
+              "-f", "mpegts",
+              "-i", "pipe:0",
+            ];
+          } else {
+            // ── SRT: wall-clock timestamps on video ────────────────────────
+            console.log(`🕒 A/V sync (SRT) — wall-clock timestamps on both audio and video inputs`);
+
+            ffmpegVideoArgs = [
+              "-use_wallclock_as_timestamps", "1",
+              "-fflags", "+genpts+nobuffer+discardcorrupt",
+              "-flags", "low_delay",
+              "-probesize", "32",
+              "-analyzeduration", "0",
+              "-thread_queue_size", "4096",
+              "-f", "mpegts",
+              "-i", "pipe:0",
+            ];
+          }
 
           const ffmpegArgs = [...ffmpegAudioArgs, ...ffmpegVideoArgs, ...ffmpegOutputArgs];
 
