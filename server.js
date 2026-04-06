@@ -1252,8 +1252,10 @@ io.on("connection", (socket) => {
         }
       }
     } else if (overlayConfig.remoteOverlayEnabled === false && puppeteerOverlay) {
-      // Remote overlay was explicitly turned off — clear the PNG (writes transparent placeholder)
-      puppeteerOverlay.setOverlayUrl(null);
+      // Remote overlay was explicitly turned off — fully shut down Puppeteer and delete all overlay files
+      console.log("🛑 Remote overlay disabled — shutting down Puppeteer and removing overlay files...");
+      await puppeteerOverlay.stop();
+      puppeteerOverlay = null;
     }
 
     // Broadcast state and write JSON (never render local scoreboard HTML)

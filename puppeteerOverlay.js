@@ -375,9 +375,9 @@ class PuppeteerOverlay extends EventEmitter {
     this._stopPeriodicRefresh();
     await this._closeBrowser();
     this.isRunning = false;
-    // Clean up temp files
-    for (const f of [this.tempHtmlPath, this.rawPngPath]) {
-      try { fs.unlinkSync(f); } catch (e) { /* ignore */ }
+    // Clean up all temp files including the main overlay PNG
+    for (const f of [this.pngPath, this.rawPngPath, this.tempHtmlPath]) {
+      try { fs.unlinkSync(f); console.log(`🗑️  Deleted overlay file: ${f}`); } catch (e) { /* ignore */ }
     }
     this.emit("stopped");
   }
