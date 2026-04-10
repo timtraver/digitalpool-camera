@@ -698,6 +698,60 @@ header h1 {
   cursor: not-allowed;
 }
 
+/* Connection info box — shows RTSP / SRT URL for clients to connect to */
+.connection-info-box {
+  background: rgba(18, 199, 255, 0.07);
+  border: 1px solid rgba(18, 199, 255, 0.3);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+}
+
+.connection-info-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: rgba(255, 255, 255, 0.5);
+  margin-bottom: 4px;
+}
+
+.connection-info-url-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.connection-info-url {
+  flex: 1;
+  font-family: "Courier New", monospace;
+  font-size: 12px;
+  color: rgba(18, 199, 255, 0.95);
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 4px;
+  padding: 3px 6px;
+  word-break: break-all;
+  user-select: all;
+}
+
+.connection-info-extra {
+  margin-top: 4px;
+}
+
+.btn-copy-url {
+  background: rgba(18, 199, 255, 0.15);
+  border: 1px solid rgba(18, 199, 255, 0.3);
+  border-radius: 4px;
+  color: rgba(18, 199, 255, 0.9);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 3px 6px;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+.btn-copy-url:hover {
+  background: rgba(18, 199, 255, 0.3);
+}
+
 /* Stream status bar - prominent indicator */
 .stream-status-bar {
   display: flex;

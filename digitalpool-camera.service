@@ -1,7 +1,8 @@
 [Unit]
 Description=Digital Pool Camera Control Service
-After=network.target sound.target
+After=network.target sound.target mediamtx.service
 Wants=sound.target
+Requires=mediamtx.service
 
 [Service]
 Type=simple

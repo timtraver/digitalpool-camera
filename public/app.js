@@ -553,9 +553,66 @@ const streamStatusText = document.getElementById("streamStatusText");
 const streamStatusBar = document.getElementById("streamStatus");
 const startBtnIcon = document.getElementById("startBtnIcon");
 const startBtnText = document.getElementById("startBtnText");
+const connectionInfoBox = document.getElementById("connectionInfoBox");
+const connectionUrlEl = document.getElementById("connectionUrl");
+const connectionInfoExtra = document.getElementById("connectionInfoExtra");
+const destinationRow = document.getElementById("destinationRow");
+const copyConnectionUrlBtn = document.getElementById("copyConnectionUrl");
 
 // Track streaming state
 let isCurrentlyStreaming = false;
+// Track device IP for connection info
+let deviceLocalIP = null;
+
+// Helper: update the connection info box based on protocol and IP
+function updateConnectionInfo(protocol, ip) {
+  const resolvedIP = ip || deviceLocalIP || "device-ip";
+  if (protocol === "rtsp") {
+    connectionInfoBox.style.display = "block";
+    destinationRow.style.display = "none";
+    connectionUrlEl.textContent = `rtsp://${resolvedIP}:8554/live`;
+    connectionInfoExtra.innerHTML =
+      `<span style="color:rgba(255,255,255,0.45);font-size:10px">` +
+      `Also: HLS → <code style="font-size:10px">http://${resolvedIP}:8888/live</code>` +
+      `</span>`;
+  } else if (protocol === "srt") {
+    connectionInfoBox.style.display = "block";
+    destinationRow.style.display = "none";
+    connectionUrlEl.textContent = `srt://${resolvedIP}:8891`;
+    connectionInfoExtra.innerHTML =
+      `<span style="color:rgba(255,255,255,0.45);font-size:10px">` +
+      `Listener mode — clients connect directly to this device` +
+      `</span>`;
+  } else {
+    // RTMP push — show destination field, hide connection info box
+    connectionInfoBox.style.display = "none";
+    destinationRow.style.display = "";
+  }
+}
+
+// Copy connection URL to clipboard
+if (copyConnectionUrlBtn) {
+  copyConnectionUrlBtn.addEventListener("click", () => {
+    const url = connectionUrlEl ? connectionUrlEl.textContent : "";
+    navigator.clipboard.writeText(url).then(() => {
+      copyConnectionUrlBtn.textContent = "✅";
+      setTimeout(() => { copyConnectionUrlBtn.textContent = "📋"; }, 1500);
+    }).catch(() => {
+      // Fallback
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      copyConnectionUrlBtn.textContent = "✅";
+      setTimeout(() => { copyConnectionUrlBtn.textContent = "📋"; }, 1500);
+    });
+  });
+}
+
+// Initialize connection info box on page load with the default protocol selection
+updateConnectionInfo(streamProtocol.value, deviceLocalIP);
 
 // Helper to update stream status display
 function setStreamStatus(state, text) {
@@ -584,13 +641,16 @@ function setStreamStatus(state, text) {
   }
 }
 
-// Update placeholder based on protocol
+// Update UI when protocol changes
 streamProtocol.addEventListener("change", () => {
   const protocol = streamProtocol.value;
-  if (protocol === "srt") {
-    streamDestination.placeholder = "Leave empty (server mode on port 8891)";
-  } else if (protocol === "rtmp") {
-    streamDestination.placeholder = "rtmp://server:1935/live/stream (or leave empty for local)";
+  updateConnectionInfo(protocol, deviceLocalIP);
+  // Also update custom dropdown display
+  const protocolDropdown = streamProtocol.parentElement.querySelector(".custom-dropdown-selected");
+  if (protocolDropdown) {
+    const opt = streamProtocol.options[streamProtocol.selectedIndex];
+    protocolDropdown.textContent = opt.text;
+    protocolDropdown.dataset.value = opt.value;
   }
 });
 
@@ -773,7 +833,17 @@ socket.on("streamStatus", (status) => {
     startStreamBtn.classList.add("btn-restart");
 
     stopStreamBtn.disabled = false;
-    setStreamStatus("live", `Streaming LIVE — ${status.config?.protocol?.toUpperCase() || "SRT"}`);
+    const liveProtocol = status.config?.protocol || "rtsp";
+    const liveLabel = liveProtocol === "rtsp" ? "RTSP Server" : liveProtocol === "srt" ? "SRT Server" : "RTMP Push";
+    setStreamStatus("live", `Streaming LIVE — ${liveLabel}`);
+
+    // Update connection info with actual IP from server status
+    if (status.localIP) deviceLocalIP = status.localIP;
+    if (status.connectionUrl && connectionUrlEl) {
+      connectionUrlEl.textContent = status.connectionUrl;
+    } else {
+      updateConnectionInfo(liveProtocol, deviceLocalIP);
+    }
 
     // Switch to TCP preview when streaming.
     // Cancel any stale pending switch first so we never queue two connections.
@@ -1716,7 +1786,7 @@ async function loadStreamConfig() {
       console.log("📡 Loaded stream config:", data.config);
 
       // Update UI with saved settings
-      streamProtocol.value = data.config.protocol || "rtmp";
+      streamProtocol.value = data.config.protocol || "rtsp";
       streamDestination.value = data.config.destination || "";
       streamBitrate.value = data.config.bitrate || 5000000;
       audioEnabledCheckbox.checked = data.config.audioEnabled !== false; // default true
@@ -1742,12 +1812,8 @@ async function loadStreamConfig() {
         bitrateDropdown.dataset.value = bitrateOption.value;
       }
 
-      // Update placeholder
-      if (data.config.protocol === "srt") {
-        streamDestination.placeholder = "Leave empty (server mode on port 8891)";
-      } else if (data.config.protocol === "rtmp") {
-        streamDestination.placeholder = "rtmp://server:1935/live/stream (or leave empty for local)";
-      }
+      // Show/hide destination field and connection info box based on protocol
+      updateConnectionInfo(data.config.protocol || "rtsp", deviceLocalIP);
     }
   } catch (error) {
     console.error("❌ Error loading stream config:", error);
@@ -1762,16 +1828,13 @@ async function loadDeviceIp() {
   try {
     const response = await fetch("/api/network");
     const data = await response.json();
-    const ipSpan = document.getElementById("deviceIpAddress");
     if (data.success && data.addresses.length > 0) {
-      ipSpan.textContent = data.addresses.map(a => a.address).join(", ");
-    } else {
-      ipSpan.textContent = "Unknown";
+      deviceLocalIP = data.addresses[0].address;
     }
+    // Refresh connection info box with resolved IP
+    updateConnectionInfo(streamProtocol.value, deviceLocalIP);
   } catch (error) {
     console.error("❌ Error loading device IP:", error);
-    const ipSpan = document.getElementById("deviceIpAddress");
-    if (ipSpan) ipSpan.textContent = "Error";
   }
 }
 loadDeviceIp();

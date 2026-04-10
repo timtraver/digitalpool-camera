@@ -463,22 +463,29 @@
 
           <!-- Stream Output Controls -->
           <div class="control-group" style="margin-top: 20px">
-            <h4>🎥 Stream Output</h4>
+            <h4>🎥 Stream Server</h4>
 
             <div class="control-item">
-              <label>Device IP:</label>
-              <span id="deviceIpAddress" style="color: rgba(18, 199, 255, 0.9); font-weight: 600; font-size: 13px;">Loading...</span>
-            </div>
-
-            <div class="control-item">
-              <label>Protocol:</label>
+              <label>Output Mode:</label>
               <select id="streamProtocol">
-                <option value="srt">SRT</option>
-                <option value="rtmp">RTMP</option>
+                <option value="rtsp">RTSP Server</option>
+                <option value="srt">SRT Server</option>
+                <option value="rtmp">RTMP Push</option>
               </select>
             </div>
 
-            <div class="control-item">
+            <!-- Connection info — shown for RTSP and SRT server modes -->
+            <div id="connectionInfoBox" class="connection-info-box">
+              <div class="connection-info-label">📡 Connect clients to:</div>
+              <div class="connection-info-url-row">
+                <code id="connectionUrl" class="connection-info-url">rtsp://…</code>
+                <button id="copyConnectionUrl" class="btn-copy-url" title="Copy URL">📋</button>
+              </div>
+              <div id="connectionInfoExtra" class="connection-info-extra"></div>
+            </div>
+
+            <!-- Destination field — only shown for RTMP Push mode -->
+            <div id="destinationRow" class="control-item" style="display: none;">
               <label>Destination:</label>
               <input
                 type="text"

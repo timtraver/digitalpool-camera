@@ -57,7 +57,7 @@ class StreamController extends EventEmitter {
 
     // Default configuration
     const defaultConfig = {
-      protocol: "srt", // 'srt' or 'rtmp'
+      protocol: "rtsp", // 'rtsp' (RTSP server via MediaMTX), 'srt', or 'rtmp'
       destination: "",
       width: 1920,
       height: 1080,
@@ -230,7 +230,7 @@ class StreamController extends EventEmitter {
       //   after 8 hours. -itsoffset only aligns the clocks at startup; it cannot compensate
       //   for an ongoing rate difference between two separate clocks.
       const useFfmpegAudio =
-        (this.streamConfig.protocol === "srt" || this.streamConfig.protocol === "rtmp") &&
+        (this.streamConfig.protocol === "srt" || this.streamConfig.protocol === "rtmp" || this.streamConfig.protocol === "rtsp") &&
         this.streamConfig.audioEnabled;
 
       // Check if we're using the compositor helper script
@@ -411,7 +411,7 @@ class StreamController extends EventEmitter {
           // parser eats commas as delimiters and no escaping works reliably.
           // abs() is a single-argument function so it needs no commas either.
           // This ensures DTS is always at least PREV_OUTDTS+100 (monotonic).
-          ...(protocol === "rtmp"
+          ...(protocol === "rtmp" || protocol === "rtsp"
             ? ["-bsf:v",
                "filter_units=remove_types=7-8,setts=" +
                "dts=(DTS+PREV_OUTDTS+100+abs(DTS-PREV_OUTDTS-100))/2:" +
@@ -429,13 +429,15 @@ class StreamController extends EventEmitter {
           // 1 s cap is a safety margin. muxdelay=0 removes mux buffering.
           "-max_interleave_delta", "1000000",
           "-muxdelay", "0",
-          // flush_packets=1 (RTMP only): force ffmpeg to flush each encoded packet to
+          // flush_packets=1 (RTMP/RTSP only): force ffmpeg to flush each encoded packet to
           // the TCP socket immediately. Without this the FLV muxer may hold packets in
           // its write cache waiting for a full block — over a long session that cache
           // can grow and become another source of creeping latency.
-          ...(protocol === "rtmp" ? ["-flush_packets", "1"] : []),
+          ...(protocol === "rtmp" || protocol === "rtsp" ? ["-flush_packets", "1"] : []),
           ...(protocol === "srt"
             ? ["-f", "mpegts", "srt://0.0.0.0:8891?mode=listener&latency=200000"]
+            : protocol === "rtsp"
+            ? ["-f", "flv", "rtmp://localhost:1935/live"]
             : ["-f", "flv", (
                 this.streamConfig.destination && this.streamConfig.destination.trim() !== ""
                   ? this.streamConfig.destination.trim()
@@ -479,10 +481,10 @@ class StreamController extends EventEmitter {
             // guard against latency growth over long sessions.
             // +discardcorrupt (SRT only): drop garbled MPEG-TS packets.
             // low_delay: minimise internal buffering at every stage.
-            ...(protocol === "rtmp"
+            ...(protocol === "rtmp" || protocol === "rtsp"
               ? ["-fflags", "+genpts+nobuffer", "-flags", "low_delay"]
               : ["-fflags", "+genpts+nobuffer+discardcorrupt", "-flags", "low_delay"]),
-            ...(protocol === "rtmp"
+            ...(protocol === "rtmp" || protocol === "rtsp"
               ? ["-probesize", "1048576", "-analyzeduration", "500000"]
               : ["-probesize", "32", "-analyzeduration", "0"]),
             "-thread_queue_size", "4096",
@@ -581,9 +583,19 @@ class StreamController extends EventEmitter {
    * Get current stream status
    */
   getStatus() {
+    const localIP = this._getLocalIP();
+    const protocol = this.streamConfig.protocol;
+    let connectionUrl = null;
+    if (protocol === "rtsp") {
+      connectionUrl = `rtsp://${localIP}:8554/live`;
+    } else if (protocol === "srt") {
+      connectionUrl = `srt://${localIP}:8891`;
+    }
     return {
       isStreaming: this.isStreaming,
       config: this.streamConfig,
+      connectionUrl,
+      localIP,
     };
   }
 
@@ -1240,13 +1252,22 @@ class StreamController extends EventEmitter {
           "async=false",
         );
       }
-    } else if (protocol === "rtmp") {
+    } else if (protocol === "rtmp" || protocol === "rtsp") {
+      // RTSP mode: always push to local MediaMTX, which serves the stream as RTSP.
+      // RTMP mode: push to the configured destination (or local MediaMTX as fallback).
       const rtmpUrl =
-        destination && destination.trim() !== ""
-          ? destination
-          : "rtmp://localhost:1935/stream";
+        protocol === "rtsp"
+          ? "rtmp://localhost:1935/live"
+          : (destination && destination.trim() !== ""
+              ? destination
+              : "rtmp://localhost:1935/stream");
 
-      console.log(`📡 RTMP destination: ${rtmpUrl}`);
+      if (protocol === "rtsp") {
+        console.log(`📡 RTSP server mode — MediaMTX serving: rtsp://${this._getLocalIP()}:8554/live`);
+        console.log(`   Also available as HLS: http://${this._getLocalIP()}:8888/live`);
+      } else {
+        console.log(`📡 RTMP destination: ${rtmpUrl}`);
+      }
 
       if (this.streamConfig.audioEnabled) {
         // ── RTMP hybrid mode ──────────────────────────────────────────────────
@@ -1260,7 +1281,7 @@ class StreamController extends EventEmitter {
         // over hours (causing the 1-hour delay). ffmpeg's wall-clock timestamps
         // on both inputs anchors them to the same reference so no accumulation
         // is possible, and aresample=async=1000 corrects residual jitter.
-        console.log(`🎤 Audio via ffmpeg ALSA (RTMP hybrid mode — video-only GStreamer mux)`);
+        console.log(`🎤 Audio via ffmpeg ALSA (${protocol.toUpperCase()} hybrid mode — video-only GStreamer mux)`);
 
         pipeline.push(
           "t2.", "!",
