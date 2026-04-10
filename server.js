@@ -697,7 +697,7 @@ app.get("/video/tcp-preview", (req, res) => {
 // Track active idle preview process (only one at a time)
 let currentIdlePreviewProcess = null;
 let idlePreviewRestartTimer = null;
-const IDLE_PREVIEW_PORT = 8554;
+const IDLE_PREVIEW_PORT = 8553; // 8554 is reserved for MediaMTX RTSP
 
 // Helper: convert color name to GStreamer integer format
 const colorToInt = (colorName) => {

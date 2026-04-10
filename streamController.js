@@ -833,9 +833,17 @@ class StreamController extends EventEmitter {
     }
 
     const protocol = this.streamConfig.protocol || "srt";
+
+    // RTSP mode pushes to local MediaMTX via RTMP internally.
+    // The shell/Python scripts only understand 'srt' and 'rtmp', so we translate
+    // 'rtsp' → 'rtmp' with a fixed local destination before passing args through.
+    const scriptProtocol = protocol === "rtsp" ? "rtmp" : protocol;
+
     // Build the full destination URL based on protocol
     let effectiveDestination = destination || "";
-    if (!effectiveDestination) {
+    if (protocol === "rtsp") {
+      effectiveDestination = "rtmp://localhost:1935/live";
+    } else if (!effectiveDestination) {
       if (protocol === "srt") {
         effectiveDestination = "srt://:8891";
       } else if (protocol === "rtmp") {
@@ -882,7 +890,7 @@ class StreamController extends EventEmitter {
       height.toString(),
       framerate.toString(),
       bitrate.toString(),
-      protocol,
+      scriptProtocol,   // 'rtsp' translated to 'rtmp' for the shell/Python scripts
       effectiveDestination,
       pngPath,
       effectiveOverlayText,
@@ -937,7 +945,7 @@ class StreamController extends EventEmitter {
     //      which drifts ~764 µs/s relative to CLOCK_REALTIME — accumulating
     //      ~22 seconds of A/V offset after 8 hours.
     const needsPythonForClock =
-      (protocol === "srt" || protocol === "rtmp") &&
+      (protocol === "srt" || protocol === "rtmp" || protocol === "rtsp") &&
       this.streamConfig.audioEnabled;
 
     if (needsGraphicsOverlay || needsPythonForClock) {
