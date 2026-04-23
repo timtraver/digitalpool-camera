@@ -68,7 +68,38 @@ class WifiManager extends EventEmitter {
   // ─── public API ────────────────────────────────────────────────────────────
 
   /**
-   * Initialize: detect interface, create NM profile if needed, start AP, begin monitoring.
+   * Wait until NetworkManager reports the interface as ready (disconnected or better).
+   * USB adapters can take several seconds after boot to initialise.
+   * Polls up to maxWaitMs milliseconds in intervalMs steps.
+   */
+  async _waitForDevice(maxWaitMs = 60_000, intervalMs = 3_000) {
+    const deadline = Date.now() + maxWaitMs;
+    console.log(`⏳ Waiting for ${this.wifiIface} to become available...`);
+    while (Date.now() < deadline) {
+      const r = await this._run(
+        `nmcli -t -f GENERAL.STATE device show "${this.wifiIface}" 2>/dev/null`
+      );
+      if (r.ok && r.out) {
+        // NM states that allow us to bring up a connection:
+        //   20 (unavailable), 30 (disconnected), 40+ (connecting/connected)
+        // We need at least state 30 (disconnected).
+        const match = r.out.match(/(\d+)/);
+        const state = match ? parseInt(match[1]) : 0;
+        console.log(`   ${this.wifiIface} NM state: ${r.out.trim()}`);
+        if (state >= 30) {
+          console.log(`✅ ${this.wifiIface} is ready (state ${state})`);
+          return true;
+        }
+      }
+      await new Promise(res => setTimeout(res, intervalMs));
+    }
+    console.warn(`⚠️  Timed out waiting for ${this.wifiIface}`);
+    return false;
+  }
+
+  /**
+   * Initialize: detect interface, wait for device, create NM profile if needed,
+   * start AP, begin monitoring.
    */
   async initialize() {
     console.log('📡 WiFi Manager: initializing...');
@@ -78,6 +109,9 @@ class WifiManager extends EventEmitter {
       return false;
     }
     console.log(`📡 WiFi Manager: using interface ${this.wifiIface}`);
+
+    // Wait for the USB WiFi adapter to be fully ready before touching NM
+    await this._waitForDevice();
 
     if (!(await this._profileExists())) {
       if (!(await this._createProfile())) return false;
@@ -119,23 +153,30 @@ class WifiManager extends EventEmitter {
     return true;
   }
 
-  async _startAP() {
+  async _startAP(retries = 5, retryDelayMs = 5_000) {
     if (await this._isAPActive()) {
       console.log('✅ WiFi Manager: AP already active');
       this.apRunning = true;
       return true;
     }
-    console.log(`📡 Starting AP: ${this.apSsid}`);
-    const r = await this._run(`nmcli connection up "${AP_CONNECTION_NAME}"`);
-    if (r.ok) {
-      this.apRunning = true;
-      console.log(`✅ AP up — SSID: ${this.apSsid}  IP: ${this.apIp}`);
-      this.emit('apStarted', { ssid: this.apSsid, ip: this.apIp });
-      return true;
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      console.log(`📡 Starting AP: ${this.apSsid} (attempt ${attempt}/${retries})`);
+      const r = await this._run(`nmcli connection up "${AP_CONNECTION_NAME}"`);
+      if (r.ok) {
+        this.apRunning = true;
+        console.log(`✅ AP up — SSID: ${this.apSsid}  IP: ${this.apIp}`);
+        this.emit('apStarted', { ssid: this.apSsid, ip: this.apIp });
+        return true;
+      }
+      console.warn(`⚠️  AP start attempt ${attempt} failed: ${r.err.split('\n')[0]}`);
+      if (attempt < retries) {
+        console.log(`   Retrying in ${retryDelayMs / 1000}s...`);
+        await new Promise(res => setTimeout(res, retryDelayMs));
+      }
     }
     this.apRunning = false;
-    console.error('❌ AP start failed:', r.err);
-    this.emit('apError', { error: r.err });
+    console.error(`❌ AP failed to start after ${retries} attempts`);
+    this.emit('apError', { error: 'AP failed to start after retries' });
     return false;
   }
 
