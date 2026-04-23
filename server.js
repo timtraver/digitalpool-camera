@@ -7,6 +7,7 @@ const path = require("path");
 const os = require("os");
 const CameraController = require("./cameraController");
 const StreamController = require("./streamController");
+const WifiManager = require("./wifiManager");
 
 // Try to load HTML overlay renderer (wkhtmltoimage + ImageMagick)
 let PuppeteerOverlay = null;
@@ -41,6 +42,14 @@ let isRestartInProgress = false;
 
 // Initialize stream controller
 const streamController = new StreamController(CAMERA_DEVICE);
+
+// Initialize WiFi Manager — always-on AP hotspot
+const wifiManager = new WifiManager();
+wifiManager.initialize()
+  .then(ok => ok
+    ? console.log("✅ WiFi AP hotspot initialised")
+    : console.warn("⚠️  WiFi AP not available (no wireless interface or nmcli missing)"))
+  .catch(err => console.error("❌ WiFi Manager init error:", err.message));
 
 // Initialize Puppeteer overlay (if available)
 let puppeteerOverlay = null;
@@ -377,6 +386,68 @@ app.get("/api/network", (req, res) => {
   }
   res.json({ success: true, addresses });
 });
+
+// ============ WIFI / HOTSPOT API ENDPOINTS ============
+
+// Get WiFi + AP status
+app.get("/api/wifi/status", async (req, res) => {
+  try {
+    const status = await wifiManager.getStatus();
+    res.json({ success: true, ...status });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// Scan for nearby WiFi networks
+app.get("/api/wifi/networks", async (req, res) => {
+  try {
+    const networks = await wifiManager.scanNetworks();
+    res.json({ success: true, networks });
+  } catch (err) {
+    res.json({ success: false, error: err.message, networks: [] });
+  }
+});
+
+// Connect to a WiFi network (client mode, AP stays running)
+app.post("/api/wifi/connect", express.json(), async (req, res) => {
+  const { ssid, password } = req.body || {};
+  if (!ssid) return res.json({ success: false, error: "ssid is required" });
+  try {
+    const result = await wifiManager.connectToNetwork(ssid, password);
+    res.json(result);
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// Disconnect from current client WiFi network
+app.post("/api/wifi/disconnect", async (req, res) => {
+  try {
+    const result = await wifiManager.disconnectFromNetwork();
+    res.json(result);
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// Update AP SSID / password (and restart the hotspot)
+app.post("/api/wifi/ap/config", express.json(), async (req, res) => {
+  const { ssid, password } = req.body || {};
+  if (!ssid && !password)
+    return res.json({ success: false, error: "Provide ssid and/or password" });
+  if (password && password.length < 8)
+    return res.json({ success: false, error: "Password must be at least 8 characters" });
+  try {
+    await wifiManager.updateAPConfig({ ssid, password });
+    const status = await wifiManager.getStatus();
+    res.json({ success: true, ...status });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// ============ END WIFI API ============
 
 // API endpoint to get current scoreboard
 app.get("/api/scoreboard", (req, res) => {

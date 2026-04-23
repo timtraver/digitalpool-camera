@@ -544,6 +544,87 @@
         </div>
       </div>
 
+      <!-- ── WiFi / Hotspot Panel ── -->
+      <div class="wifi-panel">
+        <div class="wifi-panel-header" id="wifiPanelToggle">
+          <span>📶 Network &amp; WiFi Setup</span>
+          <span class="wifi-panel-chevron" id="wifiChevron">▼</span>
+        </div>
+
+        <div class="wifi-panel-body" id="wifiPanelBody">
+
+          <!-- Two-column grid: Hotspot info | Client WiFi -->
+          <div class="wifi-grid">
+
+            <!-- Hotspot (always-on AP) -->
+            <div class="wifi-card">
+              <h4>📡 Device Hotspot <span class="ap-badge" id="apBadge">…</span></h4>
+              <p class="wifi-hint">Your device always broadcasts this network. Connect to it from any phone or laptop to reach the admin page.</p>
+
+              <div class="wifi-info-row">
+                <span class="wifi-label">Network Name (SSID)</span>
+                <span class="wifi-value" id="apSsid">—</span>
+              </div>
+              <div class="wifi-info-row">
+                <span class="wifi-label">Password</span>
+                <span class="wifi-value" id="apPassword">—</span>
+              </div>
+              <div class="wifi-info-row">
+                <span class="wifi-label">Admin URL</span>
+                <a class="wifi-value wifi-url" id="apAdminUrl" href="#" target="_blank">—</a>
+              </div>
+
+              <!-- Edit AP credentials -->
+              <details class="wifi-edit-details">
+                <summary>✏️ Change Hotspot Name / Password</summary>
+                <div class="wifi-form">
+                  <label>New SSID</label>
+                  <input type="text" id="newApSsid" placeholder="DigitalPool-Camera" maxlength="32" />
+                  <label>New Password <small>(8+ chars)</small></label>
+                  <input type="password" id="newApPassword" placeholder="min 8 characters" minlength="8" />
+                  <button class="btn-wifi-action" id="saveApConfig">💾 Save &amp; Restart Hotspot</button>
+                  <div class="wifi-msg" id="apConfigMsg"></div>
+                </div>
+              </details>
+            </div>
+
+            <!-- Client WiFi -->
+            <div class="wifi-card">
+              <h4>🌐 WiFi Network Connection</h4>
+              <div class="wifi-info-row">
+                <span class="wifi-label">Connected To</span>
+                <span class="wifi-value" id="connectedNetwork">Checking…</span>
+              </div>
+
+              <div style="display:flex; gap:8px; margin:10px 0;">
+                <button class="btn-wifi-action" id="scanNetworks" style="flex:1">🔍 Scan Networks</button>
+                <button class="btn-wifi-secondary" id="disconnectWifi" style="flex:1">⛔ Disconnect</button>
+              </div>
+
+              <div id="networksListWrap" style="display:none">
+                <div id="networksList" class="wifi-networks-list"></div>
+              </div>
+
+              <!-- Connect form (shown when a network is selected) -->
+              <div id="connectForm" class="wifi-form" style="display:none">
+                <div class="wifi-info-row">
+                  <span class="wifi-label">Joining</span>
+                  <strong id="connectTargetSsid" class="wifi-value">—</strong>
+                </div>
+                <label>Password</label>
+                <input type="password" id="connectPassword" placeholder="Leave blank for open networks" />
+                <div style="display:flex; gap:8px;">
+                  <button class="btn-wifi-action" id="doConnect" style="flex:1">✅ Connect</button>
+                  <button class="btn-wifi-secondary" id="cancelConnect" style="flex:1">✖ Cancel</button>
+                </div>
+                <div class="wifi-msg" id="connectMsg"></div>
+              </div>
+            </div>
+          </div><!-- /.wifi-grid -->
+
+        </div><!-- /.wifi-panel-body -->
+      </div><!-- /.wifi-panel -->
+
       <footer>
         <p>Digital Pool Camera Control System</p>
       </footer>

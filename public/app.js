@@ -1838,3 +1838,197 @@ async function loadDeviceIp() {
   }
 }
 loadDeviceIp();
+
+// ═══════════════════════════════════════════════════════════════
+//  WiFi / Hotspot Panel
+// ═══════════════════════════════════════════════════════════════
+
+(function initWifiPanel() {
+
+  // ── collapse / expand toggle ────────────────────────────────
+  const toggle  = document.getElementById("wifiPanelToggle");
+  const body    = document.getElementById("wifiPanelBody");
+  const chevron = document.getElementById("wifiChevron");
+  if (toggle) {
+    toggle.addEventListener("click", () => {
+      const open = body.style.display !== "none";
+      body.style.display = open ? "none" : "block";
+      chevron.textContent = open ? "▶" : "▼";
+    });
+  }
+
+  // ── helper: show a temporary message ───────────────────────
+  function showMsg(el, text, isError = false) {
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = isError ? "#f87171" : "#4ade80";
+    setTimeout(() => { el.textContent = ""; }, 5000);
+  }
+
+  // ── load & display current WiFi / AP status ─────────────────
+  async function loadWifiStatus() {
+    try {
+      const r = await fetch("/api/wifi/status");
+      const d = await r.json();
+      if (!d.success) return;
+
+      // AP badge
+      const badge = document.getElementById("apBadge");
+      if (badge) {
+        badge.textContent = d.apRunning ? "● Active" : "○ Inactive";
+        badge.className = "ap-badge " + (d.apRunning ? "ap-badge-on" : "ap-badge-off");
+      }
+      setText("apSsid",     d.apSsid     || "—");
+      setText("apPassword", d.apPassword || "—");
+
+      const urlEl = document.getElementById("apAdminUrl");
+      if (urlEl && d.apAdminUrl) {
+        urlEl.textContent = d.apAdminUrl;
+        urlEl.href = d.apAdminUrl;
+      }
+
+      setText("connectedNetwork", d.connectedNetwork || "Not connected");
+    } catch (e) {
+      console.warn("WiFi status fetch failed:", e.message);
+    }
+  }
+
+  function setText(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  }
+
+  // ── scan networks ───────────────────────────────────────────
+  let selectedSsid = null;
+
+  document.getElementById("scanNetworks")?.addEventListener("click", async () => {
+    const btn = document.getElementById("scanNetworks");
+    btn.disabled = true;
+    btn.textContent = "🔍 Scanning…";
+    document.getElementById("networksListWrap").style.display = "none";
+    document.getElementById("connectForm").style.display = "none";
+    selectedSsid = null;
+
+    try {
+      const r = await fetch("/api/wifi/networks");
+      const d = await r.json();
+      const list = document.getElementById("networksList");
+      list.innerHTML = "";
+
+      if (!d.success || !d.networks.length) {
+        list.innerHTML = '<div class="wifi-network-item">No networks found</div>';
+      } else {
+        d.networks.forEach(n => {
+          const div = document.createElement("div");
+          div.className = "wifi-network-item" + (n.connected ? " wifi-network-active" : "");
+          div.innerHTML =
+            `<span class="wifi-net-ssid">${n.ssid}</span>` +
+            `<span class="wifi-net-meta">${signalIcon(n.signal)} ${n.security || "open"}</span>`;
+          div.addEventListener("click", () => selectNetwork(n.ssid));
+          list.appendChild(div);
+        });
+      }
+      document.getElementById("networksListWrap").style.display = "block";
+    } catch (e) {
+      console.error("Scan failed:", e);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "🔍 Scan Networks";
+    }
+  });
+
+  function signalIcon(sig) {
+    if (sig >= 75) return "▮▮▮▮";
+    if (sig >= 50) return "▮▮▮░";
+    if (sig >= 25) return "▮▮░░";
+    return "▮░░░";
+  }
+
+  function selectNetwork(ssid) {
+    selectedSsid = ssid;
+    setText("connectTargetSsid", ssid);
+    document.getElementById("connectPassword").value = "";
+    document.getElementById("connectMsg").textContent = "";
+    document.getElementById("connectForm").style.display = "block";
+    document.getElementById("connectPassword").focus();
+  }
+
+  document.getElementById("cancelConnect")?.addEventListener("click", () => {
+    document.getElementById("connectForm").style.display = "none";
+    selectedSsid = null;
+  });
+
+  // ── connect to network ──────────────────────────────────────
+  document.getElementById("doConnect")?.addEventListener("click", async () => {
+    if (!selectedSsid) return;
+    const pw  = document.getElementById("connectPassword").value;
+    const btn = document.getElementById("doConnect");
+    const msg = document.getElementById("connectMsg");
+    btn.disabled = true;
+    btn.textContent = "Connecting…";
+    try {
+      const r = await fetch("/api/wifi/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ssid: selectedSsid, password: pw }),
+      });
+      const d = await r.json();
+      if (d.success) {
+        showMsg(msg, `✅ Connected to ${selectedSsid}`);
+        document.getElementById("connectForm").style.display = "none";
+        setTimeout(loadWifiStatus, 3000);
+      } else {
+        showMsg(msg, `❌ ${d.error || "Connection failed"}`, true);
+      }
+    } catch (e) {
+      showMsg(msg, `❌ ${e.message}`, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "✅ Connect";
+    }
+  });
+
+  // ── disconnect ──────────────────────────────────────────────
+  document.getElementById("disconnectWifi")?.addEventListener("click", async () => {
+    await fetch("/api/wifi/disconnect", { method: "POST" });
+    setTimeout(loadWifiStatus, 2000);
+  });
+
+  // ── save AP config ──────────────────────────────────────────
+  document.getElementById("saveApConfig")?.addEventListener("click", async () => {
+    const ssid = document.getElementById("newApSsid").value.trim();
+    const pw   = document.getElementById("newApPassword").value.trim();
+    const msg  = document.getElementById("apConfigMsg");
+    if (!ssid && !pw) { showMsg(msg, "Enter a new SSID and/or password", true); return; }
+    if (pw && pw.length < 8) { showMsg(msg, "Password must be at least 8 characters", true); return; }
+
+    const btn = document.getElementById("saveApConfig");
+    btn.disabled = true;
+    btn.textContent = "Saving…";
+    try {
+      const r = await fetch("/api/wifi/ap/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ssid: ssid || undefined, password: pw || undefined }),
+      });
+      const d = await r.json();
+      if (d.success) {
+        showMsg(msg, "✅ Hotspot updated — reconnect using the new SSID");
+        loadWifiStatus();
+      } else {
+        showMsg(msg, `❌ ${d.error}`, true);
+      }
+    } catch (e) {
+      showMsg(msg, `❌ ${e.message}`, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "💾 Save & Restart Hotspot";
+    }
+  });
+
+  // ── kick off ────────────────────────────────────────────────
+  loadWifiStatus();
+  // Refresh status every 30 s
+  setInterval(loadWifiStatus, 30_000);
+
+})();
