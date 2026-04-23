@@ -68,32 +68,52 @@ class WifiManager extends EventEmitter {
   // ─── public API ────────────────────────────────────────────────────────────
 
   /**
-   * Wait until NetworkManager reports the interface as ready (disconnected or better).
+   * Wait until NetworkManager reports the interface as ready (state >= 30 / disconnected).
    * USB adapters can take several seconds after boot to initialise.
-   * Polls up to maxWaitMs milliseconds in intervalMs steps.
+   *
+   * NM device states:
+   *   10 = unmanaged  → actively set managed=yes, then keep polling
+   *   20 = unavailable (managed, hardware not ready yet) → keep polling
+   *   30 = disconnected → ready ✅
+   *   40+ = connecting / connected → ready ✅
    */
   async _waitForDevice(maxWaitMs = 60_000, intervalMs = 3_000) {
     const deadline = Date.now() + maxWaitMs;
+    let setManagedAttempted = false;
     console.log(`⏳ Waiting for ${this.wifiIface} to become available...`);
+
     while (Date.now() < deadline) {
       const r = await this._run(
         `nmcli -t -f GENERAL.STATE device show "${this.wifiIface}" 2>/dev/null`
       );
+
       if (r.ok && r.out) {
-        // NM states that allow us to bring up a connection:
-        //   20 (unavailable), 30 (disconnected), 40+ (connecting/connected)
-        // We need at least state 30 (disconnected).
         const match = r.out.match(/(\d+)/);
         const state = match ? parseInt(match[1]) : 0;
         console.log(`   ${this.wifiIface} NM state: ${r.out.trim()}`);
+
         if (state >= 30) {
           console.log(`✅ ${this.wifiIface} is ready (state ${state})`);
           return true;
         }
+
+        // State 10 = unmanaged — tell NM to take control of this device
+        if (state === 10 && !setManagedAttempted) {
+          setManagedAttempted = true;
+          console.log(`📡 Device is unmanaged — setting managed=yes on ${this.wifiIface}...`);
+          const m = await this._run(`nmcli device set "${this.wifiIface}" managed yes`);
+          if (m.ok) {
+            console.log('✅ Device set to managed, waiting for NM to take over...');
+          } else {
+            console.error('❌ Could not set device managed:', m.err);
+          }
+        }
       }
+
       await new Promise(res => setTimeout(res, intervalMs));
     }
-    console.warn(`⚠️  Timed out waiting for ${this.wifiIface}`);
+
+    console.warn(`⚠️  Timed out waiting for ${this.wifiIface} to become ready`);
     return false;
   }
 
