@@ -588,36 +588,27 @@
               </details>
             </div>
 
-            <!-- Client WiFi -->
+            <!-- Network / Ethernet status -->
             <div class="wifi-card">
-              <h4>🌐 WiFi Network Connection</h4>
+              <h4>🔌 Network Connection</h4>
+              <p class="wifi-hint">
+                The WiFi adapter is dedicated to the admin hotspot and cannot
+                simultaneously join another WiFi network (hardware limitation of the
+                RTL8812BU chip). Use the device's <strong>Ethernet port</strong> for
+                venue/internet connectivity and camera streaming.
+              </p>
+
               <div class="wifi-info-row">
-                <span class="wifi-label">Connected To</span>
-                <span class="wifi-value" id="connectedNetwork">Checking…</span>
+                <span class="wifi-label">Ethernet</span>
+                <span class="wifi-value" id="ethernetStatus">Checking…</span>
               </div>
-
-              <div style="display:flex; gap:8px; margin:10px 0;">
-                <button class="btn-wifi-action" id="scanNetworks" style="flex:1">🔍 Scan Networks</button>
-                <button class="btn-wifi-secondary" id="disconnectWifi" style="flex:1">⛔ Disconnect</button>
+              <div class="wifi-info-row">
+                <span class="wifi-label">Ethernet IP</span>
+                <span class="wifi-value" id="ethernetIp">—</span>
               </div>
-
-              <div id="networksListWrap" style="display:none">
-                <div id="networksList" class="wifi-networks-list"></div>
-              </div>
-
-              <!-- Connect form (shown when a network is selected) -->
-              <div id="connectForm" class="wifi-form" style="display:none">
-                <div class="wifi-info-row">
-                  <span class="wifi-label">Joining</span>
-                  <strong id="connectTargetSsid" class="wifi-value">—</strong>
-                </div>
-                <label>Password</label>
-                <input type="password" id="connectPassword" placeholder="Leave blank for open networks" />
-                <div style="display:flex; gap:8px;">
-                  <button class="btn-wifi-action" id="doConnect" style="flex:1">✅ Connect</button>
-                  <button class="btn-wifi-secondary" id="cancelConnect" style="flex:1">✖ Cancel</button>
-                </div>
-                <div class="wifi-msg" id="connectMsg"></div>
+              <div class="wifi-info-row">
+                <span class="wifi-label">All IPs</span>
+                <span class="wifi-value" id="allIps" style="font-size:10px;line-height:1.6">—</span>
               </div>
             </div>
           </div><!-- /.wifi-grid -->

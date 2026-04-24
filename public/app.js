@@ -1898,101 +1898,40 @@ loadDeviceIp();
     if (el) el.textContent = text;
   }
 
-  // ── scan networks ───────────────────────────────────────────
-  let selectedSsid = null;
-
-  document.getElementById("scanNetworks")?.addEventListener("click", async () => {
-    const btn = document.getElementById("scanNetworks");
-    btn.disabled = true;
-    btn.textContent = "🔍 Scanning…";
-    document.getElementById("networksListWrap").style.display = "none";
-    document.getElementById("connectForm").style.display = "none";
-    selectedSsid = null;
-
+  // ── Ethernet / network status ───────────────────────────────
+  async function loadNetworkStatus() {
     try {
-      const r = await fetch("/api/wifi/networks");
+      const r = await fetch("/api/network");
       const d = await r.json();
-      const list = document.getElementById("networksList");
-      list.innerHTML = "";
+      if (!d.success) return;
 
-      if (!d.success || !d.networks.length) {
-        list.innerHTML = '<div class="wifi-network-item">No networks found</div>';
-      } else {
-        d.networks.forEach(n => {
-          const div = document.createElement("div");
-          div.className = "wifi-network-item" + (n.connected ? " wifi-network-active" : "");
-          div.innerHTML =
-            `<span class="wifi-net-ssid">${n.ssid}</span>` +
-            `<span class="wifi-net-meta">${signalIcon(n.signal)} ${n.security || "open"}</span>`;
-          div.addEventListener("click", () => selectNetwork(n.ssid));
-          list.appendChild(div);
-        });
+      // Separate Ethernet from WiFi addresses
+      const ethAddrs  = d.addresses.filter(a => /^e(th|n)/.test(a.interface));
+      const allNonAp  = d.addresses.filter(a => a.interface !== 'lo');
+
+      const ethEl  = document.getElementById("ethernetStatus");
+      const ethIpEl = document.getElementById("ethernetIp");
+      const allEl  = document.getElementById("allIps");
+
+      if (ethEl) {
+        if (ethAddrs.length) {
+          ethEl.textContent = "🟢 Connected";
+          ethEl.style.color = "#4ade80";
+        } else {
+          ethEl.textContent = "🔴 Not connected";
+          ethEl.style.color = "#f87171";
+        }
       }
-      document.getElementById("networksListWrap").style.display = "block";
-    } catch (e) {
-      console.error("Scan failed:", e);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "🔍 Scan Networks";
-    }
-  });
-
-  function signalIcon(sig) {
-    if (sig >= 75) return "▮▮▮▮";
-    if (sig >= 50) return "▮▮▮░";
-    if (sig >= 25) return "▮▮░░";
-    return "▮░░░";
-  }
-
-  function selectNetwork(ssid) {
-    selectedSsid = ssid;
-    setText("connectTargetSsid", ssid);
-    document.getElementById("connectPassword").value = "";
-    document.getElementById("connectMsg").textContent = "";
-    document.getElementById("connectForm").style.display = "block";
-    document.getElementById("connectPassword").focus();
-  }
-
-  document.getElementById("cancelConnect")?.addEventListener("click", () => {
-    document.getElementById("connectForm").style.display = "none";
-    selectedSsid = null;
-  });
-
-  // ── connect to network ──────────────────────────────────────
-  document.getElementById("doConnect")?.addEventListener("click", async () => {
-    if (!selectedSsid) return;
-    const pw  = document.getElementById("connectPassword").value;
-    const btn = document.getElementById("doConnect");
-    const msg = document.getElementById("connectMsg");
-    btn.disabled = true;
-    btn.textContent = "Connecting…";
-    try {
-      const r = await fetch("/api/wifi/connect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ssid: selectedSsid, password: pw }),
-      });
-      const d = await r.json();
-      if (d.success) {
-        showMsg(msg, `✅ Connected to ${selectedSsid}`);
-        document.getElementById("connectForm").style.display = "none";
-        setTimeout(loadWifiStatus, 3000);
-      } else {
-        showMsg(msg, `❌ ${d.error || "Connection failed"}`, true);
+      if (ethIpEl) {
+        ethIpEl.textContent = ethAddrs.length ? ethAddrs.map(a => a.address).join(', ') : '—';
+      }
+      if (allEl) {
+        allEl.textContent = allNonAp.map(a => `${a.interface}: ${a.address}`).join('\n') || '—';
       }
     } catch (e) {
-      showMsg(msg, `❌ ${e.message}`, true);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "✅ Connect";
+      console.warn("Network status fetch failed:", e.message);
     }
-  });
-
-  // ── disconnect ──────────────────────────────────────────────
-  document.getElementById("disconnectWifi")?.addEventListener("click", async () => {
-    await fetch("/api/wifi/disconnect", { method: "POST" });
-    setTimeout(loadWifiStatus, 2000);
-  });
+  }
 
   // ── save AP config ──────────────────────────────────────────
   document.getElementById("saveApConfig")?.addEventListener("click", async () => {
@@ -2028,7 +1967,9 @@ loadDeviceIp();
 
   // ── kick off ────────────────────────────────────────────────
   loadWifiStatus();
-  // Refresh status every 30 s
-  setInterval(loadWifiStatus, 30_000);
+  loadNetworkStatus();
+  // Refresh both every 30 s
+  setInterval(loadWifiStatus,    30_000);
+  setInterval(loadNetworkStatus, 30_000);
 
 })();

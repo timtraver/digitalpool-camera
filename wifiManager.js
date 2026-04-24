@@ -216,16 +216,58 @@ class WifiManager extends EventEmitter {
   /**
    * Scan for nearby WiFi networks (excludes the AP itself).
    * Returns array of { ssid, signal, security, connected }.
+   *
+   * When the interface is in AP mode we cannot trigger an active rescan on it —
+   * instead we ask NM for its cached results (--rescan no) which it builds up
+   * in the background.  If the cache is empty we fall back to iw scan.
    */
   async scanNetworks() {
-    await this._run(`nmcli device wifi rescan ifname ${this.wifiIface} 2>/dev/null`);
-    await new Promise(r => setTimeout(r, 2500));
-    const r = await this._run(
-      `nmcli -t -f SSID,SIGNAL,SECURITY,ACTIVE device wifi list ifname ${this.wifiIface} 2>/dev/null`
+    const apActive = await this._isAPActive();
+
+    if (!apActive) {
+      // Managed/idle mode — we can request a fresh scan
+      console.log('📡 Scanning for networks (active rescan)...');
+      await this._run(`nmcli device wifi rescan ifname ${this.wifiIface} 2>/dev/null`);
+      await new Promise(r => setTimeout(r, 2500));
+    } else {
+      // AP mode — active rescan on this interface would fail/hang.
+      // Use NM's background-cached results; no wait needed.
+      console.log('📡 Scanning for networks (cached, AP is active)...');
+    }
+
+    // Try NM cached list first (no ifname so NM searches all managed ifaces)
+    const rescanFlag = apActive ? '--rescan no' : '';
+    let r = await this._run(
+      `nmcli -t -f SSID,SIGNAL,SECURITY,ACTIVE device wifi list ${rescanFlag} 2>/dev/null`
     );
-    if (!r.ok) return [];
+
+    // Fallback: iw scan (works on many drivers even in AP mode via passive scan)
+    if (!r.ok || !r.out.trim()) {
+      console.log('📡 NM cache empty, trying iw scan fallback...');
+      const iw = await this._run(`iw dev ${this.wifiIface} scan 2>/dev/null`);
+      if (iw.ok && iw.out) {
+        // Parse iw scan output into the same shape
+        const results = [];
+        const seen = new Set();
+        for (const line of iw.out.split('\n')) {
+          const ssidMatch = line.match(/SSID:\s+(.+)/);
+          if (ssidMatch) {
+            const ssid = ssidMatch[1].trim();
+            if (ssid && !seen.has(ssid) && ssid !== this.apSsid) {
+              seen.add(ssid);
+              results.push({ ssid, signal: 50, security: 'WPA', connected: false });
+            }
+          }
+        }
+        return results;
+      }
+      return [];
+    }
+
+    // Parse nmcli -t output
+    if (!r2.ok) return [];
     const seen = new Set();
-    return r.out.split('\n')
+    return r2.out.split('\n')
       .map(line => {
         const parts = line.split(':');
         if (parts.length < 4) return null;
