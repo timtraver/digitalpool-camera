@@ -24,6 +24,8 @@ AUDIO_DEVICE=${17:-""}
 TS_FONT_SIZE=${18:-$FONT_SIZE}
 TS_COLOR=${19:-$OVERLAY_COLOR}
 TS_BACKGROUND=${20:-$OVERLAY_BACKGROUND}
+# Codec selection: 'h264' or 'h265' (arg 21, optional — defaults to h264)
+CODEC=${21:-"h264"}
 
 echo "🎨 Starting stream with dynamic PNG graphics overlay (Python GStreamer)..."
 echo "Camera: $CAMERA_DEVICE"
@@ -35,6 +37,7 @@ echo "Text Overlay: $OVERLAY_TEXT"
 echo "Show Timestamp: $SHOW_TIMESTAMP"
 echo "Title Font Size: $FONT_SIZE, Timestamp Font Size: $TS_FONT_SIZE"
 echo "Audio Device: $AUDIO_DEVICE"
+echo "Codec: $CODEC"
 
 # Get the directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,5 +49,5 @@ exec python3 "$SCRIPT_DIR/gst-overlay-pipeline.py" \
   "$PNG_PATH" "$OVERLAY_TEXT" "$SHOW_TIMESTAMP" "$FONT_SIZE" \
   "$OVERLAY_COLOR" "$OVERLAY_BACKGROUND" "$TIMESTAMP_FORMAT" \
   "$TITLE_POSITION" "$TIMESTAMP_POSITION" "$AUDIO_DEVICE" \
-  "$TS_FONT_SIZE" "$TS_COLOR" "$TS_BACKGROUND"
+  "$TS_FONT_SIZE" "$TS_COLOR" "$TS_BACKGROUND" "$CODEC"
 

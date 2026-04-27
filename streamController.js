@@ -64,6 +64,7 @@ class StreamController extends EventEmitter {
       framerate: 30,
       bitrate: 5000000, // 5 Mbps
       encoder: "mpph264enc", // Rockchip MPP hardware encoder (Orange Pi 5 / RK3588)
+      codec: "h264", // 'h264' or 'h265' — h265 not supported with RTMP
       autoStart: false, // Auto-start streaming on server startup
       // Overlay settings
       overlayEnabled: false,
@@ -884,6 +885,9 @@ class StreamController extends EventEmitter {
 
     const audioDevice = this.streamConfig.audioEnabled ? (this.streamConfig.audioDevice || "hw:3,0") : "";
 
+    // H.265 is incompatible with RTMP (FLV container only supports H.264)
+    const scriptCodec = (this.streamConfig.codec === "h265" && scriptProtocol !== "rtmp") ? "h265" : "h264";
+
     const scriptArgs = [
       this.cameraDevice,
       width.toString(),
@@ -906,6 +910,7 @@ class StreamController extends EventEmitter {
       scaledTsFontSize.toString(),
       tsColor.toString(),
       tsBackground,
+      scriptCodec,
     ];
 
     return {
@@ -928,6 +933,9 @@ class StreamController extends EventEmitter {
       bitrate,
       encoder,
     } = this.streamConfig;
+
+    // H.265 is incompatible with RTMP (FLV container only supports H.264)
+    const codec = (this.streamConfig.codec === "h265" && protocol !== "rtmp") ? "h265" : "h264";
 
     // Check if graphics overlay is needed:
     // - Legacy: skiaGraphicsEnabled checkbox (being removed from UI)
@@ -1097,7 +1105,8 @@ class StreamController extends EventEmitter {
     // For now, just use the normal pipeline
     // When using MPP hardware path without overlays, mppjpegdec outputs NV12 directly
     // so we can skip videoconvert before the tee to save CPU
-    if (encoder === "mpph264enc" && !hasAnyOverlay) {
+    // Both mpph264enc and mpph265enc receive NV12 from mppjpegdec directly
+    if ((encoder === "mpph264enc" || codec === "h265") && !hasAnyOverlay) {
       pipeline.push("video/x-raw,format=NV12", "!", "tee", "name=t");
     } else {
       pipeline.push("videoconvert", "!", "tee", "name=t");
@@ -1118,8 +1127,29 @@ class StreamController extends EventEmitter {
     );
 
     // Encoding pipeline
-    if (encoder === "mpph264enc") {
-      // Rockchip MPP hardware encoder (Orange Pi 5 / RK3588)
+    if (codec === "h265") {
+      // Rockchip MPP H.265 hardware encoder (Orange Pi 5 / RK3588)
+      // Incompatible with RTMP — enforced in UI and above; only reached for SRT / RTSP
+      if (hasAnyOverlay) {
+        pipeline.push("videoconvert", "!", "video/x-raw,format=NV12", "!");
+      }
+      pipeline.push(
+        "mpph265enc",
+        `bps=${bitrate}`,
+        `bps-max=${Math.round(bitrate * 1.6)}`,
+        "rc-mode=vbr",
+        "gop=5",                // Keyframe every ~167ms at 30fps, ~83ms at 60fps
+        "header-mode=each-idr", // VPS/SPS/PPS prepended to every IDR in the bitstream
+        "profile=main",         // H.265 Main profile
+        "!",
+        "video/x-h265,stream-format=byte-stream",
+        "!",
+        "h265parse",
+        "config-interval=-1",   // Inline parameter sets; RTMP not supported with H.265
+        "!",
+      );
+    } else if (encoder === "mpph264enc") {
+      // Rockchip MPP H.264 hardware encoder (Orange Pi 5 / RK3588)
       // When no overlay, NV12 comes directly from mppjpegdec — no videoconvert needed
       if (hasAnyOverlay) {
         pipeline.push("videoconvert", "!", "video/x-raw,format=NV12", "!");

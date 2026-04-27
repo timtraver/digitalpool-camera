@@ -547,6 +547,7 @@ const streamProtocol = document.getElementById("streamProtocol");
 const streamDestination = document.getElementById("streamDestination");
 const streamBitrate = document.getElementById("streamBitrate");
 const streamFramerate = document.getElementById("streamFramerate");
+const streamCodec = document.getElementById("streamCodec");
 const audioEnabledCheckbox = document.getElementById("audioEnabled");
 const startStreamBtn = document.getElementById("startStream");
 const stopStreamBtn = document.getElementById("stopStream");
@@ -654,7 +655,25 @@ function setStreamStatus(state, text) {
 streamProtocol.addEventListener("change", () => {
   const protocol = streamProtocol.value;
   updateConnectionInfo(protocol, deviceLocalIP);
-  // Also update custom dropdown display
+
+  // H.265 is incompatible with RTMP (FLV container only supports H.264)
+  const h265Option = streamCodec.querySelector('option[value="h265"]');
+  if (protocol === "rtmp") {
+    h265Option.disabled = true;
+    if (streamCodec.value === "h265") {
+      streamCodec.value = "h264";
+      // Sync the custom dropdown label back to H.264
+      const codecDropdown = streamCodec.parentElement.querySelector(".custom-dropdown-selected");
+      if (codecDropdown) {
+        codecDropdown.textContent = "H.264 (all protocols)";
+        codecDropdown.dataset.value = "h264";
+      }
+    }
+  } else {
+    h265Option.disabled = false;
+  }
+
+  // Also update protocol custom dropdown display
   const protocolDropdown = streamProtocol.parentElement.querySelector(".custom-dropdown-selected");
   if (protocolDropdown) {
     const opt = streamProtocol.options[streamProtocol.selectedIndex];
@@ -685,6 +704,7 @@ startStreamBtn.addEventListener("click", async () => {
       width: 1920,
       height: 1080,
       framerate: parseInt(streamFramerate.value),
+      codec: streamCodec.value,
     };
     console.log("Restarting stream with config:", config);
     socket.emit("restartStream", config);
@@ -698,6 +718,7 @@ startStreamBtn.addEventListener("click", async () => {
       width: 1920,
       height: 1080,
       framerate: parseInt(streamFramerate.value),
+      codec: streamCodec.value,
     };
 
 
@@ -962,6 +983,7 @@ createCustomDropdown(timestampBackground);
 createCustomDropdown(streamProtocol);
 createCustomDropdown(streamBitrate);
 createCustomDropdown(streamFramerate);
+createCustomDropdown(streamCodec);
 
 // Camera control dropdowns
 const exposureAutoSelect = document.getElementById("exposureAuto");
@@ -1800,7 +1822,17 @@ async function loadStreamConfig() {
       streamDestination.value = data.config.destination || "";
       streamBitrate.value = data.config.bitrate || 5000000;
       streamFramerate.value = data.config.framerate || 30;
+      streamCodec.value = data.config.codec || "h264";
       audioEnabledCheckbox.checked = data.config.audioEnabled !== false; // default true
+
+      // Enforce H.265 restriction on RTMP after restoring saved codec
+      const h265Option = streamCodec.querySelector('option[value="h265"]');
+      if ((data.config.protocol || "rtsp") === "rtmp") {
+        h265Option.disabled = true;
+        if (streamCodec.value === "h265") streamCodec.value = "h264";
+      } else {
+        h265Option.disabled = false;
+      }
 
       // Update custom dropdowns
       const protocolDropdown = streamProtocol.parentElement.querySelector(
@@ -1831,6 +1863,15 @@ async function loadStreamConfig() {
           streamFramerate.options[streamFramerate.selectedIndex];
         framerateDropdown.textContent = framerateOption.text;
         framerateDropdown.dataset.value = framerateOption.value;
+      }
+
+      const codecDropdown = streamCodec.parentElement.querySelector(
+        ".custom-dropdown-selected",
+      );
+      if (codecDropdown) {
+        const codecOption = streamCodec.options[streamCodec.selectedIndex];
+        codecDropdown.textContent = codecOption.text;
+        codecDropdown.dataset.value = codecOption.value;
       }
 
       // Show/hide destination field and connection info box based on protocol

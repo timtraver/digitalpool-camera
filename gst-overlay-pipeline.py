@@ -69,6 +69,9 @@ def main():
     ts_font_size = sys.argv[18] if len(sys.argv) > 18 else font_size
     ts_color = sys.argv[19] if len(sys.argv) > 19 else overlay_color
     ts_background = sys.argv[20] if len(sys.argv) > 20 else overlay_background
+    # H.265 is incompatible with RTMP (FLV container only supports H.264)
+    requested_codec = sys.argv[21] if len(sys.argv) > 21 else "h264"
+    codec = "h264" if protocol == "rtmp" else requested_codec
 
     bitrate_kbps = bitrate // 1000
 
@@ -221,15 +224,23 @@ def main():
         # Constrained VBR: bps_max=1.6x target allows the encoder to burst for high-motion
         # frames (fast pool shots) rather than raising quantizer and pixelating.
         # SRT latency=500ms absorbs the short bursts; average bitrate stays near bps target.
-        + f'! mpph264enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr profile=baseline '
-        + f"! video/x-h264,stream-format=byte-stream "
-        # RTMP+audio hybrid: config-interval=0 — SPS/PPS go only into the MPEG-TS PMT.
-        # ffmpeg reads them once at startup and writes ONE AVC sequence header in FLV.
-        # With config-interval=-1, ffmpeg sees inline SPS/PPS before every IDR and
-        # emits a sequence header + IDR NALU with identical DTS → MediaMTX drops the
-        # connection with "DTS is not monotonically increasing".
-        # All other paths use -1 so OBS/players can resync after any packet loss.
-        + f'! h264parse config-interval={"0" if protocol == "rtmp" and audio_device else "-1"} '
+        + (
+            # H.265 (HEVC) — Rockchip MPP hardware encoder, SRT / RTSP only
+            f'! mpph265enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr profile=main '
+            f'! video/x-h265,stream-format=byte-stream '
+            f'! h265parse config-interval=-1 '
+            if codec == "h265" else
+            # H.264 (default) — Rockchip MPP hardware encoder, all protocols
+            f'! mpph264enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr profile=baseline '
+            f'! video/x-h264,stream-format=byte-stream '
+            # RTMP+audio hybrid: config-interval=0 — SPS/PPS go only into the MPEG-TS PMT.
+            # ffmpeg reads them once at startup and writes ONE AVC sequence header in FLV.
+            # With config-interval=-1, ffmpeg sees inline SPS/PPS before every IDR and
+            # emits a sequence header + IDR NALU with identical DTS → MediaMTX drops the
+            # connection with "DTS is not monotonically increasing".
+            # All other paths use -1 so OBS/players can resync after any packet loss.
+            f'! h264parse config-interval={"0" if protocol == "rtmp" and audio_device else "-1"} '
+        )
         # Thread boundary before mux to decouple encoder from network I/O.
         # RTMP without audio still uses flvmux (which requires DTS monotonicity) —
         # no leaky, 2s buffer. All other paths use mpegtsmux with a single video-only
