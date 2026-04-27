@@ -546,6 +546,7 @@ document.addEventListener("keydown", (e) => {
 const streamProtocol = document.getElementById("streamProtocol");
 const streamDestination = document.getElementById("streamDestination");
 const streamBitrate = document.getElementById("streamBitrate");
+const streamFramerate = document.getElementById("streamFramerate");
 const audioEnabledCheckbox = document.getElementById("audioEnabled");
 const startStreamBtn = document.getElementById("startStream");
 const stopStreamBtn = document.getElementById("stopStream");
@@ -683,7 +684,7 @@ startStreamBtn.addEventListener("click", async () => {
       audioEnabled: audioEnabledCheckbox.checked,
       width: 1920,
       height: 1080,
-      framerate: 30,
+      framerate: parseInt(streamFramerate.value),
     };
     console.log("Restarting stream with config:", config);
     socket.emit("restartStream", config);
@@ -696,7 +697,7 @@ startStreamBtn.addEventListener("click", async () => {
       audioEnabled: audioEnabledCheckbox.checked,
       width: 1920,
       height: 1080,
-      framerate: 30,
+      framerate: parseInt(streamFramerate.value),
     };
 
 
@@ -960,6 +961,7 @@ createCustomDropdown(timestampBackground);
 // Stream control dropdowns
 createCustomDropdown(streamProtocol);
 createCustomDropdown(streamBitrate);
+createCustomDropdown(streamFramerate);
 
 // Camera control dropdowns
 const exposureAutoSelect = document.getElementById("exposureAuto");
@@ -1797,6 +1799,7 @@ async function loadStreamConfig() {
       streamProtocol.value = data.config.protocol || "rtsp";
       streamDestination.value = data.config.destination || "";
       streamBitrate.value = data.config.bitrate || 5000000;
+      streamFramerate.value = data.config.framerate || 30;
       audioEnabledCheckbox.checked = data.config.audioEnabled !== false; // default true
 
       // Update custom dropdowns
@@ -1818,6 +1821,16 @@ async function loadStreamConfig() {
           streamBitrate.options[streamBitrate.selectedIndex];
         bitrateDropdown.textContent = bitrateOption.text;
         bitrateDropdown.dataset.value = bitrateOption.value;
+      }
+
+      const framerateDropdown = streamFramerate.parentElement.querySelector(
+        ".custom-dropdown-selected",
+      );
+      if (framerateDropdown) {
+        const framerateOption =
+          streamFramerate.options[streamFramerate.selectedIndex];
+        framerateDropdown.textContent = framerateOption.text;
+        framerateDropdown.dataset.value = framerateOption.value;
       }
 
       // Show/hide destination field and connection info box based on protocol
