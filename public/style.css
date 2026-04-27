@@ -1320,27 +1320,28 @@ footer {
   align-items: center;
   cursor: pointer;
   user-select: none;
-  padding: 5px 4px;
-  margin-bottom: 6px;
-  border-bottom: 1px solid rgba(18, 199, 255, 0.2);
-  font-size: 14px;
+  /* Bleed to the edges of the control-panel (counteract its 12px padding) */
+  margin: 0 -12px;
+  padding: 12px 18px;
+  background: rgba(18, 199, 255, 0.08);
+  border-bottom: 1px solid rgba(18, 199, 255, 0.15);
+  font-size: 15px;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.9);
-  transition: color 0.15s;
+  transition: background 0.2s;
+}
+
+.settings-card-body {
+  padding-top: 10px;
 }
 
 .settings-card-header:hover {
-  color: rgba(18, 199, 255, 0.9);
-}
-
-.settings-card-header:hover .settings-card-chevron {
-  color: rgba(18, 199, 255, 1);
+  background: rgba(18, 199, 255, 0.14);
 }
 
 .settings-card-chevron {
-  font-size: 11px;
+  font-size: 12px;
   color: rgba(18, 199, 255, 0.7);
-  transition: color 0.15s;
 }
 
 /* Stream server header status badge */
@@ -1395,8 +1396,7 @@ footer {
   /* Settings card headers: large tap targets */
   .settings-card-header {
     min-height: 48px;
-    padding: 12px 14px;
-    font-size: 14px;
+    padding: 12px 18px;
   }
 
   /* PTZ: stack d-pad above zoom/startup on narrow screens */
