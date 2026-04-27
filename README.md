@@ -73,6 +73,49 @@ sudo apt update && sudo apt full-upgrade -y
 sudo reboot
 ```
 
+### 1e. Reduce microSD card wear — disable atime
+
+Every file read on a standard Linux mount triggers an `atime` (access time) write back to the filesystem metadata. On a microSD card this is pure wasted write wear with no practical benefit. Switching the root and boot partitions to `noatime` eliminates these writes and significantly extends card lifespan.
+
+**Edit `/etc/fstab`:**
+
+```bash
+sudo nano /etc/fstab
+```
+
+Your current entries will look something like:
+
+```
+LABEL=writable  /       ext4  defaults        0 1
+LABEL=system-boot /boot/firmware vfat defaults 0 1
+```
+
+Add `noatime` to the options field of every partition that lives on the SD card:
+
+```
+LABEL=writable    /               ext4  defaults,noatime        0 1
+LABEL=system-boot /boot/firmware  vfat  defaults,noatime        0 1
+```
+
+> **`noatime`** suppresses all access-time updates entirely — the safest choice for an embedded device that runs unattended and where you never need to know when a file was last read.
+>
+> If you have software that relies on atime (unlikely here), use **`relatime`** instead — it only writes atime when the file has been modified since the last read, giving most of the benefit with full POSIX compatibility.
+
+**Verify the change without rebooting:**
+
+```bash
+sudo mount -o remount,noatime /
+sudo mount -o remount,noatime /boot/firmware
+```
+
+Then confirm it took effect:
+
+```bash
+findmnt -o TARGET,OPTIONS / /boot/firmware
+```
+
+You should see `noatime` listed in the options column. The change will persist automatically after the next reboot because it is now in `/etc/fstab`.
+
 ---
 
 ## 2. Install System Dependencies
