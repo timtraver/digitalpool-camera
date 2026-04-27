@@ -9,7 +9,7 @@ body {
   /* DigitalPool gradient background - dark blue to black */
   background: linear-gradient(180deg, #0d1e35 0%, #000000 100%);
   min-height: 100vh;
-  padding: 10px;
+  padding: 0;
   position: relative;
 }
 
@@ -30,14 +30,12 @@ body::before {
 }
 
 .container {
-  max-width: 1400px;
-  margin: 0 auto;
   background: rgba(18, 26, 39, 0.95);
-  border-radius: 10px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  border-radius: 0;
+  box-shadow: none;
   overflow-x: hidden;
   overflow-y: visible;
-  border: 1px solid rgba(18, 199, 255, 0.2);
+  border: none;
 }
 
 header {
@@ -101,9 +99,9 @@ header h1 {
 
 .main-content {
   display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: 15px;
-  padding: 15px;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  padding: 10px;
   background: rgba(6, 16, 27, 0.5);
 }
 
@@ -455,9 +453,12 @@ header h1 {
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(18, 199, 255, 0.2);
-  /* Remove transform to prevent dropdown positioning issues */
   transform: none;
   will-change: auto;
+  /* Mobile: let the page scroll naturally */
+  overflow-y: visible;
+  max-height: none;
+  align-self: start;
 }
 
 .control-panel h3 {
@@ -1349,12 +1350,82 @@ footer {
   border-top: 1px solid rgba(18, 199, 255, 0.15);
 }
 
-/* Responsive Design */
-@media (max-width: 1200px) {
-  .main-content { grid-template-columns: 1fr; }
+/* ─── Responsive / Desktop restore ────────────────────────────────────────── */
+/* On wider screens: restore the two-column layout, padding, and card scrolling */
+@media (min-width: 900px) {
+  body {
+    padding: 10px;
+  }
+
+  .container {
+    max-width: 1400px;
+    margin: 0 auto;
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(18, 199, 255, 0.2);
+  }
+
+  .main-content {
+    grid-template-columns: 2fr 1fr;
+    gap: 15px;
+    padding: 15px;
+  }
+
+  .control-panel {
+    overflow-y: auto;
+    max-height: calc(100vh - 120px);
+  }
 }
 
-@media (max-width: 700px) {
+/* ─── Mobile overrides (≤ 899px) ──────────────────────────────────────────── */
+@media (max-width: 899px) {
+  /* Header: wrap gracefully on narrow screens */
+  header {
+    padding: 10px 12px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  header h1 { font-size: 15px; }
+  .logo { height: 26px; }
+
+  /* Settings card headers: large tap targets */
+  .settings-card-header {
+    min-height: 48px;
+    padding: 12px 14px;
+    font-size: 14px;
+  }
+
+  /* PTZ: stack d-pad above zoom/startup on narrow screens */
+  .control-grid {
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  .ptz-settings {
+    width: 100%;
+    min-width: unset;
+    align-items: stretch;
+  }
+
+  /* Larger range slider thumbs for touch accuracy */
+  .control-item input[type="range"] { height: 6px; }
+  .control-item input[type="range"]::-webkit-slider-thumb {
+    width: 22px;
+    height: 22px;
+  }
+  .control-item input[type="range"]::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
+  }
+
+  /* Stream buttons: tall enough to tap comfortably */
+  .btn-stream {
+    padding: 12px 8px;
+    font-size: 13px;
+    min-height: 44px;
+  }
+
+  /* WiFi panel: single column, edge-to-edge */
   .wifi-grid { grid-template-columns: 1fr; }
-  .wifi-panel { margin: 0 10px 16px; }
+  .wifi-panel { margin: 0 0 16px; border-radius: 0; }
 }
