@@ -1309,6 +1309,46 @@ footer {
 
 .wifi-msg { font-size: 11px; min-height: 16px; margin-top: 4px; }
 
+/* ═══════════════════════════════════════════════════════════
+   Collapsible Settings Cards
+═══════════════════════════════════════════════════════════ */
+
+.settings-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  padding: 5px 4px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid rgba(18, 199, 255, 0.2);
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  transition: color 0.15s;
+}
+
+.settings-card-header:hover {
+  color: rgba(18, 199, 255, 0.9);
+}
+
+.settings-card-header:hover .settings-card-chevron {
+  color: rgba(18, 199, 255, 1);
+}
+
+.settings-card-chevron {
+  font-size: 11px;
+  color: rgba(18, 199, 255, 0.7);
+  transition: color 0.15s;
+}
+
+/* Stream Server gets a top separator */
+.stream-server-card-header {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(18, 199, 255, 0.15);
+}
+
 /* Responsive Design */
 @media (max-width: 1200px) {
   .main-content { grid-template-columns: 1fr; }

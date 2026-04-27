@@ -1973,3 +1973,32 @@ loadDeviceIp();
   setInterval(loadNetworkStatus, 30_000);
 
 })();
+
+// ═══════════════════════════════════════════════════════════════
+//  Collapsible Settings Cards (PTZ, Overlay, Camera Settings, Stream Server)
+// ═══════════════════════════════════════════════════════════════
+(function initSettingsCards() {
+  const cards = [
+    { toggleId: "ptzToggle",            bodyId: "ptzBody",            chevronId: "ptzChevron" },
+    { toggleId: "overlayToggle",        bodyId: "overlayBody",        chevronId: "overlayChevron" },
+    { toggleId: "cameraSettingsToggle", bodyId: "cameraSettingsBody", chevronId: "cameraSettingsChevron" },
+    { toggleId: "streamServerToggle",   bodyId: "streamServerBody",   chevronId: "streamServerChevron" },
+  ];
+
+  cards.forEach(({ toggleId, bodyId, chevronId }) => {
+    const toggleEl  = document.getElementById(toggleId);
+    const bodyEl    = document.getElementById(bodyId);
+    const chevronEl = document.getElementById(chevronId);
+    if (!toggleEl || !bodyEl) return;
+
+    // Start collapsed
+    bodyEl.style.display = "none";
+    if (chevronEl) chevronEl.textContent = "▶";
+
+    toggleEl.addEventListener("click", () => {
+      const isOpen = bodyEl.style.display !== "none";
+      bodyEl.style.display = isOpen ? "none" : "block";
+      if (chevronEl) chevronEl.textContent = isOpen ? "▶" : "▼";
+    });
+  });
+})();

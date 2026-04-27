@@ -47,7 +47,11 @@
           <div class="controls-row">
             <!-- Pan/Tilt Controls -->
             <div class="ptz-controls" style="flex: 0.8">
-              <h3>PTZ</h3>
+              <div class="settings-card-header" id="ptzToggle">
+                <span>🎥 PTZ</span>
+                <span class="settings-card-chevron" id="ptzChevron">▼</span>
+              </div>
+              <div class="settings-card-body" id="ptzBody">
               <div class="control-grid">
                 <div class="directional-pad-container">
                   <!-- Outer ring - Large movements -->
@@ -148,11 +152,16 @@
                 </button>
                 <small id="startupPosInfo" style="color: #888; font-size: 9px; text-align: center; margin-top: 2px"></small>
               </div>
+              </div><!-- /.settings-card-body (ptz) -->
             </div>
 
             <!-- Overlay Settings -->
             <div class="ptz-controls" style="flex: 1.5">
-              <h3>📝 Overlay Settings</h3>
+              <div class="settings-card-header" id="overlayToggle">
+                <span>📝 Overlay Settings</span>
+                <span class="settings-card-chevron" id="overlayChevron">▼</span>
+              </div>
+              <div class="settings-card-body" id="overlayBody">
               <div class="overlay-controls">
                 <!-- Title Overlay -->
                 <div class="overlay-section">
@@ -315,7 +324,8 @@
                 <div id="overlayPreviewStatus" class="overlay-preview-status" style="display: none">
                   🔄 Updating preview…
                 </div>
-              </div>
+              </div><!-- /.overlay-controls -->
+              </div><!-- /.settings-card-body (overlay) -->
               <!-- hidden fields for backward compat -->
               <input type="hidden" id="overlayType" value="text" />
             </div>
@@ -324,7 +334,11 @@
 
         <!-- Control Panel Section -->
         <div class="control-panel">
-          <h3>Camera Settings</h3>
+          <div class="settings-card-header" id="cameraSettingsToggle">
+            <span>⚙️ Camera Settings</span>
+            <span class="settings-card-chevron" id="cameraSettingsChevron">▼</span>
+          </div>
+          <div class="settings-card-body" id="cameraSettingsBody">
 
           <!-- Image Quality Controls -->
           <div class="control-group">
@@ -460,11 +474,15 @@
           </div>
 
           <button class="btn-reset" id="resetAll">Reset All Settings</button>
+          </div><!-- /.settings-card-body (camera settings) -->
 
           <!-- Stream Output Controls -->
-          <div class="control-group" style="margin-top: 20px">
-            <h4>🎥 Stream Server</h4>
-
+          <div class="settings-card-header stream-server-card-header" id="streamServerToggle">
+            <span>🎥 Stream Server</span>
+            <span class="settings-card-chevron" id="streamServerChevron">▼</span>
+          </div>
+          <div class="settings-card-body" id="streamServerBody">
+          <div class="control-group">
             <div class="control-item">
               <label>Output Mode:</label>
               <select id="streamProtocol">
@@ -540,7 +558,8 @@
               <span id="streamStatusDot" class="status-dot"></span>
               <span id="streamStatusText">⏹ Not Streaming</span>
             </div>
-          </div>
+          </div><!-- /.control-group -->
+          </div><!-- /.settings-card-body (stream server) -->
         </div>
       </div>
 
