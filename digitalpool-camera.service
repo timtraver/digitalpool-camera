@@ -8,7 +8,7 @@ Requires=mediamtx.service
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/digitalpool-camera
-ExecStart=/home/ubuntu/.nvm/versions/node/v24.14.0/bin/node server.js
+ExecStart=/usr/local/bin/node server.js
 Restart=always
 RestartSec=5
 

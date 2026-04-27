@@ -384,6 +384,20 @@ node -v    # → v24.x.x
 npm -v
 ```
 
+**Create a stable symlink for systemd**
+
+nvm installs node at a path that includes the exact version number (e.g. `~/.nvm/versions/node/v24.3.0/bin/node`). Systemd does not source your shell profile, so it cannot use nvm directly and will fail if the service file hard-codes a version that doesn't match. Create a stable symlink at a fixed system path that the service file can always rely on:
+
+```bash
+sudo ln -sf "$(which node)" /usr/local/bin/node
+sudo ln -sf "$(which npm)"  /usr/local/bin/npm
+
+# Verify
+/usr/local/bin/node -v
+```
+
+Whenever you upgrade Node via nvm (`nvm install 26` etc.) re-run the `ln -sf` commands above to keep the symlink current.
+
 ---
 
 ## 4. Clone the Repository and Install Node Dependencies
@@ -431,7 +445,17 @@ sudo ufw reload
 
 ## 6. Install and Enable the Systemd Service
 
-The repository ships a ready-made service file at `digitalpool-camera.service`.
+The repository ships a ready-made service file at `digitalpool-camera.service`. It uses `/usr/local/bin/node` — the stable symlink you created in Step 3 — so it is not tied to any specific nvm version number.
+
+**Make sure the symlink exists before continuing:**
+
+```bash
+/usr/local/bin/node -v   # must print a version number, not "not found"
+```
+
+If it prints "not found", go back and run the `ln -sf` commands at the end of Step 3.
+
+**Install and start the service:**
 
 ```bash
 sudo cp /home/ubuntu/digitalpool-camera/digitalpool-camera.service \
