@@ -118,6 +118,80 @@ findmnt -o TARGET,OPTIONS / /boot/firmware
 
 You should see `noatime` listed in the options column. The change will persist automatically after the next reboot because it is now in `/etc/fstab`.
 
+### 1f. Prevent the root volume from filling up — log rotation
+
+An unattended device running 24/7 will accumulate logs from systemd-journald, the kernel, the application, and various system services. Left unchecked these will eventually fill the microSD card and crash everything. Two things control this: **journald** (the main log sink for all systemd services) and **logrotate** (for traditional `/var/log` files).
+
+#### Limit the systemd journal
+
+By default journald keeps up to 10 % of the filesystem. On a 32 GB card that is ~3 GB of logs — far more than you will ever need. Create a drop-in config to cap it tightly:
+
+```bash
+sudo mkdir -p /etc/systemd/journald.conf.d
+
+sudo tee /etc/systemd/journald.conf.d/size-limit.conf > /dev/null << 'EOF'
+[Journal]
+# Keep the journal on disk but cap total size
+Storage=persistent
+# Hard cap on total disk use across all journal files
+SystemMaxUse=100M
+# Always keep at least this much disk free
+SystemKeepFree=200M
+# Rotate individual journal files at this size
+SystemMaxFileSize=20M
+# Discard entries older than one week
+MaxRetentionSec=1week
+# Also limit the in-memory (runtime) journal
+RuntimeMaxUse=20M
+EOF
+```
+
+Apply immediately without rebooting:
+
+```bash
+sudo systemctl restart systemd-journald
+# Vacuum any existing files down to the new limits right now
+sudo journalctl --vacuum-size=100M
+sudo journalctl --vacuum-time=1week
+```
+
+Confirm the new limits are active:
+
+```bash
+journalctl --disk-usage
+```
+
+#### Verify logrotate is running
+
+Ubuntu 24.04 runs logrotate via a systemd timer (not cron). Confirm it is enabled:
+
+```bash
+sudo systemctl status logrotate.timer
+```
+
+If it is not active, enable it:
+
+```bash
+sudo systemctl enable --now logrotate.timer
+```
+
+Logrotate handles `/var/log/syslog`, `/var/log/kern.log`, `/var/log/auth.log`, and other traditional log files automatically. You can force a rotation immediately to test:
+
+```bash
+sudo logrotate --force /etc/logrotate.conf
+```
+
+#### Monitor free space
+
+Add a quick alias to your `~/.bashrc` so you can check disk use at a glance:
+
+```bash
+echo "alias diskcheck='df -h / && journalctl --disk-usage'" >> ~/.bashrc
+source ~/.bashrc
+```
+
+Run `diskcheck` any time to see root volume free space and journal size together.
+
 ---
 
 ## 2. Install System Dependencies
