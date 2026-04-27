@@ -151,7 +151,22 @@ sudo apt install -y \
 
 ### 2c. Rockchip MPP hardware encoder / decoder
 
-The MPP (Media Process Platform) plugins provide `mpph264enc` (H.264 hardware encoder) and `mppjpegdec` (JPEG hardware decoder) — the performance-critical elements used by the streaming pipeline.
+The MPP (Media Process Platform) plugins provide `mpph264enc` / `mpph265enc` (hardware encoders) and `mppjpegdec` (JPEG hardware decoder). These packages are **not** in the standard Ubuntu repositories — they are published in Joshua-Riek's Launchpad PPAs and must be added first.
+
+```bash
+# software-properties-common provides add-apt-repository
+sudo apt install -y software-properties-common
+
+# Base Rockchip packages (librockchip-mpp, librockchip-vpu, etc.)
+sudo add-apt-repository -y ppa:jjriek/rockchip
+
+# GStreamer Rockchip plugin (gstreamer1.0-rockchip)
+sudo add-apt-repository -y ppa:jjriek/rockchip-multimedia
+
+sudo apt update
+```
+
+Now install the packages:
 
 ```bash
 sudo apt install -y \
@@ -161,9 +176,10 @@ sudo apt install -y \
   librockchip-vpu0
 ```
 
-> **Verify the encoder is available:**
+> **Verify the encoders and decoder are available:**
 > ```bash
 > gst-inspect-1.0 mpph264enc
+> gst-inspect-1.0 mpph265enc
 > gst-inspect-1.0 mppjpegdec
 > ```
 
