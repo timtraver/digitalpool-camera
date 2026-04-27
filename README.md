@@ -32,23 +32,25 @@ A Node.js web service for the **Orange Pi 5 (RK3588)** that turns a USB PTZ came
 
 ---
 
-## 1. Flash the OS — Joshua-Riek Ubuntu 22.04 Rockchip
+## 1. Flash the OS — Joshua-Riek Ubuntu 24.04 Rockchip
 
-Use the pre-built Ubuntu 22.04 image from the [Joshua-Riek ubuntu-rockchip](https://github.com/Joshua-Riek/ubuntu-rockchip) project.
+Use the pre-built Ubuntu 24.04 (Noble) image from the [Joshua-Riek ubuntu-rockchip](https://github.com/Joshua-Riek/ubuntu-rockchip) project.
+
+> **Note:** Although the project also publishes 22.04 images, the actively maintained and recommended release for Orange Pi 5 is **Ubuntu 24.04 Noble**. The Rockchip-specific packages (MPP encoder, GStreamer plugin, firmware) in the PPAs target Noble.
 
 ### 1a. Download the image
 
-Go to the [Releases page](https://github.com/Joshua-Riek/ubuntu-rockchip/releases) and download the latest **Ubuntu 22.04** server or desktop image for **Orange Pi 5**. Example filename:
+Go to the [Releases page](https://github.com/Joshua-Riek/ubuntu-rockchip/releases) and download the latest **Ubuntu 24.04** server or desktop image for **Orange Pi 5**. Example filename:
 
 ```
-ubuntu-22.04.x-preinstalled-server-arm64-orangepi-5.img.xz
+ubuntu-24.04.x-preinstalled-server-arm64-orangepi-5.img.xz
 ```
 
 ### 1b. Flash to microSD / eMMC
 
 ```bash
 # On your workstation (Linux/macOS):
-xzcat ubuntu-22.04.x-preinstalled-server-arm64-orangepi-5.img.xz | \
+xzcat ubuntu-24.04.x-preinstalled-server-arm64-orangepi-5.img.xz | \
   sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
@@ -151,7 +153,9 @@ sudo apt install -y \
 
 ### 2c. Rockchip MPP hardware encoder / decoder
 
-The MPP (Media Process Platform) plugins provide `mpph264enc` / `mpph265enc` (hardware encoders) and `mppjpegdec` (JPEG hardware decoder). These packages are **not** in the standard Ubuntu repositories — they are published in Joshua-Riek's Launchpad PPAs and must be added first.
+The MPP (Media Process Platform) plugins provide `mpph264enc` / `mpph265enc` (hardware encoders) and `mppjpegdec` (JPEG hardware decoder). These packages come from Joshua-Riek's Launchpad PPAs, **not** the standard Ubuntu repositories, so the PPAs must be added first.
+
+> **Note:** The GStreamer Rockchip plugin package is named **`gstreamer1.0-rockchip1`** (with a trailing `1`) — not `gstreamer1.0-rockchip`. Also note that `librockchip-mpp1` is typically pre-installed by the Joshua-Riek image but is listed here for completeness.
 
 ```bash
 # software-properties-common provides add-apt-repository
@@ -160,7 +164,7 @@ sudo apt install -y software-properties-common
 # Base Rockchip packages (librockchip-mpp, librockchip-vpu, etc.)
 sudo add-apt-repository -y ppa:jjriek/rockchip
 
-# GStreamer Rockchip plugin (gstreamer1.0-rockchip)
+# GStreamer Rockchip plugin (gstreamer1.0-rockchip1)
 sudo add-apt-repository -y ppa:jjriek/rockchip-multimedia
 
 sudo apt update
@@ -170,7 +174,7 @@ Now install the packages:
 
 ```bash
 sudo apt install -y \
-  gstreamer1.0-rockchip \
+  gstreamer1.0-rockchip1 \
   librockchip-mpp1 \
   librockchip-mpp-dev \
   librockchip-vpu0
