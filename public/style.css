@@ -1158,7 +1158,7 @@ footer {
 
 .wifi-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 16px;
 }
 
@@ -1404,6 +1404,5 @@ footer {
     min-height: 44px;
   }
 
-  /* WiFi grid: single column on mobile */
-  .wifi-grid { grid-template-columns: 1fr; }
+  /* WiFi grid already single column — no override needed */
 }
