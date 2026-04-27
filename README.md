@@ -325,10 +325,10 @@ sudo apt install -y \
 MediaMTX provides the RTSP endpoint (`rtsp://<ip>:8554/live`) and HLS endpoint (`http://<ip>:8888/live`). The app pushes to it internally when the **RTSP** protocol is selected.
 
 ```bash
-# Download the latest arm64 release (adjust version as needed)
-MEDIAMTX_VER="v1.12.3"
-wget https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VER}/mediamtx_${MEDIAMTX_VER}_linux_arm64v8.tar.gz
-tar -xzf mediamtx_${MEDIAMTX_VER}_linux_arm64v8.tar.gz
+# Download the latest arm64 release (check https://github.com/bluenviron/mediamtx/releases for newer versions)
+MEDIAMTX_VER="v1.18.0"
+wget https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VER}/mediamtx_${MEDIAMTX_VER}_linux_arm64.tar.gz
+tar -xzf mediamtx_${MEDIAMTX_VER}_linux_arm64.tar.gz
 sudo mv mediamtx /usr/local/bin/
 sudo mv mediamtx.yml /etc/mediamtx.yml
 ```
