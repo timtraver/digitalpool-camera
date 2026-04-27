@@ -139,9 +139,39 @@ class WifiManager extends EventEmitter {
       console.log('✅ WiFi Manager: AP profile already exists');
     }
 
+    await this._ensureCaptivePortalDnsmasq();
     await this._startAP();
     this._startMonitor();
     return true;
+  }
+
+  /**
+   * Write a dnsmasq config that resolves every hostname to the AP IP.
+   * NM picks up files from /etc/NetworkManager/dnsmasq-shared.d/ when it
+   * starts its internal dnsmasq for an ipv4.method=shared connection.
+   * Requires: sudo tee access granted via sudoers (see README § 7c).
+   */
+  async _ensureCaptivePortalDnsmasq() {
+    const confDir  = '/etc/NetworkManager/dnsmasq-shared.d';
+    const confFile = `${confDir}/captive-portal.conf`;
+    const content  = `# Redirect all DNS queries to the AP for captive portal\naddress=/#/${this.apIp}\n`;
+
+    // Check whether file already contains the right address
+    const check = await this._run(`cat "${confFile}" 2>/dev/null`);
+    if (check.ok && check.out.includes(`address=/#/${this.apIp}`)) {
+      console.log('✅ Captive portal dnsmasq config already in place');
+      return;
+    }
+
+    const r = await this._run(
+      `sudo mkdir -p "${confDir}" && printf '%s' '${content}' | sudo tee "${confFile}" > /dev/null`
+    );
+    if (r.ok) {
+      console.log('✅ Captive portal dnsmasq config written — reloading NetworkManager');
+      await this._run('sudo systemctl reload NetworkManager 2>/dev/null || true');
+    } else {
+      console.warn('⚠️  Could not write captive portal dnsmasq config (add sudoers entry — see README § 7c):', r.err.split('\n')[0]);
+    }
   }
 
   async _createProfile() {
@@ -173,10 +203,35 @@ class WifiManager extends EventEmitter {
     return true;
   }
 
+  // ── Captive portal: iptables port-80 → port-3000 redirect ────────────────
+  // Devices probe port 80; our app listens on 3000.  A PREROUTING REDIRECT
+  // rule forwards the traffic transparently so Express handles it.
+  // Requires a sudoers entry — see README § 7c.
+  async _setupCaptivePortalIptables() {
+    const appPort = process.env.PORT || 3000;
+    const rule    = `-t nat -A PREROUTING -i "${this.wifiIface}" -p tcp --dport 80 -j REDIRECT --to-port ${appPort}`;
+    // Avoid duplicates: try to delete first (ignore failure), then add
+    await this._run(`sudo iptables ${rule.replace('-A', '-D')} 2>/dev/null`);
+    const r = await this._run(`sudo iptables ${rule}`);
+    if (r.ok) {
+      console.log(`✅ Captive portal: port 80 → ${appPort} redirect active on ${this.wifiIface}`);
+    } else {
+      console.warn('⚠️  Captive portal iptables rule failed (add sudoers entry — see README § 7c):', r.err.split('\n')[0]);
+    }
+  }
+
+  async _teardownCaptivePortalIptables() {
+    const appPort = process.env.PORT || 3000;
+    const rule    = `-t nat -D PREROUTING -i "${this.wifiIface}" -p tcp --dport 80 -j REDIRECT --to-port ${appPort}`;
+    await this._run(`sudo iptables ${rule} 2>/dev/null`);
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   async _startAP(retries = 5, retryDelayMs = 5_000) {
     if (await this._isAPActive()) {
       console.log('✅ WiFi Manager: AP already active');
       this.apRunning = true;
+      await this._setupCaptivePortalIptables();
       return true;
     }
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -185,6 +240,7 @@ class WifiManager extends EventEmitter {
       if (r.ok) {
         this.apRunning = true;
         console.log(`✅ AP up — SSID: ${this.apSsid}  IP: ${this.apIp}`);
+        await this._setupCaptivePortalIptables();
         this.emit('apStarted', { ssid: this.apSsid, ip: this.apIp });
         return true;
       }

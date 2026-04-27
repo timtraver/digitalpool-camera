@@ -479,7 +479,39 @@ sudo journalctl -u digitalpool-camera -f
 
 ## 7. WiFi Access Point (Hotspot)
 
-The app automatically creates and manages a WiFi AP named **DigitalPool-Camera** using NetworkManager (`nmcli`). No extra configuration is required beyond having a WiFi adapter plugged in.
+The app creates and manages a WiFi AP named **DigitalPool-Camera** using NetworkManager (`nmcli`). Because the service runs as the `ubuntu` user (not root), a **polkit rule** is required to grant it permission to add and activate NetworkManager connections. Without this the AP will silently fail with "Insufficient privileges".
+
+### 7a. Grant NetworkManager permissions via polkit
+
+```bash
+sudo tee /etc/polkit-1/rules.d/50-digitalpool-networkmanager.rules > /dev/null << 'EOF'
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0 &&
+        subject.user === "ubuntu") {
+        return polkit.Result.YES;
+    }
+});
+EOF
+
+# Apply immediately — no reboot needed
+sudo systemctl restart polkit
+sudo systemctl restart digitalpool-camera
+```
+
+Confirm the AP came up by watching the log:
+
+```bash
+sudo journalctl -u digitalpool-camera -f
+```
+
+You should see:
+```
+📡 WiFi Manager: using interface wlx...
+✅ AP profile created
+✅ AP up — SSID: DigitalPool-Camera  IP: 192.168.50.1
+```
+
+### 7b. Hotspot settings
 
 | Setting | Default value |
 |---|---|
@@ -491,6 +523,50 @@ The app automatically creates and manages a WiFi AP named **DigitalPool-Camera**
 After connecting your phone or tablet to the hotspot, open `http://192.168.50.1:3000` to access the full control interface.
 
 > The AP runs concurrently alongside any regular WiFi client connection (AP+STA mode), so the Orange Pi 5 can be connected to your venue network and still serve the hotspot at the same time.
+
+### 7c. Captive Portal (auto-open admin UI on connect)
+
+When a device connects to the hotspot it has no internet, so iOS, Android, and Windows each fire an HTTP "captive portal" probe to a well-known URL.  If the response is not what the OS expects it pops up a **"Sign in to network"** notification — tapping it opens a mini-browser that lands on the DigitalPool admin UI automatically.
+
+Three pieces work together:
+
+| Piece | What it does |
+|---|---|
+| **dnsmasq wildcard** | Resolves every hostname to `192.168.50.1` so probe requests reach us |
+| **iptables PREROUTING** | Forwards port-80 traffic → port-3000 where Express listens |
+| **Express captive routes** | Returns HTTP 302 → `http://192.168.50.1:3000` for all probe URLs |
+
+The app sets up pieces 1 and 2 automatically at startup — but both need `sudo` access.  Grant it with a single sudoers file:
+
+```bash
+sudo tee /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
+# Allow the digitalpool-camera service to set up captive portal rules
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /etc/NetworkManager/dnsmasq-shared.d
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/NetworkManager/dnsmasq-shared.d/captive-portal.conf
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl reload NetworkManager
+ubuntu ALL=(ALL) NOPASSWD: /usr/sbin/iptables -t nat *
+EOF
+
+# Validate syntax before applying
+sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
+
+# Pull the latest code from the repo
+cd ~/digitalpool-camera && git pull
+
+# Restart the app to trigger captive portal setup
+sudo systemctl restart digitalpool-camera
+sudo journalctl -u digitalpool-camera -f
+```
+
+You should see these lines in the log:
+```
+✅ Captive portal dnsmasq config written — reloading NetworkManager
+✅ Captive portal: port 80 → 3000 redirect active on wlx...
+```
+
+**Test it** — connect a phone to `DigitalPool-Camera` and wait 5–10 seconds.  iOS shows "Sign in to DigitalPool-Camera", Android shows a notification.  Tapping either opens the admin UI immediately.
+
+> **iptables rules are not persistent across reboots.** The app re-applies the rule every time it starts, so the rule is always in place as long as the service is running.  If you ever need to inspect active rules run: `sudo iptables -t nat -L PREROUTING -n -v`
 
 ---
 

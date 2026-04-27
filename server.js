@@ -29,6 +29,7 @@ const io = socketIO(server, {
 
 const PORT = process.env.PORT || 3000;
 const CAMERA_DEVICE = process.env.CAMERA_DEVICE || "/dev/video0";
+const DEFAULT_AP_IP = process.env.AP_IP || "192.168.50.1";
 
 // Initialize camera controller
 const camera = new CameraController(CAMERA_DEVICE);
@@ -113,6 +114,50 @@ streamController.on("error", (error) => {
 streamController.on("log", (log) => {
   console.log("Stream log:", log);
 });
+
+// ── Captive portal detection ──────────────────────────────────────────────
+// When a device connects to the DigitalPool-Camera hotspot it has no
+// internet, so the OS fires a connectivity probe to a well-known URL on
+// port 80.  iptables PREROUTING redirects that traffic to port 3000 where
+// these routes catch it and redirect the device's captive-portal browser
+// to the admin UI.  Supported platforms:
+//   iOS / macOS  → /hotspot-detect.html  (captive.apple.com)
+//   Android      → /generate_204, /gen_204
+//   Windows NCSI → /ncsi.txt, /connecttest.txt, /redirect
+//   Amazon Fire  → /kindle-wifi/wifistub.html
+const CAPTIVE_PORTAL_URL = `http://${DEFAULT_AP_IP}:${PORT}`;
+
+function _sendCaptiveRedirect(req, res, next) {
+  // Only intercept when the request arrived via the WiFi AP interface
+  // (local socket address is 192.168.50.1).  Requests coming in over
+  // Ethernet or any other interface fall through normally so they are
+  // never affected by the captive portal logic.
+  const localAddr = req.socket.localAddress || '';
+  if (!localAddr.includes(DEFAULT_AP_IP)) return next();
+
+  // 302 redirect causes every OS captive-portal browser to follow it and
+  // land on the admin UI.  We also set the standard portal header so that
+  // RFC 8908-aware clients know a portal is present.
+  res
+    .set('Cache-Control', 'no-store')
+    .set('X-Captive-Portal', CAPTIVE_PORTAL_URL)
+    .redirect(302, CAPTIVE_PORTAL_URL);
+}
+
+// Apple probes (iOS 6+, macOS)
+app.get('/hotspot-detect.html',          _sendCaptiveRedirect);
+app.get('/library/test/success.html',    _sendCaptiveRedirect);
+app.get('/success.html',                 _sendCaptiveRedirect);
+// Android / Chrome probes
+app.get('/generate_204',                 _sendCaptiveRedirect);
+app.get('/gen_204',                      _sendCaptiveRedirect);
+// Windows NCSI probes
+app.get('/ncsi.txt',                     _sendCaptiveRedirect);
+app.get('/connecttest.txt',              _sendCaptiveRedirect);
+app.get('/redirect',                     _sendCaptiveRedirect);
+// Amazon Kindle / Fire OS
+app.get('/kindle-wifi/wifistub.html',    _sendCaptiveRedirect);
+// ─────────────────────────────────────────────────────────────────────────
 
 // Serve static files from public directory
 app.use(express.static("public"));

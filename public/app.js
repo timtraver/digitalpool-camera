@@ -1885,13 +1885,20 @@ async function loadStreamConfig() {
 // Load stream config on page load
 loadStreamConfig();
 
-// Fetch and display device IP address
+// Fetch and display device IP address.
+// Prefers the Ethernet IP so the streaming URL (RTSP/SRT) always shows
+// the correct address for OBS and other clients, even when the admin UI
+// is being viewed from the WiFi hotspot (192.168.50.1).
+const AP_IP = "192.168.50.1";
 async function loadDeviceIp() {
   try {
     const response = await fetch("/api/network");
     const data = await response.json();
     if (data.success && data.addresses.length > 0) {
-      deviceLocalIP = data.addresses[0].address;
+      // Priority: 1) Ethernet (eth* / en*), 2) any non-AP address, 3) first address
+      const eth   = data.addresses.find(a => /^e(th|n)/.test(a.interface));
+      const nonAp = data.addresses.find(a => a.address !== AP_IP);
+      deviceLocalIP = (eth || nonAp || data.addresses[0]).address;
     }
     // Refresh connection info box with resolved IP
     updateConnectionInfo(streamProtocol.value, deviceLocalIP);
