@@ -56,15 +56,17 @@
             <div class="ptz-controls">
               <div class="control-grid">
                 <div class="directional-pad-container">
-                  <button class="btn-control-outer btn-top-outer" id="tiltUpLarge">↑↑</button>
-                  <button class="btn-control-outer btn-right-outer" id="panRightLarge">→→</button>
-                  <button class="btn-control-outer btn-bottom-outer" id="tiltDownLarge">↓↓</button>
-                  <button class="btn-control-outer btn-left-outer" id="panLeftLarge">←←</button>
-                  <button class="btn-control-inner btn-top-inner" id="tiltUpSmall">↑</button>
-                  <button class="btn-control-inner btn-right-inner" id="panRightSmall">→</button>
-                  <button class="btn-control-inner btn-bottom-inner" id="tiltDownSmall">↓</button>
-                  <button class="btn-control-inner btn-left-inner" id="panLeftSmall">←</button>
-                  <button class="btn-control-center" id="resetPos">⌖</button>
+                  <!-- Outer ring - Large movements -->
+                  <button class="btn-control-outer btn-top-outer" id="tiltUpLarge" title="Tilt Up (Large)">▲</button>
+                  <button class="btn-control-outer btn-right-outer" id="panRightLarge" title="Pan Right (Large)">►</button>
+                  <button class="btn-control-outer btn-bottom-outer" id="tiltDownLarge" title="Tilt Down (Large)">▼</button>
+                  <button class="btn-control-outer btn-left-outer" id="panLeftLarge" title="Pan Left (Large)">◄</button>
+                  <!-- Inner ring - Small movements -->
+                  <button class="btn-control-inner btn-top-inner" id="tiltUpSmall" title="Tilt Up (Small)">▲</button>
+                  <button class="btn-control-inner btn-right-inner" id="panRightSmall" title="Pan Right (Small)">►</button>
+                  <button class="btn-control-inner btn-bottom-inner" id="tiltDownSmall" title="Tilt Down (Small)">▼</button>
+                  <button class="btn-control-inner btn-left-inner" id="panLeftSmall" title="Pan Left (Small)">◄</button>
+                  <button class="btn-control-center" id="resetPos" title="Reset Position">⌂</button>
                 </div>
                 <div class="ptz-settings">
                   <div class="control-item">
@@ -373,8 +375,9 @@
           </div><!-- /.settings-card-body (camera settings) -->
 
           <!-- Stream Output Controls -->
-          <div class="settings-card-header stream-server-card-header" id="streamServerToggle">
+          <div class="settings-card-header" id="streamServerToggle">
             <span>🎥 Stream Server</span>
+            <span id="streamServerHeaderStatus" class="stream-header-status"></span>
             <span class="settings-card-chevron" id="streamServerChevron">▼</span>
           </div>
           <div class="settings-card-body" id="streamServerBody">
@@ -456,80 +459,79 @@
             </div>
           </div><!-- /.control-group -->
           </div><!-- /.settings-card-body (stream server) -->
-        </div>
-      </div>
 
-      <!-- ── WiFi / Hotspot Panel ── -->
-      <div class="wifi-panel">
-        <div class="wifi-panel-header" id="wifiPanelToggle">
-          <span>📶 Network &amp; WiFi Setup</span>
-          <span class="wifi-panel-chevron" id="wifiChevron">▼</span>
-        </div>
+          <!-- ── WiFi / Hotspot Panel ── -->
+          <div class="wifi-panel">
+            <div class="wifi-panel-header" id="wifiPanelToggle">
+              <span>📶 Network &amp; WiFi Setup</span>
+              <span class="wifi-panel-chevron" id="wifiChevron">▼</span>
+            </div>
 
-        <div class="wifi-panel-body" id="wifiPanelBody">
+            <div class="wifi-panel-body" id="wifiPanelBody">
+              <!-- Two-column grid: Hotspot info | Client WiFi -->
+              <div class="wifi-grid">
 
-          <!-- Two-column grid: Hotspot info | Client WiFi -->
-          <div class="wifi-grid">
+                <!-- Hotspot (always-on AP) -->
+                <div class="wifi-card">
+                  <h4>📡 Device Hotspot <span class="ap-badge" id="apBadge">…</span></h4>
+                  <p class="wifi-hint">Your device always broadcasts this network. Connect to it from any phone or laptop to reach the admin page.</p>
 
-            <!-- Hotspot (always-on AP) -->
-            <div class="wifi-card">
-              <h4>📡 Device Hotspot <span class="ap-badge" id="apBadge">…</span></h4>
-              <p class="wifi-hint">Your device always broadcasts this network. Connect to it from any phone or laptop to reach the admin page.</p>
+                  <div class="wifi-info-row">
+                    <span class="wifi-label">Network Name (SSID)</span>
+                    <span class="wifi-value" id="apSsid">—</span>
+                  </div>
+                  <div class="wifi-info-row">
+                    <span class="wifi-label">Password</span>
+                    <span class="wifi-value" id="apPassword">—</span>
+                  </div>
+                  <div class="wifi-info-row">
+                    <span class="wifi-label">Admin URL</span>
+                    <a class="wifi-value wifi-url" id="apAdminUrl" href="#" target="_blank">—</a>
+                  </div>
 
-              <div class="wifi-info-row">
-                <span class="wifi-label">Network Name (SSID)</span>
-                <span class="wifi-value" id="apSsid">—</span>
-              </div>
-              <div class="wifi-info-row">
-                <span class="wifi-label">Password</span>
-                <span class="wifi-value" id="apPassword">—</span>
-              </div>
-              <div class="wifi-info-row">
-                <span class="wifi-label">Admin URL</span>
-                <a class="wifi-value wifi-url" id="apAdminUrl" href="#" target="_blank">—</a>
-              </div>
-
-              <!-- Edit AP credentials -->
-              <details class="wifi-edit-details">
-                <summary>✏️ Change Hotspot Name / Password</summary>
-                <div class="wifi-form">
-                  <label>New SSID</label>
-                  <input type="text" id="newApSsid" placeholder="DigitalPool-Camera" maxlength="32" />
-                  <label>New Password <small>(8+ chars)</small></label>
-                  <input type="password" id="newApPassword" placeholder="min 8 characters" minlength="8" />
-                  <button class="btn-wifi-action" id="saveApConfig">💾 Save &amp; Restart Hotspot</button>
-                  <div class="wifi-msg" id="apConfigMsg"></div>
+                  <!-- Edit AP credentials -->
+                  <details class="wifi-edit-details">
+                    <summary>✏️ Change Hotspot Name / Password</summary>
+                    <div class="wifi-form">
+                      <label>New SSID</label>
+                      <input type="text" id="newApSsid" placeholder="DigitalPool-Camera" maxlength="32" />
+                      <label>New Password <small>(8+ chars)</small></label>
+                      <input type="password" id="newApPassword" placeholder="min 8 characters" minlength="8" />
+                      <button class="btn-wifi-action" id="saveApConfig">💾 Save &amp; Restart Hotspot</button>
+                      <div class="wifi-msg" id="apConfigMsg"></div>
+                    </div>
+                  </details>
                 </div>
-              </details>
-            </div>
 
-            <!-- Network / Ethernet status -->
-            <div class="wifi-card">
-              <h4>🔌 Network Connection</h4>
-              <p class="wifi-hint">
-                The WiFi adapter is dedicated to the admin hotspot and cannot
-                simultaneously join another WiFi network (hardware limitation of the
-                RTL8812BU chip). Use the device's <strong>Ethernet port</strong> for
-                venue/internet connectivity and camera streaming.
-              </p>
+                <!-- Network / Ethernet status -->
+                <div class="wifi-card">
+                  <h4>🔌 Network Connection</h4>
+                  <p class="wifi-hint">
+                    The WiFi adapter is dedicated to the admin hotspot and cannot
+                    simultaneously join another WiFi network (hardware limitation of the
+                    RTL8812BU chip). Use the device's <strong>Ethernet port</strong> for
+                    venue/internet connectivity and camera streaming.
+                  </p>
 
-              <div class="wifi-info-row">
-                <span class="wifi-label">Ethernet</span>
-                <span class="wifi-value" id="ethernetStatus">Checking…</span>
-              </div>
-              <div class="wifi-info-row">
-                <span class="wifi-label">Ethernet IP</span>
-                <span class="wifi-value" id="ethernetIp">—</span>
-              </div>
-              <div class="wifi-info-row">
-                <span class="wifi-label">All IPs</span>
-                <span class="wifi-value" id="allIps" style="font-size:10px;line-height:1.6">—</span>
-              </div>
-            </div>
-          </div><!-- /.wifi-grid -->
+                  <div class="wifi-info-row">
+                    <span class="wifi-label">Ethernet</span>
+                    <span class="wifi-value" id="ethernetStatus">Checking…</span>
+                  </div>
+                  <div class="wifi-info-row">
+                    <span class="wifi-label">Ethernet IP</span>
+                    <span class="wifi-value" id="ethernetIp">—</span>
+                  </div>
+                  <div class="wifi-info-row">
+                    <span class="wifi-label">All IPs</span>
+                    <span class="wifi-value" id="allIps" style="font-size:10px;line-height:1.6">—</span>
+                  </div>
+                </div>
+              </div><!-- /.wifi-grid -->
+            </div><!-- /.wifi-panel-body -->
+          </div><!-- /.wifi-panel -->
 
-        </div><!-- /.wifi-panel-body -->
-      </div><!-- /.wifi-panel -->
+        </div><!-- /.control-panel -->
+      </div><!-- /.main-content -->
 
       <footer>
         <p>Digital Pool Camera Control System</p>

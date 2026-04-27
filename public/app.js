@@ -615,30 +615,38 @@ if (copyConnectionUrlBtn) {
 updateConnectionInfo(streamProtocol.value, deviceLocalIP);
 
 // Helper to update stream status display
+const streamServerHeaderStatus = document.getElementById("streamServerHeaderStatus");
 function setStreamStatus(state, text) {
   streamStatusBar.className = "stream-status-bar";
+  let headerBadge = "";
   switch (state) {
     case "idle":
       streamStatusBar.classList.add("status-idle");
       streamStatusText.textContent = "⏹ " + text;
+      headerBadge = "";
       break;
     case "starting":
       streamStatusBar.classList.add("status-starting");
       streamStatusText.textContent = "⏳ " + text;
+      headerBadge = "⏳ Starting…";
       break;
     case "stopping":
       streamStatusBar.classList.add("status-stopping");
       streamStatusText.textContent = "⏳ " + text;
+      headerBadge = "⏳ Stopping…";
       break;
     case "live":
       streamStatusBar.classList.add("status-live");
       streamStatusText.textContent = "🔴 " + text;
+      headerBadge = "🔴 LIVE";
       break;
     case "error":
       streamStatusBar.classList.add("status-error");
       streamStatusText.textContent = "⚠️ " + text;
+      headerBadge = "⚠️ Error";
       break;
   }
+  if (streamServerHeaderStatus) streamServerHeaderStatus.textContent = headerBadge;
 }
 
 // Update UI when protocol changes
