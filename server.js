@@ -508,7 +508,8 @@ async function _findEthernetConn() {
     );
     for (const line of activeOut.trim().split('\n')) {
       const [name, type, device] = line.split(':');
-      if (type === 'ethernet') return { name, device: device || null, active: true };
+      // nmcli reports the full type as '802-3-ethernet', not just 'ethernet'
+      if (type && type.includes('ethernet')) return { name, device: device || null, active: true };
     }
     // Fall back to any (inactive) ethernet connection profile
     const { stdout: allOut } = await execAsync(
@@ -516,7 +517,7 @@ async function _findEthernetConn() {
     );
     for (const line of allOut.trim().split('\n')) {
       const [name, type] = line.split(':');
-      if (type === 'ethernet') return { name, device: null, active: false };
+      if (type && type.includes('ethernet')) return { name, device: null, active: false };
     }
   } catch (_) { /* nmcli unavailable */ }
   return null;
