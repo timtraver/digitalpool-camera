@@ -32,7 +32,7 @@ class AuthManager {
   }
 
   _createDefaultAdmin() {
-    const hash = bcrypt.hashSync('Admin123', SALT_ROUNDS);
+    const hash = bcrypt.hashSync('Digitalpool', SALT_ROUNDS);
     this.users = [{
       username:            'admin',
       passwordHash:        hash,
@@ -41,7 +41,7 @@ class AuthManager {
       createdAt:           new Date().toISOString(),
     }];
     this._save();
-    console.log('✅ AuthManager: default admin created  →  admin / Admin123');
+    console.log('✅ AuthManager: default admin created  →  admin / Digitalpool');
     console.log('⚠️  Please change the default password immediately after first login.');
   }
 
