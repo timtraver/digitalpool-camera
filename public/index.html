@@ -585,6 +585,27 @@
         </div><!-- /.control-panel -->
       </div><!-- /.main-content -->
 
+      <!-- ── Ethernet IP Change Warning Modal ── -->
+      <div id="ethWarningModal" class="eth-modal-backdrop" style="display:none">
+        <div class="eth-modal">
+          <div class="eth-modal-icon">⚠️</div>
+          <h3 class="eth-modal-title">This will disconnect your current connection</h3>
+          <p class="eth-modal-body">
+            Applying this change will immediately reassign the Ethernet port to:
+          </p>
+          <div class="eth-modal-address" id="ethModalNewAddress">—</div>
+          <p class="eth-modal-body">
+            If you are connected via Ethernet you will lose access to this page.
+            Reconnect your browser to the new address shown above, or use the
+            WiFi hotspot at <strong>http://192.168.50.1:3000</strong>.
+          </p>
+          <div class="eth-modal-buttons">
+            <button class="eth-modal-btn eth-modal-cancel" id="ethWarningCancel">Cancel</button>
+            <button class="eth-modal-btn eth-modal-confirm" id="ethWarningConfirm">Apply &amp; Disconnect</button>
+          </div>
+        </div>
+      </div>
+
       <footer>
         <p>Digital Pool Camera Control System</p>
       </footer>

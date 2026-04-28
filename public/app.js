@@ -2071,16 +2071,30 @@ loadDeviceIp();
     });
   });
 
-  // Save ethernet config
-  document.getElementById("saveEthConfig")?.addEventListener("click", async () => {
+  // ── Ethernet warning modal helpers ─────────────────────────────────────
+  const ethModal       = document.getElementById("ethWarningModal");
+  const ethModalAddr   = document.getElementById("ethModalNewAddress");
+  const ethModalCancel = document.getElementById("ethWarningCancel");
+  const ethModalConfirm= document.getElementById("ethWarningConfirm");
+
+  function showEthModal(labelText) {
+    if (ethModalAddr) ethModalAddr.textContent = labelText;
+    if (ethModal)     ethModal.style.display = "flex";
+  }
+  function hideEthModal() {
+    if (ethModal) ethModal.style.display = "none";
+  }
+
+  ethModalCancel?.addEventListener("click", hideEthModal);
+  // Close on backdrop click
+  ethModal?.addEventListener("click", (e) => { if (e.target === ethModal) hideEthModal(); });
+
+  // The actual save — called after the user confirms in the modal
+  async function _doSaveEthConfig() {
+    hideEthModal();
     const btn = document.getElementById("saveEthConfig");
     const msg = document.getElementById("ethConfigMsg");
     const method = document.getElementById("ethModeStatic")?.checked ? "static" : "dhcp";
-
-    if (method === 'static') {
-      const ip = document.getElementById("ethIp")?.value.trim();
-      if (!ip) { showMsg(msg, "IP address is required for static mode", true); return; }
-    }
 
     btn.disabled = true;
     btn.textContent = "Saving…";
@@ -2100,7 +2114,7 @@ loadDeviceIp();
       const d = await r.json();
       if (d.success) {
         showMsg(msg, `✅ ${d.message}`);
-        setTimeout(loadNetworkStatus, 3000); // let NM settle then refresh
+        setTimeout(loadNetworkStatus, 3000);
       } else {
         showMsg(msg, `❌ ${d.error}`, true);
       }
@@ -2109,6 +2123,25 @@ loadDeviceIp();
     } finally {
       btn.disabled = false;
       btn.textContent = "💾 Save Ethernet Config";
+    }
+  }
+
+  ethModalConfirm?.addEventListener("click", _doSaveEthConfig);
+
+  // Save button — validate then show the warning modal
+  document.getElementById("saveEthConfig")?.addEventListener("click", () => {
+    const msg    = document.getElementById("ethConfigMsg");
+    const method = document.getElementById("ethModeStatic")?.checked ? "static" : "dhcp";
+    const port   = window.location.port || "3000";
+
+    if (method === 'static') {
+      const ip = document.getElementById("ethIp")?.value.trim();
+      if (!ip) { showMsg(msg, "IP address is required for static mode", true); return; }
+      const prefix = document.getElementById("ethPrefix")?.value || '24';
+      showEthModal(`http://${ip}:${port}`);
+    } else {
+      // DHCP — new IP will be assigned by router; user won't know it in advance
+      showEthModal("New DHCP address (check your router)");
     }
   });
 

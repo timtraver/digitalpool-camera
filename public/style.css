@@ -1338,7 +1338,7 @@ footer {
   }
 
   .container {
-    max-width: 1400px;
+    /* No max-width — fills the full browser window so the video can grow */
     margin: 0 auto;
     border-radius: 10px;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
@@ -1346,7 +1346,8 @@ footer {
   }
 
   .main-content {
-    grid-template-columns: 2fr 1fr;
+    /* Control panel is a fixed 340px; video section takes all remaining space */
+    grid-template-columns: minmax(0, 1fr) 340px;
     gap: 15px;
     padding: 15px;
   }
@@ -1354,6 +1355,8 @@ footer {
   .control-panel {
     overflow-y: auto;
     max-height: calc(100vh - 120px);
+    /* Keep the control panel from shrinking its text on very wide screens */
+    min-width: 300px;
   }
 }
 
@@ -1405,4 +1408,89 @@ footer {
   }
 
   /* WiFi grid already single column — no override needed */
+}
+
+/* ── Ethernet warning modal ─────────────────────────────────────────────── */
+.eth-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.eth-modal {
+  background: #0d1f30;
+  border: 2px solid #f59e0b;
+  border-radius: 12px;
+  padding: 28px 32px;
+  max-width: 420px;
+  width: calc(100% - 40px);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  text-align: center;
+}
+
+.eth-modal-icon {
+  font-size: 42px;
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.eth-modal-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #f59e0b;
+  margin: 0 0 12px;
+}
+
+.eth-modal-body {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.75);
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+.eth-modal-address {
+  font-size: 20px;
+  font-weight: 700;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 8px;
+  padding: 10px 16px;
+  margin: 12px 0;
+  letter-spacing: 0.5px;
+  word-break: break-all;
+}
+
+.eth-modal-buttons {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+  justify-content: center;
+}
+
+.eth-modal-btn {
+  flex: 1;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.eth-modal-btn:hover { opacity: 0.85; }
+
+.eth-modal-cancel {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.eth-modal-confirm {
+  background: #f59e0b;
+  color: #0d1117;
 }
