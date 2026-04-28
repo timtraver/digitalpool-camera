@@ -2419,6 +2419,21 @@ streamController.on("preparing", async () => {
         console.log(`🌍 Using remote overlay URL: ${overlayUrl} (zoom: ${overlayZoom}%)`);
         puppeteerOverlay.setOverlayUrl(overlayUrl, { zoom: overlayZoom });
         puppeteerOverlay.startPeriodicRefresh();
+
+        // Puppeteer needs several seconds to launch Chromium + take first screenshot.
+        // GStreamer starts only 1.5s after "preparing" — if the PNG doesn't exist yet,
+        // gdkpixbufoverlay will fail. Create a placeholder transparent PNG immediately
+        // so GStreamer can start. Puppeteer will overwrite it with the real content.
+        const pngPath = "/tmp/graphics-overlay.png";
+        if (!fsSync.existsSync(pngPath) || fsSync.statSync(pngPath).size < 100) {
+          try {
+            const { execSync } = require("child_process");
+            execSync(`convert -size 1920x1080 xc:transparent ${pngPath}`, { timeout: 5000 });
+            console.log("🖼️  Created placeholder transparent PNG — Puppeteer will update it shortly");
+          } catch (e) {
+            console.error("⚠️  Could not create placeholder PNG:", e.message);
+          }
+        }
       }
       console.log("✅ Overlay PNG ready for GStreamer");
     } catch (err) {
