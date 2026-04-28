@@ -394,7 +394,7 @@ sudo systemctl start mediamtx
 > sudo systemctl status mediamtx
 > ```
 
-**Enable the MediaMTX Control API** (required for the live stream bitrate display in the web UI):
+**Enable the MediaMTX Control API** (required for the live stream bitrate display and connected-clients panel in the web UI):
 
 ```bash
 # The API is off by default — enable it so Node.js can read stream stats
@@ -408,6 +408,27 @@ sudo systemctl restart mediamtx
 ```
 
 The API listens on `127.0.0.1:9997` (localhost only — not exposed externally). The camera app polls `GET /v3/paths/get/live` once per second to read the encoded stream bitrate.
+
+**Enable the MediaMTX authentication hook** (required for the IP ban feature to block clients before they connect):
+
+```bash
+# Switch auth method to HTTP and point it at the camera app's auth endpoint
+sudo sed -i 's/^authMethod: internal/authMethod: http/' /etc/mediamtx.yml
+sudo sed -i '/^authMethod: http/a authHTTPAddress: http://127.0.0.1:3000/api/mediamtx/auth' /etc/mediamtx.yml
+
+# Verify both lines are present
+grep -E 'authMethod|authHTTPAddress' /etc/mediamtx.yml
+# Expected output:
+#   authMethod: http
+#   authHTTPAddress: http://127.0.0.1:3000/api/mediamtx/auth
+
+# Restart to apply
+sudo systemctl restart mediamtx
+```
+
+For every incoming connection (RTSP, SRT, RTMP, WebRTC) MediaMTX calls `POST /api/mediamtx/auth` on the camera app before the session is established. The camera app returns HTTP 200 to allow or HTTP 403 to reject. Banned IPs are refused at this point — they never complete the connection. The GStreamer publisher (127.0.0.1) is always allowed through regardless of the ban list.
+
+> **Note:** Without the auth hook the ban feature still works, but banned clients can connect briefly before the auto-kick on the next 2-second poll removes them. The auth hook eliminates that window entirely.
 
 ---
 

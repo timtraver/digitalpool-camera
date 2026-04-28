@@ -1215,8 +1215,7 @@ socket.on("streamFps", ({ fps }) => {
 // Receives "streamBitrate" events from the server (1 Hz, Mbps).
 // Draws a scrolling filled-area chart on a canvas below the video.
 (function () {
-  const HISTORY  = 120; // seconds of data to keep (2 min rolling window)
-  const STEP_PX  = 4;   // fixed pixels per sample — keeps steps tight regardless of canvas width
+  const HISTORY = 120; // seconds of data to keep (2 min rolling window)
   const canvas  = document.getElementById("bitrateGraph");
   const wrap    = document.getElementById("bitrateGraphWrap");
   const valEl   = document.getElementById("bitrateValue");
@@ -1243,11 +1242,12 @@ socket.on("streamFps", ({ fps }) => {
     const points = data.slice(-HISTORY);
     if (points.length < 2) return;
 
-    // Newest sample is always at the right edge; older samples extend leftward
-    // at STEP_PX pixels each.  Points that go past the left edge are skipped.
-    // While the buffer is filling up, the left portion of the canvas is empty —
-    // matching the standard network-monitor style (history grows rightward from
-    // the current moment, not from the start of the stream).
+    // STEP_PX is calculated so that a full HISTORY of samples spans the entire
+    // canvas width.  This means the graph always fills edge-to-edge once the
+    // 2-minute buffer is complete, regardless of screen/window width.
+    // While filling, the newest sample is pinned to the right edge and older
+    // samples grow leftward — standard network-monitor behaviour.
+    const STEP_PX = W / Math.max(HISTORY - 1, 1);
     const xOf = (i) => W - (points.length - 1 - i) * STEP_PX;
 
     // Build fill path
@@ -1356,6 +1356,18 @@ socket.on("streamFps", ({ fps }) => {
   // Shared button style fragments
   const BTN_BASE = `border:none;color:#fff;font-size:10px;padding:2px 5px;border-radius:3px;cursor:pointer;font-family:monospace;white-space:nowrap;`;
 
+  // Protocol badge colours (subtle, readable on dark bg)
+  const PROTO_COLOR = {
+    RTSP:   "rgba(30,120,220,0.85)",
+    SRT:    "rgba(30,170,100,0.85)",
+    RTMP:   "rgba(200,120,20,0.85)",
+    WebRTC: "rgba(140,60,200,0.85)",
+  };
+  function protoBadge(type) {
+    const bg = PROTO_COLOR[type] || "rgba(80,80,80,0.7)";
+    return `<span style="font-size:9px;font-family:monospace;background:${bg};color:#fff;padding:1px 4px;border-radius:3px;margin-right:5px;flex-shrink:0;">${type}</span>`;
+  }
+
   function renderViewers(viewers, banned) {
     countEl.textContent = viewers.length;
 
@@ -1376,6 +1388,7 @@ socket.on("streamFps", ({ fps }) => {
       const ip   = v.ip || v.remoteAddr || "unknown";
       const rate = v.mbps !== null ? v.mbps.toFixed(2) + " Mbps" : "…";
       html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+        ${protoBadge(v.type)}
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${ip}">${ip}</span>
         <span style="color:#12c7ff;margin:0 6px;min-width:68px;text-align:right;">${rate}</span>
         <button id="kick-${v.id}" data-id="${v.id}" style="${BTN_BASE}background:rgba(200,80,80,0.75);">Kick</button>

@@ -1041,8 +1041,12 @@ function mediamtxPost(apiPath) {
 
 // ── Banned-IP persistence ────────────────────────────────────────────────────
 // bannedIPs is an array of IP strings (no port).  It survives restarts via
-// banned-ips.json.  When a banned IP connects via RTSP, the next viewer-poll
-// automatically kicks them before the response is sent to the UI.
+// banned-ips.json.
+//
+// Enforcement has two layers:
+//   1. MediaMTX auth hook (POST /api/mediamtx/auth) — rejects the connection
+//      before it is established, requires authMethod: http in mediamtx.yml.
+//   2. Auto-kick on each viewer poll — fallback if the auth hook isn't configured.
 const BANNED_IPS_FILE = path.join(__dirname, "banned-ips.json");
 let bannedIPs = [];
 
@@ -1069,32 +1073,57 @@ function extractIp(remoteAddr) {
   return colon >= 0 ? remoteAddr.slice(0, colon) : remoteAddr;
 }
 
-// Per-viewer bytesSent tracking for rate calculation.
-// Each entry: { bytes, time, mbps }
+// Protocol definitions — each entry describes one MediaMTX connection type,
+// the list endpoint to query, and the kick endpoint to call.
+// All four share the same JSON schema (id, remoteAddr, path, state,
+// bytesSent, bytesReceived), so a single code path handles them all.
+const MEDIAMTX_PROTOCOLS = [
+  { type: "RTSP",   listPath: "/v3/rtspsessions/list", kickBase: "/v3/rtspsessions/kick" },
+  { type: "SRT",    listPath: "/v3/srtconns/list",     kickBase: "/v3/srtconns/kick"     },
+  { type: "RTMP",   listPath: "/v3/rtmpconns/list",    kickBase: "/v3/rtmpconns/kick"    },
+  { type: "WebRTC", listPath: "/v3/webrtcsessions/list", kickBase: "/v3/webrtcsessions/kick" },
+];
+
+// Per-client bytesSent tracking for rate calculation.
+// Each entry: { bytes, time, mbps, kickBase }
 //   bytes / time — last sample used for delta calculation
 //   mbps         — last successfully computed rate (returned as-is when the
 //                  interval between requests is too short to recalculate)
+//   kickBase     — the protocol-specific kick URL prefix (e.g. /v3/srtconns/kick)
 const viewerBytesHistory = {};
 
-// GET /api/stream/viewers — list RTSP sessions reading the "live" path,
-// with per-viewer data rate computed from consecutive bytesSent samples.
-// Also auto-kicks any session whose IP is in the banned list, and appends
-// the full bannedIPs list so the UI can display them permanently.
+// GET /api/stream/viewers — list all reading clients on the "live" path across
+// every supported protocol, compute per-client data rate, auto-kick banned IPs,
+// and return the full bannedIPs list for permanent display in the UI.
 app.get("/api/stream/viewers", requireAdmin, async (req, res) => {
   try {
-    const data = await mediamtxGet("/v3/rtspsessions/list");
     const now = Date.now();
     const bannedSet = new Set(bannedIPs);
 
+    // Query all protocol endpoints in parallel; tolerate individual failures
+    // (e.g. a protocol is disabled in mediamtx.yml) via allSettled.
+    const results = await Promise.allSettled(
+      MEDIAMTX_PROTOCOLS.map((p) => mediamtxGet(p.listPath).then((d) => ({ ...p, items: d.items || [] })))
+    );
+
+    // Flatten all sessions from every protocol into one array, tagged with type
+    const allSessions = results.flatMap((r) =>
+      r.status === "fulfilled"
+        ? r.value.items
+            .filter((s) => s.path === "live" && s.state !== "publish")
+            .map((s) => ({ ...s, _type: r.value.type, _kickBase: r.value.kickBase }))
+        : []
+    );
+
     const viewers = [];
-    for (const s of (data.items || []).filter((s) => s.path === "live")) {
+    for (const s of allSessions) {
       const ip = extractIp(s.remoteAddr);
 
-      // Auto-kick banned IPs silently — fire-and-forget, don't block the response
+      // Auto-kick banned IPs silently — fire-and-forget
       if (ip && bannedSet.has(ip)) {
-        mediamtxPost(`/v3/rtspsessions/kick/${s.id}`).catch(() => {});
+        mediamtxPost(`${s._kickBase}/${s.id}`).catch(() => {});
         delete viewerBytesHistory[s.id];
-        continue; // don't include this session in the active viewer list
+        continue;
       }
 
       const prev = viewerBytesHistory[s.id];
@@ -1102,15 +1131,18 @@ app.get("/api/stream/viewers", requireAdmin, async (req, res) => {
       if (prev && s.bytesSent >= prev.bytes && (now - prev.time) >= 800) {
         const elapsed = (now - prev.time) / 1000;
         mbps = parseFloat(((s.bytesSent - prev.bytes) * 8 / elapsed / 1_000_000).toFixed(2));
-        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps };
+        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps, kickBase: s._kickBase };
       } else if (!prev) {
-        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps: null };
+        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps: null, kickBase: s._kickBase };
       }
 
-      viewers.push({ id: s.id, remoteAddr: s.remoteAddr, ip, state: s.state, bytesSent: s.bytesSent, mbps });
+      viewers.push({
+        id: s.id, remoteAddr: s.remoteAddr, ip,
+        type: s._type, state: s.state, bytesSent: s.bytesSent, mbps,
+      });
     }
 
-    // Clean up history for sessions no longer active
+    // Clean up history for sessions that are no longer active
     const activeIds = new Set(viewers.map((v) => v.id));
     for (const id of Object.keys(viewerBytesHistory)) {
       if (!activeIds.has(id)) delete viewerBytesHistory[id];
@@ -1122,10 +1154,12 @@ app.get("/api/stream/viewers", requireAdmin, async (req, res) => {
   }
 });
 
-// POST /api/stream/kick/:id — forcibly disconnect an RTSP viewer session.
+// POST /api/stream/kick/:id — disconnect a client.
+// Uses the kickBase stored in viewerBytesHistory to pick the right protocol endpoint.
 app.post("/api/stream/kick/:id", requireAdmin, async (req, res) => {
   try {
-    await mediamtxPost(`/v3/rtspsessions/kick/${req.params.id}`);
+    const kickBase = viewerBytesHistory[req.params.id]?.kickBase || "/v3/rtspsessions/kick";
+    await mediamtxPost(`${kickBase}/${req.params.id}`);
     delete viewerBytesHistory[req.params.id];
     res.json({ success: true });
   } catch (err) {
@@ -1134,25 +1168,32 @@ app.post("/api/stream/kick/:id", requireAdmin, async (req, res) => {
 });
 
 // POST /api/stream/ban/:id — kick the session AND permanently ban the IP.
-// The IP is extracted from the session's remoteAddr so the caller only needs
-// to pass the session ID (which they already have from the viewer list).
+// Looks the session up across all protocol lists to extract the IP and kickBase.
 app.post("/api/stream/ban/:id", requireAdmin, async (req, res) => {
   try {
-    const data = await mediamtxGet("/v3/rtspsessions/list");
-    const session = (data.items || []).find((s) => s.id === req.params.id);
-    const ip = session ? extractIp(session.remoteAddr) : req.body?.ip || null;
-    if (!ip) return res.status(400).json({ success: false, error: "Session not found" });
+    // Try to get kickBase + IP from cached history first (fastest path)
+    let kickBase = viewerBytesHistory[req.params.id]?.kickBase;
+    let ip = null;
 
-    // Add to ban list if not already there
-    if (!bannedIPs.includes(ip)) {
-      bannedIPs.push(ip);
-      saveBannedIPs();
+    // If not cached, search all protocol lists for this session ID
+    if (!kickBase) {
+      const results = await Promise.allSettled(
+        MEDIAMTX_PROTOCOLS.map((p) => mediamtxGet(p.listPath).then((d) => ({ ...p, items: d.items || [] })))
+      );
+      for (const r of results) {
+        if (r.status !== "fulfilled") continue;
+        const found = r.value.items.find((s) => s.id === req.params.id);
+        if (found) { kickBase = r.value.kickBase; ip = extractIp(found.remoteAddr); break; }
+      }
     }
 
-    // Kick the live session
-    await mediamtxPost(`/v3/rtspsessions/kick/${req.params.id}`);
-    delete viewerBytesHistory[req.params.id];
+    if (!ip) ip = req.body?.ip || null; // last resort: caller can supply it
+    if (!ip) return res.status(400).json({ success: false, error: "Session not found" });
 
+    if (!bannedIPs.includes(ip)) { bannedIPs.push(ip); saveBannedIPs(); }
+
+    await mediamtxPost(`${kickBase}/${req.params.id}`);
+    delete viewerBytesHistory[req.params.id];
     res.json({ success: true, ip });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1167,6 +1208,39 @@ app.post("/api/stream/unban", requireAdmin, express.json(), async (req, res) => 
   bannedIPs = bannedIPs.filter((b) => b !== ip);
   saveBannedIPs();
   res.json({ success: true, ip });
+});
+
+// ── MediaMTX external authentication hook ────────────────────────────────────
+// MediaMTX calls this endpoint BEFORE accepting any connection, giving us the
+// opportunity to reject banned IPs before they ever establish a session.
+//
+// Required additions to /etc/mediamtx.yml:
+//   authMethod: http
+//   authHTTPAddress: http://127.0.0.1:3000/api/mediamtx/auth
+//
+// MediaMTX POSTs JSON: { ip, user, password, action, path, protocol, id, query }
+// Return HTTP 200 → connection allowed.  HTTP 4xx → connection rejected.
+//
+// This endpoint is intentionally unauthenticated — it is only reachable from
+// localhost (MediaMTX runs on the same machine) and we enforce that below.
+app.post("/api/mediamtx/auth", express.json(), (req, res) => {
+  // Reject calls from anywhere other than localhost
+  const caller = req.ip || req.socket?.remoteAddress || "";
+  const isLocal = caller === "127.0.0.1" || caller === "::1" || caller === "::ffff:127.0.0.1";
+  if (!isLocal) return res.sendStatus(403);
+
+  const { ip, action, path: streamPath, protocol } = req.body || {};
+
+  // Always allow the local GStreamer publisher and internal MediaMTX processes
+  if (!ip || ip === "127.0.0.1" || ip === "::1") return res.sendStatus(200);
+
+  // Block banned IPs — connection is rejected before it is established
+  if (bannedIPs.includes(ip)) {
+    console.log(`🚫 Auth hook: blocked ${protocol} ${action} from banned IP ${ip} on path "${streamPath}"`);
+    return res.sendStatus(403);
+  }
+
+  res.sendStatus(200);
 });
 
 // Update overlay configuration
