@@ -316,14 +316,18 @@ class PuppeteerOverlay extends EventEmitter {
       // After that, NEVER reload — the page updates itself via subscriptions.
       if (this._currentLoadedUrl !== this._overlayUrl) {
         console.log(`🌍 Navigating to overlay URL: ${this._overlayUrl}`);
+        // Use "domcontentloaded" instead of "networkidle0" — overlay pages often have
+        // persistent WebSocket / polling connections that prevent networkidle0 from
+        // ever firing, causing a silent 30-second timeout.
         await this._page.goto(this._overlayUrl, {
-          waitUntil: "networkidle0",
+          waitUntil: "domcontentloaded",
           timeout: 30000,
         });
         this._currentLoadedUrl = this._overlayUrl;
         this._zoomDirty = true; // Always apply zoom after navigation
 
         // Wait for JS frameworks to finish initial render
+        console.log(`⏳ Waiting ${this._jsDelay}ms for JS framework to render...`);
         await new Promise(r => setTimeout(r, this._jsDelay));
       }
 
@@ -351,16 +355,14 @@ class PuppeteerOverlay extends EventEmitter {
       console.log(`📸 URL overlay PNG updated from: ${this._overlayUrl}`);
       this.emit("updated", this.pngPath);
     } catch (err) {
-      // Don't spam logs — browser disconnects are expected under CPU pressure.
-      // _ensureBrowser will silently relaunch on the next cycle.
+      // Always log — silently swallowing errors makes debugging impossible.
+      console.error("❌ Overlay render error:", err.message);
       if (!this._browser || !this._browser.isConnected()) {
-        // Browser died — next cycle will relaunch via _ensureBrowser
+        // Browser died — _ensureBrowser will relaunch on the next cycle.
+        console.log("🔄 Chromium disconnected — will relaunch on next cycle");
         this._browser = null;
         this._page = null;
         this._currentLoadedUrl = null;
-      } else {
-        // Browser is still alive but something else failed
-        console.error("❌ Overlay render error:", err.message);
       }
     } finally {
       this._renderInProgress = false;
