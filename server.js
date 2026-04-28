@@ -2402,6 +2402,23 @@ streamController.on("preparing", async () => {
   if (needsGraphicsOverlay) {
     console.log(`🎨 Preparing overlay (HTML → PNG)...`);
 
+    // Ensure a valid PNG exists BEFORE any async work so GStreamer always has a file
+    // to load. Puppeteer initialization can take several seconds; the stream controller
+    // only waits 1.5 s after emitting "preparing" before spawning GStreamer. Creating a
+    // placeholder here (synchronous, < 50 ms) guarantees gdkpixbufoverlay won't fail
+    // with "No such file". Puppeteer will overwrite it with real content asynchronously.
+    const pngPath = "/tmp/graphics-overlay.png";
+    const pngMissing = !fsSync.existsSync(pngPath) || fsSync.statSync(pngPath).size < 100;
+    if (pngMissing) {
+      try {
+        const { execSync } = require("child_process");
+        execSync(`convert -size 1920x1080 xc:transparent "${pngPath}"`, { timeout: 5000 });
+        console.log("🖼️  Placeholder transparent PNG created — Puppeteer will update it shortly");
+      } catch (e) {
+        console.error("⚠️  Could not create placeholder PNG:", e.message);
+      }
+    }
+
     try {
       // Initialize overlay renderer if not already running
       if (!puppeteerOverlay) {
@@ -2419,21 +2436,6 @@ streamController.on("preparing", async () => {
         console.log(`🌍 Using remote overlay URL: ${overlayUrl} (zoom: ${overlayZoom}%)`);
         puppeteerOverlay.setOverlayUrl(overlayUrl, { zoom: overlayZoom });
         puppeteerOverlay.startPeriodicRefresh();
-
-        // Puppeteer needs several seconds to launch Chromium + take first screenshot.
-        // GStreamer starts only 1.5s after "preparing" — if the PNG doesn't exist yet,
-        // gdkpixbufoverlay will fail. Create a placeholder transparent PNG immediately
-        // so GStreamer can start. Puppeteer will overwrite it with the real content.
-        const pngPath = "/tmp/graphics-overlay.png";
-        if (!fsSync.existsSync(pngPath) || fsSync.statSync(pngPath).size < 100) {
-          try {
-            const { execSync } = require("child_process");
-            execSync(`convert -size 1920x1080 xc:transparent ${pngPath}`, { timeout: 5000 });
-            console.log("🖼️  Created placeholder transparent PNG — Puppeteer will update it shortly");
-          } catch (e) {
-            console.error("⚠️  Could not create placeholder PNG:", e.message);
-          }
-        }
       }
       console.log("✅ Overlay PNG ready for GStreamer");
     } catch (err) {
