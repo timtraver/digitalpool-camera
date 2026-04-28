@@ -192,6 +192,39 @@ source ~/.bashrc
 
 Run `diskcheck` any time to see root volume free space and journal size together.
 
+### 1g. Add swap space
+
+The Orange Pi 5 has 4 GB of RAM and **no swap by default**. The camera service, GStreamer pipeline, and ffmpeg together can peak at 2–3 GB under load. Without swap, the OOM killer will silently terminate processes and make the device appear unresponsive. A 2 GB swap file gives the OS room to page out cold memory rather than killing services.
+
+```bash
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+
+# Make permanent across reboots
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+# Verify
+free -h
+```
+
+### 1h. Disable sleep and suspend
+
+An IoT device running headless must never suspend — a missed keep-alive or an idle timeout will take the camera completely offline with no way to recover it remotely.
+
+```bash
+sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+```
+
+Verify none of them are active:
+
+```bash
+sudo systemctl status sleep.target suspend.target
+```
+
+Both should show `masked`.
+
 ---
 
 ## 2. Install System Dependencies

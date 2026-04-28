@@ -425,9 +425,8 @@ app.put("/api/remote/name", requireAdmin, express.json(), async (req, res) => {
 function proxyUrl(targetUrl, res, req = null) {
   const https = require("https");
   const http = require("http");
-  const urlModule = require("url");
 
-  const parsedUrl = urlModule.parse(targetUrl);
+  const parsedUrl = new URL(targetUrl);
   const protocol = parsedUrl.protocol === "https:" ? https : http;
 
   const requestId = Math.random().toString(36).substring(7);
@@ -556,7 +555,7 @@ function proxyUrl(targetUrl, res, req = null) {
     const options = {
       hostname: parsedUrl.hostname,
       port: parsedUrl.port || (parsedUrl.protocol === "https:" ? 443 : 80),
-      path: parsedUrl.path,
+      path: parsedUrl.pathname + parsedUrl.search,
       method: req.method,
       headers: headers,
     };
