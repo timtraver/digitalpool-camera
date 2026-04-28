@@ -1039,6 +1039,36 @@ function mediamtxPost(apiPath) {
   });
 }
 
+// ── Banned-IP persistence ────────────────────────────────────────────────────
+// bannedIPs is an array of IP strings (no port).  It survives restarts via
+// banned-ips.json.  When a banned IP connects via RTSP, the next viewer-poll
+// automatically kicks them before the response is sent to the UI.
+const BANNED_IPS_FILE = path.join(__dirname, "banned-ips.json");
+let bannedIPs = [];
+
+function loadBannedIPs() {
+  try {
+    if (fsSync.existsSync(BANNED_IPS_FILE))
+      bannedIPs = JSON.parse(fsSync.readFileSync(BANNED_IPS_FILE, "utf8"));
+  } catch (_) { bannedIPs = []; }
+}
+
+function saveBannedIPs() {
+  fsSync.writeFileSync(BANNED_IPS_FILE, JSON.stringify(bannedIPs, null, 2));
+}
+
+loadBannedIPs();
+
+// Extract just the IP address from a "host:port" remoteAddr string.
+// Handles both IPv4 ("1.2.3.4:5678") and IPv6 ("[::1]:5678").
+function extractIp(remoteAddr) {
+  if (!remoteAddr) return null;
+  const ipv6 = remoteAddr.match(/^\[(.+)\]:\d+$/);
+  if (ipv6) return ipv6[1];
+  const colon = remoteAddr.lastIndexOf(":");
+  return colon >= 0 ? remoteAddr.slice(0, colon) : remoteAddr;
+}
+
 // Per-viewer bytesSent tracking for rate calculation.
 // Each entry: { bytes, time, mbps }
 //   bytes / time — last sample used for delta calculation
@@ -1048,39 +1078,47 @@ const viewerBytesHistory = {};
 
 // GET /api/stream/viewers — list RTSP sessions reading the "live" path,
 // with per-viewer data rate computed from consecutive bytesSent samples.
+// Also auto-kicks any session whose IP is in the banned list, and appends
+// the full bannedIPs list so the UI can display them permanently.
 app.get("/api/stream/viewers", requireAdmin, async (req, res) => {
   try {
     const data = await mediamtxGet("/v3/rtspsessions/list");
     const now = Date.now();
-    const viewers = (data.items || [])
-      .filter((s) => s.path === "live")
-      .map((s) => {
-        const prev = viewerBytesHistory[s.id];
-        let mbps = prev ? prev.mbps : null; // default: keep last known value
-        if (prev && s.bytesSent >= prev.bytes && (now - prev.time) >= 800) {
-          // Enough time has elapsed — recompute the rate
-          const elapsed = (now - prev.time) / 1000;
-          mbps = parseFloat(((s.bytesSent - prev.bytes) * 8 / elapsed / 1_000_000).toFixed(2));
-          viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps };
-        } else if (!prev) {
-          // First time we've seen this session — store baseline, no rate yet
-          viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps: null };
-        }
-        // If elapsed < 800 ms we intentionally skip updating bytes/time so the
-        // next request (with a proper gap) can compute an accurate delta.
-        return { id: s.id, remoteAddr: s.remoteAddr, state: s.state, bytesSent: s.bytesSent, mbps };
-      });
+    const bannedSet = new Set(bannedIPs);
 
-    // Clean up sessions that are no longer active
+    const viewers = [];
+    for (const s of (data.items || []).filter((s) => s.path === "live")) {
+      const ip = extractIp(s.remoteAddr);
+
+      // Auto-kick banned IPs silently — fire-and-forget, don't block the response
+      if (ip && bannedSet.has(ip)) {
+        mediamtxPost(`/v3/rtspsessions/kick/${s.id}`).catch(() => {});
+        delete viewerBytesHistory[s.id];
+        continue; // don't include this session in the active viewer list
+      }
+
+      const prev = viewerBytesHistory[s.id];
+      let mbps = prev ? prev.mbps : null;
+      if (prev && s.bytesSent >= prev.bytes && (now - prev.time) >= 800) {
+        const elapsed = (now - prev.time) / 1000;
+        mbps = parseFloat(((s.bytesSent - prev.bytes) * 8 / elapsed / 1_000_000).toFixed(2));
+        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps };
+      } else if (!prev) {
+        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps: null };
+      }
+
+      viewers.push({ id: s.id, remoteAddr: s.remoteAddr, ip, state: s.state, bytesSent: s.bytesSent, mbps });
+    }
+
+    // Clean up history for sessions no longer active
     const activeIds = new Set(viewers.map((v) => v.id));
     for (const id of Object.keys(viewerBytesHistory)) {
       if (!activeIds.has(id)) delete viewerBytesHistory[id];
     }
 
-    res.json({ success: true, viewers });
+    res.json({ success: true, viewers, bannedIPs });
   } catch (_) {
-    // MediaMTX not running or API disabled — return empty list gracefully
-    res.json({ success: true, viewers: [] });
+    res.json({ success: true, viewers: [], bannedIPs });
   }
 });
 
@@ -1088,11 +1126,47 @@ app.get("/api/stream/viewers", requireAdmin, async (req, res) => {
 app.post("/api/stream/kick/:id", requireAdmin, async (req, res) => {
   try {
     await mediamtxPost(`/v3/rtspsessions/kick/${req.params.id}`);
-    delete viewerBytesHistory[req.params.id]; // clear cached bytes for kicked session
+    delete viewerBytesHistory[req.params.id];
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+// POST /api/stream/ban/:id — kick the session AND permanently ban the IP.
+// The IP is extracted from the session's remoteAddr so the caller only needs
+// to pass the session ID (which they already have from the viewer list).
+app.post("/api/stream/ban/:id", requireAdmin, async (req, res) => {
+  try {
+    const data = await mediamtxGet("/v3/rtspsessions/list");
+    const session = (data.items || []).find((s) => s.id === req.params.id);
+    const ip = session ? extractIp(session.remoteAddr) : req.body?.ip || null;
+    if (!ip) return res.status(400).json({ success: false, error: "Session not found" });
+
+    // Add to ban list if not already there
+    if (!bannedIPs.includes(ip)) {
+      bannedIPs.push(ip);
+      saveBannedIPs();
+    }
+
+    // Kick the live session
+    await mediamtxPost(`/v3/rtspsessions/kick/${req.params.id}`);
+    delete viewerBytesHistory[req.params.id];
+
+    res.json({ success: true, ip });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/stream/unban — remove an IP from the ban list.
+// Body: { ip: "1.2.3.4" }
+app.post("/api/stream/unban", requireAdmin, express.json(), async (req, res) => {
+  const ip = req.body?.ip;
+  if (!ip) return res.status(400).json({ success: false, error: "ip required" });
+  bannedIPs = bannedIPs.filter((b) => b !== ip);
+  saveBannedIPs();
+  res.json({ success: true, ip });
 });
 
 // Update overlay configuration

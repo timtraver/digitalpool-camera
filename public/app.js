@@ -1243,17 +1243,12 @@ socket.on("streamFps", ({ fps }) => {
     const points = data.slice(-HISTORY);
     if (points.length < 2) return;
 
-    // How many samples fit across the canvas at the current step size.
-    // • While filling (fewer points than fit): grow left-to-right so the line
-    //   starts at x=0 and extends rightward — feels natural to the viewer.
-    // • Once the buffer overflows the visible width: switch to right-anchored
-    //   scrolling so the newest sample is always at the right edge and old
-    //   samples scroll off the left.
-    const visiblePts = Math.floor(W / STEP_PX);
-    const scrolling  = points.length > visiblePts;
-    const xOf = scrolling
-      ? (i) => W - (points.length - 1 - i) * STEP_PX  // newest pinned to right
-      : (i) => i * STEP_PX;                             // oldest pinned to left
+    // Newest sample is always at the right edge; older samples extend leftward
+    // at STEP_PX pixels each.  Points that go past the left edge are skipped.
+    // While the buffer is filling up, the left portion of the canvas is empty —
+    // matching the standard network-monitor style (history grows rightward from
+    // the current moment, not from the start of the stream).
+    const xOf = (i) => W - (points.length - 1 - i) * STEP_PX;
 
     // Build fill path
     ctx.beginPath();
@@ -1336,7 +1331,7 @@ socket.on("streamFps", ({ fps }) => {
   window.addEventListener("resize", schedDraw);
 })();
 
-// ── Connected Viewers panel ───────────────────────────────────────────────────
+// ── Connected Clients panel ───────────────────────────────────────────────────
 // Polls /api/stream/viewers every 2 seconds while the stream is active.
 // Shows each RTSP viewer's IP, data rate, and a Kick button.
 (function () {
@@ -1352,60 +1347,105 @@ socket.on("streamFps", ({ fps }) => {
     try {
       const r = await fetch("/api/stream/viewers");
       const d = await r.json();
-      renderViewers(d.viewers || []);
+      renderViewers(d.viewers || [], d.bannedIPs || []);
     } catch (_) {
-      renderViewers([]);
+      renderViewers([], []);
     }
   }
 
-  function renderViewers(viewers) {
+  // Shared button style fragments
+  const BTN_BASE = `border:none;color:#fff;font-size:10px;padding:2px 5px;border-radius:3px;cursor:pointer;font-family:monospace;white-space:nowrap;`;
+
+  function renderViewers(viewers, banned) {
     countEl.textContent = viewers.length;
 
-    if (viewers.length === 0) {
-      listEl.innerHTML = '<span style="color:rgba(255,255,255,0.3);">No viewers connected</span>';
+    // Always keep the panel visible once it has content (banned list persists
+    // across stream stop/start).
+    const hasContent = viewers.length > 0 || banned.length > 0;
+    wrap.style.display = hasContent ? "block" : "none";
+
+    let html = "";
+
+    // ── Active viewers ──────────────────────────────────────────────────────
+    if (viewers.length === 0 && banned.length === 0) {
+      listEl.innerHTML = '<span style="color:rgba(255,255,255,0.3);">No clients connected</span>';
       return;
     }
 
-    listEl.innerHTML = viewers.map((v) => {
-      const ip   = v.remoteAddr || "unknown";
+    viewers.forEach((v) => {
+      const ip   = v.ip || v.remoteAddr || "unknown";
       const rate = v.mbps !== null ? v.mbps.toFixed(2) + " Mbps" : "…";
-      const btnId = `kick-${v.id}`;
-      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+      html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${ip}">${ip}</span>
-        <span style="color:#12c7ff;margin:0 8px;min-width:68px;text-align:right;">${rate}</span>
-        <button id="${btnId}" data-id="${v.id}"
-          style="
-            background:rgba(220,50,50,0.75);
-            border:none;
-            color:#fff;
-            font-size:10px;
-            padding:2px 6px;
-            border-radius:3px;
-            cursor:pointer;
-            font-family:monospace;
-            white-space:nowrap;
-          ">Kick</button>
+        <span style="color:#12c7ff;margin:0 6px;min-width:68px;text-align:right;">${rate}</span>
+        <button id="kick-${v.id}" data-id="${v.id}" style="${BTN_BASE}background:rgba(200,80,80,0.75);">Kick</button>
+        <button id="ban-${v.id}"  data-id="${v.id}" style="${BTN_BASE}background:rgba(160,40,40,0.85);margin-left:3px;">Ban</button>
       </div>`;
-    }).join("");
+    });
 
-    // Attach kick handlers
+    // ── Banned IPs (always shown while panel is open) ───────────────────────
+    if (banned.length > 0) {
+      html += `<div style="margin-top:4px;padding-top:4px;border-top:1px solid rgba(255,80,80,0.25);">`;
+      banned.forEach((ip) => {
+        html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;">
+          <span style="color:rgba(255,100,100,0.75);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${ip}">🚫 ${ip}</span>
+          <span style="color:rgba(255,255,255,0.3);margin:0 6px;min-width:68px;text-align:right;">0.00 Mbps</span>
+          <button id="unban-${ip.replace(/[.:]/g,'-')}" data-ip="${ip}" style="${BTN_BASE}background:rgba(60,140,60,0.8);">Unban</button>
+        </div>`;
+      });
+      html += `</div>`;
+    }
+
+    listEl.innerHTML = html;
+
+    // ── Wire up Kick buttons ────────────────────────────────────────────────
     viewers.forEach((v) => {
       const btn = document.getElementById(`kick-${v.id}`);
       if (!btn) return;
       btn.addEventListener("click", async () => {
         if (kickingIds.has(v.id)) return;
         kickingIds.add(v.id);
-        btn.textContent = "…";
-        btn.disabled = true;
+        btn.textContent = "…"; btn.disabled = true;
         try {
-          const r = await fetch(`/api/stream/kick/${v.id}`, { method: "POST" });
-          const d = await r.json();
-          if (!d.success) btn.textContent = "Err";
-        } catch (_) {
-          btn.textContent = "Err";
-        } finally {
+          await fetch(`/api/stream/kick/${v.id}`, { method: "POST" });
+        } catch (_) { /* ignore */ } finally {
           kickingIds.delete(v.id);
-          // Refresh immediately after kicking
+          await fetchViewers();
+        }
+      });
+    });
+
+    // ── Wire up Ban buttons ─────────────────────────────────────────────────
+    viewers.forEach((v) => {
+      const btn = document.getElementById(`ban-${v.id}`);
+      if (!btn) return;
+      btn.addEventListener("click", async () => {
+        if (kickingIds.has(v.id)) return;
+        kickingIds.add(v.id);
+        btn.textContent = "…"; btn.disabled = true;
+        try {
+          await fetch(`/api/stream/ban/${v.id}`, { method: "POST" });
+        } catch (_) { /* ignore */ } finally {
+          kickingIds.delete(v.id);
+          await fetchViewers();
+        }
+      });
+    });
+
+    // ── Wire up Unban buttons ───────────────────────────────────────────────
+    banned.forEach((ip) => {
+      const btnId = `unban-${ip.replace(/[.:]/g, "-")}`;
+      const btn = document.getElementById(btnId);
+      if (!btn) return;
+      btn.addEventListener("click", async () => {
+        btn.textContent = "…"; btn.disabled = true;
+        try {
+          await fetch("/api/stream/unban", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ip }),
+          });
+        } catch (_) { /* ignore */ } finally {
           await fetchViewers();
         }
       });
@@ -1413,24 +1453,24 @@ socket.on("streamFps", ({ fps }) => {
   }
 
   function startPolling() {
-    wrap.style.display = "block";
-    // Only fetch immediately and start the interval on the first invocation.
-    // streamBitrate fires every 1 s, so without this guard we'd call fetchViewers()
-    // on every tick — causing two requests to arrive within milliseconds of each
-    // other and breaking the server-side bytesSent-delta calculation.
+    // Only start the interval once; renderViewers() controls visibility.
     if (!pollTimer) {
-      fetchViewers(); // immediate first fetch
+      fetchViewers();
       pollTimer = setInterval(fetchViewers, 2000);
     }
   }
 
   function stopPolling() {
-    wrap.style.display = "none";
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-    renderViewers([]);
+    // Fetch one last time so the banned-IP list stays visible even when
+    // the stream is stopped — banned entries persist regardless of stream state.
+    fetchViewers();
   }
 
-  // Tie lifecycle to the bitrate events — streaming = non-null mbps, stopped = null
+  // Show banned IPs immediately on page load (even before the stream starts)
+  fetchViewers();
+
+  // Tie polling lifecycle to the stream — start interval when live, stop when idle.
   socket.on("streamBitrate", ({ mbps }) => {
     if (mbps !== null) startPolling();
     else stopPolling();
