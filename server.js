@@ -1003,6 +1003,88 @@ app.get("/api/stream/test", async (req, res) => {
   res.json(result);
 });
 
+// ── MediaMTX Control API helpers ─────────────────────────────────────────────
+// Thin wrappers around http.get / http.request for talking to MediaMTX on
+// localhost:9997.  Both return a Promise that resolves to the parsed JSON body.
+function mediamtxGet(apiPath) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(
+      { hostname: "127.0.0.1", port: 9997, path: apiPath, timeout: 2000 },
+      (res) => {
+        let body = "";
+        res.on("data", (d) => { body += d; });
+        res.on("end", () => {
+          try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("MediaMTX timeout")); });
+  });
+}
+
+function mediamtxPost(apiPath) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { hostname: "127.0.0.1", port: 9997, path: apiPath, method: "POST", timeout: 2000 },
+      (res) => {
+        res.resume(); // drain body
+        if (res.statusCode >= 200 && res.statusCode < 300) resolve();
+        else reject(new Error(`MediaMTX returned HTTP ${res.statusCode}`));
+      }
+    );
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("MediaMTX timeout")); });
+    req.end();
+  });
+}
+
+// Per-viewer bytesSent tracking for rate calculation (session id → {bytes, time})
+const viewerBytesHistory = {};
+
+// GET /api/stream/viewers — list RTSP sessions reading the "live" path,
+// with per-viewer data rate computed from consecutive bytesSent samples.
+app.get("/api/stream/viewers", requireAdmin, async (req, res) => {
+  try {
+    const data = await mediamtxGet("/v3/rtspsessions/list");
+    const now = Date.now();
+    const viewers = (data.items || [])
+      .filter((s) => s.path === "live")
+      .map((s) => {
+        const prev = viewerBytesHistory[s.id];
+        let mbps = null;
+        if (prev && s.bytesSent >= prev.bytes && (now - prev.time) >= 500) {
+          const elapsed = (now - prev.time) / 1000;
+          mbps = parseFloat(((s.bytesSent - prev.bytes) * 8 / elapsed / 1_000_000).toFixed(2));
+        }
+        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now };
+        return { id: s.id, remoteAddr: s.remoteAddr, state: s.state, bytesSent: s.bytesSent, mbps };
+      });
+
+    // Clean up sessions that are no longer active
+    const activeIds = new Set(viewers.map((v) => v.id));
+    for (const id of Object.keys(viewerBytesHistory)) {
+      if (!activeIds.has(id)) delete viewerBytesHistory[id];
+    }
+
+    res.json({ success: true, viewers });
+  } catch (_) {
+    // MediaMTX not running or API disabled — return empty list gracefully
+    res.json({ success: true, viewers: [] });
+  }
+});
+
+// POST /api/stream/kick/:id — forcibly disconnect an RTSP viewer session.
+app.post("/api/stream/kick/:id", requireAdmin, async (req, res) => {
+  try {
+    await mediamtxPost(`/v3/rtspsessions/kick/${req.params.id}`);
+    delete viewerBytesHistory[req.params.id]; // clear cached bytes for kicked session
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Update overlay configuration
 app.post("/api/stream/overlay", (req, res) => {
   const overlayConfig = req.body;

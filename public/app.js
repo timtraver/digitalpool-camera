@@ -1215,7 +1215,8 @@ socket.on("streamFps", ({ fps }) => {
 // Receives "streamBitrate" events from the server (1 Hz, Mbps).
 // Draws a scrolling filled-area chart on a canvas below the video.
 (function () {
-  const HISTORY = 60; // seconds of data to keep
+  const HISTORY  = 120; // seconds of data to keep (2 min rolling window)
+  const STEP_PX  = 4;   // fixed pixels per sample — keeps steps tight regardless of canvas width
   const canvas  = document.getElementById("bitrateGraph");
   const wrap    = document.getElementById("bitrateGraphWrap");
   const valEl   = document.getElementById("bitrateValue");
@@ -1242,27 +1243,29 @@ socket.on("streamFps", ({ fps }) => {
     const points = data.slice(-HISTORY);
     if (points.length < 2) return;
 
-    const stepX = W / (HISTORY - 1);
+    // Newest sample is always pinned to the right edge; older samples extend left
+    // at STEP_PX pixels each.  Points that go past the left edge are clipped naturally.
+    const xOf = (i) => W - (points.length - 1 - i) * STEP_PX;
 
-    // Build path
+    // Build fill path
     ctx.beginPath();
     let started = false;
+    let firstX = null;
     for (let i = 0; i < points.length; i++) {
       const v = points[i];
+      const x = xOf(i);
+      if (x < 0) { started = false; continue; } // off left edge
       if (v === null) { started = false; continue; }
-      const x = (HISTORY - points.length + i) * stepX;
       const y = H - (v / yMax) * (H - 6) - 2;
-      if (!started) { ctx.moveTo(x, y); started = true; }
+      if (!started) { ctx.moveTo(x, y); started = true; if (firstX === null) firstX = x; }
       else ctx.lineTo(x, y);
     }
 
-    // Filled gradient under the line
-    const lastValid = [...points].reverse().find(v => v !== null);
-    if (lastValid !== undefined) {
-      const lastIdx = points.lastIndexOf(lastValid);
-      const lastX = (HISTORY - points.length + lastIdx) * stepX;
-      ctx.lineTo(lastX, H);
-      ctx.lineTo((HISTORY - points.length) * stepX, H);
+    // Close fill to bottom
+    const lastValidIdx = [...points].reduce((last, v, i) => v !== null ? i : last, -1);
+    if (lastValidIdx >= 0 && firstX !== null) {
+      ctx.lineTo(xOf(lastValidIdx), H);
+      ctx.lineTo(firstX, H);
       ctx.closePath();
       const grad = ctx.createLinearGradient(0, 0, 0, H);
       grad.addColorStop(0, "rgba(18,199,255,0.55)");
@@ -1276,8 +1279,9 @@ socket.on("streamFps", ({ fps }) => {
     started = false;
     for (let i = 0; i < points.length; i++) {
       const v = points[i];
+      const x = xOf(i);
+      if (x < 0) { started = false; continue; }
       if (v === null) { started = false; continue; }
-      const x = (HISTORY - points.length + i) * stepX;
       const y = H - (v / yMax) * (H - 6) - 2;
       if (!started) { ctx.moveTo(x, y); started = true; }
       else ctx.lineTo(x, y);
@@ -1323,6 +1327,102 @@ socket.on("streamFps", ({ fps }) => {
   // Redraw on resize so canvas pixel width stays correct
   window.addEventListener("resize", schedDraw);
 })();
+
+// ── Connected Viewers panel ───────────────────────────────────────────────────
+// Polls /api/stream/viewers every 2 seconds while the stream is active.
+// Shows each RTSP viewer's IP, data rate, and a Kick button.
+(function () {
+  const wrap      = document.getElementById("viewersWrap");
+  const countEl   = document.getElementById("viewerCount");
+  const listEl    = document.getElementById("viewerList");
+  if (!wrap || !countEl || !listEl) return;
+
+  let pollTimer   = null;
+  let kickingIds  = new Set(); // IDs currently being kicked (debounce)
+
+  async function fetchViewers() {
+    try {
+      const r = await fetch("/api/stream/viewers");
+      const d = await r.json();
+      renderViewers(d.viewers || []);
+    } catch (_) {
+      renderViewers([]);
+    }
+  }
+
+  function renderViewers(viewers) {
+    countEl.textContent = viewers.length;
+
+    if (viewers.length === 0) {
+      listEl.innerHTML = '<span style="color:rgba(255,255,255,0.3);">No viewers connected</span>';
+      return;
+    }
+
+    listEl.innerHTML = viewers.map((v) => {
+      const ip   = v.remoteAddr || "unknown";
+      const rate = v.mbps !== null ? v.mbps.toFixed(2) + " Mbps" : "…";
+      const btnId = `kick-${v.id}`;
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${ip}">${ip}</span>
+        <span style="color:#12c7ff;margin:0 8px;min-width:68px;text-align:right;">${rate}</span>
+        <button id="${btnId}" data-id="${v.id}"
+          style="
+            background:rgba(220,50,50,0.75);
+            border:none;
+            color:#fff;
+            font-size:10px;
+            padding:2px 6px;
+            border-radius:3px;
+            cursor:pointer;
+            font-family:monospace;
+            white-space:nowrap;
+          ">Kick</button>
+      </div>`;
+    }).join("");
+
+    // Attach kick handlers
+    viewers.forEach((v) => {
+      const btn = document.getElementById(`kick-${v.id}`);
+      if (!btn) return;
+      btn.addEventListener("click", async () => {
+        if (kickingIds.has(v.id)) return;
+        kickingIds.add(v.id);
+        btn.textContent = "…";
+        btn.disabled = true;
+        try {
+          const r = await fetch(`/api/stream/kick/${v.id}`, { method: "POST" });
+          const d = await r.json();
+          if (!d.success) btn.textContent = "Err";
+        } catch (_) {
+          btn.textContent = "Err";
+        } finally {
+          kickingIds.delete(v.id);
+          // Refresh immediately after kicking
+          await fetchViewers();
+        }
+      });
+    });
+  }
+
+  function startPolling() {
+    wrap.style.display = "block";
+    fetchViewers(); // immediate
+    if (!pollTimer) pollTimer = setInterval(fetchViewers, 2000);
+  }
+
+  function stopPolling() {
+    wrap.style.display = "none";
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    renderViewers([]);
+  }
+
+  // Tie lifecycle to the bitrate events — streaming = non-null mbps, stopped = null
+  socket.on("streamBitrate", ({ mbps }) => {
+    if (mbps !== null) startPolling();
+    else stopPolling();
+  });
+})();
+
 // const overlayCanvas = document.getElementById("overlayCanvas");
 // const ctx = overlayCanvas.getContext("2d");
 

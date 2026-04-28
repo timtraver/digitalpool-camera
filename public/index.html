@@ -61,6 +61,26 @@
               style="width:100%; display:block; border-radius:4px; background:rgba(0,0,0,0.35);"
             ></canvas>
           </div>
+
+          <!-- Connected Viewers — only visible while streaming -->
+          <div id="viewersWrap" style="display:none; margin-top:6px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px;">
+              <span style="font-size:11px; color:rgba(255,255,255,0.5); font-family:monospace;">
+                Connected Viewers: <span id="viewerCount" style="color:#12c7ff; font-weight:600;">0</span>
+              </span>
+            </div>
+            <div id="viewerList" style="
+              font-size:11px;
+              font-family:monospace;
+              color:rgba(255,255,255,0.7);
+              background:rgba(0,0,0,0.3);
+              border-radius:4px;
+              padding:4px 6px;
+              min-height:22px;
+            ">
+              <span style="color:rgba(255,255,255,0.3);">No viewers connected</span>
+            </div>
+          </div>
         </div>
 
         <!-- Control Panel Section -->
