@@ -2316,16 +2316,22 @@ loadDeviceIp();
 
   // ── Remote Access (Tailscale) ─────────────────────────────────
   function initRemoteAccess() {
-    const nameInput     = document.getElementById("remoteDeviceName");
-    const saveNameBtn   = document.getElementById("saveDeviceNameBtn");
-    const enableBtn     = document.getElementById("remoteEnableBtn");
-    const disableBtn    = document.getElementById("remoteDisableBtn");
-    const statusDot     = document.getElementById("remoteStatusDot");
-    const statusText    = document.getElementById("remoteStatusText");
-    const ipRow         = document.getElementById("remoteIpRow");
-    const ipValue       = document.getElementById("remoteIpValue");
-    const msg           = document.getElementById("remoteMsg");
-    let pollTimer       = null;
+    const nameInput   = document.getElementById("remoteDeviceName");
+    const saveNameBtn = document.getElementById("saveDeviceNameBtn");
+    const enableBtn   = document.getElementById("remoteEnableBtn");
+    const disableBtn  = document.getElementById("remoteDisableBtn");
+    const statusDot   = document.getElementById("remoteStatusDot");
+    const statusText  = document.getElementById("remoteStatusText");
+    const ipRow       = document.getElementById("remoteIpRow");
+    const ipValue     = document.getElementById("remoteIpValue");
+    const msg         = document.getElementById("remoteMsg");
+
+    function showMsg(el, text, isError = false) {
+      if (!el) return;
+      el.textContent = text;
+      el.style.color = isError ? "#f87171" : "#4ade80";
+      setTimeout(() => { el.textContent = ""; }, 5000);
+    }
 
     function setConnected(ip, deviceName) {
       statusDot.className  = "remote-status-dot remote-dot-on";
