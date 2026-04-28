@@ -1137,9 +1137,9 @@ app.get("/api/stream/viewers", requireAdmin, async (req, res) => {
       if (prev && s.bytesSent >= prev.bytes && (now - prev.time) >= 800) {
         const elapsed = (now - prev.time) / 1000;
         mbps = parseFloat(((s.bytesSent - prev.bytes) * 8 / elapsed / 1_000_000).toFixed(2));
-        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps, kickBase: s._kickBase };
+        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps, kickBase: s._kickBase, ip };
       } else if (!prev) {
-        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps: null, kickBase: s._kickBase };
+        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps: null, kickBase: s._kickBase, ip };
       }
 
       viewers.push({
@@ -1179,10 +1179,10 @@ app.post("/api/stream/ban/:id", requireAdmin, async (req, res) => {
   try {
     // Try to get kickBase + IP from cached history first (fastest path)
     let kickBase = viewerBytesHistory[req.params.id]?.kickBase;
-    let ip = null;
+    let ip = viewerBytesHistory[req.params.id]?.ip || null;
 
-    // If not cached, search all protocol lists for this session ID
-    if (!kickBase) {
+    // If not fully cached, search all protocol lists for this session ID
+    if (!kickBase || !ip) {
       const results = await Promise.allSettled(
         MEDIAMTX_PROTOCOLS.map((p) => mediamtxGet(p.listPath).then((d) => ({ ...p, items: d.items || [] })))
       );
