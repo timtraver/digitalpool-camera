@@ -411,22 +411,36 @@ The API listens on `127.0.0.1:9997` (localhost only — not exposed externally).
 
 **Enable the MediaMTX authentication hook** (required for the IP ban feature to block clients before they connect):
 
-```bash
-# Switch auth method to HTTP and point it at the camera app's auth endpoint
-sudo sed -i 's/^authMethod: internal/authMethod: http/' /etc/mediamtx.yml
-sudo sed -i '/^authMethod: http/a authHTTPAddress: http://127.0.0.1:3000/api/mediamtx/auth' /etc/mediamtx.yml
+Edit `/etc/mediamtx.yml` and set these three lines (they already exist in the file — find and update them):
 
-# Verify both lines are present
-grep -E 'authMethod|authHTTPAddress' /etc/mediamtx.yml
-# Expected output:
-#   authMethod: http
-#   authHTTPAddress: http://127.0.0.1:3000/api/mediamtx/auth
-
-# Restart to apply
-sudo systemctl restart mediamtx
+```yaml
+authMethod: http
+authHTTPAddress: http://127.0.0.1:3000/api/mediamtx/auth
+authHTTPExclude:
+  - action: publish
 ```
 
-For every incoming connection (RTSP, SRT, RTMP, WebRTC) MediaMTX calls `POST /api/mediamtx/auth` on the camera app before the session is established. The camera app returns HTTP 200 to allow or HTTP 403 to reject. Banned IPs are refused at this point — they never complete the connection. The GStreamer publisher (127.0.0.1) is always allowed through regardless of the ban list.
+> **Important notes on editing `mediamtx.yml`:**
+> - `authMethod` replaces the default `authMethod: internal` line — change only the value, not the key.
+> - `authHTTPAddress` is a separate line that must appear after `authMethod`.
+> - `authHTTPExclude` **must** include `- action: publish` to allow the local GStreamer/ffmpeg publisher to push video to MediaMTX without going through the auth hook. Without this, the stream will fail to start.
+> - The `authHTTPExclude` entry only accepts `action` and `path` sub-fields — **do not add an `ips` field**, it is not supported and will crash MediaMTX.
+
+Verify and restart:
+
+```bash
+grep -n 'authMethod\|authHTTPAddress\|authHTTPExclude' /etc/mediamtx.yml
+# Expected (line numbers will differ):
+#   58: authMethod: http
+#   59: authHTTPAddress: http://127.0.0.1:3000/api/mediamtx/auth
+#   60: authHTTPExclude:
+#   61:   - action: publish
+
+sudo systemctl restart mediamtx
+sudo systemctl status mediamtx   # must show "active (running)", not "failed"
+```
+
+For every incoming viewer connection (RTSP, SRT, RTMP, WebRTC) MediaMTX calls `POST /api/mediamtx/auth` on the camera app before the session is established. The camera app returns HTTP 200 to allow or HTTP 403 to reject. Banned IPs are refused at this point — they never complete the connection. Publish actions (the local ffmpeg/GStreamer source) bypass the hook entirely via `authHTTPExclude`.
 
 > **Note:** Without the auth hook the ban feature still works, but banned clients can connect briefly before the auto-kick on the next 2-second poll removes them. The auth hook eliminates that window entirely.
 

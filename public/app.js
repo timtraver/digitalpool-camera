@@ -598,6 +598,7 @@ function updateConnectionInfo(protocol, ip) {
     connectionInfoExtra.innerHTML =
       `<span style="color:rgba(255,255,255,0.45);font-size:10px">` +
       `Also: HLS → <code style="font-size:10px">http://${resolvedIP}:8888/live</code>` +
+      `&nbsp;&nbsp;SRT → <code style="font-size:10px">srt://${resolvedIP}:8890?streamid=read:live</code>` +
       `</span>`;
   } else if (protocol === "srt") {
     connectionInfoBox.style.display = "block";
