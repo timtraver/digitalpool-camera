@@ -902,13 +902,12 @@ header h1 {
 }
 
 .overlay-section {
-  margin-bottom: 10px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  margin-bottom: 8px;
 }
-.overlay-section:last-child {
-  border-bottom: none;
-  margin-bottom: 0;
+/* Separator only between sections, never after the last one */
+.overlay-section + .overlay-section {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 8px;
 }
 
 /* Collapsible formatting toggle button */
@@ -1369,6 +1368,7 @@ footer {
 
 .settings-card-body {
   padding-top: 10px;
+  padding-bottom: 12px;
 }
 
 .settings-card-header:hover {

@@ -150,7 +150,7 @@ console.log("🔌 Socket.IO initialized:", socket);
 const statusElement = document.getElementById("connectionStatus");
 
 socket.on("connect", () => {
-  statusElement.textContent = "Camera Connected";
+  statusElement.textContent = "Connected";
   statusElement.className = "status status-connected";
   console.log("Connected to server");
 
@@ -160,7 +160,7 @@ socket.on("connect", () => {
 });
 
 socket.on("disconnect", () => {
-  statusElement.textContent = "Camera Disconnected";
+  statusElement.textContent = "Disconnected";
   statusElement.className = "status status-disconnected";
   console.log("Disconnected from server");
 });
@@ -1919,6 +1919,10 @@ loadDeviceIp();
   const body    = document.getElementById("wifiPanelBody");
   const chevron = document.getElementById("wifiChevron");
   if (toggle) {
+    // Start collapsed
+    body.style.display = "none";
+    chevron.textContent = "▶";
+
     toggle.addEventListener("click", () => {
       const open = body.style.display !== "none";
       body.style.display = open ? "none" : "block";
@@ -2317,7 +2321,6 @@ loadDeviceIp();
     { toggleId: "overlayToggle",        bodyId: "overlayBody",        chevronId: "overlayChevron" },
     { toggleId: "cameraSettingsToggle", bodyId: "cameraSettingsBody", chevronId: "cameraSettingsChevron" },
     { toggleId: "streamServerToggle",   bodyId: "streamServerBody",   chevronId: "streamServerChevron" },
-    { toggleId: "wifiPanelToggle",      bodyId: "wifiPanelBody",      chevronId: "wifiChevron" },
     { toggleId: "adminSettingsToggle",  bodyId: "adminSettingsBody",  chevronId: "adminSettingsChevron" },
   ];
 
