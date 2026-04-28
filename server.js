@@ -1109,11 +1109,14 @@ app.get("/api/stream/viewers", requireAdmin, async (req, res) => {
       MEDIAMTX_PROTOCOLS.map((p) => mediamtxGet(p.listPath).then((d) => ({ ...p, items: d.items || [] })))
     );
 
-    // Flatten all sessions from every protocol into one array, tagged with type
+    // Flatten all sessions from every protocol into one array, tagged with type.
+    // Only include sessions in "read" state — this excludes "publish" (the local
+    // GStreamer/ffmpeg source) and "idle" (RTSP sessions that are mid-handshake or
+    // lingering after a client disconnect without a proper TEARDOWN).
     const allSessions = results.flatMap((r) =>
       r.status === "fulfilled"
         ? r.value.items
-            .filter((s) => s.path === "live" && s.state !== "publish")
+            .filter((s) => s.path === "live" && s.state === "read")
             .map((s) => ({ ...s, _type: r.value.type, _kickBase: r.value.kickBase }))
         : []
     );
