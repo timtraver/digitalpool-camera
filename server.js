@@ -69,6 +69,9 @@ function isHotspotRequest(req) {
 }
 
 function requireAuth(req, res, next) {
+  // MediaMTX auth hook — called from localhost by MediaMTX, never needs a session
+  if (req.path === "/api/mediamtx/auth") return next();
+
   if (isHotspotRequest(req))          return next();   // hotspot bypass
   if (req.session && req.session.user) return next();  // logged-in session
 
@@ -1217,6 +1220,8 @@ app.post("/api/stream/unban", requireAdmin, express.json(), async (req, res) => 
 // Required additions to /etc/mediamtx.yml:
 //   authMethod: http
 //   authHTTPAddress: http://127.0.0.1:3000/api/mediamtx/auth
+//   authHTTPExclude:
+//     - action: publish
 //
 // MediaMTX POSTs JSON: { ip, user, password, action, path, protocol, id, query }
 // Return HTTP 200 → connection allowed.  HTTP 4xx → connection rejected.
