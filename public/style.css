@@ -1567,6 +1567,12 @@ footer {
 }
 .btn-user-delete:hover { background: rgba(239,68,68,0.2); color: #fca5a5; }
 
+.user-row-locked {
+  font-size: 13px;
+  color: rgba(255,255,255,0.3);
+  cursor: default;
+}
+
 /* ── Ethernet warning modal ─────────────────────────────────────────────── */
 .eth-modal-backdrop {
   position: fixed;

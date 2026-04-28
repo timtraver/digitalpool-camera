@@ -2204,6 +2204,12 @@ loadDeviceIp();
     if (chevron) { chevron.textContent   = "▼"; }
   }
 
+  // Hide "Change Your Password" section for the built-in admin account
+  if (currentUser.username === "admin" && !currentUser.hotspot) {
+    const changePwSection = document.getElementById("oldPassword")?.closest(".admin-section");
+    if (changePwSection) changePwSection.style.display = "none";
+  }
+
   // Show User Management section for admins only
   if (currentUser.role === "admin" || currentUser.hotspot) {
     const sec = document.getElementById("userMgmtSection");
@@ -2257,9 +2263,11 @@ loadDeviceIp();
         row.innerHTML = `
           <span class="user-row-name">${u.username}</span>
           <span class="user-row-role ${u.role}">${u.role}</span>
-          ${u.username !== currentUser.username
-            ? `<button class="btn-user-delete" data-user="${u.username}" title="Delete user">🗑</button>`
-            : `<span class="user-row-you">(you)</span>`}
+          ${u.username === currentUser.username
+            ? `<span class="user-row-you">(you)</span>`
+            : u.username === "admin"
+              ? `<span class="user-row-locked" title="Built-in account — cannot be deleted">🔒</span>`
+              : `<button class="btn-user-delete" data-user="${u.username}" title="Delete user">🗑</button>`}
         `;
         container.appendChild(row);
       });

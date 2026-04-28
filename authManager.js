@@ -37,7 +37,8 @@ class AuthManager {
       username:            'admin',
       passwordHash:        hash,
       role:                'admin',
-      forcePasswordChange: true,
+      forcePasswordChange: false,  // built-in account — no forced change
+      locked:              true,   // cannot be deleted or have password changed
       createdAt:           new Date().toISOString(),
     }];
     this._save();
@@ -92,6 +93,7 @@ class AuthManager {
   async changePassword(username, newPassword, requireOldPassword = null, oldPassword = null) {
     const user = this.findUser(username);
     if (!user) throw new Error('User not found');
+    if (user.locked) throw new Error(`The "${username}" account is a built-in account and cannot be modified`);
     if (requireOldPassword) {
       const ok = await bcrypt.compare(oldPassword, user.passwordHash);
       if (!ok) throw new Error('Current password is incorrect');
@@ -107,6 +109,7 @@ class AuthManager {
     username = username.trim().toLowerCase();
     const idx = this.users.findIndex(u => u.username === username);
     if (idx === -1) throw new Error('User not found');
+    if (this.users[idx].locked) throw new Error(`The "${username}" account is a built-in account and cannot be deleted`);
     // Prevent removing the last admin
     if (this.users[idx].role === 'admin') {
       const adminCount = this.users.filter(u => u.role === 'admin').length;
@@ -121,6 +124,7 @@ class AuthManager {
     if (!['admin', 'operator'].includes(role)) throw new Error('Invalid role');
     const user = this.findUser(username);
     if (!user) throw new Error('User not found');
+    if (user.locked) throw new Error(`The "${username}" account is a built-in account and cannot be modified`);
     // Prevent downgrading the last admin
     if (user.role === 'admin' && role !== 'admin') {
       const adminCount = this.users.filter(u => u.role === 'admin').length;
