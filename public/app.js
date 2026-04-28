@@ -1406,8 +1406,14 @@ socket.on("streamFps", ({ fps }) => {
 
   function startPolling() {
     wrap.style.display = "block";
-    fetchViewers(); // immediate
-    if (!pollTimer) pollTimer = setInterval(fetchViewers, 2000);
+    // Only fetch immediately and start the interval on the first invocation.
+    // streamBitrate fires every 1 s, so without this guard we'd call fetchViewers()
+    // on every tick — causing two requests to arrive within milliseconds of each
+    // other and breaking the server-side bytesSent-delta calculation.
+    if (!pollTimer) {
+      fetchViewers(); // immediate first fetch
+      pollTimer = setInterval(fetchViewers, 2000);
+    }
   }
 
   function stopPolling() {

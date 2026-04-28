@@ -1039,7 +1039,11 @@ function mediamtxPost(apiPath) {
   });
 }
 
-// Per-viewer bytesSent tracking for rate calculation (session id → {bytes, time})
+// Per-viewer bytesSent tracking for rate calculation.
+// Each entry: { bytes, time, mbps }
+//   bytes / time — last sample used for delta calculation
+//   mbps         — last successfully computed rate (returned as-is when the
+//                  interval between requests is too short to recalculate)
 const viewerBytesHistory = {};
 
 // GET /api/stream/viewers — list RTSP sessions reading the "live" path,
@@ -1052,12 +1056,18 @@ app.get("/api/stream/viewers", requireAdmin, async (req, res) => {
       .filter((s) => s.path === "live")
       .map((s) => {
         const prev = viewerBytesHistory[s.id];
-        let mbps = null;
-        if (prev && s.bytesSent >= prev.bytes && (now - prev.time) >= 500) {
+        let mbps = prev ? prev.mbps : null; // default: keep last known value
+        if (prev && s.bytesSent >= prev.bytes && (now - prev.time) >= 800) {
+          // Enough time has elapsed — recompute the rate
           const elapsed = (now - prev.time) / 1000;
           mbps = parseFloat(((s.bytesSent - prev.bytes) * 8 / elapsed / 1_000_000).toFixed(2));
+          viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps };
+        } else if (!prev) {
+          // First time we've seen this session — store baseline, no rate yet
+          viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps: null };
         }
-        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now };
+        // If elapsed < 800 ms we intentionally skip updating bytes/time so the
+        // next request (with a proper gap) can compute an accurate delta.
         return { id: s.id, remoteAddr: s.remoteAddr, state: s.state, bytesSent: s.bytesSent, mbps };
       });
 
