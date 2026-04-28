@@ -1243,9 +1243,17 @@ socket.on("streamFps", ({ fps }) => {
     const points = data.slice(-HISTORY);
     if (points.length < 2) return;
 
-    // Newest sample is always pinned to the right edge; older samples extend left
-    // at STEP_PX pixels each.  Points that go past the left edge are clipped naturally.
-    const xOf = (i) => W - (points.length - 1 - i) * STEP_PX;
+    // How many samples fit across the canvas at the current step size.
+    // • While filling (fewer points than fit): grow left-to-right so the line
+    //   starts at x=0 and extends rightward — feels natural to the viewer.
+    // • Once the buffer overflows the visible width: switch to right-anchored
+    //   scrolling so the newest sample is always at the right edge and old
+    //   samples scroll off the left.
+    const visiblePts = Math.floor(W / STEP_PX);
+    const scrolling  = points.length > visiblePts;
+    const xOf = scrolling
+      ? (i) => W - (points.length - 1 - i) * STEP_PX  // newest pinned to right
+      : (i) => i * STEP_PX;                             // oldest pinned to left
 
     // Build fill path
     ctx.beginPath();

@@ -1509,8 +1509,11 @@ class StreamController extends EventEmitter {
           res.on("end", () => {
             try {
               const data = JSON.parse(body);
-              // bytesReceived is a uint64 (number in JS); guard against resets
-              const bytes = typeof data.bytesReceived === "number" ? data.bytesReceived : null;
+              // bytesSent = total bytes MediaMTX has delivered to ALL readers combined.
+              // This scales with the number of connected viewers, which is what the
+              // "Total Out" graph should reflect.  bytesReceived (encode rate) would
+              // stay flat regardless of viewer count.
+              const bytes = typeof data.bytesSent === "number" ? data.bytesSent : null;
               if (bytes === null) return;
               const now = Date.now();
               if (prevBytes !== null && bytes >= prevBytes) {
