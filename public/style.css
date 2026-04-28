@@ -42,7 +42,7 @@ header {
   /* DigitalPool blue gradient */
   background: linear-gradient(135deg, #1890ff 0%, #0d5a9e 100%);
   color: white;
-  padding: 12px 20px;
+  padding: 6px 20px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -68,10 +68,10 @@ header h1 {
 }
 
 .status {
-  padding: 6px 14px;
+  padding: 3px 10px;
   border-radius: 18px;
   font-weight: 600;
-  font-size: 11px;
+  font-size: 10px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   border: 2px solid rgba(255, 255, 255, 0.2);
   transition: all 0.3s ease;
@@ -495,7 +495,7 @@ header h1 {
 /* Control Panel */
 .control-panel {
   background: rgba(11, 30, 52, 0.8);
-  padding: 12px;
+  padding: 0 12px;
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(18, 199, 255, 0.2);
@@ -1360,9 +1360,32 @@ footer {
   background: rgba(18, 199, 255, 0.14);
 }
 
+/* First card header — rounded top corners matching the panel */
+.control-panel > .settings-card-header:first-child {
+  border-radius: 8px 8px 0 0;
+}
+
+/* Last card header when collapsed — rounded bottom corners */
+.control-panel > .settings-card-header:last-child {
+  border-radius: 0 0 8px 8px;
+  border-bottom: none;
+}
+
+/* Last card body when open — rounded bottom corners */
+.control-panel > .settings-card-body:last-child {
+  border-radius: 0 0 8px 8px;
+  padding-bottom: 12px;
+}
+
+/* Let the title span grow so status pill + chevron stay right-aligned */
+.settings-card-header > span:first-child {
+  flex: 1;
+}
+
 .settings-card-chevron {
   font-size: 12px;
   color: rgba(18, 199, 255, 0.7);
+  margin-left: 8px;
 }
 
 /* Stream server header status badge */

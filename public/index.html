@@ -13,9 +13,6 @@
           <img src="images/dp-logo-header.png" alt="DigitalPool" class="logo" />
           <h1>Camera Control</h1>
         </div>
-        <div id="connectionStatus" class="status status-disconnected">
-          Camera Disconnected
-        </div>
         <div class="header-user" id="headerUser">
           <span id="headerUsername" class="header-username">…</span>
           <button id="logoutBtn" class="btn-logout" title="Sign out">⏏ Sign Out</button>
@@ -54,6 +51,7 @@
           <!-- Camera Settings Card -->
           <div class="settings-card-header" id="cameraSettingsToggle">
             <span>⚙️ Camera Settings</span>
+            <div id="connectionStatus" class="status status-disconnected">Camera Disconnected</div>
             <span class="settings-card-chevron" id="cameraSettingsChevron">▼</span>
           </div>
           <div class="settings-card-body" id="cameraSettingsBody">
