@@ -2675,20 +2675,30 @@ loadDeviceIp();
       setTimeout(() => { el.textContent = ""; }, 5000);
     }
 
+    const urlRow   = document.getElementById("remoteUrlRow");
+    const urlValue = document.getElementById("remoteUrlValue");
+
     function setConnected(ip, deviceName) {
-      statusDot.className  = "remote-status-dot remote-dot-on";
+      statusDot.className    = "remote-status-dot remote-dot-on";
       statusText.textContent = "Connected";
-      ipRow.style.display  = "flex";
-      ipValue.textContent  = ip;
+      ipRow.style.display    = "flex";
+      ipValue.textContent    = ip;
       enableBtn.style.display  = "none";
       disableBtn.style.display = "";
       if (deviceName && nameInput) nameInput.value = deviceName;
+      if (urlRow && urlValue && deviceName) {
+        const url = `https://cameras.digitalpool.com/camera/${deviceName}`;
+        urlValue.textContent = url;
+        urlValue.href        = url;
+        urlRow.style.display = "flex";
+      }
     }
 
     function setDisconnected(deviceName) {
-      statusDot.className  = "remote-status-dot remote-dot-off";
+      statusDot.className    = "remote-status-dot remote-dot-off";
       statusText.textContent = "Not connected";
-      ipRow.style.display  = "none";
+      ipRow.style.display    = "none";
+      if (urlRow) urlRow.style.display = "none";
       enableBtn.style.display  = "";
       disableBtn.style.display = "none";
       if (deviceName && nameInput && !nameInput.value) nameInput.value = deviceName;
