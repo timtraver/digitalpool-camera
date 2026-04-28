@@ -1229,18 +1229,22 @@ app.post("/api/mediamtx/auth", express.json(), (req, res) => {
     const { ip, action, path: streamPath, protocol } = req.body || {};
 
     // Always allow the local GStreamer publisher and internal MediaMTX processes
-    if (!ip || ip === "127.0.0.1" || ip === "::1") return res.sendStatus(200);
+    if (!ip || ip === "127.0.0.1" || ip === "::1") {
+      console.log(`🔐 Auth hook: allowed local ${protocol} ${action} from ${ip} on "${streamPath}"`);
+      return res.sendStatus(200);
+    }
 
     // Block banned IPs — connection is rejected before it is established
     if (Array.isArray(bannedIPs) && bannedIPs.includes(ip)) {
-      console.log(`🚫 Auth hook: blocked ${protocol} ${action} from banned IP ${ip} on path "${streamPath}"`);
+      console.log(`🚫 Auth hook: BLOCKED ${protocol} ${action} from banned IP ${ip} on "${streamPath}"`);
       return res.sendStatus(403);
     }
 
+    console.log(`✅ Auth hook: allowed ${protocol} ${action} from ${ip} on "${streamPath}"`);
     res.sendStatus(200);
   } catch (err) {
     // Never let an unexpected error default to a rejection — log and allow
-    console.error("⚠️  Auth hook error:", err.message);
+    console.error("⚠️  Auth hook error:", err.message, "body:", JSON.stringify(req.body));
     res.sendStatus(200);
   }
 });
