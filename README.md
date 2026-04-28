@@ -576,22 +576,37 @@ The **Network & WiFi Setup** panel in the admin UI includes an **"Configure Ethe
 
 ### How it works
 
-- The app reads the active ethernet NetworkManager connection profile via `nmcli` and returns its current `ipv4.method`, address, gateway, and DNS.
-- Saving a new config calls `nmcli connection modify` followed by `nmcli connection up` to apply it immediately.
-- The existing polkit rule (§ 7a) already grants the `ubuntu` user full NetworkManager D-Bus access, so **no additional sudo or polkit entries are required**.
+Ubuntu 24.04 manages wired ethernet via **netplan → systemd-networkd**, not NetworkManager. The ethernet interface (`end1`) appears as `unmanaged` in `nmcli`. The app therefore:
+
+1. Writes a dedicated netplan override file at `/etc/netplan/99-digitalpool-ethernet.yaml`
+2. Runs `sudo netplan apply` to activate the change immediately (no reboot needed)
+
+### Required sudoers entries
+
+Two `sudo` commands are needed. Add them to the existing sudoers file created in § 7c:
+
+```bash
+sudo tee -a /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/netplan/99-digitalpool-ethernet.yaml
+ubuntu ALL=(ALL) NOPASSWD: /usr/sbin/netplan apply
+EOF
+
+# Validate before applying
+sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
+```
 
 ### Setting a static IP
 
 1. Open the admin UI at `http://192.168.50.1:3000` (WiFi hotspot) or `http://<device-ip>:3000` (Ethernet).
 2. Go to **Network & WiFi Setup → Configure Ethernet IP**.
-3. Select **Static IP**, fill in the address, prefix length (e.g. `24`), gateway, and optionally a DNS server.
+3. Select **Static IP**, fill in the IP address, prefix length (e.g. `24` = 255.255.255.0), gateway, and optionally a DNS server.
 4. Click **Save Ethernet Config**.
 
 > ⚠️ If you are accessing the admin UI over Ethernet, switching to a different static IP will immediately disconnect your browser tab. Reconnect using the new IP or via the WiFi hotspot (`http://192.168.50.1:3000`).
 
 ### Reverting to DHCP
 
-Select **DHCP (automatic)** and click **Save Ethernet Config**. The interface will re-request an address from your router/DHCP server within a few seconds.
+Select **DHCP (automatic)** and click **Save Ethernet Config**. The interface will re-request an address from your router within a few seconds.
 
 ---
 

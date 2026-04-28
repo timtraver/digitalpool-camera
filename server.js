@@ -5,6 +5,7 @@ const socketIO = require("socket.io");
 const { spawn, exec } = require("child_process");
 const { promisify } = require("util");
 const execAsync = promisify(exec);
+const fsSync = require("fs");
 const path = require("path");
 const os = require("os");
 const CameraController = require("./cameraController");
@@ -495,82 +496,62 @@ app.post("/api/wifi/ap/config", express.json(), async (req, res) => {
 });
 
 // ============ ETHERNET / IP CONFIG API ============
+// Ubuntu 24.04 manages wired ethernet via netplan → systemd-networkd, not
+// NetworkManager. The ethernet interface (end1) shows as "unmanaged" in nmcli.
+// We write a dedicated netplan override file and run `netplan apply` instead.
+
+const NETPLAN_ETH_FILE = '/etc/netplan/99-digitalpool-ethernet.yaml';
+const ETH_CONFIG_FILE  = path.join(__dirname, 'ethernet-config.json');
 
 /**
- * Find the first ethernet NM connection (active preferred, inactive accepted).
- * Returns { name, device, active } or null.
+ * Find the ethernet interface name.
+ * Tries nmcli device status first (type == 'ethernet'), then falls back to
+ * os.networkInterfaces() matching common ethernet name patterns.
  */
-async function _findEthernetConn() {
+async function _findEthernetIface() {
   try {
-    // Prefer active ethernet connections
-    const { stdout: activeOut } = await execAsync(
-      "nmcli -t -f NAME,TYPE,DEVICE connection show --active 2>/dev/null"
-    );
-    for (const line of activeOut.trim().split('\n')) {
-      const [name, type, device] = line.split(':');
-      // nmcli reports the full type as '802-3-ethernet', not just 'ethernet'
-      if (type && type.includes('ethernet')) return { name, device: device || null, active: true };
-    }
-    // Fall back to any (inactive) ethernet connection profile
-    const { stdout: allOut } = await execAsync(
-      "nmcli -t -f NAME,TYPE connection show 2>/dev/null"
-    );
-    for (const line of allOut.trim().split('\n')) {
-      const [name, type] = line.split(':');
-      if (type && type.includes('ethernet')) return { name, device: null, active: false };
+    const { stdout } = await execAsync("nmcli -t -f DEVICE,TYPE device status 2>/dev/null");
+    for (const line of stdout.trim().split('\n')) {
+      const parts = line.split(':');
+      // device type here is 'ethernet' (not '802-3-ethernet')
+      if (parts[1] === 'ethernet' && parts[0] && parts[0] !== 'lo') return parts[0];
     }
   } catch (_) { /* nmcli unavailable */ }
-  return null;
+  // Fallback: check os.networkInterfaces() for known ethernet name patterns
+  const ifaces = os.networkInterfaces();
+  const ethName = Object.keys(ifaces).find(n => /^(eth|end|enp|ens|eno)/.test(n));
+  return ethName || null;
 }
 
-// Get current ethernet IP configuration (DHCP vs static)
+// GET /api/ethernet/config — return current ethernet IP mode and saved settings
 app.get("/api/ethernet/config", async (req, res) => {
   try {
-    const conn = await _findEthernetConn();
-    if (!conn) return res.json({ success: true, connected: false, method: 'dhcp' });
+    const iface = await _findEthernetIface();
 
-    const { stdout } = await execAsync(
-      `nmcli -t -f ipv4.method,ipv4.addresses,ipv4.gateway,ipv4.dns connection show "${conn.name}" 2>/dev/null`
-    );
+    // Load our persisted config (written whenever the user saves).
+    // Defaults to DHCP if no config file exists yet.
+    let saved = { method: 'dhcp', ip: '', prefix: '24', gateway: '', dns: '' };
+    try {
+      saved = { ...saved, ...JSON.parse(fsSync.readFileSync(ETH_CONFIG_FILE, 'utf8')) };
+    } catch (_) { /* first run — no saved config yet */ }
 
-    // Parse key:value lines — split only on first ':' to handle values with colons
-    const cfg = {};
-    for (const line of stdout.trim().split('\n')) {
-      const idx = line.indexOf(':');
-      if (idx > -1) cfg[line.slice(0, idx)] = line.slice(idx + 1);
+    // Get the live IP that the OS currently has on the interface
+    let currentIp = '', connected = false;
+    if (iface) {
+      try {
+        const { stdout } = await execAsync(`ip -4 addr show dev ${iface} 2>/dev/null`);
+        const m = stdout.match(/inet\s+([0-9.]+)/);
+        if (m) { currentIp = m[1]; connected = true; }
+      } catch (_) {}
     }
 
-    const rawAddr   = cfg['ipv4.addresses'] || '';
-    const rawGw     = cfg['ipv4.gateway']   || '';
-    const rawDns    = cfg['ipv4.dns']        || '';
-    const isStatic  = cfg['ipv4.method'] === 'manual';
-
-    // Parse CIDR address into ip + prefix
-    let ip = '', prefix = '24';
-    const addrClean = rawAddr !== '--' ? rawAddr : '';
-    if (addrClean) {
-      const m = addrClean.match(/^([^/]+)\/(\d+)/);
-      if (m) { ip = m[1]; prefix = m[2]; }
-      else     { ip = addrClean; }
-    }
-
-    res.json({
-      success:        true,
-      connected:      conn.active,
-      connectionName: conn.name,
-      device:         conn.device,
-      method:         isStatic ? 'static' : 'dhcp',
-      ip,
-      prefix,
-      gateway: rawGw  !== '--' ? rawGw  : '',
-      dns:     rawDns !== '--' ? rawDns : '',
-    });
+    res.json({ success: true, iface: iface || null, connected, currentIp, ...saved });
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
 });
 
-// Apply ethernet IP configuration (DHCP or static)
+// POST /api/ethernet/config — write a netplan override file and apply it
 app.post("/api/ethernet/config", express.json(), async (req, res) => {
   const { method, ip, prefix, gateway, dns } = req.body || {};
 
@@ -580,26 +561,58 @@ app.post("/api/ethernet/config", express.json(), async (req, res) => {
     return res.json({ success: false, error: "ip is required for static mode" });
 
   try {
-    const conn = await _findEthernetConn();
-    if (!conn) return res.json({ success: false, error: 'No ethernet connection profile found' });
+    const iface = await _findEthernetIface();
+    if (!iface) return res.json({ success: false, error: 'No ethernet interface found' });
 
-    let modCmd;
+    // Build netplan YAML
+    let yaml;
     if (method === 'dhcp') {
-      modCmd = `nmcli connection modify "${conn.name}" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns ""`;
+      yaml = [
+        'network:',
+        '  version: 2',
+        '  ethernets:',
+        `    ${iface}:`,
+        '      dhcp4: true',
+        '',
+      ].join('\n');
     } else {
-      const cidr = `${ip}/${prefix || '24'}`;
-      const gw   = gateway ? ` ipv4.gateway "${gateway}"` : ' ipv4.gateway ""';
-      const dnsv = dns     ? ` ipv4.dns "${dns}"`         : ' ipv4.dns ""';
-      modCmd = `nmcli connection modify "${conn.name}" ipv4.method manual ipv4.addresses "${cidr}"${gw}${dnsv}`;
+      const pfx = prefix || '24';
+      const lines = [
+        'network:',
+        '  version: 2',
+        '  ethernets:',
+        `    ${iface}:`,
+        '      dhcp4: false',
+        '      addresses:',
+        `        - ${ip}/${pfx}`,
+      ];
+      if (gateway) lines.push('      routes:', '        - to: default', `          via: ${gateway}`);
+      if (dns)     lines.push('      nameservers:', '        addresses:', `          - ${dns}`);
+      lines.push('');
+      yaml = lines.join('\n');
     }
 
-    await execAsync(modCmd);
+    // Write via `sudo tee` (pipe content directly — no temp file needed)
+    // Requires: ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/netplan/99-digitalpool-ethernet.yaml
+    await new Promise((resolve, reject) => {
+      const proc = spawn('sudo', ['tee', NETPLAN_ETH_FILE], { stdio: ['pipe', 'ignore', 'pipe'] });
+      let errMsg = '';
+      proc.stderr.on('data', d => { errMsg += d.toString(); });
+      proc.on('close', code => code === 0 ? resolve() : reject(new Error(errMsg || `tee exited ${code}`)));
+      proc.stdin.write(yaml);
+      proc.stdin.end();
+    });
 
-    // Bring connection up to apply (best-effort — cable may not be plugged in)
-    await execAsync(`nmcli connection up "${conn.name}" 2>/dev/null`).catch(() => {});
+    // Apply the new netplan config
+    // Requires: ubuntu ALL=(ALL) NOPASSWD: /usr/sbin/netplan apply
+    await execAsync('sudo netplan apply');
+
+    // Persist our config state so GET can read it back without needing root
+    const toSave = { method, ip: ip || '', prefix: prefix || '24', gateway: gateway || '', dns: dns || '' };
+    fsSync.writeFileSync(ETH_CONFIG_FILE, JSON.stringify(toSave, null, 2));
 
     const label = method === 'dhcp' ? 'Switched to DHCP' : `Static IP ${ip}/${prefix || 24} applied`;
-    console.log(`✅ Ethernet config updated: ${label}`);
+    console.log(`✅ Ethernet config updated on ${iface}: ${label}`);
     res.json({ success: true, message: label });
   } catch (err) {
     console.error('❌ Ethernet config error:', err.message);
