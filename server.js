@@ -356,28 +356,25 @@ app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) =>
   cfg.enabled    = true;
   saveRemoteConfig(cfg);
   try {
-    // Run tailscale up and capture both stdout and stderr.
-    // On first run it will print an auth URL to stderr and exit non-zero —
-    // we detect that and return it to the UI so the user can click it.
-    let stdout = "", stderr = "";
+    const loginServer = process.env.HEADSCALE_URL || "";
+    const authKey     = process.env.HEADSCALE_AUTHKEY || "";
+
+    // Build the tailscale up command.
+    // With a Headscale pre-auth key, registration is fully automatic — no auth URL needed.
+    let upCmd = `sudo tailscale up --hostname=${name} --accept-routes --timeout=15s`;
+    if (loginServer) upCmd += ` --login-server=${loginServer}`;
+    if (authKey)     upCmd += ` --authkey=${authKey}`;
+
     try {
-      ({ stdout, stderr } = await execAsync(
-        `sudo tailscale up --hostname=${name} --accept-routes --timeout=10s`
-      ));
+      await execAsync(upCmd);
     } catch (e) {
-      stdout = e.stdout || "";
-      stderr = e.stderr || e.message || "";
+      // Non-zero exit is sometimes returned even on success (e.g. "already running")
+      // so we fall through and check the IP rather than failing immediately.
+      console.warn("tailscale up warning:", e.stderr || e.message);
     }
 
-    // Look for an auth URL in either stream
-    const combined = stdout + "\n" + stderr;
-    const authMatch = combined.match(/https:\/\/login\.tailscale\.com\/[^\s]+/);
-    if (authMatch) {
-      return res.json({ needsAuth: true, authUrl: authMatch[0], deviceName: name });
-    }
-
-    // No auth URL — assume it connected; grab the IP
-    await new Promise(r => setTimeout(r, 1500));
+    // Give tailscale a moment to get an IP
+    await new Promise(r => setTimeout(r, 2000));
     const { stdout: ipOut } = await execAsync("tailscale ip --4 2>/dev/null").catch(() => ({ stdout: "" }));
     const ip = ipOut.trim();
     if (ip) {
