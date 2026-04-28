@@ -2317,6 +2317,7 @@ loadDeviceIp();
     { toggleId: "overlayToggle",        bodyId: "overlayBody",        chevronId: "overlayChevron" },
     { toggleId: "cameraSettingsToggle", bodyId: "cameraSettingsBody", chevronId: "cameraSettingsChevron" },
     { toggleId: "streamServerToggle",   bodyId: "streamServerBody",   chevronId: "streamServerChevron" },
+    { toggleId: "wifiPanelToggle",      bodyId: "wifiPanelBody",      chevronId: "wifiChevron" },
     { toggleId: "adminSettingsToggle",  bodyId: "adminSettingsBody",  chevronId: "adminSettingsChevron" },
   ];
 

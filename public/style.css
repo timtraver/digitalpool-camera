@@ -153,11 +153,6 @@ header h1 {
 }
 
 .ptz-controls {
-  background: rgba(11, 30, 52, 0.8);
-  padding: 8px;
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(18, 199, 255, 0.2);
   position: relative;
   z-index: 1;
   overflow: visible !important;
@@ -394,6 +389,24 @@ header h1 {
   flex: 1;           /* fill remaining space in control-grid */
   align-items: stretch;
   justify-content: center;
+}
+
+/* Set Home button */
+.btn-set-home {
+  padding: 6px 16px;
+  background: rgba(18, 199, 255, 0.12);
+  border: 1px solid rgba(18, 199, 255, 0.35);
+  border-radius: 20px;
+  color: rgba(18, 199, 255, 0.9);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+  align-self: center;
+}
+.btn-set-home:hover {
+  background: rgba(18, 199, 255, 0.22);
+  border-color: rgba(18, 199, 255, 0.6);
 }
 
 /* Zoom control — label + value on one row, slider spans full width below */
@@ -889,11 +902,13 @@ header h1 {
 }
 
 .overlay-section {
-  border: 1px solid rgba(18, 199, 255, 0.15);
-  padding: 6px;
-  margin-bottom: 6px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.15);
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.overlay-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
 }
 
 /* Collapsible formatting toggle button */
