@@ -54,6 +54,7 @@ class StreamController extends EventEmitter {
     this.ffmpegProcess = null; // Separate ffmpeg process for SRT+audio hybrid
     this.isStreaming = false;
     this._fpsInterval = null;
+    this._bitrateInterval = null;
     this.configFile = path.join(__dirname, "stream-config.json");
 
     // Default configuration
@@ -308,6 +309,7 @@ class StreamController extends EventEmitter {
         this.isStreaming = false;
         this.gstProcess = null;
         this._stopFpsMonitoring();
+        this._stopBitrateMonitoring();
 
         // When GStreamer exits its stdout pipe closes, which causes ffmpeg to see EOF
         // on stdin and exit naturally. Kill explicitly in case it hangs.
@@ -526,6 +528,7 @@ class StreamController extends EventEmitter {
       this.isStreaming = true;
       this.emit("started");
       this._startFpsMonitoring();
+      this._startBitrateMonitoring();
 
       // Enable auto-start and save config
       this.streamConfig.autoStart = true;
@@ -563,6 +566,7 @@ class StreamController extends EventEmitter {
 
       this.isStreaming = false;
       this._stopFpsMonitoring();
+      this._stopBitrateMonitoring();
 
       // Wait for process to fully exit and release the camera device
       // V4L2 devices need time to be released by the kernel after the process exits
@@ -1472,6 +1476,59 @@ class StreamController extends EventEmitter {
       this._fpsInterval = null;
     }
     this.emit("fps", null); // signal "no data" to clients
+  }
+
+  /**
+   * Monitor outgoing network throughput by reading /proc/net/dev every second.
+   * Sums TX bytes across all non-loopback, non-virtual interfaces and emits
+   * a "bitrate" event with the current Mbps value.
+   * On this dedicated streaming device, virtually all TX traffic is the stream.
+   */
+  _startBitrateMonitoring() {
+    this._stopBitrateMonitoring();
+    const fs = require("fs");
+    // Interfaces to exclude — loopback and known virtual/container types
+    const SKIP = /^(lo|docker|veth|br-|virbr)/;
+    let prevTx = null;
+    let prevTime = null;
+
+    const poll = () => {
+      try {
+        const lines = fs.readFileSync("/proc/net/dev", "utf8").split("\n");
+        let totalTx = 0;
+        for (const line of lines) {
+          const t = line.trim();
+          if (!t || t.startsWith("Inter") || t.startsWith("face")) continue;
+          const parts = t.split(/\s+/);
+          const iface = parts[0].replace(":", "");
+          if (SKIP.test(iface)) continue;
+          // /proc/net/dev columns: iface rx_bytes rx_pkts ... tx_bytes (col 9)
+          totalTx += parseInt(parts[9], 10) || 0;
+        }
+
+        const now = Date.now();
+        if (prevTx !== null) {
+          const elapsed = (now - prevTime) / 1000;
+          const mbps = Math.max(0, ((totalTx - prevTx) * 8) / elapsed / 1_000_000);
+          this.emit("bitrate", parseFloat(mbps.toFixed(2)));
+        }
+        prevTx = totalTx;
+        prevTime = now;
+      } catch (_) {
+        // /proc/net/dev not available — skip silently
+      }
+    };
+
+    poll(); // prime prevTx/prevTime without emitting
+    this._bitrateInterval = setInterval(poll, 1000);
+  }
+
+  _stopBitrateMonitoring() {
+    if (this._bitrateInterval) {
+      clearInterval(this._bitrateInterval);
+      this._bitrateInterval = null;
+    }
+    this.emit("bitrate", null);
   }
 
   /**

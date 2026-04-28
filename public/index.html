@@ -43,11 +43,23 @@
               📡 Live Stream Preview
             </div>
           </div>
-          <!-- Outgoing stream FPS bar — below the video, right-aligned -->
-          <div style="display:flex; justify-content:flex-end; padding:4px 2px 0;">
+          <!-- Stats bar: FPS left, bitrate right -->
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 2px 0;">
             <span style="font-size:11px; color:rgba(255,255,255,0.5); font-family:monospace;">
               Outgoing Stream FPS: <span id="outgoingFps" style="color:#12c7ff; font-weight:600;">—</span>
             </span>
+            <span style="font-size:11px; color:rgba(255,255,255,0.5); font-family:monospace;">
+              TX: <span id="bitrateValue" style="color:#12c7ff; font-weight:600;">—</span> Mbps
+              <span id="bitrateMax" style="color:rgba(255,255,255,0.3); font-size:10px;"></span>
+            </span>
+          </div>
+          <!-- Scrolling bitrate sparkline — only visible while streaming -->
+          <div id="bitrateGraphWrap" style="display:none; margin-top:4px;">
+            <canvas
+              id="bitrateGraph"
+              height="56"
+              style="width:100%; display:block; border-radius:4px; background:rgba(0,0,0,0.35);"
+            ></canvas>
           </div>
         </div>
 

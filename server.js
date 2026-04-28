@@ -170,6 +170,10 @@ streamController.on("fps", (fps) => {
   io.emit("streamFps", { fps }); // fps is null when stream stops
 });
 
+streamController.on("bitrate", (mbps) => {
+  io.emit("streamBitrate", { mbps }); // mbps is null when stream stops
+});
+
 // ── Captive portal detection ──────────────────────────────────────────────
 // When a device connects to the DigitalPool-Camera hotspot it has no
 // internet, so the OS fires a connectivity probe to a well-known URL on

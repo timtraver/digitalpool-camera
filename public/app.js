@@ -1210,6 +1210,119 @@ socket.on("streamFps", ({ fps }) => {
     outgoingFpsEl.textContent = fps !== null ? fps + " fps" : "—";
   }
 });
+
+// ── Live TX bitrate sparkline ─────────────────────────────────────────────
+// Receives "streamBitrate" events from the server (1 Hz, Mbps).
+// Draws a scrolling filled-area chart on a canvas below the video.
+(function () {
+  const HISTORY = 60; // seconds of data to keep
+  const canvas  = document.getElementById("bitrateGraph");
+  const wrap    = document.getElementById("bitrateGraphWrap");
+  const valEl   = document.getElementById("bitrateValue");
+  const maxEl   = document.getElementById("bitrateMax");
+  if (!canvas || !wrap || !valEl) return;
+
+  const data = []; // rolling array of Mbps values (null = no data)
+  let peakMbps = 0;
+  let animFrame = null;
+
+  function draw() {
+    animFrame = null;
+    const W = canvas.offsetWidth;
+    const H = canvas.height;
+    if (W === 0 || H === 0) return;
+    if (canvas.width !== W) canvas.width = W;
+
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, W, H);
+
+    // Determine Y scale from peak (minimum 1 Mbps so axis isn't flat)
+    const yMax = Math.max(peakMbps * 1.15, 1);
+
+    const points = data.slice(-HISTORY);
+    if (points.length < 2) return;
+
+    const stepX = W / (HISTORY - 1);
+
+    // Build path
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < points.length; i++) {
+      const v = points[i];
+      if (v === null) { started = false; continue; }
+      const x = (HISTORY - points.length + i) * stepX;
+      const y = H - (v / yMax) * (H - 6) - 2;
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+
+    // Filled gradient under the line
+    const lastValid = [...points].reverse().find(v => v !== null);
+    if (lastValid !== undefined) {
+      const lastIdx = points.lastIndexOf(lastValid);
+      const lastX = (HISTORY - points.length + lastIdx) * stepX;
+      ctx.lineTo(lastX, H);
+      ctx.lineTo((HISTORY - points.length) * stepX, H);
+      ctx.closePath();
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, "rgba(18,199,255,0.55)");
+      grad.addColorStop(1, "rgba(18,199,255,0.04)");
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
+
+    // Re-draw the line on top (sharp)
+    ctx.beginPath();
+    started = false;
+    for (let i = 0; i < points.length; i++) {
+      const v = points[i];
+      if (v === null) { started = false; continue; }
+      const x = (HISTORY - points.length + i) * stepX;
+      const y = H - (v / yMax) * (H - 6) - 2;
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = "#12c7ff";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Y-axis label (top = yMax)
+    ctx.fillStyle = "rgba(255,255,255,0.3)";
+    ctx.font = "9px monospace";
+    ctx.fillText(yMax.toFixed(1) + " Mbps", 4, 11);
+  }
+
+  function schedDraw() {
+    if (!animFrame) animFrame = requestAnimationFrame(draw);
+  }
+
+  socket.on("streamBitrate", ({ mbps }) => {
+    if (mbps === null) {
+      // Stream stopped — reset display
+      data.length = 0;
+      peakMbps = 0;
+      wrap.style.display = "none";
+      valEl.textContent = "—";
+      if (maxEl) maxEl.textContent = "";
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+
+    wrap.style.display = "block";
+    data.push(mbps);
+    if (data.length > HISTORY) data.shift();
+    if (mbps > peakMbps) peakMbps = mbps;
+
+    valEl.textContent = mbps.toFixed(2);
+    if (maxEl) maxEl.textContent = "↑" + peakMbps.toFixed(2);
+
+    schedDraw();
+  });
+
+  // Redraw on resize so canvas pixel width stays correct
+  window.addEventListener("resize", schedDraw);
+})();
 // const overlayCanvas = document.getElementById("overlayCanvas");
 // const ctx = overlayCanvas.getContext("2d");
 
