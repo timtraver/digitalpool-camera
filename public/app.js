@@ -2047,7 +2047,7 @@ loadDeviceIp();
 
       if (d.method === 'static') {
         if (staticRadio)  staticRadio.checked = true;
-        if (staticFields) staticFields.style.display = 'block';
+        if (staticFields) staticFields.style.display = 'flex';
         const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
         set("ethIp",      d.ip);
         set("ethPrefix",  d.prefix || '24');
@@ -2067,7 +2067,7 @@ loadDeviceIp();
     document.getElementById(id)?.addEventListener('change', () => {
       const isStatic = document.getElementById("ethModeStatic")?.checked;
       const sf = document.getElementById("ethStaticFields");
-      if (sf) sf.style.display = isStatic ? 'block' : 'none';
+      if (sf) sf.style.display = isStatic ? 'flex' : 'none';
     });
   });
 
