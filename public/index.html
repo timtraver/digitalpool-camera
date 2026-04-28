@@ -91,10 +91,10 @@
             <div class="overlay-section">
               <div class="control-item-compact">
                 <label>
-                  <input type="checkbox" id="overlayEnabled" />
+                  <input type="checkbox" id="overlayEnabled" checked />
                   <strong>Title</strong>
                 </label>
-                <input type="text" id="overlayText" placeholder="Stream Title" style="flex: 1; margin-left: 8px" />
+                <input type="text" id="overlayText" placeholder="Stream Title" value="DigitalPool" style="flex: 1; margin-left: 8px" />
                 <button type="button" class="btn-format-toggle" id="titleFormatToggle" title="Title formatting">⚙</button>
               </div>
               <div class="format-options" id="titleOptions" style="display: none">
@@ -105,14 +105,14 @@
                       <option value="top-left">Top Left</option>
                       <option value="top-center">Top Center</option>
                       <option value="top-right">Top Right</option>
-                      <option value="bottom-left">Bottom Left</option>
+                      <option value="bottom-left" selected>Bottom Left</option>
                       <option value="bottom-center">Bottom Center</option>
                       <option value="bottom-right">Bottom Right</option>
                     </select>
                   </div>
                   <div class="fmt-group">
                     <label>Size:</label>
-                    <input type="number" id="titleFontSize" min="4" max="120" value="32" class="fmt-number" />
+                    <input type="number" id="titleFontSize" min="4" max="120" value="12" class="fmt-number" />
                   </div>
                   <div class="fmt-group">
                     <label>Color:</label>
@@ -141,7 +141,7 @@
             <div class="overlay-section">
               <div class="control-item-compact">
                 <label>
-                  <input type="checkbox" id="showTimestamp" />
+                  <input type="checkbox" id="showTimestamp" checked />
                   <strong>Timestamp</strong>
                 </label>
                 <button type="button" class="btn-format-toggle" id="timestampFormatToggle" title="Timestamp formatting">⚙</button>
@@ -161,7 +161,7 @@
                   </div>
                   <div class="fmt-group">
                     <label>Size:</label>
-                    <input type="number" id="timestampFontSize" min="4" max="120" value="24" class="fmt-number" />
+                    <input type="number" id="timestampFontSize" min="4" max="120" value="6" class="fmt-number" />
                   </div>
                   <div class="fmt-group">
                     <label>Color:</label>
@@ -545,6 +545,39 @@
                     <span class="wifi-label">All IPs</span>
                     <span class="wifi-value" id="allIps" style="font-size:10px;line-height:1.6">—</span>
                   </div>
+
+                  <!-- Edit Ethernet IP config -->
+                  <details class="wifi-edit-details">
+                    <summary>⚙️ Configure Ethernet IP</summary>
+                    <div class="wifi-form">
+                      <label>Mode</label>
+                      <div class="eth-mode-row">
+                        <label style="font-weight:normal;display:inline-flex;align-items:center;gap:6px;margin-right:16px">
+                          <input type="radio" name="ethMode" id="ethModeDhcp" value="dhcp" checked /> DHCP <small>(automatic)</small>
+                        </label>
+                        <label style="font-weight:normal;display:inline-flex;align-items:center;gap:6px">
+                          <input type="radio" name="ethMode" id="ethModeStatic" value="static" /> Static IP
+                        </label>
+                      </div>
+
+                      <div id="ethStaticFields" style="display:none">
+                        <label>IP Address</label>
+                        <input type="text" id="ethIp" placeholder="192.168.1.100" autocomplete="off" />
+                        <label>Subnet Prefix <small>(e.g. 24 = 255.255.255.0)</small></label>
+                        <input type="number" id="ethPrefix" value="24" min="1" max="30" />
+                        <label>Gateway</label>
+                        <input type="text" id="ethGateway" placeholder="192.168.1.1" autocomplete="off" />
+                        <label>DNS Server <small>(optional, e.g. 8.8.8.8)</small></label>
+                        <input type="text" id="ethDns" placeholder="8.8.8.8" autocomplete="off" />
+                      </div>
+
+                      <p class="wifi-hint" style="margin:8px 0 4px;color:#f59e0b">
+                        ⚠️ Changing IP settings will disconnect Ethernet browser tabs. Reconnect using the new IP or via the WiFi hotspot.
+                      </p>
+                      <button class="btn-wifi-action" id="saveEthConfig">💾 Save Ethernet Config</button>
+                      <div class="wifi-msg" id="ethConfigMsg"></div>
+                    </div>
+                  </details>
                 </div>
               </div><!-- /.wifi-grid -->
           </div><!-- /.wifi-panel-body / settings-card-body -->

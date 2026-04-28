@@ -2,7 +2,9 @@ require("dotenv").config();
 const express = require("express");
 const http = require("http");
 const socketIO = require("socket.io");
-const { spawn } = require("child_process");
+const { spawn, exec } = require("child_process");
+const { promisify } = require("util");
+const execAsync = promisify(exec);
 const path = require("path");
 const os = require("os");
 const CameraController = require("./cameraController");
@@ -488,6 +490,118 @@ app.post("/api/wifi/ap/config", express.json(), async (req, res) => {
     const status = await wifiManager.getStatus();
     res.json({ success: true, ...status });
   } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// ============ ETHERNET / IP CONFIG API ============
+
+/**
+ * Find the first ethernet NM connection (active preferred, inactive accepted).
+ * Returns { name, device, active } or null.
+ */
+async function _findEthernetConn() {
+  try {
+    // Prefer active ethernet connections
+    const { stdout: activeOut } = await execAsync(
+      "nmcli -t -f NAME,TYPE,DEVICE connection show --active 2>/dev/null"
+    );
+    for (const line of activeOut.trim().split('\n')) {
+      const [name, type, device] = line.split(':');
+      if (type === 'ethernet') return { name, device: device || null, active: true };
+    }
+    // Fall back to any (inactive) ethernet connection profile
+    const { stdout: allOut } = await execAsync(
+      "nmcli -t -f NAME,TYPE connection show 2>/dev/null"
+    );
+    for (const line of allOut.trim().split('\n')) {
+      const [name, type] = line.split(':');
+      if (type === 'ethernet') return { name, device: null, active: false };
+    }
+  } catch (_) { /* nmcli unavailable */ }
+  return null;
+}
+
+// Get current ethernet IP configuration (DHCP vs static)
+app.get("/api/ethernet/config", async (req, res) => {
+  try {
+    const conn = await _findEthernetConn();
+    if (!conn) return res.json({ success: true, connected: false, method: 'dhcp' });
+
+    const { stdout } = await execAsync(
+      `nmcli -t -f ipv4.method,ipv4.addresses,ipv4.gateway,ipv4.dns connection show "${conn.name}" 2>/dev/null`
+    );
+
+    // Parse key:value lines — split only on first ':' to handle values with colons
+    const cfg = {};
+    for (const line of stdout.trim().split('\n')) {
+      const idx = line.indexOf(':');
+      if (idx > -1) cfg[line.slice(0, idx)] = line.slice(idx + 1);
+    }
+
+    const rawAddr   = cfg['ipv4.addresses'] || '';
+    const rawGw     = cfg['ipv4.gateway']   || '';
+    const rawDns    = cfg['ipv4.dns']        || '';
+    const isStatic  = cfg['ipv4.method'] === 'manual';
+
+    // Parse CIDR address into ip + prefix
+    let ip = '', prefix = '24';
+    const addrClean = rawAddr !== '--' ? rawAddr : '';
+    if (addrClean) {
+      const m = addrClean.match(/^([^/]+)\/(\d+)/);
+      if (m) { ip = m[1]; prefix = m[2]; }
+      else     { ip = addrClean; }
+    }
+
+    res.json({
+      success:        true,
+      connected:      conn.active,
+      connectionName: conn.name,
+      device:         conn.device,
+      method:         isStatic ? 'static' : 'dhcp',
+      ip,
+      prefix,
+      gateway: rawGw  !== '--' ? rawGw  : '',
+      dns:     rawDns !== '--' ? rawDns : '',
+    });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// Apply ethernet IP configuration (DHCP or static)
+app.post("/api/ethernet/config", express.json(), async (req, res) => {
+  const { method, ip, prefix, gateway, dns } = req.body || {};
+
+  if (!['dhcp', 'static'].includes(method))
+    return res.json({ success: false, error: "method must be 'dhcp' or 'static'" });
+  if (method === 'static' && !ip)
+    return res.json({ success: false, error: "ip is required for static mode" });
+
+  try {
+    const conn = await _findEthernetConn();
+    if (!conn) return res.json({ success: false, error: 'No ethernet connection profile found' });
+
+    let modCmd;
+    if (method === 'dhcp') {
+      modCmd = `nmcli connection modify "${conn.name}" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns ""`;
+    } else {
+      const cidr = `${ip}/${prefix || '24'}`;
+      const gw   = gateway ? ` ipv4.gateway "${gateway}"` : ' ipv4.gateway ""';
+      const dnsv = dns     ? ` ipv4.dns "${dns}"`         : ' ipv4.dns ""';
+      modCmd = `nmcli connection modify "${conn.name}" ipv4.method manual ipv4.addresses "${cidr}"${gw}${dnsv}`;
+    }
+
+    await execAsync(modCmd);
+
+    // Bring connection up to apply (best-effort — cable may not be plugged in)
+    await execAsync(`nmcli connection up "${conn.name}" 2>/dev/null`).catch(() => {});
+
+    const label = method === 'dhcp' ? 'Switched to DHCP' : `Static IP ${ip}/${prefix || 24} applied`;
+    console.log(`✅ Ethernet config updated: ${label}`);
+    res.json({ success: true, message: label });
+  } catch (err) {
+    console.error('❌ Ethernet config error:', err.message);
     res.json({ success: false, error: err.message });
   }
 });

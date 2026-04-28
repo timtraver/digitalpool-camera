@@ -67,24 +67,24 @@ class StreamController extends EventEmitter {
       codec: "h264", // 'h264' or 'h265' — h265 not supported with RTMP
       autoStart: false, // Auto-start streaming on server startup
       // Overlay settings
-      overlayEnabled: false,
+      overlayEnabled: true,
       overlayType: "text", // 'text' or 'url'
-      overlayText: "",
-      showTimestamp: false,
+      overlayText: "DigitalPool",
+      showTimestamp: true,
       overlayUrl: "",
       overlayZoom: 100, // Zoom level for remote overlay page (50-200%)
       remoteOverlayEnabled: false, // Enable remote overlay (Puppeteer screenshot)
       timestampPosition: "bottom-right",
-      titlePosition: "top-left",
-      overlayFontSize: 32, // Default font size for overlays
+      titlePosition: "bottom-left",
+      overlayFontSize: 12, // Default font size for overlays
       overlayColor: "white",
       overlayBackground: "transparent",
       overlayBackgroundOpacity: 70,
       // Per-element formatting
-      titleFontSize: 32,
+      titleFontSize: 12,
       titleColor: "white",
       titleBackground: "transparent",
-      timestampFontSize: 24,
+      timestampFontSize: 6,
       timestampColor: "white",
       timestampBackground: "transparent",
       // Legacy fields

@@ -1194,23 +1194,23 @@ console.log("🔧 Debug elements:", {
 
 // Current overlay config
 let currentOverlayConfig = {
-  overlayEnabled: false,
+  overlayEnabled: true,
   overlayType: "text",
-  overlayText: "",
-  showTimestamp: false,
+  overlayText: "DigitalPool",
+  showTimestamp: true,
   remoteOverlayEnabled: false,
   overlayUrl: "",
   timestampPosition: "bottom-right",
-  titlePosition: "top-left",
+  titlePosition: "bottom-left",
   // Per-element formatting
-  titleFontSize: 32,
+  titleFontSize: 12,
   titleColor: "white",
   titleBackground: "transparent",
-  timestampFontSize: 24,
+  timestampFontSize: 6,
   timestampColor: "white",
   timestampBackground: "transparent",
   // Legacy shared (kept for backward compat with server)
-  overlayFontSize: 32,
+  overlayFontSize: 12,
   overlayColor: "white",
   overlayBackground: "transparent",
 };
@@ -2034,9 +2034,88 @@ loadDeviceIp();
     }
   });
 
+  // ── Ethernet IP config ──────────────────────────────────────
+  async function loadEthernetConfig() {
+    try {
+      const r = await fetch("/api/ethernet/config");
+      const d = await r.json();
+      if (!d.success) return;
+
+      const dhcpRadio    = document.getElementById("ethModeDhcp");
+      const staticRadio  = document.getElementById("ethModeStatic");
+      const staticFields = document.getElementById("ethStaticFields");
+
+      if (d.method === 'static') {
+        if (staticRadio)  staticRadio.checked = true;
+        if (staticFields) staticFields.style.display = 'block';
+        const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
+        set("ethIp",      d.ip);
+        set("ethPrefix",  d.prefix || '24');
+        set("ethGateway", d.gateway);
+        set("ethDns",     d.dns);
+      } else {
+        if (dhcpRadio)    dhcpRadio.checked = true;
+        if (staticFields) staticFields.style.display = 'none';
+      }
+    } catch (e) {
+      console.warn("Ethernet config fetch failed:", e.message);
+    }
+  }
+
+  // Show/hide static fields when mode radio changes
+  ['ethModeDhcp', 'ethModeStatic'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', () => {
+      const isStatic = document.getElementById("ethModeStatic")?.checked;
+      const sf = document.getElementById("ethStaticFields");
+      if (sf) sf.style.display = isStatic ? 'block' : 'none';
+    });
+  });
+
+  // Save ethernet config
+  document.getElementById("saveEthConfig")?.addEventListener("click", async () => {
+    const btn = document.getElementById("saveEthConfig");
+    const msg = document.getElementById("ethConfigMsg");
+    const method = document.getElementById("ethModeStatic")?.checked ? "static" : "dhcp";
+
+    if (method === 'static') {
+      const ip = document.getElementById("ethIp")?.value.trim();
+      if (!ip) { showMsg(msg, "IP address is required for static mode", true); return; }
+    }
+
+    btn.disabled = true;
+    btn.textContent = "Saving…";
+    try {
+      const body = {
+        method,
+        ip:      document.getElementById("ethIp")?.value.trim()      || undefined,
+        prefix:  document.getElementById("ethPrefix")?.value          || '24',
+        gateway: document.getElementById("ethGateway")?.value.trim() || undefined,
+        dns:     document.getElementById("ethDns")?.value.trim()     || undefined,
+      };
+      const r = await fetch("/api/ethernet/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (d.success) {
+        showMsg(msg, `✅ ${d.message}`);
+        setTimeout(loadNetworkStatus, 3000); // let NM settle then refresh
+      } else {
+        showMsg(msg, `❌ ${d.error}`, true);
+      }
+    } catch (e) {
+      showMsg(msg, `❌ ${e.message}`, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "💾 Save Ethernet Config";
+    }
+  });
+
   // ── kick off ────────────────────────────────────────────────
   loadWifiStatus();
   loadNetworkStatus();
+  loadEthernetConfig();
   // Refresh both every 30 s
   setInterval(loadWifiStatus,    30_000);
   setInterval(loadNetworkStatus, 30_000);

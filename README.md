@@ -570,6 +570,31 @@ You should see these lines in the log:
 
 ---
 
+## 7d. Ethernet IP Configuration
+
+The **Network & WiFi Setup** panel in the admin UI includes an **"Configure Ethernet IP"** section that lets you switch the wired port between DHCP and a static IP without touching the command line.
+
+### How it works
+
+- The app reads the active ethernet NetworkManager connection profile via `nmcli` and returns its current `ipv4.method`, address, gateway, and DNS.
+- Saving a new config calls `nmcli connection modify` followed by `nmcli connection up` to apply it immediately.
+- The existing polkit rule (§ 7a) already grants the `ubuntu` user full NetworkManager D-Bus access, so **no additional sudo or polkit entries are required**.
+
+### Setting a static IP
+
+1. Open the admin UI at `http://192.168.50.1:3000` (WiFi hotspot) or `http://<device-ip>:3000` (Ethernet).
+2. Go to **Network & WiFi Setup → Configure Ethernet IP**.
+3. Select **Static IP**, fill in the address, prefix length (e.g. `24`), gateway, and optionally a DNS server.
+4. Click **Save Ethernet Config**.
+
+> ⚠️ If you are accessing the admin UI over Ethernet, switching to a different static IP will immediately disconnect your browser tab. Reconnect using the new IP or via the WiFi hotspot (`http://192.168.50.1:3000`).
+
+### Reverting to DHCP
+
+Select **DHCP (automatic)** and click **Save Ethernet Config**. The interface will re-request an address from your router/DHCP server within a few seconds.
+
+---
+
 ## 8. Accessing the Web Interface
 
 | URL | Description |
@@ -716,6 +741,8 @@ digitalpool-camera/
 | `GET` | `/api/wifi/status` | WiFi AP + client network status |
 | `GET` | `/api/wifi/networks` | Scan nearby networks |
 | `POST` | `/api/wifi/connect` | Connect to a WiFi network |
+| `GET` | `/api/ethernet/config` | Get ethernet IP mode (DHCP/static), IP, gateway, DNS |
+| `POST` | `/api/ethernet/config` | Set ethernet to DHCP or static IP |
 
 ### Socket.IO events (client → server)
 
@@ -752,6 +779,10 @@ ls -l /dev/video*
 # Add the ubuntu user to the video group if needed:
 sudo usermod -aG video ubuntu
 newgrp video   # or log out and back in
+
+# Add the ubuntu user to the audio group (required for camera mic / ALSA access):
+sudo usermod -aG audio ubuntu
+sudo systemctl restart digitalpool-camera   # picks up the new group immediately
 ```
 
 ### Hardware encoder not found
@@ -792,10 +823,27 @@ echo 'kernel.unprivileged_userns_clone=1' | sudo tee /etc/sysctl.d/99-chrome-san
 
 Ensure the Python script (`gst-overlay-pipeline.py`) is being used rather than the raw shell pipeline — it forces GStreamer's system clock to `CLOCK_REALTIME`, matching FFmpeg's `av_gettime` source and eliminating long-term drift between the video and audio PTS streams.
 
+### OBS connects to RTSP but "no stream is available on path 'live'"
+
+MediaMTX is running but nothing is pushing video to it. The most common cause is the `ubuntu` user lacking permission to open the camera mic (`hw:3,0`), which causes the ffmpeg audio process to crash before it ever reaches MediaMTX.
+
+```bash
+# Confirm the audio card is present (should list the camera mic)
+cat /proc/asound/cards
+
+# If arecord -l shows nothing for the ubuntu user, the group is missing:
+sudo usermod -aG audio ubuntu
+sudo systemctl restart digitalpool-camera
+
+# Confirm the RTMP push is now active (should show a connection to port 1935)
+sudo ss -tnp | grep 1935
+```
+
 ### Permission denied on camera device
 
 ```bash
 sudo usermod -aG video ubuntu
+sudo usermod -aG audio ubuntu
 # Verify:
 groups ubuntu
 ```
