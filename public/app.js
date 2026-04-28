@@ -2382,6 +2382,8 @@ loadDeviceIp();
       if (!name) { showMsg(msg, "❌ Enter a device name first", true); return; }
       showMsg(msg, "⏳ Connecting to Tailscale…");
       enableBtn.disabled = true;
+      // Clear any previous auth prompt
+      document.getElementById("remoteAuthPrompt")?.remove();
       try {
         const r = await fetch("/api/remote/enable", {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -2391,6 +2393,17 @@ loadDeviceIp();
         if (d.success) {
           showMsg(msg, `✅ Connected — ${d.ip}`);
           setConnected(d.ip, d.deviceName);
+        } else if (d.needsAuth) {
+          // First-time auth — show the link so the user can authorise the device
+          msg.textContent = "";
+          const prompt = document.createElement("div");
+          prompt.id = "remoteAuthPrompt";
+          prompt.className = "remote-auth-prompt";
+          prompt.innerHTML = `
+            🔑 Authorise this device in Tailscale, then click <strong>Enable</strong> again:<br>
+            <a href="${d.authUrl}" target="_blank" class="remote-auth-link">${d.authUrl}</a>
+          `;
+          msg.after(prompt);
         } else {
           showMsg(msg, `❌ ${d.error}`, true);
         }

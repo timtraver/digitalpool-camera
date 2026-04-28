@@ -356,12 +356,35 @@ app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) =>
   cfg.enabled    = true;
   saveRemoteConfig(cfg);
   try {
-    await execAsync(`sudo tailscale up --hostname=${name} --accept-routes`);
-    // Give tailscale a moment to get an IP
-    await new Promise(r => setTimeout(r, 2000));
-    const { stdout } = await execAsync("tailscale ip --4 2>/dev/null");
-    const ip = stdout.trim();
-    res.json({ success: true, ip, deviceName: name });
+    // Run tailscale up and capture both stdout and stderr.
+    // On first run it will print an auth URL to stderr and exit non-zero —
+    // we detect that and return it to the UI so the user can click it.
+    let stdout = "", stderr = "";
+    try {
+      ({ stdout, stderr } = await execAsync(
+        `sudo tailscale up --hostname=${name} --accept-routes --timeout=10s`
+      ));
+    } catch (e) {
+      stdout = e.stdout || "";
+      stderr = e.stderr || e.message || "";
+    }
+
+    // Look for an auth URL in either stream
+    const combined = stdout + "\n" + stderr;
+    const authMatch = combined.match(/https:\/\/login\.tailscale\.com\/[^\s]+/);
+    if (authMatch) {
+      return res.json({ needsAuth: true, authUrl: authMatch[0], deviceName: name });
+    }
+
+    // No auth URL — assume it connected; grab the IP
+    await new Promise(r => setTimeout(r, 1500));
+    const { stdout: ipOut } = await execAsync("tailscale ip --4 2>/dev/null").catch(() => ({ stdout: "" }));
+    const ip = ipOut.trim();
+    if (ip) {
+      res.json({ success: true, ip, deviceName: name });
+    } else {
+      res.status(500).json({ error: "Tailscale started but could not get IP. Check service logs." });
+    }
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
