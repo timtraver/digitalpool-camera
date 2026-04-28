@@ -2314,7 +2314,7 @@ loadDeviceIp();
     }
   });
 
-  // ── Remote Access (Tailscale) ─────────────────────────────────
+  // ── Remote Access (Headscale/Tailscale) ──────────────────────
   function initRemoteAccess() {
     const nameInput   = document.getElementById("remoteDeviceName");
     const saveNameBtn = document.getElementById("saveDeviceNameBtn");
@@ -2380,7 +2380,7 @@ loadDeviceIp();
     enableBtn?.addEventListener("click", async () => {
       const name = nameInput?.value.trim();
       if (!name) { showMsg(msg, "❌ Enter a device name first", true); return; }
-      showMsg(msg, "⏳ Connecting to Tailscale…");
+      showMsg(msg, "⏳ Connecting…");
       enableBtn.disabled = true;
       // Clear any previous auth prompt
       document.getElementById("remoteAuthPrompt")?.remove();
