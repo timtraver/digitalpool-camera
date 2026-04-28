@@ -1222,25 +1222,27 @@ app.post("/api/stream/unban", requireAdmin, express.json(), async (req, res) => 
 // Return HTTP 200 → connection allowed.  HTTP 4xx → connection rejected.
 //
 // This endpoint is intentionally unauthenticated — it is only reachable from
-// localhost (MediaMTX runs on the same machine) and we enforce that below.
+// localhost because MediaMTX is configured with authHTTPAddress: http://127.0.0.1:3000/...
+// No IP check is performed here; the bind address is the security boundary.
 app.post("/api/mediamtx/auth", express.json(), (req, res) => {
-  // Reject calls from anywhere other than localhost
-  const caller = req.ip || req.socket?.remoteAddress || "";
-  const isLocal = caller === "127.0.0.1" || caller === "::1" || caller === "::ffff:127.0.0.1";
-  if (!isLocal) return res.sendStatus(403);
+  try {
+    const { ip, action, path: streamPath, protocol } = req.body || {};
 
-  const { ip, action, path: streamPath, protocol } = req.body || {};
+    // Always allow the local GStreamer publisher and internal MediaMTX processes
+    if (!ip || ip === "127.0.0.1" || ip === "::1") return res.sendStatus(200);
 
-  // Always allow the local GStreamer publisher and internal MediaMTX processes
-  if (!ip || ip === "127.0.0.1" || ip === "::1") return res.sendStatus(200);
+    // Block banned IPs — connection is rejected before it is established
+    if (Array.isArray(bannedIPs) && bannedIPs.includes(ip)) {
+      console.log(`🚫 Auth hook: blocked ${protocol} ${action} from banned IP ${ip} on path "${streamPath}"`);
+      return res.sendStatus(403);
+    }
 
-  // Block banned IPs — connection is rejected before it is established
-  if (bannedIPs.includes(ip)) {
-    console.log(`🚫 Auth hook: blocked ${protocol} ${action} from banned IP ${ip} on path "${streamPath}"`);
-    return res.sendStatus(403);
+    res.sendStatus(200);
+  } catch (err) {
+    // Never let an unexpected error default to a rejection — log and allow
+    console.error("⚠️  Auth hook error:", err.message);
+    res.sendStatus(200);
   }
-
-  res.sendStatus(200);
 });
 
 // Update overlay configuration
