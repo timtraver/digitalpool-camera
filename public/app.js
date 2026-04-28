@@ -2156,6 +2156,160 @@ loadDeviceIp();
 })();
 
 // ═══════════════════════════════════════════════════════════════
+//  Auth — check session, populate header, handle logout
+// ═══════════════════════════════════════════════════════════════
+(async function initAuth() {
+  let currentUser = null;
+
+  // Check who is logged in
+  try {
+    const res  = await fetch("/api/auth/me");
+    const data = await res.json();
+    if (res.ok && data.user) {
+      currentUser = data.user;
+    } else {
+      // Not authenticated — redirect to login (unless hotspot)
+      window.location.href = "/login";
+      return;
+    }
+  } catch (e) {
+    window.location.href = "/login";
+    return;
+  }
+
+  // Show username in header
+  const headerUsername = document.getElementById("headerUsername");
+  const headerUser     = document.getElementById("headerUser");
+  if (headerUsername) {
+    headerUsername.textContent = currentUser.hotspot
+      ? "Hotspot Access"
+      : `👤 ${currentUser.username}`;
+  }
+  if (headerUser) headerUser.style.display = "flex";
+
+  // Logout button
+  document.getElementById("logoutBtn")?.addEventListener("click", async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.href = "/login";
+  });
+
+  // Force-password-change banner
+  if (currentUser.forcePasswordChange && !currentUser.hotspot) {
+    const banner = document.getElementById("forcePasswordBanner");
+    if (banner) banner.style.display = "block";
+    // Auto-open Admin Settings card so they see the change-password form
+    const body    = document.getElementById("adminSettingsBody");
+    const chevron = document.getElementById("adminSettingsChevron");
+    if (body)    { body.style.display    = "block"; }
+    if (chevron) { chevron.textContent   = "▼"; }
+  }
+
+  // Show User Management section for admins only
+  if (currentUser.role === "admin" || currentUser.hotspot) {
+    const sec = document.getElementById("userMgmtSection");
+    if (sec) sec.style.display = "block";
+    loadUserList();
+  }
+
+  // ── Change own password ──────────────────────────────────────
+  document.getElementById("changePasswordBtn")?.addEventListener("click", async () => {
+    const msg     = document.getElementById("changePasswordMsg");
+    const oldPw   = document.getElementById("oldPassword")?.value;
+    const newPw   = document.getElementById("newPassword")?.value;
+    const confirm = document.getElementById("confirmPassword")?.value;
+
+    if (!newPw || newPw.length < 8) { showMsg(msg, "Password must be at least 8 characters", true); return; }
+    if (newPw !== confirm)           { showMsg(msg, "Passwords do not match", true); return; }
+
+    try {
+      const r = await fetch(`/api/users/${currentUser.username}/password`, {
+        method:  "PUT",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ oldPassword: oldPw, newPassword: newPw }),
+      });
+      const d = await r.json();
+      if (d.success) {
+        showMsg(msg, "✅ Password changed successfully");
+        document.getElementById("oldPassword").value     = "";
+        document.getElementById("newPassword").value     = "";
+        document.getElementById("confirmPassword").value = "";
+        const banner = document.getElementById("forcePasswordBanner");
+        if (banner) banner.style.display = "none";
+      } else {
+        showMsg(msg, `❌ ${d.error}`, true);
+      }
+    } catch (e) {
+      showMsg(msg, `❌ ${e.message}`, true);
+    }
+  });
+
+  // ── User management (admin only) ─────────────────────────────
+  async function loadUserList() {
+    const container = document.getElementById("userList");
+    if (!container) return;
+    try {
+      const r    = await fetch("/api/users");
+      const data = await r.json();
+      container.innerHTML = "";
+      (data.users || []).forEach(u => {
+        const row = document.createElement("div");
+        row.className = "user-row";
+        row.innerHTML = `
+          <span class="user-row-name">${u.username}</span>
+          <span class="user-row-role ${u.role}">${u.role}</span>
+          ${u.username !== currentUser.username
+            ? `<button class="btn-user-delete" data-user="${u.username}" title="Delete user">🗑</button>`
+            : `<span class="user-row-you">(you)</span>`}
+        `;
+        container.appendChild(row);
+      });
+      // Bind delete buttons
+      container.querySelectorAll(".btn-user-delete").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          if (!confirm(`Delete user "${btn.dataset.user}"?`)) return;
+          const r = await fetch(`/api/users/${btn.dataset.user}`, { method: "DELETE" });
+          const d = await r.json();
+          if (d.success) loadUserList();
+          else alert(d.error);
+        });
+      });
+    } catch (e) {
+      container.innerHTML = `<div style="color:#fca5a5;font-size:12px">Failed to load users: ${e.message}</div>`;
+    }
+  }
+
+  document.getElementById("addUserBtn")?.addEventListener("click", async () => {
+    const msg  = document.getElementById("addUserMsg");
+    const body = {
+      username: document.getElementById("newUserUsername")?.value.trim(),
+      password: document.getElementById("newUserPassword")?.value,
+      role:     document.getElementById("newUserRole")?.value,
+    };
+    if (!body.username) { showMsg(msg, "Username is required", true); return; }
+    if (!body.password || body.password.length < 8) { showMsg(msg, "Password must be 8+ characters", true); return; }
+    try {
+      const r = await fetch("/api/users", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (d.success) {
+        showMsg(msg, `✅ User "${d.user.username}" added`);
+        document.getElementById("newUserUsername").value = "";
+        document.getElementById("newUserPassword").value = "";
+        loadUserList();
+      } else {
+        showMsg(msg, `❌ ${d.error}`, true);
+      }
+    } catch (e) {
+      showMsg(msg, `❌ ${e.message}`, true);
+    }
+  });
+
+})();
+
+// ═══════════════════════════════════════════════════════════════
 //  Collapsible Settings Cards (PTZ, Overlay, Camera Settings, Stream Server)
 // ═══════════════════════════════════════════════════════════════
 (function initSettingsCards() {
@@ -2164,6 +2318,7 @@ loadDeviceIp();
     { toggleId: "overlayToggle",        bodyId: "overlayBody",        chevronId: "overlayChevron" },
     { toggleId: "cameraSettingsToggle", bodyId: "cameraSettingsBody", chevronId: "cameraSettingsChevron" },
     { toggleId: "streamServerToggle",   bodyId: "streamServerBody",   chevronId: "streamServerChevron" },
+    { toggleId: "adminSettingsToggle",  bodyId: "adminSettingsBody",  chevronId: "adminSettingsChevron" },
   ];
 
   cards.forEach(({ toggleId, bodyId, chevronId }) => {

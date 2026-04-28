@@ -16,6 +16,10 @@
         <div id="connectionStatus" class="status status-disconnected">
           Camera Disconnected
         </div>
+        <div class="header-user" id="headerUser">
+          <span id="headerUsername" class="header-username">…</span>
+          <button id="logoutBtn" class="btn-logout" title="Sign out">⏏ Sign Out</button>
+        </div>
       </header>
 
       <div class="main-content">
@@ -584,6 +588,60 @@
                 </div>
               </div><!-- /.wifi-grid -->
           </div><!-- /.wifi-panel-body / settings-card-body -->
+
+          <!-- ── Admin Settings Card ── -->
+          <div class="settings-card-header" id="adminSettingsToggle">
+            <span>🔐 Admin Settings</span>
+            <span class="settings-card-chevron" id="adminSettingsChevron">▶</span>
+          </div>
+          <div class="settings-card-body" id="adminSettingsBody" style="display:none">
+
+            <!-- Force-password-change banner (shown when needed) -->
+            <div id="forcePasswordBanner" class="force-pw-banner" style="display:none">
+              ⚠️ You are using the default password. Please change it now.
+            </div>
+
+            <!-- Change own password -->
+            <div class="admin-section">
+              <h4 class="admin-section-title">🔑 Change Your Password</h4>
+              <div class="wifi-form">
+                <label>Current Password</label>
+                <input type="password" id="oldPassword" placeholder="Current password" autocomplete="current-password" />
+                <label>New Password <small>(8+ chars)</small></label>
+                <input type="password" id="newPassword" placeholder="New password" autocomplete="new-password" />
+                <label>Confirm New Password</label>
+                <input type="password" id="confirmPassword" placeholder="Confirm new password" autocomplete="new-password" />
+                <button class="btn-wifi-action" id="changePasswordBtn">🔑 Update Password</button>
+                <div class="wifi-msg" id="changePasswordMsg"></div>
+              </div>
+            </div>
+
+            <!-- User management (admin role only) -->
+            <div class="admin-section" id="userMgmtSection" style="display:none">
+              <h4 class="admin-section-title">👥 User Management</h4>
+              <div id="userList" class="user-list">
+                <!-- populated by app.js -->
+              </div>
+
+              <details class="wifi-edit-details" style="margin-top:10px">
+                <summary>➕ Add New User</summary>
+                <div class="wifi-form">
+                  <label>Username</label>
+                  <input type="text" id="newUserUsername" placeholder="e.g. operator1" autocomplete="off" />
+                  <label>Password <small>(8+ chars)</small></label>
+                  <input type="password" id="newUserPassword" placeholder="Password" autocomplete="new-password" />
+                  <label>Role</label>
+                  <select id="newUserRole">
+                    <option value="operator">Operator</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                  <button class="btn-wifi-action" id="addUserBtn">➕ Add User</button>
+                  <div class="wifi-msg" id="addUserMsg"></div>
+                </div>
+              </details>
+            </div>
+
+          </div><!-- /.adminSettingsBody -->
 
         </div><!-- /.control-panel -->
       </div><!-- /.main-content -->

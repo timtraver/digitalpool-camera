@@ -1456,6 +1456,117 @@ footer {
   /* WiFi grid already single column — no override needed */
 }
 
+/* ── Header user / logout ──────────────────────────────────────────────────── */
+.header-user {
+  display: none; /* shown by JS once auth resolves */
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.header-username {
+  font-size: 12px;
+  color: rgba(255,255,255,0.75);
+  white-space: nowrap;
+}
+
+.btn-logout {
+  padding: 5px 12px;
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 6px;
+  color: rgba(255,255,255,0.85);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+.btn-logout:hover { background: rgba(255,255,255,0.18); }
+
+/* ── Force-password-change banner ──────────────────────────────────────────── */
+.force-pw-banner {
+  background: rgba(245,158,11,0.15);
+  border: 1px solid rgba(245,158,11,0.5);
+  border-radius: 7px;
+  color: #fcd34d;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  text-align: center;
+}
+
+/* ── Admin Settings sections ───────────────────────────────────────────────── */
+.admin-section {
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(18,199,255,0.1);
+}
+.admin-section:last-child { border-bottom: none; margin-bottom: 0; }
+
+.admin-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(18,199,255,0.9);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+}
+
+/* ── User list ─────────────────────────────────────────────────────────────── */
+.user-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.user-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(6,16,27,0.5);
+  border: 1px solid rgba(18,199,255,0.12);
+  border-radius: 6px;
+  padding: 7px 10px;
+}
+
+.user-row-name {
+  flex: 1;
+  font-size: 13px;
+  color: rgba(255,255,255,0.9);
+  font-weight: 500;
+}
+
+.user-row-role {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+.user-row-role.admin    { background: rgba(24,144,255,0.2); color: #60a5fa; }
+.user-row-role.operator { background: rgba(16,185,129,0.2); color: #6ee7b7; }
+
+.user-row-you {
+  font-size: 10px;
+  color: rgba(255,255,255,0.35);
+  font-style: italic;
+}
+
+.btn-user-delete {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background 0.15s;
+  color: rgba(255,255,255,0.5);
+}
+.btn-user-delete:hover { background: rgba(239,68,68,0.2); color: #fca5a5; }
+
 /* ── Ethernet warning modal ─────────────────────────────────────────────── */
 .eth-modal-backdrop {
   position: fixed;

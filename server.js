@@ -2,6 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const http = require("http");
 const socketIO = require("socket.io");
+const session = require("express-session");
 const { spawn, exec } = require("child_process");
 const { promisify } = require("util");
 const execAsync = promisify(exec);
@@ -11,6 +12,7 @@ const os = require("os");
 const CameraController = require("./cameraController");
 const StreamController = require("./streamController");
 const WifiManager = require("./wifiManager");
+const authManager = require("./authManager");
 
 // Try to load HTML overlay renderer (wkhtmltoimage + ImageMagick)
 let PuppeteerOverlay = null;
@@ -33,6 +35,52 @@ const io = socketIO(server, {
 const PORT = process.env.PORT || 3000;
 const CAMERA_DEVICE = process.env.CAMERA_DEVICE || "/dev/video0";
 const DEFAULT_AP_IP = process.env.AP_IP || "192.168.50.1";
+const HOTSPOT_SUBNET = process.env.HOTSPOT_SUBNET || "192.168.50.";
+
+// ── Session middleware ────────────────────────────────────────────────────────
+// Use SESSION_SECRET from .env; fall back to a random secret (regenerated each
+// restart — existing sessions are invalidated on restart, which is acceptable
+// for an embedded device).  Set SESSION_SECRET in .env for persistence.
+const sessionMiddleware = session({
+  secret:            process.env.SESSION_SECRET || require("crypto").randomBytes(32).toString("hex"),
+  resave:            false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    maxAge:   24 * 60 * 60 * 1000, // 24 hours
+    sameSite: "lax",
+  },
+});
+app.use(sessionMiddleware);
+
+// Share the session with Socket.IO so we can check auth on WS connections
+io.use((socket, next) => sessionMiddleware(socket.request, socket.request.res || {}, next));
+
+// ── Auth guard helpers ────────────────────────────────────────────────────────
+// File extensions that are always served publicly (CSS, JS, images).
+// Protecting them gains nothing because they contain no sensitive data.
+const PUBLIC_EXTENSIONS = new Set([".css", ".js", ".png", ".jpg", ".jpeg", ".svg", ".ico", ".woff", ".woff2", ".map"]);
+
+function isHotspotRequest(req) {
+  // Requests arriving from the WiFi hotspot subnet skip authentication so that
+  // venue staff connecting to the AP can reach the interface without credentials.
+  const ip = req.ip || req.connection?.remoteAddress || "";
+  return ip.includes(HOTSPOT_SUBNET);
+}
+
+function requireAuth(req, res, next) {
+  if (isHotspotRequest(req))          return next();   // hotspot bypass
+  if (req.session && req.session.user) return next();  // logged-in session
+
+  const ext = path.extname(req.path);
+  if (ext && PUBLIC_EXTENSIONS.has(ext)) return next(); // safe static assets
+
+  // Unauthenticated
+  if (req.path.startsWith("/api/") || req.path.startsWith("/video/")) {
+    return res.status(401).json({ error: "Unauthorized", redirect: "/login" });
+  }
+  return res.redirect("/login");
+}
 
 // Initialize camera controller
 const camera = new CameraController(CAMERA_DEVICE);
@@ -162,9 +210,109 @@ app.get('/redirect',                     _sendCaptiveRedirect);
 app.get('/kindle-wifi/wifistub.html',    _sendCaptiveRedirect);
 // ─────────────────────────────────────────────────────────────────────────
 
-// Serve static files from public directory
+// ── Public auth routes (no requireAuth guard) ────────────────────────────────
+// Login page — serve the standalone HTML file directly
+app.get("/login", (req, res) => {
+  if (isHotspotRequest(req)) return res.redirect("/"); // hotspot: skip login
+  if (req.session?.user)     return res.redirect("/"); // already logged in
+  res.sendFile(path.join(__dirname, "public", "login.html"));
+});
+
+app.post("/api/auth/login", express.json(), async (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: "Username and password are required" });
+  try {
+    const ok = await authManager.verifyPassword(username, password);
+    if (!ok) return res.status(401).json({ error: "Invalid username or password" });
+    const user = authManager.findUser(username);
+    req.session.user = { username: user.username, role: user.role, forcePasswordChange: user.forcePasswordChange };
+    req.session.save(() => res.json({ success: true, user: req.session.user }));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  req.session.destroy(() => res.json({ success: true }));
+});
+
+app.get("/api/auth/me", (req, res) => {
+  if (isHotspotRequest(req)) return res.json({ user: { username: "hotspot", role: "admin", hotspot: true } });
+  if (!req.session?.user)    return res.status(401).json({ error: "Unauthorized" });
+  res.json({ user: req.session.user });
+});
+
+// ── Apply auth guard to everything below ────────────────────────────────────
+app.use(requireAuth);
+
+// ── Static files (guarded — index.html requires auth, assets pass through) ──
 app.use(express.static("public"));
 app.use(express.json());
+
+// ── User management API (admin only) ─────────────────────────────────────────
+function requireAdmin(req, res, next) {
+  if (isHotspotRequest(req)) return next(); // hotspot users are implicitly admin
+  if (req.session?.user?.role === "admin") return next();
+  res.status(403).json({ error: "Admin access required" });
+}
+
+app.get("/api/users", requireAdmin, (req, res) => {
+  res.json({ users: authManager.listUsers() });
+});
+
+app.post("/api/users", requireAdmin, express.json(), async (req, res) => {
+  try {
+    const { username, password, role } = req.body || {};
+    const user = await authManager.addUser(username, password, role);
+    res.json({ success: true, user });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete("/api/users/:username", requireAdmin, async (req, res) => {
+  try {
+    const target = req.params.username;
+    if (target === req.session?.user?.username)
+      return res.status(400).json({ error: "You cannot delete your own account" });
+    authManager.deleteUser(target);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.put("/api/users/:username/role", requireAdmin, express.json(), async (req, res) => {
+  try {
+    authManager.updateRole(req.params.username, req.body.role);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Any authenticated user may change their own password; admin may change anyone's
+app.put("/api/users/:username/password", express.json(), async (req, res) => {
+  const { username } = req.params;
+  const { oldPassword, newPassword } = req.body || {};
+  const caller = req.session?.user;
+  const isAdmin = isHotspotRequest(req) || caller?.role === "admin";
+  // Non-admin can only change their own password
+  if (!isAdmin && caller?.username !== username)
+    return res.status(403).json({ error: "Forbidden" });
+  try {
+    // Non-admin must supply current password
+    await authManager.changePassword(username, newPassword, !isAdmin, oldPassword);
+    // Update session if user changed their own password
+    if (req.session?.user?.username === username) {
+      req.session.user.forcePasswordChange = false;
+      req.session.save();
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
 
 // Helper function to proxy any URL
 function proxyUrl(targetUrl, res, req = null) {
@@ -1315,9 +1463,20 @@ app.get("/video/stream", async (req, res) => {
   connectToPreview();
 });
 
+// ── Socket.IO auth guard ──────────────────────────────────────────────────────
+// The session middleware was already wired into io.use() at startup so that
+// socket.request.session is populated.  Now enforce the auth check.
+io.use((socket, next) => {
+  const ip = socket.handshake.address || socket.handshake.headers["x-forwarded-for"] || "";
+  if (ip.includes(HOTSPOT_SUBNET)) return next();       // hotspot bypass
+  if (socket.request.session?.user) return next();     // authenticated session
+  next(new Error("Unauthorized"));                     // reject the connection
+});
+
 // Socket.IO for real-time camera control
 io.on("connection", (socket) => {
-  console.log("Client connected:", socket.id);
+  const who = socket.request.session?.user?.username || "hotspot";
+  console.log(`Client connected: ${socket.id} (${who})`);
 
   // Handle camera control commands
   socket.on("setControl", async (data) => {
