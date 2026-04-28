@@ -2205,11 +2205,15 @@ loadDeviceIp();
     if (changePwSection) changePwSection.style.display = "none";
   }
 
-  // Show User Management section for admins only
+  // Show User Management + Remote Access sections for admins only
   if (currentUser.role === "admin" || currentUser.hotspot) {
     const sec = document.getElementById("userMgmtSection");
     if (sec) sec.style.display = "block";
     loadUserList();
+
+    const remoteSec = document.getElementById("remoteAccessSection");
+    if (remoteSec) remoteSec.style.display = "block";
+    initRemoteAccess();
   }
 
   // ── Change own password ──────────────────────────────────────
@@ -2309,6 +2313,97 @@ loadDeviceIp();
       showMsg(msg, `❌ ${e.message}`, true);
     }
   });
+
+  // ── Remote Access (Tailscale) ─────────────────────────────────
+  function initRemoteAccess() {
+    const nameInput     = document.getElementById("remoteDeviceName");
+    const saveNameBtn   = document.getElementById("saveDeviceNameBtn");
+    const enableBtn     = document.getElementById("remoteEnableBtn");
+    const disableBtn    = document.getElementById("remoteDisableBtn");
+    const statusDot     = document.getElementById("remoteStatusDot");
+    const statusText    = document.getElementById("remoteStatusText");
+    const ipRow         = document.getElementById("remoteIpRow");
+    const ipValue       = document.getElementById("remoteIpValue");
+    const msg           = document.getElementById("remoteMsg");
+    let pollTimer       = null;
+
+    function setConnected(ip, deviceName) {
+      statusDot.className  = "remote-status-dot remote-dot-on";
+      statusText.textContent = "Connected";
+      ipRow.style.display  = "flex";
+      ipValue.textContent  = ip;
+      enableBtn.style.display  = "none";
+      disableBtn.style.display = "";
+      if (deviceName && nameInput) nameInput.value = deviceName;
+    }
+
+    function setDisconnected(deviceName) {
+      statusDot.className  = "remote-status-dot remote-dot-off";
+      statusText.textContent = "Not connected";
+      ipRow.style.display  = "none";
+      enableBtn.style.display  = "";
+      disableBtn.style.display = "none";
+      if (deviceName && nameInput && !nameInput.value) nameInput.value = deviceName;
+    }
+
+    async function refreshStatus() {
+      try {
+        const r = await fetch("/api/remote/status");
+        const d = await r.json();
+        if (d.enabled && d.ip) setConnected(d.ip, d.deviceName);
+        else setDisconnected(d.deviceName);
+      } catch { setDisconnected(""); }
+    }
+
+    refreshStatus();
+
+    saveNameBtn?.addEventListener("click", async () => {
+      const name = nameInput?.value.trim();
+      if (!name) { showMsg(msg, "❌ Device name is required", true); return; }
+      try {
+        const r = await fetch("/api/remote/name", {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceName: name }),
+        });
+        const d = await r.json();
+        if (d.success) showMsg(msg, `✅ Name saved as "${d.deviceName}"`);
+        else showMsg(msg, `❌ ${d.error}`, true);
+      } catch (e) { showMsg(msg, `❌ ${e.message}`, true); }
+    });
+
+    enableBtn?.addEventListener("click", async () => {
+      const name = nameInput?.value.trim();
+      if (!name) { showMsg(msg, "❌ Enter a device name first", true); return; }
+      showMsg(msg, "⏳ Connecting to Tailscale…");
+      enableBtn.disabled = true;
+      try {
+        const r = await fetch("/api/remote/enable", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceName: name }),
+        });
+        const d = await r.json();
+        if (d.success) {
+          showMsg(msg, `✅ Connected — ${d.ip}`);
+          setConnected(d.ip, d.deviceName);
+        } else {
+          showMsg(msg, `❌ ${d.error}`, true);
+        }
+      } catch (e) { showMsg(msg, `❌ ${e.message}`, true); }
+      finally { enableBtn.disabled = false; }
+    });
+
+    disableBtn?.addEventListener("click", async () => {
+      showMsg(msg, "⏳ Disconnecting…");
+      disableBtn.disabled = true;
+      try {
+        const r = await fetch("/api/remote/disable", { method: "POST" });
+        const d = await r.json();
+        if (d.success) { showMsg(msg, "✅ Remote access disabled"); setDisconnected(""); }
+        else showMsg(msg, `❌ ${d.error}`, true);
+      } catch (e) { showMsg(msg, `❌ ${e.message}`, true); }
+      finally { disableBtn.disabled = false; }
+    });
+  }
 
 })();
 

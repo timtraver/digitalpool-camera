@@ -639,6 +639,41 @@
               </details>
             </div>
 
+            <!-- Remote Access (Tailscale) — admin only -->
+            <div class="admin-section" id="remoteAccessSection" style="display:none">
+              <h4 class="admin-section-title">🌐 Remote Access (Tailscale)</h4>
+
+              <div class="wifi-form">
+                <label>Device Name</label>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input type="text" id="remoteDeviceName" placeholder="e.g. venue-chicago-table1"
+                         autocomplete="off" style="flex:1;font-size:12px" />
+                  <button class="btn-wifi-action" id="saveDeviceNameBtn" style="white-space:nowrap">💾 Save</button>
+                </div>
+                <small style="color:rgba(255,255,255,0.4);font-size:10px">
+                  Lowercase letters, numbers and hyphens only. Appears in your Tailscale dashboard.
+                </small>
+              </div>
+
+              <div class="remote-status-row" id="remoteStatusRow">
+                <div class="remote-status-dot" id="remoteStatusDot"></div>
+                <span id="remoteStatusText">Checking…</span>
+              </div>
+
+              <div id="remoteIpRow" style="display:none" class="remote-ip-row">
+                <span class="remote-ip-label">Tailscale IP:</span>
+                <code id="remoteIpValue" class="remote-ip-value"></code>
+                <a href="https://login.tailscale.com/admin/machines" target="_blank"
+                   class="remote-dashboard-link">Open Dashboard ↗</a>
+              </div>
+
+              <div style="display:flex;gap:8px;margin-top:10px">
+                <button class="btn-wifi-action" id="remoteEnableBtn">🔗 Enable Remote Access</button>
+                <button class="btn-wifi-action btn-remote-disable" id="remoteDisableBtn" style="display:none">⛔ Disable</button>
+              </div>
+              <div class="wifi-msg" id="remoteMsg"></div>
+            </div>
+
           </div><!-- /.adminSettingsBody -->
 
         </div><!-- /.control-panel -->

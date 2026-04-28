@@ -314,6 +314,93 @@ app.put("/api/users/:username/password", express.json(), async (req, res) => {
   }
 });
 
+// ── Remote Access (Tailscale) API ── admin only ─────────────────────────────
+const REMOTE_CONFIG_FILE = path.join(__dirname, "remote.json");
+
+function loadRemoteConfig() {
+  try {
+    if (fsSync.existsSync(REMOTE_CONFIG_FILE))
+      return JSON.parse(fsSync.readFileSync(REMOTE_CONFIG_FILE, "utf8"));
+  } catch (e) { /* ignore */ }
+  return { deviceName: "", enabled: false };
+}
+
+function saveRemoteConfig(cfg) {
+  fsSync.writeFileSync(REMOTE_CONFIG_FILE, JSON.stringify(cfg, null, 2));
+}
+
+app.get("/api/remote/status", requireAdmin, async (req, res) => {
+  const cfg = loadRemoteConfig();
+  try {
+    // tailscale status --json gives us everything we need
+    const { stdout } = await execAsync("tailscale status --json 2>/dev/null");
+    const ts = JSON.parse(stdout);
+    const ip  = ts.TailscaleIPs?.[0] || null;
+    const up  = ts.BackendState === "Running";
+    res.json({ enabled: up, ip, deviceName: cfg.deviceName, backendState: ts.BackendState });
+  } catch {
+    // tailscale not installed or not running yet
+    res.json({ enabled: false, ip: null, deviceName: cfg.deviceName, backendState: "Stopped" });
+  }
+});
+
+app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) => {
+  const cfg = loadRemoteConfig();
+  const name = (req.body?.deviceName || cfg.deviceName || "digitalpool-camera")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  cfg.deviceName = name;
+  cfg.enabled    = true;
+  saveRemoteConfig(cfg);
+  try {
+    await execAsync(`sudo tailscale up --hostname=${name} --accept-routes`);
+    // Give tailscale a moment to get an IP
+    await new Promise(r => setTimeout(r, 2000));
+    const { stdout } = await execAsync("tailscale ip --4 2>/dev/null");
+    const ip = stdout.trim();
+    res.json({ success: true, ip, deviceName: name });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/remote/disable", requireAdmin, async (req, res) => {
+  const cfg = loadRemoteConfig();
+  cfg.enabled = false;
+  saveRemoteConfig(cfg);
+  try {
+    await execAsync("sudo tailscale down");
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put("/api/remote/name", requireAdmin, express.json(), async (req, res) => {
+  const name = (req.body?.deviceName || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  if (!name) return res.status(400).json({ error: "Device name is required" });
+  const cfg = loadRemoteConfig();
+  cfg.deviceName = name;
+  saveRemoteConfig(cfg);
+  // If tailscale is running, update the hostname live
+  try {
+    const { stdout } = await execAsync("tailscale status --json 2>/dev/null");
+    const ts = JSON.parse(stdout);
+    if (ts.BackendState === "Running") {
+      await execAsync(`sudo tailscale set --hostname=${name}`);
+    }
+  } catch { /* tailscale not running — name saved for next enable */ }
+  res.json({ success: true, deviceName: name });
+});
+
 // Helper function to proxy any URL
 function proxyUrl(targetUrl, res, req = null) {
   const https = require("https");

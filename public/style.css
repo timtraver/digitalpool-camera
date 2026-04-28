@@ -1605,6 +1605,65 @@ footer {
 }
 .btn-user-delete:hover { background: rgba(239,68,68,0.2); color: #fca5a5; }
 
+/* ── Remote Access ──────────────────────────────────────────────────────── */
+.remote-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 4px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.75);
+}
+
+.remote-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.2);
+}
+.remote-dot-on  { background: #10b981; box-shadow: 0 0 6px rgba(16,185,129,0.7); }
+.remote-dot-off { background: #64748b; }
+
+.remote-ip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.remote-ip-label {
+  font-size: 11px;
+  color: rgba(255,255,255,0.5);
+}
+
+.remote-ip-value {
+  font-size: 12px;
+  font-family: monospace;
+  color: rgba(18,199,255,0.9);
+  background: rgba(18,199,255,0.08);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.remote-dashboard-link {
+  font-size: 11px;
+  color: rgba(18,199,255,0.7);
+  text-decoration: none;
+  margin-left: auto;
+}
+.remote-dashboard-link:hover { color: rgba(18,199,255,1); text-decoration: underline; }
+
+.btn-remote-disable {
+  background: rgba(239,68,68,0.12) !important;
+  border-color: rgba(239,68,68,0.35) !important;
+  color: #fca5a5 !important;
+}
+.btn-remote-disable:hover {
+  background: rgba(239,68,68,0.22) !important;
+}
+
 .user-row-locked {
   font-size: 13px;
   color: rgba(255,255,255,0.3);
