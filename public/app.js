@@ -2193,16 +2193,7 @@ loadDeviceIp();
     window.location.href = "/login";
   });
 
-  // Force-password-change banner
-  if (currentUser.forcePasswordChange && !currentUser.hotspot) {
-    const banner = document.getElementById("forcePasswordBanner");
-    if (banner) banner.style.display = "block";
-    // Auto-open Admin Settings card so they see the change-password form
-    const body    = document.getElementById("adminSettingsBody");
-    const chevron = document.getElementById("adminSettingsChevron");
-    if (body)    { body.style.display    = "block"; }
-    if (chevron) { chevron.textContent   = "▼"; }
-  }
+  // Force-password-change banner — intentionally disabled; default password is acceptable for an IoT device behind a firewall
 
   // Hide "Change Your Password" section for the built-in admin account
   if (currentUser.username === "admin" && !currentUser.hotspot) {
