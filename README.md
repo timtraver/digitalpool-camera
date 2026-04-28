@@ -493,8 +493,8 @@ cd digitalpool-camera
 # Install npm dependencies
 npm install
 
-# Optional: install puppeteer-core for remote URL overlay support
-npm install puppeteer-core
+# Required for remote URL overlay support (must match Chromium 114 — do NOT use latest)
+npm install puppeteer-core@20.9.0
 ```
 
 ### 4a. Create the environment file
@@ -915,6 +915,17 @@ which chromium-browser
 sudo sysctl -w kernel.unprivileged_userns_clone=1
 # Make it persistent:
 echo 'kernel.unprivileged_userns_clone=1' | sudo tee /etc/sysctl.d/99-chrome-sandbox.conf
+```
+
+**Version compatibility:** The system Chromium is version 114. You **must** use `puppeteer-core@20.9.0` — newer versions use a DevTools Protocol revision that Chromium 114 does not support, causing Chromium to crash silently during page navigation with a misleading "Timed out after waiting 30000ms" error.
+
+```bash
+# Correct install:
+npm install puppeteer-core@20.9.0
+
+# Verify:
+npm list puppeteer-core
+# Should print: puppeteer-core@20.9.0
 ```
 
 ### Audio / video drift after long streams

@@ -662,8 +662,8 @@ function setStreamStatus(state, text) {
       break;
     case "live":
       streamStatusBar.classList.add("status-live");
-      streamStatusText.textContent = "🔴 " + text;
-      headerBadge = "🔴 LIVE";
+      streamStatusText.textContent = "🟢 " + text;
+      headerBadge = "🟢 LIVE";
       break;
     case "error":
       streamStatusBar.classList.add("status-error");
