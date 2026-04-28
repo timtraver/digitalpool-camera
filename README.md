@@ -516,7 +516,7 @@ You should see:
 | Setting | Default value |
 |---|---|
 | SSID | `DigitalPool-Camera` |
-| Password | `digitalpool` |
+| Password | `Digitalpool` |
 | AP IP | `192.168.50.1` |
 | Admin URL | `http://192.168.50.1:3000` |
 

@@ -18,7 +18,7 @@ const execAsync = promisify(exec);
 
 const AP_CONNECTION_NAME = 'DigitalPool-Hotspot';
 const DEFAULT_AP_SSID     = 'DigitalPool-Camera';
-const DEFAULT_AP_PASSWORD = 'digitalpool';   // min 8 chars for WPA2
+const DEFAULT_AP_PASSWORD = 'Digitalpool';   // min 8 chars for WPA2
 const DEFAULT_AP_IP       = '192.168.50.1';
 const AP_SUBNET_PREFIX    = '24';
 const AP_CHANNEL          = '6';
