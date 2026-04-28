@@ -394,6 +394,21 @@ sudo systemctl start mediamtx
 > sudo systemctl status mediamtx
 > ```
 
+**Enable the MediaMTX Control API** (required for the live stream bitrate display in the web UI):
+
+```bash
+# The API is off by default — enable it so Node.js can read stream stats
+sudo sed -i 's/^api: false/api: yes/' /etc/mediamtx.yml
+
+# Verify the change
+grep '^api:' /etc/mediamtx.yml   # should print: api: yes
+
+# Restart to apply
+sudo systemctl restart mediamtx
+```
+
+The API listens on `127.0.0.1:9997` (localhost only — not exposed externally). The camera app polls `GET /v3/paths/get/live` once per second to read the encoded stream bitrate.
+
 ---
 
 ## 3. Install Node.js via nvm

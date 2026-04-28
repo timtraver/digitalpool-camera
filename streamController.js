@@ -1479,47 +1479,58 @@ class StreamController extends EventEmitter {
   }
 
   /**
-   * Monitor outgoing network throughput by reading /proc/net/dev every second.
-   * Sums TX bytes across all non-loopback, non-virtual interfaces and emits
-   * a "bitrate" event with the current Mbps value.
-   * On this dedicated streaming device, virtually all TX traffic is the stream.
+   * Monitor the encoded stream bitrate by polling the MediaMTX Control API.
+   * Endpoint: GET http://127.0.0.1:9997/v3/paths/get/live
+   *
+   * `bytesReceived` = cumulative bytes GStreamer has pushed into MediaMTX on the
+   * "live" path.  Computing the delta each second gives the exact encoded bitrate
+   * — completely independent of the MJPEG preview, the admin web UI, or how many
+   * RTSP viewers are currently connected.
+   *
+   * Falls back to null (shows "—" in the UI) when MediaMTX is not running or the
+   * path is not yet active (e.g. stream just started and GStreamer hasn't published
+   * its first bytes yet).
+   *
+   * Requires the MediaMTX API to be enabled in /etc/mediamtx.yml:
+   *   api: yes   # default in MediaMTX v1.x — already on unless explicitly disabled
    */
   _startBitrateMonitoring() {
     this._stopBitrateMonitoring();
-    const fs = require("fs");
-    // Interfaces to exclude — loopback and known virtual/container types
-    const SKIP = /^(lo|docker|veth|br-|virbr)/;
-    let prevTx = null;
-    let prevTime = null;
+    const http = require("http");
+    let prevBytes = null;
+    let prevTime  = null;
 
     const poll = () => {
-      try {
-        const lines = fs.readFileSync("/proc/net/dev", "utf8").split("\n");
-        let totalTx = 0;
-        for (const line of lines) {
-          const t = line.trim();
-          if (!t || t.startsWith("Inter") || t.startsWith("face")) continue;
-          const parts = t.split(/\s+/);
-          const iface = parts[0].replace(":", "");
-          if (SKIP.test(iface)) continue;
-          // /proc/net/dev columns: iface rx_bytes rx_pkts ... tx_bytes (col 9)
-          totalTx += parseInt(parts[9], 10) || 0;
+      const req = http.get(
+        { hostname: "127.0.0.1", port: 9997, path: "/v3/paths/get/live", timeout: 2000 },
+        (res) => {
+          let body = "";
+          res.on("data", (d) => { body += d; });
+          res.on("end", () => {
+            try {
+              const data = JSON.parse(body);
+              // bytesReceived is a uint64 (number in JS); guard against resets
+              const bytes = typeof data.bytesReceived === "number" ? data.bytesReceived : null;
+              if (bytes === null) return;
+              const now = Date.now();
+              if (prevBytes !== null && bytes >= prevBytes) {
+                const elapsed = (now - prevTime) / 1000;
+                const mbps = (bytes - prevBytes) * 8 / elapsed / 1_000_000;
+                this.emit("bitrate", parseFloat(mbps.toFixed(2)));
+              }
+              prevBytes = bytes;
+              prevTime  = now;
+            } catch (_) {
+              // JSON parse error — skip tick
+            }
+          });
         }
-
-        const now = Date.now();
-        if (prevTx !== null) {
-          const elapsed = (now - prevTime) / 1000;
-          const mbps = Math.max(0, ((totalTx - prevTx) * 8) / elapsed / 1_000_000);
-          this.emit("bitrate", parseFloat(mbps.toFixed(2)));
-        }
-        prevTx = totalTx;
-        prevTime = now;
-      } catch (_) {
-        // /proc/net/dev not available — skip silently
-      }
+      );
+      req.on("error",   () => {}); // ECONNREFUSED etc. — MediaMTX not running
+      req.on("timeout", () => req.destroy());
     };
 
-    poll(); // prime prevTx/prevTime without emitting
+    poll(); // first tick: primes prevBytes/prevTime, no emit yet
     this._bitrateInterval = setInterval(poll, 1000);
   }
 
