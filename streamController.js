@@ -53,6 +53,7 @@ class StreamController extends EventEmitter {
     this.gstProcess = null;
     this.ffmpegProcess = null; // Separate ffmpeg process for SRT+audio hybrid
     this.isStreaming = false;
+    this._fpsInterval = null;
     this.configFile = path.join(__dirname, "stream-config.json");
 
     // Default configuration
@@ -306,6 +307,7 @@ class StreamController extends EventEmitter {
         console.log(`GStreamer process exited with code ${code}`);
         this.isStreaming = false;
         this.gstProcess = null;
+        this._stopFpsMonitoring();
 
         // When GStreamer exits its stdout pipe closes, which causes ffmpeg to see EOF
         // on stdin and exit naturally. Kill explicitly in case it hangs.
@@ -523,6 +525,7 @@ class StreamController extends EventEmitter {
 
       this.isStreaming = true;
       this.emit("started");
+      this._startFpsMonitoring();
 
       // Enable auto-start and save config
       this.streamConfig.autoStart = true;
@@ -559,6 +562,7 @@ class StreamController extends EventEmitter {
       }
 
       this.isStreaming = false;
+      this._stopFpsMonitoring();
 
       // Wait for process to fully exit and release the camera device
       // V4L2 devices need time to be released by the kernel after the process exits
@@ -1425,6 +1429,41 @@ class StreamController extends EventEmitter {
       magenta: "0xFFFF00FF",
     };
     return colors[colorName.toLowerCase()] || colors.white;
+  }
+
+  /**
+   * Start polling v4l2-ctl for the actual negotiated camera frame rate and
+   * emitting "fps" events so callers can forward them to connected clients.
+   * Safe to call while GStreamer holds the V4L2 device open (VIDIOC_G_PARM
+   * is a read-only ioctl that does not interfere with streaming).
+   */
+  _startFpsMonitoring() {
+    this._stopFpsMonitoring(); // clear any leftover interval first
+    const poll = async () => {
+      try {
+        const { stdout } = await execAsync(
+          `v4l2-ctl -d ${this.cameraDevice} --get-parm`
+        );
+        // Example line: "  Frames per second: 30.000 (30/1)"
+        const m = stdout.match(/Frames per second:\s+[\d.]+\s+\((\d+)\/(\d+)\)/);
+        if (m) {
+          const fps = Math.round(parseInt(m[1], 10) / parseInt(m[2], 10));
+          this.emit("fps", fps);
+        }
+      } catch (_) {
+        // Device busy or not available — skip this tick silently
+      }
+    };
+    poll(); // immediate first reading
+    this._fpsInterval = setInterval(poll, 5000);
+  }
+
+  _stopFpsMonitoring() {
+    if (this._fpsInterval) {
+      clearInterval(this._fpsInterval);
+      this._fpsInterval = null;
+    }
+    this.emit("fps", null); // signal "no data" to clients
   }
 
   /**

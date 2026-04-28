@@ -1200,6 +1200,16 @@ function switchToMJPEGPreview(onLoaded) {
 // Canvas overlay removed - preview now shows actual stream output via tee
 // Overlay settings still work, they just apply to the GStreamer pipeline
 const videoStream = document.getElementById("videoStream");
+
+// ── Outgoing stream FPS display ───────────────────────────────────────────
+// Updated by the server polling v4l2-ctl --get-parm every 5 s while streaming.
+// Shows "—" when the stream is stopped.
+const outgoingFpsEl = document.getElementById("outgoingFps");
+socket.on("streamFps", ({ fps }) => {
+  if (outgoingFpsEl) {
+    outgoingFpsEl.textContent = fps !== null ? fps + " fps" : "—";
+  }
+});
 // const overlayCanvas = document.getElementById("overlayCanvas");
 // const ctx = overlayCanvas.getContext("2d");
 

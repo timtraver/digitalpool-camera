@@ -1473,15 +1473,15 @@ footer {
     align-items: stretch;
   }
 
-  /* Larger range slider thumbs for touch accuracy */
-  .control-item input[type="range"] { height: 6px; }
+  /* Touch-friendly range slider thumbs — smaller than before to avoid crowding */
+  .control-item input[type="range"] { height: 5px; }
   .control-item input[type="range"]::-webkit-slider-thumb {
-    width: 22px;
-    height: 22px;
+    width: 18px;
+    height: 18px;
   }
   .control-item input[type="range"]::-moz-range-thumb {
-    width: 22px;
-    height: 22px;
+    width: 18px;
+    height: 18px;
   }
 
   /* Stream buttons: tall enough to tap comfortably */

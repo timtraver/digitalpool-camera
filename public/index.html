@@ -43,6 +43,12 @@
               📡 Live Stream Preview
             </div>
           </div>
+          <!-- Outgoing stream FPS bar — below the video, right-aligned -->
+          <div style="display:flex; justify-content:flex-end; padding:4px 2px 0;">
+            <span style="font-size:11px; color:rgba(255,255,255,0.5); font-family:monospace;">
+              Outgoing Stream FPS: <span id="outgoingFps" style="color:#12c7ff; font-weight:600;">—</span>
+            </span>
+          </div>
         </div>
 
         <!-- Control Panel Section -->
@@ -112,7 +118,7 @@
             </div>
 
             <div class="control-item">
-              <label for="exposureAbsolute">Exposure Time</label>
+              <label for="exposureAbsolute">Exposure Time <small style="opacity:0.6">(×100µs — 167=60fps, 333=30fps, 2500=4fps)</small></label>
               <input
                 type="range"
                 id="exposureAbsolute"

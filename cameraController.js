@@ -73,7 +73,7 @@ class CameraController {
       exposure_time_absolute: {
         id: "0x009a0902",
         min: 1,
-        max: 2500,
+        max: 2500,  // units = 100 µs; 167=60fps ceiling, 333=30fps ceiling, 2500=4fps (camera drops framerate for longer exposures)
         step: 1,
         default: 330,
       },
