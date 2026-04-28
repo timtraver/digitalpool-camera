@@ -159,6 +159,7 @@ streamController.on("stopped", (code) => {
   if (isRestartInProgress) return;
   const status = streamController.getStatus();
   io.emit("streamStatus", { ...status, status: "stopped", code });
+  io.emit("streamDrift",  { ppm: null }); // clear drift display
 });
 
 streamController.on("error", (error) => {
@@ -176,6 +177,41 @@ streamController.on("fps", (fps) => {
 streamController.on("bitrate", (mbps) => {
   io.emit("streamBitrate", { mbps }); // mbps is null when stream stops
 });
+
+streamController.on("drift", (ppm) => {
+  io.emit("streamDrift", { ppm });
+});
+
+// ── CPU load broadcasting ─────────────────────────────────────────────────────
+// Reads /proc/stat every 2 seconds and broadcasts the CPU usage percentage
+// to all connected clients via socket.
+let _prevCpuIdle = null;
+let _prevCpuTotal = null;
+
+function readCpuPercent() {
+  try {
+    const stat = fsSync.readFileSync("/proc/stat", "utf8");
+    const vals = stat.split("\n")[0].split(/\s+/).slice(1).map(Number);
+    // Fields: user nice system idle iowait irq softirq steal guest guest_nice
+    const idle  = vals[3] + (vals[4] || 0); // idle + iowait
+    const total = vals.reduce((a, b) => a + b, 0);
+    if (_prevCpuIdle !== null) {
+      const idleDelta  = idle  - _prevCpuIdle;
+      const totalDelta = total - _prevCpuTotal;
+      _prevCpuIdle  = idle;
+      _prevCpuTotal = total;
+      return totalDelta > 0 ? Math.round((1 - idleDelta / totalDelta) * 100) : 0;
+    }
+    _prevCpuIdle  = idle;
+    _prevCpuTotal = total;
+    return null; // first read — no delta yet
+  } catch (_) { return null; }
+}
+
+setInterval(() => {
+  const percent = readCpuPercent();
+  if (percent !== null) io.emit("cpuLoad", { percent });
+}, 2000);
 
 // ── Captive portal detection ──────────────────────────────────────────────
 // When a device connects to the DigitalPool-Camera hotspot it has no

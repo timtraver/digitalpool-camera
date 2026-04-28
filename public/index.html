@@ -43,10 +43,16 @@
               📡 Live Stream Preview
             </div>
           </div>
-          <!-- Stats bar: FPS left, bitrate right -->
-          <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 2px 0;">
+          <!-- Stats bar: FPS | CPU | Drift | Bitrate -->
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 2px 0; flex-wrap:wrap; gap:2px 0;">
             <span style="font-size:11px; color:rgba(255,255,255,0.5); font-family:monospace;">
-              Outgoing Stream FPS: <span id="outgoingFps" style="color:#12c7ff; font-weight:600;">—</span>
+              FPS: <span id="outgoingFps" style="color:#12c7ff; font-weight:600;">—</span>
+            </span>
+            <span style="font-size:11px; color:rgba(255,255,255,0.5); font-family:monospace;">
+              CPU: <span id="cpuLoad" style="color:#12c7ff; font-weight:600;">—</span>
+            </span>
+            <span style="font-size:11px; color:rgba(255,255,255,0.5); font-family:monospace;">
+              Drift: <span id="streamDrift" style="color:#12c7ff; font-weight:600;">—</span>
             </span>
             <span style="font-size:11px; color:rgba(255,255,255,0.5); font-family:monospace;">
               Total Out: <span id="bitrateValue" style="color:#12c7ff; font-weight:600;">—</span> Mbps

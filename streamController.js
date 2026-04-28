@@ -288,6 +288,13 @@ class StreamController extends EventEmitter {
 
         console.error(`GStreamer stderr: ${message}`);
 
+        // Parse drift check line and emit ppm value for the UI.
+        // Example: "🕒 Drift check — GStreamer: 59.800s  Wall: 60.056s  Δ: -0.256s  (-4265.3 ppm)"
+        const driftMatch = message.match(/\((-?[\d.]+)\s*ppm\)/);
+        if (driftMatch) {
+          this.emit("drift", parseFloat(driftMatch[1]));
+        }
+
         // Only emit as error if it's an actual error (contains ERROR, WARNING, or CRITICAL)
         // Ignore informational messages like NVMEDIA, NvMMLite, H264 profile info
         if (

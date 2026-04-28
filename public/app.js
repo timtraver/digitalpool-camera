@@ -1212,6 +1212,35 @@ socket.on("streamFps", ({ fps }) => {
   }
 });
 
+// ── CPU load display ──────────────────────────────────────────────────────
+// Broadcast every 2 s from /proc/stat on the server. Colour-coded by load.
+const cpuLoadEl = document.getElementById("cpuLoad");
+socket.on("cpuLoad", ({ percent }) => {
+  if (!cpuLoadEl) return;
+  cpuLoadEl.textContent = percent + "%";
+  cpuLoadEl.style.color = percent > 80 ? "#f87171"   // red   — high load
+                        : percent > 50 ? "#fbbf24"   // amber — moderate
+                        :                "#12c7ff";  // blue  — normal
+});
+
+// ── GStreamer drift display ───────────────────────────────────────────────
+// Emitted every ~60 s from the GStreamer drift check. Colour-coded by magnitude.
+// Positive ppm = GStreamer clock running fast; negative = running slow.
+const streamDriftEl = document.getElementById("streamDrift");
+socket.on("streamDrift", ({ ppm }) => {
+  if (!streamDriftEl) return;
+  if (ppm === null) {
+    streamDriftEl.textContent = "—";
+    streamDriftEl.style.color = "#12c7ff";
+    return;
+  }
+  const abs = Math.abs(ppm);
+  streamDriftEl.textContent = (ppm >= 0 ? "+" : "") + Math.round(ppm) + " ppm";
+  streamDriftEl.style.color = abs > 5000 ? "#f87171"   // red   — significant drift
+                            : abs > 1000 ? "#fbbf24"   // amber — mild drift
+                            :              "#4ade80";  // green — negligible
+});
+
 // ── Live TX bitrate sparkline ─────────────────────────────────────────────
 // Receives "streamBitrate" events from the server (1 Hz, Mbps).
 // Draws a scrolling filled-area chart on a canvas below the video.
