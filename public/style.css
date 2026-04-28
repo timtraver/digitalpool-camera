@@ -182,6 +182,7 @@ header h1 {
   position: relative;
   width: 160px;
   height: 160px;
+  flex: 0 0 160px; /* never let flex shrink the d-pad — outer buttons clip if it does */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -390,9 +391,54 @@ header h1 {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-width: 140px;
-  align-items: center;
+  flex: 1;           /* fill remaining space in control-grid */
+  align-items: stretch;
   justify-content: center;
+}
+
+/* Zoom control — label + value on one row, slider spans full width below */
+.ptz-zoom-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.ptz-zoom-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.ptz-zoom-control input[type="range"] {
+  width: 100%;
+  height: 4px;
+  border-radius: 5px;
+  background: rgba(18, 199, 255, 0.2);
+  outline: none;
+  -webkit-appearance: none;
+}
+
+.ptz-zoom-control input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #1890ff;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.ptz-zoom-control input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #1890ff;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
 }
 
 .control-item-compact {
@@ -1346,8 +1392,8 @@ footer {
   }
 
   .main-content {
-    /* Control panel is a fixed 340px; video section takes all remaining space */
-    grid-template-columns: minmax(0, 1fr) 340px;
+    /* Control panel is a fixed 380px; video section takes all remaining space */
+    grid-template-columns: minmax(0, 1fr) 380px;
     gap: 15px;
     padding: 15px;
   }

@@ -276,16 +276,16 @@ socket.on("startupPositionSet", (data) => {
   if (data.success) {
     const pos = data.position;
     if (startupPosInfo) {
-      startupPosInfo.textContent = `Startup: pan=${pos.pan_absolute}, tilt=${pos.tilt_absolute}, zoom=${pos.zoom_absolute}`;
+      startupPosInfo.textContent = `Home: pan=${pos.pan_absolute}, tilt=${pos.tilt_absolute}, zoom=${pos.zoom_absolute}`;
     }
-    console.log("📌 Startup position saved:", pos);
+    console.log("📌 Home position saved:", pos);
   }
 });
 
 socket.on("startupPosition", (data) => {
   if (data.position && startupPosInfo) {
     const pos = data.position;
-    startupPosInfo.textContent = `Startup: pan=${pos.pan_absolute}, tilt=${pos.tilt_absolute}, zoom=${pos.zoom_absolute}`;
+    startupPosInfo.textContent = `Home: pan=${pos.pan_absolute}, tilt=${pos.tilt_absolute}, zoom=${pos.zoom_absolute}`;
   }
 });
 
