@@ -439,20 +439,16 @@ class CameraController {
       }
 
       const command = `sudo v4l2-ctl -d ${this.device} --set-ctrl=${controlName}=${value}`;
-      // console.log(`    🔧 Executing: ${command}`);
+      console.log(`    🔧 Executing: ${command}`);
 
       const { stdout, stderr } = await execAsync(command);
 
-      // Check for errors in stderr
+      // Check for errors in stderr — v4l2-ctl may write warnings/errors without
+      // using a non-zero exit code (e.g. "unable to set", "VIDIOC_S_CTRL: busy").
       if (stderr && stderr.trim().length > 0) {
         console.log(`    ⚠️  stderr: ${stderr}`);
-        // Some v4l2-ctl errors go to stderr but don't throw
-        if (
-          stderr.toLowerCase().includes("error") ||
-          stderr.toLowerCase().includes("failed")
-        ) {
-          throw new Error(stderr);
-        }
+        // Treat any non-empty stderr as an error
+        throw new Error(stderr.trim());
       }
 
       if (stdout && stdout.trim().length > 0) {

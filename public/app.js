@@ -168,9 +168,31 @@ socket.on("disconnect", () => {
 socket.on("controlResult", (result) => {
   console.log("Control result:", result);
   if (!result.success) {
-    console.error("Control error:", result.error);
+    console.error(`❌ Control error [${result.control}]:`, result.error);
+    // Show a brief visible error so failures aren't silent
+    showControlError(result.control, result.error);
   }
 });
+
+function showControlError(control, message) {
+  let toast = document.getElementById("controlErrorToast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "controlErrorToast";
+    toast.style.cssText =
+      "position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);" +
+      "background:#b91c1c;color:#fff;padding:0.5rem 1.2rem;border-radius:6px;" +
+      "font-size:0.85rem;z-index:9999;max-width:90vw;text-align:center;" +
+      "box-shadow:0 2px 8px rgba(0,0,0,0.4);";
+    document.body.appendChild(toast);
+  }
+  toast.textContent = `⚠️ ${control}: ${message || "command failed"}`;
+  toast.style.display = "block";
+  clearTimeout(toast._hideTimer);
+  toast._hideTimer = setTimeout(() => {
+    toast.style.display = "none";
+  }, 4000);
+}
 
 // Handle camera configuration from server
 socket.on("cameraConfig", (data) => {
