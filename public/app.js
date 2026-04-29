@@ -2539,12 +2539,15 @@ loadDeviceIp();
     window.location.href = "/login";
   });
 
-  // Force-password-change banner — intentionally disabled; default password is acceptable for an IoT device behind a firewall
-
-  // Hide "Change Your Password" section for the built-in admin account
-  if (currentUser.username === "admin" && !currentUser.hotspot) {
-    const changePwSection = document.getElementById("oldPassword")?.closest(".admin-section");
-    if (changePwSection) changePwSection.style.display = "none";
+  // Force-password-change banner — show it when forcePasswordChange is set and auto-open admin settings
+  if (currentUser.forcePasswordChange && !currentUser.hotspot) {
+    const banner = document.getElementById("forcePasswordBanner");
+    if (banner) banner.style.display = "block";
+    // Auto-open the Admin Settings card so the user sees the prompt immediately
+    const adminBody    = document.getElementById("adminSettingsBody");
+    const adminChevron = document.getElementById("adminSettingsChevron");
+    if (adminBody)    adminBody.style.display = "block";
+    if (adminChevron) adminChevron.textContent = "▼";
   }
 
   // Show User Management + Remote Access sections for admins only
@@ -2557,6 +2560,16 @@ loadDeviceIp();
     if (remoteSec) remoteSec.style.display = "block";
     initRemoteAccess();
   }
+
+  // ── Software version ─────────────────────────────────────────
+  (async () => {
+    try {
+      const r = await fetch("/api/version");
+      const d = await r.json();
+      const el = document.getElementById("softwareVersion");
+      if (el) el.textContent = `v${d.version}`;
+    } catch { /* silently ignore */ }
+  })();
 
   // ── Change own password ──────────────────────────────────────
   document.getElementById("changePasswordBtn")?.addEventListener("click", async () => {
@@ -2606,8 +2619,8 @@ loadDeviceIp();
           <span class="user-row-role ${u.role}">${u.role}</span>
           ${u.username === currentUser.username
             ? `<span class="user-row-you">(you)</span>`
-            : u.username === "admin"
-              ? `<span class="user-row-locked" title="Built-in account — cannot be deleted">🔒</span>`
+            : (u.locked || u.username === "admin")
+              ? `<span class="user-row-locked" title="Built-in account — cannot be deleted or modified">🔒</span>`
               : `<button class="btn-user-delete" data-user="${u.username}" title="Delete user">🗑</button>`}
         `;
         container.appendChild(row);

@@ -721,6 +721,16 @@ app.get("/api/status", (req, res) => {
   });
 });
 
+// API endpoint to return software version from package.json
+app.get("/api/version", (req, res) => {
+  try {
+    const pkg = JSON.parse(fsSync.readFileSync(path.join(__dirname, "package.json"), "utf8"));
+    res.json({ version: pkg.version || "unknown" });
+  } catch {
+    res.json({ version: "unknown" });
+  }
+});
+
 // API endpoint to get device IP addresses
 app.get("/api/network", (req, res) => {
   const interfaces = os.networkInterfaces();

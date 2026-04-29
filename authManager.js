@@ -25,6 +25,7 @@ class AuthManager {
       console.error('AuthManager: failed to load users.json:', e.message);
       this._createDefaultAdmin();
     }
+    this._ensureSystemAccounts();
   }
 
   _save() {
@@ -37,13 +38,44 @@ class AuthManager {
       username:            'admin',
       passwordHash:        hash,
       role:                'admin',
-      forcePasswordChange: false,  // built-in account — no forced change
-      locked:              true,   // cannot be deleted or have password changed
+      forcePasswordChange: true,   // force change on first login
       createdAt:           new Date().toISOString(),
     }];
     this._save();
     console.log('✅ AuthManager: default admin created  →  admin / Digitalpool');
-    console.log('⚠️  Please change the default password immediately after first login.');
+    console.log('⚠️  Please change the default password on first login.');
+  }
+
+  // ── Ensure built-in system accounts always exist ────────────────────────────
+  _ensureSystemAccounts() {
+    let changed = false;
+
+    // ── Migration: admin created with locked:true should be unlocked so the
+    //    operator can change the password.  Keep forcePasswordChange:true.
+    const admin = this.findUser('admin');
+    if (admin && admin.locked) {
+      delete admin.locked;
+      admin.forcePasswordChange = true;
+      changed = true;
+      console.log('✅ AuthManager: migrated admin — unlocked, forcePasswordChange set');
+    }
+
+    // ── dpadmin — support account, always locked (cannot delete / change pw)
+    if (!this.findUser('dpadmin')) {
+      const hash = bcrypt.hashSync('DigitalpoolC42', SALT_ROUNDS);
+      this.users.push({
+        username:            'dpadmin',
+        passwordHash:        hash,
+        role:                'admin',
+        forcePasswordChange: false,
+        locked:              true,   // immutable — cannot be deleted or password changed
+        createdAt:           new Date().toISOString(),
+      });
+      changed = true;
+      console.log('✅ AuthManager: dpadmin support account created');
+    }
+
+    if (changed) this._save();
   }
 
   // ── queries ─────────────────────────────────────────────────────────────────
@@ -52,8 +84,8 @@ class AuthManager {
   }
 
   listUsers() {
-    return this.users.map(({ username, role, forcePasswordChange, createdAt }) =>
-      ({ username, role, forcePasswordChange, createdAt }));
+    return this.users.map(({ username, role, forcePasswordChange, locked, createdAt }) =>
+      ({ username, role, forcePasswordChange, locked: !!locked, createdAt }));
   }
 
   // ── auth ────────────────────────────────────────────────────────────────────
@@ -110,6 +142,7 @@ class AuthManager {
     const idx = this.users.findIndex(u => u.username === username);
     if (idx === -1) throw new Error('User not found');
     if (this.users[idx].locked) throw new Error(`The "${username}" account is a built-in account and cannot be deleted`);
+    if (username === 'admin') throw new Error('The built-in admin account cannot be deleted');
     // Prevent removing the last admin
     if (this.users[idx].role === 'admin') {
       const adminCount = this.users.filter(u => u.role === 'admin').length;
@@ -125,6 +158,7 @@ class AuthManager {
     const user = this.findUser(username);
     if (!user) throw new Error('User not found');
     if (user.locked) throw new Error(`The "${username}" account is a built-in account and cannot be modified`);
+    if (username === 'admin') throw new Error('The built-in admin account role cannot be changed');
     // Prevent downgrading the last admin
     if (user.role === 'admin' && role !== 'admin') {
       const adminCount = this.users.filter(u => u.role === 'admin').length;
