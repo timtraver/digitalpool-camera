@@ -2668,6 +2668,7 @@ loadDeviceIp();
         showMsg(msg, `✅ User "${d.user.username}" added`);
         document.getElementById("newUserUsername").value = "";
         document.getElementById("newUserPassword").value = "";
+        document.getElementById("addUserDetails")?.removeAttribute("open");
         loadUserList();
       } else {
         showMsg(msg, `❌ ${d.error}`, true);
