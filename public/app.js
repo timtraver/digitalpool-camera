@@ -2571,6 +2571,14 @@ loadDeviceIp();
     } catch { /* silently ignore */ }
   })();
 
+  // ── helper: show a temporary status message ─────────────────
+  function showMsg(el, text, isError = false) {
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = isError ? "#f87171" : "#4ade80";
+    setTimeout(() => { el.textContent = ""; }, 5000);
+  }
+
   // ── Change own password ──────────────────────────────────────
   document.getElementById("changePasswordBtn")?.addEventListener("click", async () => {
     const msg     = document.getElementById("changePasswordMsg");
