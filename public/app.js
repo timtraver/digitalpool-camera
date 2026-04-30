@@ -1042,20 +1042,28 @@ let hlsPlayer = null;
 
 // Pending preview-switch timeout handles — only one of each should ever be queued
 // at a time, so we cancel any stale timer before scheduling a new one.
-let _tcpPreviewTimeout = null;
+let _tcpPreviewTimeout  = null;
 let _mjpegPreviewTimeout = null;
 
+// Snapshot polling state
+let _snapshotPollActive = false;
+let _snapshotBlobUrl    = null;
+
 /**
- * Mark the current preview img element as cancelled so its internal onerror
- * retry loop stops opening new connections, then clear its src.
+ * Stop snapshot polling and cancel any in-flight preview img/video elements.
  * Call this before any operation that will replace or restart the stream.
  */
 function cancelCurrentPreviewImg() {
+  // Stop snapshot polling immediately
+  _snapshotPollActive = false;
+  if (_snapshotBlobUrl) { URL.revokeObjectURL(_snapshotBlobUrl); _snapshotBlobUrl = null; }
+
   for (const id of ["videoStream", "videoStreamNew"]) {
     const el = document.getElementById(id);
     if (el) {
       el._cancelled = true;
-      el.src = "";
+      if (el.tagName === "VIDEO") { el.pause(); el.src = ""; }
+      else el.src = "";
       el.remove();
     }
   }
@@ -1069,6 +1077,7 @@ function switchToHLSPreview() {
   console.log("🔄 Switching to HLS live preview...");
   const container = document.querySelector(".video-container");
 
+  _snapshotPollActive = false; // stop idle snapshot polling
   cancelCurrentPreviewImg();
   if (hlsPlayer) { hlsPlayer.destroy(); hlsPlayer = null; }
 
@@ -1105,6 +1114,19 @@ function switchToHLSPreview() {
     clearTimeout(fallbackTimer);
     video.play().catch(() => {});
     console.log("✅ HLS live preview playing");
+
+    // On slow connections the player drifts behind the live edge.
+    // Every 3 s check; if we're more than 5 s behind, snap back to live.
+    const liveEdgeInterval = setInterval(() => {
+      if (!hlsPlayer) { clearInterval(liveEdgeInterval); return; }
+      const target = hlsPlayer.liveSyncPosition;
+      if (target != null && video.currentTime < target - 5) {
+        console.log(`🔄 Snapping to live edge (${(target - video.currentTime).toFixed(1)}s behind)`);
+        video.currentTime = target;
+      }
+    }, 3000);
+    // Attach so the error handler can clear it
+    video._liveEdgeInterval = liveEdgeInterval;
   }
 
   if (typeof Hls !== "undefined" && Hls.isSupported()) {
@@ -1122,6 +1144,7 @@ function switchToHLSPreview() {
       if (data.fatal) {
         console.error("❌ HLS fatal error:", data.details, "— falling back to TCP MJPEG");
         clearTimeout(fallbackTimer);
+        if (video._liveEdgeInterval) clearInterval(video._liveEdgeInterval);
         hlsPlayer.destroy(); hlsPlayer = null;
         video.remove();
         _switchToTCPMJPEG(container);
@@ -1169,102 +1192,81 @@ function _switchToTCPMJPEG(container) {
   container.insertBefore(img, container.firstChild);
 }
 
+/**
+ * Idle preview using snapshot polling.
+ *
+ * Each call to /video/snapshot is a fresh, independent HTTP request that
+ * connects to the GStreamer TCP server, reads one complete JPEG, and returns
+ * it immediately. There is no server-side buffer to drain — no matter how
+ * slow the connection, every response is always the LATEST camera frame.
+ *
+ * This replaces the old continuous-MJPEG approach which caused frames to
+ * queue up in the TCP buffer on slow/remote connections, resulting in the
+ * preview being minutes behind the actual camera position.
+ */
 function switchToMJPEGPreview(onLoaded) {
-  console.log("🔄 Switching to idle MJPEG preview...");
+  console.log("🔄 Switching to snapshot preview (idle)...");
   const container = document.querySelector(".video-container");
   const oldElement = document.getElementById("videoStream");
 
-  // Tear down HLS player (stream was active, now stopped)
-  if (hlsPlayer) { hlsPlayer.destroy(); hlsPlayer = null; }
-
-  // Pause/clear any live <video> element before replacing it
-  if (oldElement && oldElement.tagName === "VIDEO") {
-    oldElement.pause();
-    oldElement.src = "";
+  // Tear down HLS player if stream just stopped
+  if (hlsPlayer) {
+    if (oldElement && oldElement._liveEdgeInterval) clearInterval(oldElement._liveEdgeInterval);
+    hlsPlayer.destroy();
+    hlsPlayer = null;
   }
 
-  // Clean up any in-flight transition elements from a previous call
-  // (prevents duplicate frames when refreshIdlePreview fires multiple times)
+  // Tear down any live <video> or stale MJPEG img
+  if (oldElement) {
+    if (oldElement.tagName === "VIDEO") { oldElement.pause(); oldElement.src = ""; }
+    else oldElement.src = "";
+    oldElement.remove();
+  }
   const staleNew = document.getElementById("videoStreamNew");
   if (staleNew) {
-    console.log("🧹 Removing stale in-flight preview element");
     if (staleNew.tagName === "VIDEO") { staleNew.pause(); staleNew.src = ""; }
-    else staleNew.src = ""; // stop MJPEG connection
+    else staleNew.src = "";
     staleNew.remove();
   }
 
-  // Create new img element for MJPEG with temporary ID
+  // Stop any previous snapshot poll before starting a new one
+  _snapshotPollActive = false;
+  if (_snapshotBlobUrl) { URL.revokeObjectURL(_snapshotBlobUrl); _snapshotBlobUrl = null; }
+
   const img = document.createElement("img");
-  img.id = "videoStreamNew";
+  img.id = "videoStream";
   img.alt = "Camera Stream";
+  img.style.cssText = "width:100%;height:100%;object-fit:contain;display:block";
+  container.insertBefore(img, container.firstChild);
 
-  // Pass overlay setting as query parameter
-  // Overlays are enabled if any individual overlay checkbox is on
-  const overlaysEnabled = overlayEnabled.checked || showTimestamp.checked || remoteOverlayEnabled.checked;
-  img.src = `/video/stream?overlays=${overlaysEnabled}&t=${Date.now()}`;
+  // Start polling
+  _snapshotPollActive = true;
+  let firstLoad = true;
 
-  // Position absolutely over the old element to prevent layout shift
-  img.style.position = "absolute";
-  img.style.top = "0";
-  img.style.left = "0";
-  img.style.width = "100%";
-  img.style.height = "100%";
-  img.style.objectFit = "contain";
-  img.style.opacity = "0";
-  img.style.transition = "opacity 0.3s ease-in-out";
-  img.style.zIndex = "1"; // Place new image above old one
-
-  // Keep old element visible during transition
-  if (oldElement) {
-    oldElement.style.zIndex = "0";
-  }
-
-  // When new stream loads, swap elements smoothly
-  img.onload = function() {
-    // Fade in new stream
-    img.style.opacity = "1";
-
-    // After fade completes, swap the elements
-    setTimeout(() => {
-      // Remove absolute positioning from new element
-      img.style.position = "";
-      img.style.top = "";
-      img.style.left = "";
-      img.style.height = "auto"; // Let it size naturally
-      img.style.zIndex = "";
-
-      // Give new element the proper ID
-      img.id = "videoStream";
-
-      // Remove old element
-      if (oldElement && oldElement.parentElement) {
-        oldElement.remove();
+  async function poll() {
+    if (!_snapshotPollActive) return;
+    try {
+      const r = await fetch(`/video/snapshot?t=${Date.now()}`);
+      if (!_snapshotPollActive) return;
+      if (r.ok) {
+        const blob = await r.blob();
+        if (!_snapshotPollActive) return;
+        const url = URL.createObjectURL(blob);
+        const old = _snapshotBlobUrl;
+        _snapshotBlobUrl = url;
+        img.src = url;
+        if (old) URL.revokeObjectURL(old);
+        if (firstLoad) {
+          firstLoad = false;
+          console.log("✅ Snapshot preview active");
+          if (typeof onLoaded === "function") onLoaded();
+        }
       }
-
-      console.log(`✅ MJPEG preview loaded (overlays: ${overlaysEnabled})`);
-      if (typeof onLoaded === "function") onLoaded();
-    }, 350);
-  };
-
-  // Handle error case - if new stream fails to load, keep old one
-  img.onerror = function() {
-    console.error("❌ Failed to load new preview, keeping old one");
-    if (img.parentElement) {
-      img.remove();
-    }
-    // Restore old element's z-index
-    if (oldElement) {
-      oldElement.style.zIndex = "";
-    }
-    if (typeof onLoaded === "function") onLoaded();
-  };
-
-  // Insert new element into container (will be positioned over old one)
-  if (oldElement) {
-    container.insertBefore(img, oldElement);
-  } else {
-    container.insertBefore(img, container.firstChild);
+    } catch { /* network error — retry next tick */ }
+    if (_snapshotPollActive) setTimeout(poll, 1000);
   }
+
+  poll();
 }
 
 // Canvas overlay removed - preview now shows actual stream output via tee

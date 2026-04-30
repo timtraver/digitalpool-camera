@@ -1507,6 +1507,67 @@ app.get("/video/test", (req, res) => {
   });
 });
 
+// ── Single-frame JPEG snapshot ────────────────────────────────────────────
+// Connects to the GStreamer TCP server, reads until one complete JPEG is found
+// (FF D8 … FF D9), then returns it and closes the connection immediately.
+// Because every request is independent there is no frame queue — the client
+// always gets the most recent frame regardless of network speed.
+app.get("/video/snapshot", requireAuth, (req, res) => {
+  const net    = require("net");
+  const port   = streamController.isStreaming ? 8555 : IDLE_PREVIEW_PORT;
+
+  let buffer    = Buffer.alloc(0);
+  let responded = false;
+  let client;
+
+  const done = (jpeg) => {
+    if (responded) return;
+    responded = true;
+    clearTimeout(timer);
+    if (client) { try { client.destroy(); } catch (_) {} }
+    if (jpeg) {
+      res.setHeader("Content-Type",  "image/jpeg");
+      res.setHeader("Cache-Control", "no-store");
+      res.send(jpeg);
+    } else {
+      res.status(503).end();
+    }
+  };
+
+  const timer = setTimeout(() => done(null), 5000);
+
+  try {
+    client = net.connect({ port, host: "127.0.0.1" });
+
+    client.on("data", (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+
+      // Find JPEG start marker FF D8 FF
+      let start = -1;
+      for (let i = 0; i <= buffer.length - 3; i++) {
+        if (buffer[i] === 0xFF && buffer[i + 1] === 0xD8 && buffer[i + 2] === 0xFF) {
+          start = i; break;
+        }
+      }
+      if (start < 0) return;
+
+      // Find JPEG end marker FF D9 after the start
+      for (let i = start + 2; i < buffer.length - 1; i++) {
+        if (buffer[i] === 0xFF && buffer[i + 1] === 0xD9) {
+          done(buffer.slice(start, i + 2));
+          return;
+        }
+      }
+    });
+
+    client.on("error", () => done(null));
+    client.on("close",  () => { if (!responded) done(null); });
+    req.on("close",     () => { responded = true; clearTimeout(timer); if (client) client.destroy(); });
+  } catch (e) {
+    done(null);
+  }
+});
+
 // ── MediaMTX HLS proxy (live stream preview) ──────────────────────────────
 // Proxies MediaMTX's HLS output through the authenticated Express server so
 // the browser can fetch the live stream via port 3000.
