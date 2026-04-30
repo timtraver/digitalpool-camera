@@ -645,17 +645,19 @@
 
             <!-- Change own password -->
             <div class="admin-section">
-              <h4 class="admin-section-title">🔑 Change Your Password</h4>
-              <div class="wifi-form">
-                <label>Current Password</label>
-                <input type="password" id="oldPassword" placeholder="Current password" autocomplete="current-password" />
-                <label>New Password <small>(8+ chars)</small></label>
-                <input type="password" id="newPassword" placeholder="New password" autocomplete="new-password" />
-                <label>Confirm New Password</label>
-                <input type="password" id="confirmPassword" placeholder="Confirm new password" autocomplete="new-password" />
-                <button class="btn-wifi-action" id="changePasswordBtn">🔑 Update Password</button>
-                <div class="wifi-msg" id="changePasswordMsg"></div>
-              </div>
+              <details id="changePasswordDetails" class="wifi-edit-details">
+                <summary>🔑 Change Your Password</summary>
+                <div class="wifi-form">
+                  <label>Current Password</label>
+                  <input type="password" id="oldPassword" placeholder="Current password" autocomplete="current-password" />
+                  <label>New Password <small>(8+ chars)</small></label>
+                  <input type="password" id="newPassword" placeholder="New password" autocomplete="new-password" />
+                  <label>Confirm New Password</label>
+                  <input type="password" id="confirmPassword" placeholder="Confirm new password" autocomplete="new-password" />
+                  <button class="btn-wifi-action" id="changePasswordBtn">🔑 Update Password</button>
+                  <div class="wifi-msg" id="changePasswordMsg"></div>
+                </div>
+              </details>
             </div>
 
             <!-- User management (admin role only) -->

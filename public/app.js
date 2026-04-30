@@ -2543,11 +2543,12 @@ loadDeviceIp();
   if (currentUser.forcePasswordChange && !currentUser.hotspot) {
     const banner = document.getElementById("forcePasswordBanner");
     if (banner) banner.style.display = "block";
-    // Auto-open the Admin Settings card so the user sees the prompt immediately
+    // Auto-open the Admin Settings card and the Change Password section
     const adminBody    = document.getElementById("adminSettingsBody");
     const adminChevron = document.getElementById("adminSettingsChevron");
     if (adminBody)    adminBody.style.display = "block";
     if (adminChevron) adminChevron.textContent = "▼";
+    document.getElementById("changePasswordDetails")?.setAttribute("open", "");
   }
 
   // Show User Management + Remote Access sections for admins only
@@ -2601,6 +2602,7 @@ loadDeviceIp();
         document.getElementById("oldPassword").value     = "";
         document.getElementById("newPassword").value     = "";
         document.getElementById("confirmPassword").value = "";
+        document.getElementById("changePasswordDetails")?.removeAttribute("open");
         const banner = document.getElementById("forcePasswordBanner");
         if (banner) banner.style.display = "none";
       } else {
