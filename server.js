@@ -1160,9 +1160,39 @@ app.get("/api/camera/config", (req, res) => {
   res.json({ success: true, config: camera.config });
 });
 
-// Active camera source — updated at runtime via /api/camera/source
-// Starts from the env/default USB device; can be switched to RTSP without restart.
-let activeCameraSource = { type: "usb", device: CAMERA_DEVICE, rtspUrl: "" };
+// ── Camera source persistence ─────────────────────────────────────────────────
+// The active input source (USB device path or RTSP URL) survives restarts via
+// camera-source.json — same pattern as remote.json, ethernet-config.json, etc.
+const CAMERA_SOURCE_FILE = path.join(__dirname, "camera-source.json");
+
+function loadCameraSource() {
+  try {
+    if (fsSync.existsSync(CAMERA_SOURCE_FILE)) {
+      const saved = JSON.parse(fsSync.readFileSync(CAMERA_SOURCE_FILE, "utf8"));
+      // Validate minimal shape before trusting it
+      if (saved && (saved.type === "usb" || saved.type === "rtsp")) {
+        console.log(`📷 Loaded camera source from file: ${saved.type}${saved.type === "rtsp" ? " → " + saved.rtspUrl : " → " + saved.device}`);
+        return saved;
+      }
+    }
+  } catch (e) {
+    console.warn("⚠️  Could not load camera-source.json:", e.message);
+  }
+  return null;
+}
+
+function saveCameraSource(source) {
+  try {
+    fsSync.writeFileSync(CAMERA_SOURCE_FILE, JSON.stringify(source, null, 2));
+  } catch (e) {
+    console.error("❌ Could not save camera-source.json:", e.message);
+  }
+}
+
+// Active camera source — updated at runtime via /api/camera/source.
+// Initialised from disk so the chosen source survives restarts.
+const _savedSource = loadCameraSource();
+let activeCameraSource = _savedSource || { type: "usb", device: CAMERA_DEVICE, rtspUrl: "" };
 
 // List available V4L2 video capture devices
 app.get("/api/camera/devices", requireAuth, (req, res) => {
@@ -1258,6 +1288,9 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
 
     io.emit("refreshIdlePreview");
   }
+
+  // Persist so the chosen source survives a service restart
+  saveCameraSource(activeCameraSource);
 
   res.json({ success: true, source: activeCameraSource });
 });
@@ -2600,6 +2633,17 @@ server.listen(PORT, async () => {
     console.log("✅ Camera resources cleaned up");
   } catch (error) {
     console.log("⚠️  Error during cleanup:", error.message);
+  }
+
+  // Restore the camera source that was active before the last restart.
+  // This must happen before startPersistentIdlePreview() so that
+  // buildIdlePreviewGstArgs() uses the correct source (RTSP or USB).
+  if (_savedSource) {
+    console.log(`📷 Restoring camera source: ${_savedSource.type}${_savedSource.type === "rtsp" ? " → " + _savedSource.rtspUrl : " → " + _savedSource.device}`);
+    streamController.setInputSource(activeCameraSource);
+    if (activeCameraSource.type === "usb" && activeCameraSource.device) {
+      camera.device = activeCameraSource.device;
+    }
   }
 
   // Initialize stream controller (auto-start if configured)
