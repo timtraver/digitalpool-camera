@@ -1602,7 +1602,8 @@ footer {
   padding: 5px 12px;
   white-space: nowrap;
 }
-.btn-apply-small:hover { background: rgba(18, 199, 255, 0.28); }
+.btn-apply-small:hover:not(:disabled) { background: rgba(18, 199, 255, 0.28); }
+.btn-apply-small:disabled { opacity: 0.35; cursor: default; }
 
 /* ── Admin Settings sections ───────────────────────────────────────────────── */
 .admin-section {

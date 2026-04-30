@@ -578,6 +578,21 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
 
   if (!sourceTypeEl) return;
 
+  // Tracks what the server considers the active source so we can dim the button
+  // when the UI selection already matches it.
+  let activeSource = { type: "usb", device: "", rtspUrl: "" };
+
+  function updateApplyButton() {
+    if (!applyBtn) return;
+    const type = sourceTypeEl.value;
+    let matches = type === activeSource.type;
+    if (matches) {
+      if (type === "usb")  matches = (deviceSelect?.value || "") === activeSource.device;
+      if (type === "rtsp") matches = (rtspUrlEl?.value.trim() || "") === (activeSource.rtspUrl || "");
+    }
+    applyBtn.disabled = matches;
+  }
+
   async function loadDevices() {
     if (deviceSelect) deviceSelect.innerHTML = "<option>Scanning…</option>";
     try {
@@ -599,9 +614,10 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
         opt.textContent = `${name} (${device})`;
         deviceSelect.appendChild(opt);
       });
-      // Pre-select the current active device
+      // Pre-select the current active device and record it as activeSource
       if (data.current?.type === "usb" && data.current.device) {
         deviceSelect.value = data.current.device;
+        activeSource = { type: "usb", device: data.current.device, rtspUrl: "" };
       }
       // Pre-fill RTSP URL if currently active
       if (data.current?.type === "rtsp" && rtspUrlEl) {
@@ -609,10 +625,12 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
         sourceTypeEl.value = "rtsp";
         usbSection.style.display  = "none";
         rtspSection.style.display = "";
+        activeSource = { type: "rtsp", device: "", rtspUrl: data.current.rtspUrl || "" };
       }
     } catch (e) {
       if (deviceSelect) deviceSelect.innerHTML = "<option value=''>Error loading devices</option>";
     }
+    updateApplyButton();
   }
 
   // Toggle USB / RTSP panels on source type change, and update audio device row.
@@ -621,7 +639,11 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
     usbSection.style.display  = isRtsp ? "none" : "";
     rtspSection.style.display = isRtsp ? "" : "none";
     updateAudioDeviceRowVisibility();
+    updateApplyButton();
   });
+
+  if (deviceSelect) deviceSelect.addEventListener("change", updateApplyButton);
+  if (rtspUrlEl)    rtspUrlEl.addEventListener("input",  updateApplyButton);
 
   if (refreshBtn) refreshBtn.addEventListener("click", loadDevices);
   if (refreshAudioDevicesBtn) refreshAudioDevicesBtn.addEventListener("click", () => loadAudioDevices());
@@ -641,6 +663,7 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
       applyBtn.disabled = true;
       // Show a contextual message — if streaming, we'll stop → switch → restart.
       if (isCurrentlyStreaming) {
+        statusEl.style.color = "rgba(255,160,80,0.9)";
         statusEl.textContent = "Switching… stopping stream & reconnecting";
       } else if (type === "rtsp") {
         statusEl.textContent = "Connecting… (up to 12 s)";
@@ -655,6 +678,8 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
         });
         const data = await r.json();
         if (data.success) {
+          // Record the new active source so the button dims again
+          activeSource = { ...data.source };
           statusEl.style.color = "rgba(80,220,120,0.9)";
           statusEl.textContent = data.streamRestarted ? "✅ Applied — stream restarted" : "✅ Applied";
         } else {
@@ -666,7 +691,8 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
         statusEl.style.color = "rgba(255,160,80,0.9)";
         statusEl.textContent = "⚠️ Network error";
       } finally {
-        applyBtn.disabled = false;
+        // Dim if the UI still matches the (possibly reverted) active source
+        updateApplyButton();
       }
     });
   }
