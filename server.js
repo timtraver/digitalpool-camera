@@ -1507,6 +1507,31 @@ app.get("/video/test", (req, res) => {
   });
 });
 
+// ── MediaMTX HLS proxy (live stream preview) ──────────────────────────────
+// Proxies MediaMTX's HLS output through the authenticated Express server so
+// the browser can fetch the live stream via port 3000.
+// MediaMTX serves HLS at http://localhost:8888/<path>/index.m3u8 + *.ts segments.
+// Available whenever GStreamer is pushing RTMP to MediaMTX (not SRT-direct mode).
+app.get("/video/hls-live/*", requireAuth, (req, res) => {
+  const file = req.params[0]; // 'index.m3u8' or a segment like 'seg001.ts'
+  const upstreamUrl = `http://127.0.0.1:8888/live/${file}`;
+
+  const proxyReq = http.get(upstreamUrl, { timeout: 4000 }, (upRes) => {
+    if (upRes.statusCode !== 200) {
+      upRes.resume(); // drain so the socket can be reused
+      return res.status(upRes.statusCode).end();
+    }
+    res.setHeader("Content-Type", upRes.headers["content-type"] || "application/vnd.apple.mpegurl");
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    upRes.pipe(res);
+  });
+
+  proxyReq.on("error", () => res.status(502).end());
+  proxyReq.on("timeout", () => { proxyReq.destroy(); res.status(504).end(); });
+  req.on("close", () => proxyReq.destroy()); // client disconnected — stop proxying
+});
+
 // Serve HLS playlist and segments for preview when streaming
 app.get("/video/hls/playlist.m3u8", (req, res) => {
   const fs = require("fs");

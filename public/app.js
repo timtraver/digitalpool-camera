@@ -1061,77 +1061,126 @@ function cancelCurrentPreviewImg() {
   }
 }
 
+/**
+ * Switch the preview area to the live HLS stream served by MediaMTX.
+ * Falls back to TCP MJPEG (port 8555) if HLS is unavailable (e.g. SRT mode).
+ */
 function switchToHLSPreview() {
-  console.log("🔄 Switching to TCP preview (MJPEG over TCP)...");
+  console.log("🔄 Switching to HLS live preview...");
   const container = document.querySelector(".video-container");
-  const oldElement = document.getElementById("videoStream");
 
-  console.log("📦 Container:", container);
-  console.log("🗑️  Old element:", oldElement);
-
-  // Cancel and remove any existing preview elements (including in-flight transitions).
-  // Setting _cancelled=true stops their internal onerror retry timers from firing.
   cancelCurrentPreviewImg();
+  if (hlsPlayer) { hlsPlayer.destroy(); hlsPlayer = null; }
 
-  // Destroy HLS player if it exists
-  if (hlsPlayer) {
-    hlsPlayer.destroy();
-    hlsPlayer = null;
-    console.log("✅ Destroyed HLS player");
+  const oldElement = document.getElementById("videoStream");
+  if (oldElement) {
+    if (oldElement.tagName === "VIDEO") { oldElement.pause(); oldElement.src = ""; }
+    oldElement.remove();
   }
 
-  // Create img element for MJPEG from TCP server
+  const hlsUrl = "/video/hls-live/index.m3u8";
+
+  // Create <video> element to host the HLS stream
+  const video = document.createElement("video");
+  video.id = "videoStream";
+  video.muted = true;
+  video.autoplay = true;
+  video.playsInline = true;
+  video.style.cssText = "width:100%;height:100%;object-fit:contain;display:block;background:#000";
+  container.insertBefore(video, container.firstChild);
+
+  // Fall back to TCP MJPEG if HLS doesn't load within 8 seconds
+  let hlsLoaded = false;
+  const fallbackTimer = setTimeout(() => {
+    if (!hlsLoaded) {
+      console.warn("⏱️ HLS timed out — falling back to TCP MJPEG preview");
+      if (hlsPlayer) { hlsPlayer.destroy(); hlsPlayer = null; }
+      video.remove();
+      _switchToTCPMJPEG(container);
+    }
+  }, 8000);
+
+  function onHlsReady() {
+    hlsLoaded = true;
+    clearTimeout(fallbackTimer);
+    video.play().catch(() => {});
+    console.log("✅ HLS live preview playing");
+  }
+
+  if (typeof Hls !== "undefined" && Hls.isSupported()) {
+    hlsPlayer = new Hls({
+      lowLatencyMode:            true,
+      backBufferLength:          4,
+      maxBufferLength:           8,
+      liveSyncDurationCount:     2,
+      liveMaxLatencyDurationCount: 5,
+    });
+    hlsPlayer.loadSource(hlsUrl);
+    hlsPlayer.attachMedia(video);
+    hlsPlayer.on(Hls.Events.MANIFEST_PARSED, onHlsReady);
+    hlsPlayer.on(Hls.Events.ERROR, (_evt, data) => {
+      if (data.fatal) {
+        console.error("❌ HLS fatal error:", data.details, "— falling back to TCP MJPEG");
+        clearTimeout(fallbackTimer);
+        hlsPlayer.destroy(); hlsPlayer = null;
+        video.remove();
+        _switchToTCPMJPEG(container);
+      }
+    });
+  } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    // Native HLS (Safari / iOS)
+    video.src = hlsUrl;
+    video.addEventListener("loadedmetadata", onHlsReady, { once: true });
+  } else {
+    // No HLS support at all — go straight to TCP MJPEG
+    clearTimeout(fallbackTimer);
+    video.remove();
+    _switchToTCPMJPEG(container);
+  }
+}
+
+/**
+ * TCP MJPEG fallback — used when HLS is unavailable (SRT mode, or MediaMTX not ready).
+ * Connects to the GStreamer tcpserversink on port 8555 via the /video/tcp-preview proxy.
+ */
+function _switchToTCPMJPEG(container) {
+  console.log("🔄 Using TCP MJPEG fallback preview...");
   const img = document.createElement("img");
   img.id = "videoStream";
   img.alt = "Camera Stream";
-  const previewUrl = "/video/tcp-preview?t=" + Date.now();
-  img.src = previewUrl;
-  img.style.width = "100%";
-  img.style.height = "100%";
-  img.style.objectFit = "contain";
-  img.style.display = "block"; // Ensure it's visible
+  img.style.cssText = "width:100%;height:100%;object-fit:contain;display:block";
+  img.src = "/video/tcp-preview?t=" + Date.now();
 
-  console.log("🖼️  Created new img element with src:", previewUrl);
-
-  // Retry if TCP server isn't ready yet — but ONLY if this element hasn't
-  // been cancelled (i.e. the stream wasn't restarted before the timer fired).
   let retryCount = 0;
-  img.onerror = function(e) {
-    if (img._cancelled) return; // stream restarted — don't open another connection
+  img.onerror = function() {
+    if (img._cancelled) return;
     retryCount++;
-    console.error(`❌ TCP preview error (attempt ${retryCount}/5):`, e);
     if (retryCount < 5) {
-      console.log(`⚠️  TCP preview not ready, retrying (${retryCount}/5)...`);
       setTimeout(() => {
-        if (img._cancelled) return; // double-check before the delayed src assignment
-        const newUrl = "/video/tcp-preview?t=" + Date.now();
-        console.log("🔄 Retrying with URL:", newUrl);
-        img.src = newUrl;
+        if (img._cancelled) return;
+        img.src = "/video/tcp-preview?t=" + Date.now();
       }, 1000);
     } else {
-      console.error("❌ TCP preview failed after 5 retries");
-      console.error("💡 Try accessing http://" + window.location.host + "/video/tcp-preview directly");
+      console.error("❌ TCP MJPEG preview failed after 5 retries");
     }
   };
-
-  img.onload = function() {
-    console.log("✅ TCP preview loaded successfully!");
-    console.log("📐 Image dimensions:", img.naturalWidth, "x", img.naturalHeight);
-  };
+  img.onload = () => console.log("✅ TCP MJPEG preview loaded");
 
   container.insertBefore(img, container.firstChild);
-  console.log("✅ Inserted img into container");
-  console.log("📊 Container children:", container.children.length);
 }
 
 function switchToMJPEGPreview(onLoaded) {
-  console.log("🔄 Switching to MJPEG preview...");
+  console.log("🔄 Switching to idle MJPEG preview...");
   const container = document.querySelector(".video-container");
   const oldElement = document.getElementById("videoStream");
 
-  if (hlsPlayer) {
-    hlsPlayer.destroy();
-    hlsPlayer = null;
+  // Tear down HLS player (stream was active, now stopped)
+  if (hlsPlayer) { hlsPlayer.destroy(); hlsPlayer = null; }
+
+  // Pause/clear any live <video> element before replacing it
+  if (oldElement && oldElement.tagName === "VIDEO") {
+    oldElement.pause();
+    oldElement.src = "";
   }
 
   // Clean up any in-flight transition elements from a previous call
@@ -1139,7 +1188,8 @@ function switchToMJPEGPreview(onLoaded) {
   const staleNew = document.getElementById("videoStreamNew");
   if (staleNew) {
     console.log("🧹 Removing stale in-flight preview element");
-    staleNew.src = ""; // stop the old MJPEG connection
+    if (staleNew.tagName === "VIDEO") { staleNew.pause(); staleNew.src = ""; }
+    else staleNew.src = ""; // stop MJPEG connection
     staleNew.remove();
   }
 
