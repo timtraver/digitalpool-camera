@@ -731,6 +731,23 @@ app.get("/api/version", (req, res) => {
   }
 });
 
+// API endpoint to pull latest code and restart the service (admin only)
+// The server calls process.exit(0) after responding; systemd Restart=always brings it back.
+app.post("/api/update", requireAdmin, async (req, res) => {
+  try {
+    const { stdout, stderr } = await execAsync("git pull", { cwd: __dirname });
+    const output = (stdout || "").trim() || (stderr || "").trim() || "No output";
+    res.json({ success: true, output });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message });
+  }
+  // Give the response time to flush, then exit — systemd will restart the process
+  setTimeout(() => {
+    console.log("🔄 Software update requested — restarting service via process.exit");
+    process.exit(0);
+  }, 800);
+});
+
 // API endpoint to get device IP addresses
 app.get("/api/network", (req, res) => {
   const interfaces = os.networkInterfaces();

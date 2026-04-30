@@ -2572,6 +2572,72 @@ loadDeviceIp();
     } catch { /* silently ignore */ }
   })();
 
+  // ── Software update ───────────────────────────────────────────
+  document.getElementById("updateSoftwareBtn")?.addEventListener("click", async () => {
+    const btn    = document.getElementById("updateSoftwareBtn");
+    const msg    = document.getElementById("updateSoftwareMsg");
+    const output = document.getElementById("updateSoftwareOutput");
+
+    if (!confirm("This will pull the latest code and restart the camera service. Continue?")) return;
+
+    btn.disabled = true;
+    btn.textContent = "⏳ Updating…";
+    msg.textContent = "";
+    output.style.display = "none";
+
+    try {
+      const r = await fetch("/api/update", { method: "POST" });
+      const d = await r.json();
+
+      if (!d.success) {
+        msg.textContent = `❌ ${d.error}`;
+        msg.style.color = "#f87171";
+        btn.disabled = false;
+        btn.textContent = "⬆️ Check & Update Software";
+        return;
+      }
+
+      // Show git output
+      output.textContent = d.output;
+      output.style.display = "block";
+      msg.textContent = "🔄 Restarting service…";
+      msg.style.color = "#facc15";
+
+      // Poll until the server comes back, then reload
+      const poll = async () => {
+        try {
+          const pr = await fetch("/api/status");
+          if (pr.ok) {
+            msg.textContent = "✅ Update complete — reloading…";
+            msg.style.color = "#4ade80";
+            setTimeout(() => window.location.reload(), 1500);
+            return;
+          }
+        } catch { /* server still restarting */ }
+        setTimeout(poll, 2000);
+      };
+      setTimeout(poll, 3000); // give systemd a moment to restart
+
+    } catch (e) {
+      // If the request itself fails the server already restarted — just poll
+      msg.textContent = "🔄 Restarting service…";
+      msg.style.color = "#facc15";
+      const poll = async () => {
+        try {
+          const pr = await fetch("/api/status");
+          if (pr.ok) {
+            msg.textContent = "✅ Update complete — reloading…";
+            msg.style.color = "#4ade80";
+            setTimeout(() => window.location.reload(), 1500);
+            return;
+          }
+        } catch { /* still restarting */ }
+        setTimeout(poll, 2000);
+      };
+      setTimeout(poll, 3000);
+    }
+  });
+
   // ── helper: show a temporary status message ─────────────────
   function showMsg(el, text, isError = false) {
     if (!el) return;
