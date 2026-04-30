@@ -273,7 +273,7 @@ def main():
         ) +
         # Preview branch (own thread, low priority)
         f't. ! queue max-size-buffers=10 leaky=downstream '
-        f'! videorate ! video/x-raw,framerate=5/1 '
+        f'! videorate ! video/x-raw,framerate=1/1 '
         f'! videoconvert ! videoscale '
         f'! video/x-raw,width=1280,height=720 '
         f'! jpegenc quality=65 '

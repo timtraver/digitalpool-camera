@@ -1780,7 +1780,7 @@ function buildIdlePreviewGstArgs(sinkArgs) {
     "!",
     "videorate",
     "!",
-    "video/x-raw,framerate=2/1",
+    "video/x-raw,framerate=1/1",
     "!",
     "videoscale",
     "!",

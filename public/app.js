@@ -1193,19 +1193,13 @@ function _switchToTCPMJPEG(container) {
 }
 
 /**
- * Idle preview using snapshot polling.
- *
- * Each call to /video/snapshot is a fresh, independent HTTP request that
- * connects to the GStreamer TCP server, reads one complete JPEG, and returns
- * it immediately. There is no server-side buffer to drain — no matter how
- * slow the connection, every response is always the LATEST camera frame.
- *
- * This replaces the old continuous-MJPEG approach which caused frames to
- * queue up in the TCP buffer on slow/remote connections, resulting in the
- * preview being minutes behind the actual camera position.
+ * Idle MJPEG preview — connects to /video/stream (1 fps GStreamer pipeline).
+ * Streams continuously as multipart/x-mixed-replace; the browser renders each
+ * JPEG as it arrives. Reduced to 1 fps so the TCP buffer stays tiny even on
+ * slow/remote connections, preventing the runaway lag that occurred at 5 fps.
  */
 function switchToMJPEGPreview(onLoaded) {
-  console.log("🔄 Switching to snapshot preview (idle)...");
+  console.log("🔄 Switching to idle MJPEG preview (1 fps)...");
   const container = document.querySelector(".video-container");
   const oldElement = document.getElementById("videoStream");
 
@@ -1216,57 +1210,46 @@ function switchToMJPEGPreview(onLoaded) {
     hlsPlayer = null;
   }
 
-  // Tear down any live <video> or stale MJPEG img
+  // Tear down any live <video> or stale elements
   if (oldElement) {
     if (oldElement.tagName === "VIDEO") { oldElement.pause(); oldElement.src = ""; }
-    else oldElement.src = "";
+    else { oldElement._cancelled = true; oldElement.src = ""; }
     oldElement.remove();
   }
   const staleNew = document.getElementById("videoStreamNew");
   if (staleNew) {
+    staleNew._cancelled = true;
     if (staleNew.tagName === "VIDEO") { staleNew.pause(); staleNew.src = ""; }
     else staleNew.src = "";
     staleNew.remove();
   }
 
-  // Stop any previous snapshot poll before starting a new one
-  _snapshotPollActive = false;
-  if (_snapshotBlobUrl) { URL.revokeObjectURL(_snapshotBlobUrl); _snapshotBlobUrl = null; }
-
+  const overlaysEnabled = overlayEnabled.checked || showTimestamp.checked || remoteOverlayEnabled.checked;
   const img = document.createElement("img");
   img.id = "videoStream";
   img.alt = "Camera Stream";
   img.style.cssText = "width:100%;height:100%;object-fit:contain;display:block";
+  img.src = `/video/stream?overlays=${overlaysEnabled}&t=${Date.now()}`;
+
+  let retryCount = 0;
+  img.onerror = function() {
+    if (img._cancelled) return;
+    retryCount++;
+    if (retryCount < 10) {
+      setTimeout(() => {
+        if (img._cancelled) return;
+        img.src = `/video/stream?overlays=${overlaysEnabled}&t=${Date.now()}`;
+      }, 1000);
+    } else {
+      console.error("❌ Idle MJPEG preview failed after 10 retries");
+    }
+  };
+  img.onload = () => {
+    console.log("✅ Idle MJPEG preview loaded");
+    if (typeof onLoaded === "function") { onLoaded(); onLoaded = null; }
+  };
+
   container.insertBefore(img, container.firstChild);
-
-  // Start polling
-  _snapshotPollActive = true;
-  let firstLoad = true;
-
-  async function poll() {
-    if (!_snapshotPollActive) return;
-    try {
-      const r = await fetch(`/video/snapshot?t=${Date.now()}`);
-      if (!_snapshotPollActive) return;
-      if (r.ok) {
-        const blob = await r.blob();
-        if (!_snapshotPollActive) return;
-        const url = URL.createObjectURL(blob);
-        const old = _snapshotBlobUrl;
-        _snapshotBlobUrl = url;
-        img.src = url;
-        if (old) URL.revokeObjectURL(old);
-        if (firstLoad) {
-          firstLoad = false;
-          console.log("✅ Snapshot preview active");
-          if (typeof onLoaded === "function") onLoaded();
-        }
-      }
-    } catch { /* network error — retry next tick */ }
-    if (_snapshotPollActive) setTimeout(poll, 1000);
-  }
-
-  poll();
 }
 
 // Canvas overlay removed - preview now shows actual stream output via tee
