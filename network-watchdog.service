@@ -1,0 +1,7 @@
+[Unit]
+Description=Network watchdog — reboot if all interfaces are unreachable
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/network-watchdog.sh

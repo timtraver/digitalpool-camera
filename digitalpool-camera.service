@@ -22,6 +22,29 @@ Environment=NODE_ENV=production
 Environment=PORT=3000
 Environment=CAMERA_DEVICE=/dev/video0
 
+# ── Memory limits ────────────────────────────────────────────────────────────
+# Applies to the entire cgroup: Node.js + all child processes (GStreamer, ffmpeg,
+# Python overlay pipeline).  The Python/GStreamer process leaked to 3.3 GB after
+# 8 h of streaming and was killed by the kernel OOM killer, which also knocked
+# out the WiFi driver.  A hard cgroup limit ensures the kernel kills only this
+# service's cgroup (cleanly, triggering Restart=always) rather than randomly
+# killing drivers or other system processes.
+MemoryMax=1500M
+MemorySwapMax=0
+
+# ── OOM priority ─────────────────────────────────────────────────────────────
+# Lower score = less likely to be chosen by the OOM killer when system-wide
+# memory is critically low.  -900 strongly protects Node.js itself so that if
+# memory pressure spills outside the cgroup limit the kernel targets other
+# processes first.
+OOMScoreAdjust=-900
+
+# ── Systemd watchdog ─────────────────────────────────────────────────────────
+# Node.js must call sd_notify("WATCHDOG=1") or systemd will restart the service.
+# This catches hangs where the process is alive but completely unresponsive.
+# server.js emits keepalives via the WATCHDOG_USEC env variable.
+WatchdogSec=120
+
 [Install]
 WantedBy=multi-user.target
 
