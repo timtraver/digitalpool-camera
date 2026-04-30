@@ -2180,7 +2180,10 @@ app.get("/video/stream", async (req, res) => {
   // During boot, allow more retries since the preview takes time to start
   const net = require("net");
   let retries = 0;
-  const maxRetries = bootComplete ? 5 : 30;
+  // Post-boot: allow up to 15 s for the TCP server to become ready.
+  // RTSP idle pipelines need up to 12 s to negotiate the session before
+  // tcpserversink starts accepting connections; USB typically takes <1 s.
+  const maxRetries = bootComplete ? 15 : 30;
 
   // Track the current active TCP client so req.on("close") can always destroy it.
   // The listener is registered ONCE here — not inside the retry loop — to avoid
@@ -2844,9 +2847,19 @@ streamController.on("stopped", async () => {
 
   // Restart the persistent idle preview so clients see the camera feed again
   console.log("📹 Stream stopped — restarting persistent idle preview...");
-  // Brief delay to let the streaming process fully release the camera
+  // Brief delay to let the streaming process fully release the camera/RTSP source
   await new Promise((resolve) => setTimeout(resolve, 1000));
   await startPersistentIdlePreview();
+
+  // For RTSP sources, the GStreamer pipeline needs time to negotiate the session
+  // before tcpserversink begins accepting connections.  Wait for the port to be
+  // ready (up to 12 s) before telling clients to reconnect — otherwise they hit
+  // the server before any frames are available and the preview stays blank.
+  const idleTimeoutMs = activeCameraSource.type === "rtsp" ? 12000 : 5000;
+  const idleReady = await waitForPort(IDLE_PREVIEW_PORT, idleTimeoutMs);
+  if (!idleReady) {
+    console.warn(`⚠️  Idle preview port not ready after ${idleTimeoutMs / 1000}s — clients will retry on their own`);
+  }
   // Tell clients to reconnect to the idle preview
   io.emit("refreshIdlePreview");
 });
