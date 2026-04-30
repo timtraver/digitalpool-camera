@@ -248,7 +248,11 @@ class StreamController extends EventEmitter {
       //   for an ongoing rate difference between two separate clocks.
       const useFfmpegAudio =
         (this.streamConfig.protocol === "srt" || this.streamConfig.protocol === "rtmp" || this.streamConfig.protocol === "rtsp") &&
-        this.streamConfig.audioEnabled;
+        this.streamConfig.audioEnabled &&
+        // RTSP input sources carry their own audio track — there is no local ALSA
+        // device to capture.  GStreamer's decodebin taps the audio pad directly
+        // inside the Python pipeline (RTSP passthrough mode); ffmpeg is not needed.
+        this.inputSource.type !== "rtsp";
 
       // Check if we're using the compositor helper script
       if (gstArgs.useCompositorScript) {
@@ -543,13 +547,33 @@ class StreamController extends EventEmitter {
             console.log(`ffmpeg exited with code ${code}`);
             this.ffmpegProcess = null;
           });
+
+          // In hybrid mode (ffmpeg muxer), the stream is only truly live once
+          // ffmpeg has connected to its destination (MediaMTX RTMP/SRT).
+          // Wait 2 s after ffmpeg spawns so the upstream has data before clients
+          // (OBS, VLC, browser) are told to connect — prevents a race where OBS
+          // connects to MediaMTX before the first frames arrive and gives up.
+          if (!this.isStreaming) {
+            setTimeout(() => {
+              if (this.ffmpegProcess && !this.isStreaming) {
+                console.log("🟢 ffmpeg connected — emitting 'started'");
+                this.isStreaming = true;
+                this.emit("started");
+                this._startFpsMonitoring();
+                this._startBitrateMonitoring();
+              }
+            }, 2000);
+          }
         });
       }
 
-      this.isStreaming = true;
-      this.emit("started");
-      this._startFpsMonitoring();
-      this._startBitrateMonitoring();
+      if (!useFfmpegAudio) {
+        // Non-hybrid path: GStreamer handles the sink directly — declare live immediately.
+        this.isStreaming = true;
+        this.emit("started");
+        this._startFpsMonitoring();
+        this._startBitrateMonitoring();
+      }
 
       // Enable auto-start and save config
       this.streamConfig.autoStart = true;
@@ -912,7 +936,14 @@ class StreamController extends EventEmitter {
     // Only pass timestamp if the Timestamp checkbox is enabled
     const effectiveShowTimestamp = this.streamConfig.showTimestamp ? "true" : "false";
 
-    const audioDevice = this.streamConfig.audioEnabled ? (this.streamConfig.audioDevice || "hw:3,0") : "";
+    // When the input is an RTSP source the audio is already in the network stream —
+    // pass the sentinel "rtsp" so gst-overlay-pipeline.py knows to tap decodebin's
+    // audio pad rather than opening a local ALSA device.
+    const audioDevice = this.streamConfig.audioEnabled
+      ? (this.inputSource.type === "rtsp"
+          ? "rtsp"
+          : (this.streamConfig.audioDevice || "hw:3,0"))
+      : "";
 
     // H.265 is incompatible with RTMP (FLV container only supports H.264)
     const scriptCodec = (this.streamConfig.codec === "h265" && scriptProtocol !== "rtmp") ? "h265" : "h264";

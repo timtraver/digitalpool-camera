@@ -116,6 +116,18 @@ def main():
         ts_valign, ts_halign = parse_position(timestamp_position)
         timestamp_overlay = f'! clockoverlay valignment={ts_valign} halignment={ts_halign} font-desc="Sans Bold {ts_font_size}" color={ts_color} time-format="{timestamp_format}" xpad=20 ypad=20 {ts_shaded_bg}'
 
+    # Detect RTSP audio passthrough sentinel set by streamController.js.
+    # When input_type is "rtsp" and audioEnabled is true, Node.js passes "rtsp"
+    # as the audio_device arg instead of an ALSA device name.  In this mode we:
+    #   1. Name the decodebin so we can tap its audio pad via pad-added.
+    #   2. Clear audio_device so the output_sink uses direct GStreamer mode
+    #      (srtsink / rtmpsink) rather than the ffmpeg fdsink hybrid.
+    #   3. After Gst.parse_launch() we attach a pad-added handler that links
+    #      the audio pad to audioconvert → audioresample → avenc_aac → mux.
+    use_rtsp_audio = (audio_device == "rtsp")
+    if use_rtsp_audio:
+        audio_device = ""  # treat as no-ALSA for output_sink selection below
+
     # Build protocol-specific output sink
     if protocol == "srt":
         srt_uri = destination if destination else "srt://:8891"
@@ -204,10 +216,17 @@ def main():
         print(f"📡 Input source: RTSP → {input_rtsp_url}", file=sys.stderr)
         # decodebin emits dynamic caps — videoconvert + videoscale normalise them
         # to a fixed resolution/format before videorate enforces the target fps.
+        #
+        # When use_rtsp_audio is True we name the decodebin "dec" so that the
+        # pad-added handler below can tap its audio pad at runtime.  We also
+        # explicitly start the video chain with "dec. ! videoconvert" so GStreamer
+        # knows to connect the video pad here (rather than auto-selecting any pad).
+        dec_name = "name=dec " if use_rtsp_audio else ""
+        dec_ref  = "dec. "    if use_rtsp_audio else ""
         source_str = (
             f'rtspsrc location={input_rtsp_url} latency=200 protocols=tcp '
-            f'! decodebin '
-            f'! videoconvert '
+            f'! decodebin {dec_name}'
+            f'{dec_ref}! videoconvert '
             f'! videoscale '
             f'! video/x-raw,width={width},height={height} '
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
@@ -302,6 +321,66 @@ def main():
     print(f"\nPipeline: {pipeline_str}\n", file=sys.stderr)
 
     pipeline = Gst.parse_launch(pipeline_str)
+
+    # ── RTSP audio passthrough ─────────────────────────────────────────────
+    # When the input is an RTSP source that carries audio, decodebin creates an
+    # audio pad dynamically at PLAYING time.  We connect a pad-added handler to
+    # route that pad through: audioconvert → audioresample → avenc_aac → mux.
+    # If the RTSP stream has no audio track the callback simply never fires for
+    # an audio pad and the pipeline runs silently as video-only — no error.
+    if use_rtsp_audio:
+        dec_element = pipeline.get_by_name("dec")
+        mux_element = pipeline.get_by_name("mux")
+
+        if dec_element and mux_element:
+            def on_rtsp_pad_added(element, pad, mux):
+                # Only handle audio pads — video is already wired in the string.
+                pad_caps = pad.get_current_caps() or pad.query_caps(None)
+                if not pad_caps:
+                    return
+                struct = pad_caps.get_structure(0)
+                if not struct or not struct.get_name().startswith("audio/"):
+                    return
+
+                print("🔊 RTSP audio pad detected — linking passthrough to mux", file=sys.stderr)
+
+                audioqueue   = Gst.ElementFactory.make("queue",          None)
+                audioconv    = Gst.ElementFactory.make("audioconvert",   None)
+                audiores     = Gst.ElementFactory.make("audioresample",  None)
+                aacenc       = Gst.ElementFactory.make("avenc_aac",      None)
+                aacparse_el  = Gst.ElementFactory.make("aacparse",       None)
+
+                if not all([audioqueue, audioconv, audiores, aacenc, aacparse_el]):
+                    print("❌ Could not create audio passthrough elements", file=sys.stderr)
+                    return
+
+                aacenc.set_property("bitrate", 128000)
+
+                for elem in [audioqueue, audioconv, audiores, aacenc, aacparse_el]:
+                    pipeline.add(elem)
+                    elem.sync_state_with_parent()
+
+                pad.link(audioqueue.get_static_pad("sink"))
+                audioqueue.link(audioconv)
+                audioconv.link(audiores)
+                audiores.link(aacenc)
+                aacenc.link(aacparse_el)
+
+                # Request the audio sink pad from the mux.
+                # flvmux (RTMP) uses "audio"; mpegtsmux (SRT) uses "audio_%u".
+                mux_factory = mux.get_factory().get_name() if mux.get_factory() else ""
+                pad_name = "audio" if mux_factory == "flvmux" else "audio_%u"
+                mux_sink = mux.get_request_pad(pad_name)
+                if mux_sink:
+                    aacparse_el.get_static_pad("src").link(mux_sink)
+                    print(f"🔊 RTSP audio linked to {mux_factory}.{pad_name}", file=sys.stderr)
+                else:
+                    print(f"⚠️  Could not get {mux_factory} audio request pad", file=sys.stderr)
+
+            dec_element.connect("pad-added", on_rtsp_pad_added, mux_element)
+            print("🔊 RTSP audio passthrough: pad-added handler installed", file=sys.stderr)
+        else:
+            print("⚠️  RTSP audio: could not find 'dec' or 'mux' element — audio disabled", file=sys.stderr)
 
     # Attach the global CLOCK_REALTIME system clock to this pipeline.
     # The clock-type was already set to REALTIME at module load (above Gst.init).
