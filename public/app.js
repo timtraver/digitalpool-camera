@@ -558,6 +558,13 @@ if (resetAllBtn) {
   });
 }
 
+// Declared here (before initCameraInput IIFE) so the IIFE can reference them
+// without hitting the const Temporal Dead Zone.
+const audioEnabledCheckbox  = document.getElementById("audioEnabled");
+const audioDeviceRow        = document.getElementById("audioDeviceRow");
+const audioDeviceSelect     = document.getElementById("audioDeviceSelect");
+const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
+
 // ── Camera Input section ──────────────────────────────────────────────────────
 (function initCameraInput() {
   const sourceTypeEl  = document.getElementById("cameraSourceType");
@@ -694,10 +701,8 @@ const streamDestination = document.getElementById("streamDestination");
 const streamBitrate = document.getElementById("streamBitrate");
 const streamFramerate = document.getElementById("streamFramerate");
 const streamCodec = document.getElementById("streamCodec");
-const audioEnabledCheckbox = document.getElementById("audioEnabled");
-const audioDeviceRow    = document.getElementById("audioDeviceRow");
-const audioDeviceSelect = document.getElementById("audioDeviceSelect");
-const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
+// audioEnabledCheckbox, audioDeviceRow, audioDeviceSelect, refreshAudioDevicesBtn
+// are declared before the initCameraInput IIFE above.
 const startStreamBtn = document.getElementById("startStream");
 const stopStreamBtn = document.getElementById("stopStream");
 const streamStatusText = document.getElementById("streamStatusText");
