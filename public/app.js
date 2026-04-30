@@ -905,35 +905,9 @@ socket.on("refreshIdlePreview", () => {
   }
 });
 
-// Preview refresh notification
-socket.on("previewRefreshNeeded", (data) => {
-  console.log("Preview refresh needed:", data.message);
-  // Show a subtle notification instead of alert
-  const notification = document.createElement("div");
-  notification.style.cssText = `
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    background: rgba(18, 199, 255, 0.9);
-    color: white;
-    padding: 15px 20px;
-    border-radius: 8px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-    z-index: 10000;
-    font-size: 14px;
-    cursor: pointer;
-  `;
-  notification.textContent = "Stream stopped. Click to refresh preview.";
-  notification.onclick = () => window.location.reload();
-  document.body.appendChild(notification);
-
-  // Auto-remove after 10 seconds
-  setTimeout(() => {
-    if (notification.parentElement) {
-      notification.remove();
-    }
-  }, 10000);
-});
+// previewRefreshNeeded is no longer emitted by the server — preview reconnects
+// automatically via the "refreshIdlePreview" event once the idle preview port
+// is confirmed ready.  Handler removed.
 
 // Stream status updates
 socket.on("streamStatus", (status) => {

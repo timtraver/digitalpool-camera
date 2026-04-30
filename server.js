@@ -2383,13 +2383,9 @@ io.on("connection", (socket) => {
     io.emit("streamStatus", { ...streamController.getStatus(), status: "stopping" });
     const result = await streamController.stopStream();
     socket.emit("streamResult", result);
-
-    // Notify client to refresh preview
-    if (result.success) {
-      socket.emit("previewRefreshNeeded", {
-        message: "Stream stopped. Refresh the page to restart the preview.",
-      });
-    }
+    // No manual refresh prompt needed — the "stopped" event handler calls
+    // startPersistentIdlePreview() + waitForPort() and then broadcasts
+    // "refreshIdlePreview" to all clients, which auto-switches the preview.
   });
 
   // Atomic restart: stop → start without showing the idle preview in between.
