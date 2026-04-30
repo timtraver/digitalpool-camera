@@ -667,7 +667,7 @@ function setStreamStatus(state, text) {
     case "idle":
       streamStatusBar.classList.add("status-idle");
       streamStatusText.textContent = "⏹ " + text;
-      headerBadge = "";
+      headerBadge = "⚫ Offline";
       break;
     case "starting":
       streamStatusBar.classList.add("status-starting");
