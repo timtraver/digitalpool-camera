@@ -9,21 +9,20 @@ const execAsync = promisify(exec);
 const fsSync = require("fs");
 const path = require("path");
 const os = require("os");
-const dgram = require("dgram");
-
 // ── Systemd watchdog keepalive ────────────────────────────────────────────────
-// WatchdogSec=120 in the service file requires periodic WATCHDOG=1 notifications
-// sent to NOTIFY_SOCKET. Without this, systemd restarts the service every
-// WatchdogSec seconds even when it is running perfectly.
-// We pet it at half the configured interval to stay comfortably within budget.
-if (process.env.WATCHDOG_USEC && process.env.NOTIFY_SOCKET) {
+// WatchdogSec=120 in the service file requires periodic WATCHDOG=1 notifications.
+// We use the `systemd-notify` binary (always available on systemd hosts) which
+// handles socket addressing correctly. The dgram approach requires the socket to
+// be bound before sending and silently fails on abstract-namespace paths.
+// WATCHDOG_USEC is set automatically by systemd when WatchdogSec is present.
+if (process.env.WATCHDOG_USEC) {
+  const { execFile } = require("child_process");
   const watchdogMs = Math.max(5000, Math.floor(parseInt(process.env.WATCHDOG_USEC) / 2 / 1000));
-  const notifyPath = process.env.NOTIFY_SOCKET.replace(/^@/, "\0"); // support abstract sockets
   console.log(`🐕 Systemd watchdog active — petting every ${watchdogMs / 1000}s`);
   setInterval(() => {
-    const client = dgram.createSocket("unix_dgram");
-    const msg = Buffer.from("WATCHDOG=1");
-    client.send(msg, 0, msg.length, notifyPath, () => client.close());
+    execFile("systemd-notify", ["WATCHDOG=1"], { timeout: 2000 }, (err) => {
+      if (err) console.error("⚠️  Watchdog notify failed:", err.message);
+    });
   }, watchdogMs);
 }
 const CameraController = require("./cameraController");

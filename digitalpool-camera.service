@@ -40,9 +40,11 @@ MemorySwapMax=0
 OOMScoreAdjust=-900
 
 # ── Systemd watchdog ─────────────────────────────────────────────────────────
-# Node.js must call sd_notify("WATCHDOG=1") or systemd will restart the service.
-# This catches hangs where the process is alive but completely unresponsive.
-# server.js emits keepalives via the WATCHDOG_USEC env variable.
+# Node.js sends WATCHDOG=1 via `systemd-notify` every WatchdogSec/2 seconds.
+# NotifyAccess=main is required: without it systemd does not set NOTIFY_SOCKET
+# or WATCHDOG_USEC in the process environment, so the keepalive never fires and
+# the service is killed every WatchdogSec seconds regardless.
+NotifyAccess=main
 WatchdogSec=120
 
 [Install]
