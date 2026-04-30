@@ -733,9 +733,11 @@ app.get("/api/version", (req, res) => {
   }
 });
 
-// API endpoint to pull latest code and restart the service (admin only)
+// API endpoint to pull latest code and restart the service (dpadmin only)
 // The server calls process.exit(0) after responding; systemd Restart=always brings it back.
 app.post("/api/update", requireAdmin, async (req, res) => {
+  if (req.session?.user?.username !== "dpadmin")
+    return res.status(403).json({ success: false, error: "Access denied" });
   try {
     const { stdout, stderr } = await execAsync("git pull", { cwd: __dirname });
     const output = (stdout || "").trim() || (stderr || "").trim() || "No output";

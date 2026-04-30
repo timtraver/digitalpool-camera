@@ -2591,7 +2591,11 @@ loadDeviceIp();
     } catch { /* silently ignore */ }
   })();
 
-  // ── Software update ───────────────────────────────────────────
+  // ── Software update (dpadmin only) ───────────────────────────
+  if (currentUser.username !== "dpadmin") {
+    document.getElementById("updateSoftwareBtn")?.closest("div")?.remove();
+  }
+
   document.getElementById("updateSoftwareBtn")?.addEventListener("click", async () => {
     const btn    = document.getElementById("updateSoftwareBtn");
     const msg    = document.getElementById("updateSoftwareMsg");
