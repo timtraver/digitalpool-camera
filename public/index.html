@@ -731,13 +731,12 @@
               </div>
               <div class="wifi-form">
                 <label>Set Timezone</label>
-                <div style="display:flex;gap:6px;align-items:center">
-                  <input type="text" id="timezoneInput" list="timezoneList"
-                         placeholder="e.g. America/Chicago" autocomplete="off"
-                         style="flex:1;font-size:12px" />
-                  <button class="btn-wifi-action" id="saveTimezoneBtn" style="white-space:nowrap">💾 Save</button>
-                </div>
-                <datalist id="timezoneList"></datalist>
+                <input type="text" id="timezoneFilter"
+                       placeholder="Filter timezones…" autocomplete="off"
+                       style="width:100%;font-size:12px;margin-bottom:4px;box-sizing:border-box" />
+                <select id="timezoneSelect" size="6"
+                        style="width:100%;font-size:12px;margin-bottom:6px;box-sizing:border-box"></select>
+                <button class="btn-wifi-action" id="saveTimezoneBtn" style="width:100%">💾 Save Timezone</button>
                 <div class="wifi-msg" id="timezoneMsg"></div>
               </div>
             </div>

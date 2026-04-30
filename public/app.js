@@ -2592,6 +2592,20 @@ loadDeviceIp();
   })();
 
   // ── Timezone ──────────────────────────────────────────────────
+  let _allTimezones = [];  // array of {value, label}
+
+  function _populateTzSelect(filter, currentValue) {
+    const sel = document.getElementById("timezoneSelect");
+    if (!sel) return;
+    const q = (filter || "").toLowerCase();
+    const matches = q
+      ? _allTimezones.filter(tz => tz.label.toLowerCase().includes(q) || tz.value.toLowerCase().includes(q))
+      : _allTimezones;
+    sel.innerHTML = matches
+      .map(tz => `<option value="${tz.value}"${tz.value === currentValue ? " selected" : ""}>${tz.label}</option>`)
+      .join("");
+  }
+
   (async () => {
     try {
       const r = await fetch("/api/timezone");
@@ -2601,22 +2615,20 @@ loadDeviceIp();
       const currentEl = document.getElementById("currentTimezone");
       if (currentEl) currentEl.textContent = d.current || "—";
 
-      const input    = document.getElementById("timezoneInput");
-      const datalist = document.getElementById("timezoneList");
-      if (input && d.current) input.value = d.current;
-      if (datalist && d.timezones) {
-        datalist.innerHTML = d.timezones
-          .map(tz => `<option value="${tz}">`)
-          .join("");
-      }
+      _allTimezones = d.timezones || [];
+      _populateTzSelect("", d.current);
+
+      document.getElementById("timezoneFilter")?.addEventListener("input", e => {
+        _populateTzSelect(e.target.value, document.getElementById("timezoneSelect")?.value);
+      });
     } catch { /* silently ignore */ }
   })();
 
   document.getElementById("saveTimezoneBtn")?.addEventListener("click", async () => {
-    const msg   = document.getElementById("timezoneMsg");
-    const input = document.getElementById("timezoneInput");
-    const tz    = input?.value.trim();
-    if (!tz) { showMsg(msg, "❌ Please enter a timezone", true); return; }
+    const msg = document.getElementById("timezoneMsg");
+    const sel = document.getElementById("timezoneSelect");
+    const tz  = sel?.value?.trim();
+    if (!tz) { showMsg(msg, "❌ Please select a timezone", true); return; }
     try {
       const r = await fetch("/api/timezone", {
         method:  "POST",

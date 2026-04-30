@@ -753,16 +753,116 @@ app.post("/api/update", requireAdmin, async (req, res) => {
 });
 
 // ── Timezone API (admin only) ─────────────────────────────────────────────────
+// Curated list of common timezones grouped by region.
+// Each entry: { value: IANA name, label: human-friendly display }
+const COMMON_TIMEZONES = [
+  // ── United States ──────────────────────────────────────────────
+  { value: "America/New_York",       label: "Eastern Time (New York)" },
+  { value: "America/Chicago",        label: "Central Time (Chicago)" },
+  { value: "America/Denver",         label: "Mountain Time (Denver)" },
+  { value: "America/Phoenix",        label: "Mountain Time – no DST (Phoenix)" },
+  { value: "America/Los_Angeles",    label: "Pacific Time (Los Angeles)" },
+  { value: "America/Anchorage",      label: "Alaska Time (Anchorage)" },
+  { value: "Pacific/Honolulu",       label: "Hawaii Time (Honolulu)" },
+  { value: "America/Indiana/Indianapolis", label: "Eastern Time – no DST (Indianapolis)" },
+  // ── Canada ─────────────────────────────────────────────────────
+  { value: "America/Halifax",        label: "Atlantic Time (Halifax)" },
+  { value: "America/Toronto",        label: "Eastern Time (Toronto)" },
+  { value: "America/Winnipeg",       label: "Central Time (Winnipeg)" },
+  { value: "America/Edmonton",       label: "Mountain Time (Edmonton)" },
+  { value: "America/Vancouver",      label: "Pacific Time (Vancouver)" },
+  { value: "America/St_Johns",       label: "Newfoundland Time (St. John's)" },
+  // ── Mexico / Central America ────────────────────────────────────
+  { value: "America/Mexico_City",    label: "Central Time (Mexico City)" },
+  { value: "America/Monterrey",      label: "Central Time (Monterrey)" },
+  { value: "America/Tijuana",        label: "Pacific Time (Tijuana)" },
+  { value: "America/Guatemala",      label: "Central America (Guatemala)" },
+  { value: "America/Costa_Rica",     label: "Central America (Costa Rica)" },
+  { value: "America/Panama",         label: "Eastern – no DST (Panama)" },
+  // ── Caribbean ──────────────────────────────────────────────────
+  { value: "America/Puerto_Rico",    label: "Atlantic – no DST (Puerto Rico)" },
+  { value: "America/Havana",         label: "Cuba (Havana)" },
+  { value: "America/Jamaica",        label: "Eastern – no DST (Jamaica)" },
+  // ── South America ───────────────────────────────────────────────
+  { value: "America/Bogota",         label: "Colombia (Bogotá)" },
+  { value: "America/Lima",           label: "Peru (Lima)" },
+  { value: "America/Caracas",        label: "Venezuela (Caracas)" },
+  { value: "America/Santiago",       label: "Chile (Santiago)" },
+  { value: "America/Argentina/Buenos_Aires", label: "Argentina (Buenos Aires)" },
+  { value: "America/Sao_Paulo",      label: "Brazil – East (São Paulo)" },
+  { value: "America/Manaus",         label: "Brazil – West (Manaus)" },
+  // ── Europe ──────────────────────────────────────────────────────
+  { value: "UTC",                    label: "UTC (Coordinated Universal Time)" },
+  { value: "Europe/London",          label: "GMT/BST (London)" },
+  { value: "Europe/Dublin",          label: "GMT/IST (Dublin)" },
+  { value: "Europe/Lisbon",          label: "WET (Lisbon)" },
+  { value: "Europe/Paris",           label: "CET (Paris)" },
+  { value: "Europe/Berlin",          label: "CET (Berlin)" },
+  { value: "Europe/Madrid",          label: "CET (Madrid)" },
+  { value: "Europe/Rome",            label: "CET (Rome)" },
+  { value: "Europe/Amsterdam",       label: "CET (Amsterdam)" },
+  { value: "Europe/Brussels",        label: "CET (Brussels)" },
+  { value: "Europe/Zurich",          label: "CET (Zurich)" },
+  { value: "Europe/Vienna",          label: "CET (Vienna)" },
+  { value: "Europe/Stockholm",       label: "CET (Stockholm)" },
+  { value: "Europe/Warsaw",          label: "CET (Warsaw)" },
+  { value: "Europe/Prague",          label: "CET (Prague)" },
+  { value: "Europe/Budapest",        label: "CET (Budapest)" },
+  { value: "Europe/Athens",          label: "EET (Athens)" },
+  { value: "Europe/Bucharest",       label: "EET (Bucharest)" },
+  { value: "Europe/Helsinki",        label: "EET (Helsinki)" },
+  { value: "Europe/Kyiv",            label: "EET (Kyiv)" },
+  { value: "Europe/Istanbul",        label: "Turkey Time (Istanbul)" },
+  { value: "Europe/Moscow",          label: "Moscow Time (Moscow)" },
+  // ── Africa ──────────────────────────────────────────────────────
+  { value: "Africa/Casablanca",      label: "WET (Casablanca)" },
+  { value: "Africa/Cairo",           label: "EET (Cairo)" },
+  { value: "Africa/Lagos",           label: "WAT (Lagos)" },
+  { value: "Africa/Nairobi",         label: "EAT (Nairobi)" },
+  { value: "Africa/Johannesburg",    label: "SAST (Johannesburg)" },
+  // ── Middle East ─────────────────────────────────────────────────
+  { value: "Asia/Jerusalem",         label: "Israel Time (Jerusalem)" },
+  { value: "Asia/Beirut",            label: "EET (Beirut)" },
+  { value: "Asia/Riyadh",            label: "AST (Riyadh)" },
+  { value: "Asia/Dubai",             label: "GST (Dubai)" },
+  { value: "Asia/Tehran",            label: "IRST (Tehran)" },
+  { value: "Asia/Baghdad",           label: "AST (Baghdad)" },
+  // ── South & Central Asia ────────────────────────────────────────
+  { value: "Asia/Baku",              label: "AZT (Baku)" },
+  { value: "Asia/Karachi",           label: "PKT (Karachi)" },
+  { value: "Asia/Kolkata",           label: "IST (India – Kolkata)" },
+  { value: "Asia/Kathmandu",         label: "NPT (Kathmandu)" },
+  { value: "Asia/Dhaka",             label: "BST (Dhaka)" },
+  { value: "Asia/Almaty",            label: "ALMT (Almaty)" },
+  { value: "Asia/Yangon",            label: "MMT (Yangon)" },
+  // ── East & Southeast Asia ───────────────────────────────────────
+  { value: "Asia/Bangkok",           label: "ICT (Bangkok)" },
+  { value: "Asia/Jakarta",           label: "WIB (Jakarta)" },
+  { value: "Asia/Singapore",         label: "SGT (Singapore)" },
+  { value: "Asia/Kuala_Lumpur",      label: "MYT (Kuala Lumpur)" },
+  { value: "Asia/Hong_Kong",         label: "HKT (Hong Kong)" },
+  { value: "Asia/Shanghai",          label: "CST (Shanghai)" },
+  { value: "Asia/Taipei",            label: "CST (Taipei)" },
+  { value: "Asia/Manila",            label: "PHT (Manila)" },
+  { value: "Asia/Seoul",             label: "KST (Seoul)" },
+  { value: "Asia/Tokyo",             label: "JST (Tokyo)" },
+  // ── Australia & Pacific ─────────────────────────────────────────
+  { value: "Australia/Perth",        label: "AWST (Perth)" },
+  { value: "Australia/Darwin",       label: "ACST (Darwin)" },
+  { value: "Australia/Adelaide",     label: "ACST/ACDT (Adelaide)" },
+  { value: "Australia/Brisbane",     label: "AEST – no DST (Brisbane)" },
+  { value: "Australia/Sydney",       label: "AEST/AEDT (Sydney)" },
+  { value: "Australia/Melbourne",    label: "AEST/AEDT (Melbourne)" },
+  { value: "Pacific/Auckland",       label: "NZST/NZDT (Auckland)" },
+  { value: "Pacific/Fiji",           label: "FJT (Fiji)" },
+  { value: "Pacific/Guam",           label: "ChST (Guam)" },
+];
+
 app.get("/api/timezone", requireAdmin, async (req, res) => {
   try {
-    // Current timezone from the system
     const tzRes  = await execAsync("timedatectl show --property=Timezone --value 2>/dev/null");
     const current = tzRes.stdout.trim();
-
-    // Full IANA timezone list from Node's built-in ICU data — no tzdata package needed
-    const timezones = Intl.supportedValuesOf("timeZone");
-
-    res.json({ success: true, current, timezones });
+    res.json({ success: true, current, timezones: COMMON_TIMEZONES });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
