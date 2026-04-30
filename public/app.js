@@ -639,7 +639,14 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
         if (!body.rtspUrl) { statusEl.textContent = "⚠️ Enter an RTSP URL first."; return; }
       }
       applyBtn.disabled = true;
-      statusEl.textContent = type === "rtsp" ? "Connecting… (up to 12 s)" : "Applying…";
+      // Show a contextual message — if streaming, we'll stop → switch → restart.
+      if (isCurrentlyStreaming) {
+        statusEl.textContent = "Switching… stopping stream & reconnecting";
+      } else if (type === "rtsp") {
+        statusEl.textContent = "Connecting… (up to 12 s)";
+      } else {
+        statusEl.textContent = "Applying…";
+      }
       try {
         const r = await fetch("/api/camera/source", {
           method: "POST",
@@ -649,7 +656,7 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
         const data = await r.json();
         if (data.success) {
           statusEl.style.color = "rgba(80,220,120,0.9)";
-          statusEl.textContent = "✅ Applied";
+          statusEl.textContent = data.streamRestarted ? "✅ Applied — stream restarted" : "✅ Applied";
         } else {
           statusEl.style.color = "rgba(255,160,80,0.9)";
           statusEl.textContent = `⚠️ ${data.error}`;

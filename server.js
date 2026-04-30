@@ -1265,59 +1265,110 @@ function waitForPort(port, timeoutMs = 8000) {
   });
 }
 
-// Switch the active camera source (USB device or RTSP URL)
+// Switch the active camera source (USB device or RTSP URL).
+// If a live stream is running, it is stopped first, the new source is validated
+// via the idle preview, and then the stream is restarted automatically.
 app.post("/api/camera/source", requireAuth, async (req, res) => {
   const { type, device, rtspUrl } = req.body;
-  const previousSource = { ...activeCameraSource };
 
+  // ── Validate inputs before touching any state ────────────────────────────
+  if (type === "rtsp" && !rtspUrl) {
+    return res.status(400).json({ success: false, error: "rtspUrl required" });
+  }
+  if (type !== "usb" && type !== "rtsp") {
+    return res.status(400).json({ success: false, error: "Unknown source type" });
+  }
+
+  const previousSource    = { ...activeCameraSource };
+  const wasStreaming      = streamController.isStreaming;
+  const savedStreamConfig = wasStreaming ? { ...streamController.streamConfig } : null;
+
+  // ── Step 1: Stop the live stream if running ──────────────────────────────
+  // isRestartInProgress suppresses the automatic idle-preview restart that the
+  // "stopped" event handler would otherwise trigger — we handle that ourselves.
+  if (wasStreaming) {
+    isRestartInProgress = true;
+    io.emit("streamStatus", { ...streamController.getStatus(), status: "stopping" });
+    console.log("📷 Camera source switch: stopping active stream…");
+    await streamController.stopStream();
+    // Allow extra time for the old device/RTSP session to fully release.
+    const stopDelay = previousSource.type === "rtsp" ? 2500 : 1000;
+    await new Promise((r) => setTimeout(r, stopDelay));
+  }
+
+  // ── Step 2: Switch to the new source ────────────────────────────────────
   if (type === "usb") {
     const dev = device || CAMERA_DEVICE;
     activeCameraSource = { type: "usb", device: dev, rtspUrl: "" };
     camera.device = dev;
-  } else if (type === "rtsp") {
-    if (!rtspUrl) return res.status(400).json({ success: false, error: "rtspUrl required" });
-    activeCameraSource = { type: "rtsp", device: CAMERA_DEVICE, rtspUrl };
   } else {
-    return res.status(400).json({ success: false, error: "Unknown source type" });
+    activeCameraSource = { type: "rtsp", device: CAMERA_DEVICE, rtspUrl };
   }
-
-  // Keep the stream controller in sync so the NEXT "Start Stream" uses the
-  // correct source (v4l2src for USB, rtspsrc for RTSP).
   streamController.setInputSource(activeCameraSource);
 
-  if (!streamController.isStreaming) {
-    try {
-      await startPersistentIdlePreview();
-    } catch (e) {
-      console.error("⚠️ Failed to start idle preview after source change:", e.message);
-    }
-
-    // For RTSP, give GStreamer up to 12 s to negotiate the session and open the port.
-    // For USB, 5 s is plenty.
-    const timeoutMs = type === "rtsp" ? 12000 : 5000;
-    const ready = await waitForPort(IDLE_PREVIEW_PORT, timeoutMs);
-
-    if (!ready) {
-      // Pipeline never came up — revert to previous USB source
-      console.error(`⚠️ Camera source (${type}) did not respond in time — reverting`);
-      activeCameraSource = { ...previousSource, type: "usb", device: previousSource.device || CAMERA_DEVICE, rtspUrl: "" };
-      camera.device = activeCameraSource.device;
-      // Also revert the stream controller so the next Start Stream uses USB again
-      streamController.setInputSource(activeCameraSource);
-      try { await startPersistentIdlePreview(); } catch (_) {}
-      io.emit("refreshIdlePreview");
-      return res.json({ success: false, error: type === "rtsp"
-        ? "RTSP source did not respond. Check the URL is reachable and try again."
-        : "USB device did not start. Check the device path." });
-    }
-
-    io.emit("refreshIdlePreview");
+  // ── Step 3: Bring up idle preview on the new source ─────────────────────
+  try {
+    await startPersistentIdlePreview();
+  } catch (e) {
+    console.error("⚠️ Failed to start idle preview after source change:", e.message);
   }
 
-  // Persist so the chosen source survives a service restart
-  saveCameraSource(activeCameraSource);
+  // For RTSP, give GStreamer up to 12 s to negotiate; 5 s is plenty for USB.
+  const timeoutMs = type === "rtsp" ? 12000 : 5000;
+  const ready = await waitForPort(IDLE_PREVIEW_PORT, timeoutMs);
 
-  res.json({ success: true, source: activeCameraSource });
+  if (!ready) {
+    // ── Revert on failure ────────────────────────────────────────────────
+    console.error(`⚠️ Camera source (${type}) did not respond in time — reverting`);
+    activeCameraSource = { ...previousSource };
+    if (previousSource.type === "usb") camera.device = previousSource.device || CAMERA_DEVICE;
+    streamController.setInputSource(activeCameraSource);
+    try { await startPersistentIdlePreview(); } catch (_) {}
+    io.emit("refreshIdlePreview");
+
+    // Restart the stream on the reverted source if it was running before.
+    if (wasStreaming) {
+      isRestartInProgress = false;
+      io.emit("streamStatus", { ...streamController.getStatus(), status: "starting" });
+      const revertRestart = await streamController.startStream(savedStreamConfig);
+      io.emit("streamStatus", streamController.getStatus());
+      if (!revertRestart.success) {
+        console.error("⚠️ Failed to restart stream after source revert:", revertRestart.error);
+      }
+    }
+
+    return res.json({
+      success: false,
+      error: type === "rtsp"
+        ? "RTSP source did not respond. Check the URL is reachable and try again."
+        : "USB device did not start. Check the device path.",
+    });
+  }
+
+  // ── Step 4: Persist and notify clients ──────────────────────────────────
+  saveCameraSource(activeCameraSource);
+  io.emit("refreshIdlePreview");
+
+  // ── Step 5: Restart the stream on the new source (if it was running) ────
+  if (wasStreaming) {
+    isRestartInProgress = false;
+    console.log("📷 Camera source switch: restarting stream on new source…");
+    io.emit("streamStatus", { ...streamController.getStatus(), status: "starting" });
+    const restartResult = await streamController.startStream(savedStreamConfig);
+    io.emit("streamStatus", streamController.getStatus());
+    if (!restartResult.success) {
+      console.error("⚠️ Failed to restart stream after source change:", restartResult.error);
+      return res.json({
+        success: true,
+        source: activeCameraSource,
+        wasStreaming,
+        streamRestarted: false,
+        streamError: restartResult.error,
+      });
+    }
+  }
+
+  res.json({ success: true, source: activeCameraSource, wasStreaming, streamRestarted: wasStreaming });
 });
 
 // API endpoint to get stream configuration
