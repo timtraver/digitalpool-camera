@@ -328,13 +328,21 @@ sudo apt install -y libsrt-openssl-dev
 sudo apt install -y ffmpeg
 ```
 
-### 2g. ImageMagick + wkhtmltoimage (local HTML scoreboard overlay)
+### 2g. Timezone data
+
+Required for the **Timezone** setting in Admin Settings. Without this package, `timedatectl set-timezone` will fail because the zone files in `/usr/share/zoneinfo/` won't exist.
+
+```bash
+sudo apt install -y tzdata
+```
+
+### 2h. ImageMagick + wkhtmltoimage (local HTML scoreboard overlay)
 
 ```bash
 sudo apt install -y imagemagick wkhtmltopdf
 ```
 
-### 2h. Chromium browser (Puppeteer headless — remote URL overlay)
+### 2i. Chromium browser (Puppeteer headless — remote URL overlay)
 
 ```bash
 sudo apt install -y chromium-browser
@@ -342,7 +350,7 @@ sudo apt install -y chromium-browser
 
 > The app searches for the Chromium binary at `/usr/bin/chromium-browser`, `/usr/bin/chromium`, and `/snap/bin/chromium`. The standard Ubuntu package installs to `/usr/bin/chromium-browser`.
 
-### 2i. Python GLib / GStreamer bindings (for `gst-overlay-pipeline.py`)
+### 2j. Python GLib / GStreamer bindings (for `gst-overlay-pipeline.py`)
 
 ```bash
 sudo apt install -y \
@@ -353,7 +361,7 @@ sudo apt install -y \
   gir1.2-gdkpixbuf-2.0
 ```
 
-### 2j. MediaMTX — RTSP / HLS server
+### 2k. MediaMTX — RTSP / HLS server
 
 MediaMTX provides the RTSP endpoint (`rtsp://<ip>:8554/live`) and HLS endpoint (`http://<ip>:8888/live`). The app pushes to it internally when the **RTSP** protocol is selected.
 

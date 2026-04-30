@@ -755,12 +755,13 @@ app.post("/api/update", requireAdmin, async (req, res) => {
 // ── Timezone API (admin only) ─────────────────────────────────────────────────
 app.get("/api/timezone", requireAdmin, async (req, res) => {
   try {
-    const [tzRes, listRes] = await Promise.all([
-      execAsync("timedatectl show --property=Timezone --value 2>/dev/null"),
-      execAsync("timedatectl list-timezones 2>/dev/null"),
-    ]);
-    const current   = tzRes.stdout.trim();
-    const timezones = listRes.stdout.trim().split("\n").filter(Boolean);
+    // Current timezone from the system
+    const tzRes  = await execAsync("timedatectl show --property=Timezone --value 2>/dev/null");
+    const current = tzRes.stdout.trim();
+
+    // Full IANA timezone list from Node's built-in ICU data — no tzdata package needed
+    const timezones = Intl.supportedValuesOf("timeZone");
+
     res.json({ success: true, current, timezones });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
