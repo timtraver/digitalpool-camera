@@ -645,9 +645,9 @@
 
             <!-- Change own password -->
             <div class="admin-section">
-              <details id="changePasswordDetails" class="wifi-edit-details">
-                <summary>🔑 Change Your Password</summary>
-                <div class="wifi-form">
+              <details id="changePasswordDetails" class="admin-collapsible">
+                <summary class="admin-section-title">🔑 Change Your Password</summary>
+                <div class="admin-collapsible-body wifi-form">
                   <label>Current Password</label>
                   <input type="password" id="oldPassword" placeholder="Current password" autocomplete="current-password" />
                   <label>New Password <small>(8+ chars)</small></label>
@@ -662,97 +662,102 @@
 
             <!-- User management (admin role only) -->
             <div class="admin-section" id="userMgmtSection" style="display:none">
-              <h4 class="admin-section-title">👥 User Management</h4>
-              <div id="userList" class="user-list">
-                <!-- populated by app.js -->
-              </div>
-
-              <details id="addUserDetails" class="wifi-edit-details" style="margin-top:10px">
-                <summary>➕ Add New User</summary>
-                <div class="wifi-form">
-                  <label>Username</label>
-                  <input type="text" id="newUserUsername" placeholder="e.g. operator1" autocomplete="off" />
-                  <label>Password <small>(8+ chars)</small></label>
-                  <input type="password" id="newUserPassword" placeholder="Password" autocomplete="new-password" />
-                  <label>Role</label>
-                  <select id="newUserRole">
-                    <option value="operator">Operator</option>
-                    <option value="admin">Admin</option>
-                  </select>
-                  <button class="btn-wifi-action" id="addUserBtn">➕ Add User</button>
-                  <div class="wifi-msg" id="addUserMsg"></div>
+              <details class="admin-collapsible">
+                <summary class="admin-section-title">👥 User Management</summary>
+                <div class="admin-collapsible-body">
+                  <div id="userList" class="user-list"></div>
+                  <details id="addUserDetails" class="wifi-edit-details" style="margin-top:10px">
+                    <summary>➕ Add New User</summary>
+                    <div class="wifi-form">
+                      <label>Username</label>
+                      <input type="text" id="newUserUsername" placeholder="e.g. operator1" autocomplete="off" />
+                      <label>Password <small>(8+ chars)</small></label>
+                      <input type="password" id="newUserPassword" placeholder="Password" autocomplete="new-password" />
+                      <label>Role</label>
+                      <select id="newUserRole">
+                        <option value="operator">Operator</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                      <button class="btn-wifi-action" id="addUserBtn">➕ Add User</button>
+                      <div class="wifi-msg" id="addUserMsg"></div>
+                    </div>
+                  </details>
                 </div>
               </details>
             </div>
 
             <!-- Remote Access — admin only -->
             <div class="admin-section" id="remoteAccessSection" style="display:none">
-              <h4 class="admin-section-title">🌐 Remote Access</h4>
-
-              <div class="wifi-form">
-                <label>Device Name</label>
-                <div style="display:flex;gap:6px;align-items:center">
-                  <input type="text" id="remoteDeviceName" placeholder="e.g. venue-chicago-table1"
-                         autocomplete="off" style="flex:1;font-size:12px" />
-                  <button class="btn-wifi-action" id="saveDeviceNameBtn" style="white-space:nowrap">💾 Save</button>
+              <details class="admin-collapsible">
+                <summary class="admin-section-title">🌐 Remote Access</summary>
+                <div class="admin-collapsible-body">
+                  <div class="wifi-form">
+                    <label>Device Name</label>
+                    <div style="display:flex;gap:6px;align-items:center">
+                      <input type="text" id="remoteDeviceName" placeholder="e.g. venue-chicago-table1"
+                             autocomplete="off" style="flex:1;font-size:12px" />
+                      <button class="btn-wifi-action" id="saveDeviceNameBtn" style="white-space:nowrap">💾 Save</button>
+                    </div>
+                    <small style="color:rgba(255,255,255,0.4);font-size:10px">
+                      Lowercase letters, numbers and hyphens only. Appears in your Headscale device list.
+                    </small>
+                  </div>
+                  <div class="remote-status-row" id="remoteStatusRow">
+                    <div class="remote-status-dot" id="remoteStatusDot"></div>
+                    <span id="remoteStatusText">Checking…</span>
+                  </div>
+                  <div id="remoteIpRow" style="display:none" class="remote-ip-row">
+                    <span class="remote-ip-label">Remote IP:</span>
+                    <code id="remoteIpValue" class="remote-ip-value"></code>
+                  </div>
+                  <div id="remoteUrlRow" style="display:none" class="remote-ip-row">
+                    <span class="remote-ip-label">Access URL:</span>
+                    <a id="remoteUrlValue" class="remote-dashboard-link" href="#" target="_blank">—</a>
+                  </div>
+                  <div style="display:flex;gap:8px;margin-top:10px">
+                    <button class="btn-wifi-action" id="remoteEnableBtn">🔗 Enable Remote Access</button>
+                    <button class="btn-wifi-action btn-remote-disable" id="remoteDisableBtn" style="display:none">⛔ Disable</button>
+                  </div>
+                  <div class="wifi-msg" id="remoteMsg"></div>
                 </div>
-                <small style="color:rgba(255,255,255,0.4);font-size:10px">
-                  Lowercase letters, numbers and hyphens only. Appears in your Headscale device list.
-                </small>
-              </div>
-
-              <div class="remote-status-row" id="remoteStatusRow">
-                <div class="remote-status-dot" id="remoteStatusDot"></div>
-                <span id="remoteStatusText">Checking…</span>
-              </div>
-
-              <div id="remoteIpRow" style="display:none" class="remote-ip-row">
-                <span class="remote-ip-label">Remote IP:</span>
-                <code id="remoteIpValue" class="remote-ip-value"></code>
-              </div>
-              <div id="remoteUrlRow" style="display:none" class="remote-ip-row">
-                <span class="remote-ip-label">Access URL:</span>
-                <a id="remoteUrlValue" class="remote-dashboard-link" href="#" target="_blank">—</a>
-              </div>
-
-              <div style="display:flex;gap:8px;margin-top:10px">
-                <button class="btn-wifi-action" id="remoteEnableBtn">🔗 Enable Remote Access</button>
-                <button class="btn-wifi-action btn-remote-disable" id="remoteDisableBtn" style="display:none">⛔ Disable</button>
-              </div>
-              <div class="wifi-msg" id="remoteMsg"></div>
+              </details>
             </div>
 
             <!-- Timezone -->
             <div class="admin-section" id="timezoneSection">
-              <h4 class="admin-section-title">🕐 Timezone</h4>
-              <div class="wifi-info-row" style="margin-bottom:8px">
-                <span class="wifi-label">Current</span>
-                <span class="wifi-value" id="currentTimezone">—</span>
-              </div>
-              <div class="wifi-form">
-                <label>Set Timezone</label>
-                <input type="text" id="timezoneFilter"
-                       placeholder="Filter timezones…" autocomplete="off"
-                       style="width:100%;font-size:12px;margin-bottom:4px;box-sizing:border-box" />
-                <select id="timezoneSelect" size="6"
-                        style="width:100%;font-size:12px;margin-bottom:6px;box-sizing:border-box"></select>
-                <button class="btn-wifi-action" id="saveTimezoneBtn" style="width:100%">💾 Save Timezone</button>
-                <div class="wifi-msg" id="timezoneMsg"></div>
-              </div>
+              <details class="admin-collapsible">
+                <summary class="admin-section-title">🕐 Timezone</summary>
+                <div class="admin-collapsible-body">
+                  <div class="wifi-info-row" style="margin-bottom:8px">
+                    <span class="wifi-label">Current</span>
+                    <span class="wifi-value" id="currentTimezone">—</span>
+                  </div>
+                  <div class="wifi-form">
+                    <label>Set Timezone</label>
+                    <select id="timezoneSelect"></select>
+                    <button class="btn-wifi-action" id="saveTimezoneBtn" style="width:100%">💾 Save Timezone</button>
+                    <div class="wifi-msg" id="timezoneMsg"></div>
+                  </div>
+                </div>
+              </details>
             </div>
 
             <!-- Software Version -->
             <div class="admin-section" id="versionSection">
-              <h4 class="admin-section-title">ℹ️ Software Version</h4>
-              <div class="wifi-info-row">
-                <span class="wifi-label">Camera Control</span>
-                <span class="wifi-value" id="softwareVersion">—</span>
-              </div>
-              <div style="margin-top:10px">
-                <button class="btn-wifi-action" id="updateSoftwareBtn">⬆️ Check &amp; Update Software</button>
-                <div class="wifi-msg" id="updateSoftwareMsg"></div>
-                <pre id="updateSoftwareOutput" style="display:none;margin-top:8px;font-size:11px;color:rgba(255,255,255,0.6);white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,0.3);padding:8px;border-radius:6px;"></pre>
-              </div>
+              <details class="admin-collapsible">
+                <summary class="admin-section-title">ℹ️ Software Version</summary>
+                <div class="admin-collapsible-body">
+                  <div class="wifi-info-row">
+                    <span class="wifi-label">Camera Control</span>
+                    <span class="wifi-value" id="softwareVersion">—</span>
+                  </div>
+                  <div style="margin-top:10px">
+                    <button class="btn-wifi-action" id="updateSoftwareBtn">⬆️ Check &amp; Update Software</button>
+                    <div class="wifi-msg" id="updateSoftwareMsg"></div>
+                    <pre id="updateSoftwareOutput" style="display:none;margin-top:8px;font-size:11px;color:rgba(255,255,255,0.6);white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,0.3);padding:8px;border-radius:6px;"></pre>
+                  </div>
+                </div>
+              </details>
             </div>
 
           </div><!-- /.adminSettingsBody -->

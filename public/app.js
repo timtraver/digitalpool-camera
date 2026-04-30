@@ -2592,20 +2592,6 @@ loadDeviceIp();
   })();
 
   // ── Timezone ──────────────────────────────────────────────────
-  let _allTimezones = [];  // array of {value, label}
-
-  function _populateTzSelect(filter, currentValue) {
-    const sel = document.getElementById("timezoneSelect");
-    if (!sel) return;
-    const q = (filter || "").toLowerCase();
-    const matches = q
-      ? _allTimezones.filter(tz => tz.label.toLowerCase().includes(q) || tz.value.toLowerCase().includes(q))
-      : _allTimezones;
-    sel.innerHTML = matches
-      .map(tz => `<option value="${tz.value}"${tz.value === currentValue ? " selected" : ""}>${tz.label}</option>`)
-      .join("");
-  }
-
   (async () => {
     try {
       const r = await fetch("/api/timezone");
@@ -2615,12 +2601,12 @@ loadDeviceIp();
       const currentEl = document.getElementById("currentTimezone");
       if (currentEl) currentEl.textContent = d.current || "—";
 
-      _allTimezones = d.timezones || [];
-      _populateTzSelect("", d.current);
-
-      document.getElementById("timezoneFilter")?.addEventListener("input", e => {
-        _populateTzSelect(e.target.value, document.getElementById("timezoneSelect")?.value);
-      });
+      const sel = document.getElementById("timezoneSelect");
+      if (sel && d.timezones) {
+        sel.innerHTML = (d.timezones)
+          .map(tz => `<option value="${tz.value}"${tz.value === d.current ? " selected" : ""}>${tz.label}</option>`)
+          .join("");
+      }
     } catch { /* silently ignore */ }
   })();
 
