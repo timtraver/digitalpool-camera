@@ -9,22 +9,6 @@ const execAsync = promisify(exec);
 const fsSync = require("fs");
 const path = require("path");
 const os = require("os");
-// ── Systemd watchdog keepalive ────────────────────────────────────────────────
-// WatchdogSec=120 in the service file requires periodic WATCHDOG=1 notifications.
-// We use the `systemd-notify` binary (always available on systemd hosts) which
-// handles socket addressing correctly. The dgram approach requires the socket to
-// be bound before sending and silently fails on abstract-namespace paths.
-// WATCHDOG_USEC is set automatically by systemd when WatchdogSec is present.
-if (process.env.WATCHDOG_USEC) {
-  const { execFile } = require("child_process");
-  const watchdogMs = Math.max(5000, Math.floor(parseInt(process.env.WATCHDOG_USEC) / 2 / 1000));
-  console.log(`🐕 Systemd watchdog active — petting every ${watchdogMs / 1000}s`);
-  setInterval(() => {
-    execFile("systemd-notify", ["WATCHDOG=1"], { timeout: 2000 }, (err) => {
-      if (err) console.error("⚠️  Watchdog notify failed:", err.message);
-    });
-  }, watchdogMs);
-}
 const CameraController = require("./cameraController");
 const StreamController = require("./streamController");
 const WifiManager = require("./wifiManager");

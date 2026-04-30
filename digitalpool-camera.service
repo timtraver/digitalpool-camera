@@ -39,13 +39,13 @@ MemorySwapMax=0
 # processes first.
 OOMScoreAdjust=-900
 
-# ── Systemd watchdog ─────────────────────────────────────────────────────────
-# Node.js sends WATCHDOG=1 via `systemd-notify` every WatchdogSec/2 seconds.
-# NotifyAccess=main is required: without it systemd does not set NOTIFY_SOCKET
-# or WATCHDOG_USEC in the process environment, so the keepalive never fires and
-# the service is killed every WatchdogSec seconds regardless.
-NotifyAccess=main
-WatchdogSec=120
+# Per-service WatchdogSec is intentionally omitted.
+# With Type=simple, systemd uses WatchdogSec/2 as the effective kill threshold,
+# and keepalives from child processes (execFile) are rejected by NotifyAccess=main,
+# causing the service to be killed every ~60 s even when healthy.
+# Last-resort watchdog protection is provided by the hardware watchdog configured
+# in /etc/systemd/system.conf.d/watchdog.conf (RuntimeWatchdogSec=60), which
+# reboots the board only if PID 1 / the kernel itself becomes completely unresponsive.
 
 [Install]
 WantedBy=multi-user.target

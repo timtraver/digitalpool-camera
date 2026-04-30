@@ -610,6 +610,8 @@ systemctl list-timers network-watchdog.timer
 
 The RK3588 SoC has a hardware watchdog at `/dev/watchdog0`. If systemd stops petting it (because the kernel has completely locked up), the hardware forces a board reset after 60 seconds — even a kernel panic can't prevent this.
 
+> **Note:** The service file deliberately omits `WatchdogSec`. With `Type=simple`, systemd uses `WatchdogSec / 2` as the effective kill threshold, and keepalives sent from Node.js child processes are rejected when `NotifyAccess=main` is set. This combination caused the service to be killed and restarted every ~60 seconds even when it was running perfectly. The hardware watchdog above provides equivalent last-resort protection without this complication.
+
 ```bash
 sudo mkdir -p /etc/systemd/system.conf.d
 
