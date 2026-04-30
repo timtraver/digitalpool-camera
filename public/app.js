@@ -2,6 +2,25 @@ console.log("=".repeat(60));
 console.log("🎬 DIGITALPOOL CAMERA APP.JS STARTING");
 console.log("=".repeat(60));
 
+// ── Global 401 interceptor ────────────────────────────────────────────────────
+// Wraps window.fetch so that ANY API response with HTTP 401 (session expired /
+// server restarted) immediately redirects to the login page instead of leaving
+// the user staring at a UI that looks active but is actually unauthenticated.
+(function installAuthInterceptor() {
+  const _fetch = window.fetch.bind(window);
+  window.fetch = async function (...args) {
+    const res = await _fetch(...args);
+    if (res.status === 401) {
+      // Avoid redirect loops on the login page itself
+      if (!window.location.pathname.startsWith("/login")) {
+        console.warn("🔒 Session expired — redirecting to login");
+        window.location.href = "/login";
+      }
+    }
+    return res;
+  };
+})();
+
 // Custom Dropdown Helper Function
 function createCustomDropdown(selectElement) {
   const options = Array.from(selectElement.options).map((opt) => ({
