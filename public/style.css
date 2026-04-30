@@ -1535,6 +1535,75 @@ footer {
   text-align: center;
 }
 
+/* ── Camera Settings inner subsections ─────────────────────────────────────── */
+.cam-subsection {
+  border-bottom: 1px solid rgba(18, 199, 255, 0.08);
+  margin: 0 -12px;
+}
+.cam-subsection:last-of-type { border-bottom: none; }
+
+.cam-subsection > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 12px;
+  background: rgba(18, 199, 255, 0.04);
+  transition: background 0.15s;
+}
+.cam-subsection > summary::-webkit-details-marker { display: none; }
+.cam-subsection > summary:hover { background: rgba(18, 199, 255, 0.1); }
+.cam-subsection > summary::after {
+  content: '▶';
+  font-size: 9px;
+  color: rgba(18, 199, 255, 0.6);
+  transition: transform 0.15s;
+  flex-shrink: 0;
+  margin-left: 6px;
+}
+.cam-subsection[open] > summary::after { transform: rotate(90deg); }
+
+.cam-subsection-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(18, 199, 255, 0.85);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.cam-subsection-body {
+  padding: 10px 12px;
+}
+
+/* Small icon/refresh button inside Camera Input */
+.btn-icon-small {
+  background: rgba(18, 199, 255, 0.12);
+  border: 1px solid rgba(18, 199, 255, 0.25);
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+.btn-icon-small:hover { background: rgba(18, 199, 255, 0.22); }
+
+/* Small apply button */
+.btn-apply-small {
+  background: rgba(18, 199, 255, 0.15);
+  border: 1px solid rgba(18, 199, 255, 0.35);
+  border-radius: 5px;
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 5px 12px;
+  white-space: nowrap;
+}
+.btn-apply-small:hover { background: rgba(18, 199, 255, 0.28); }
+
 /* ── Admin Settings sections ───────────────────────────────────────────────── */
 .admin-section {
   margin-bottom: 16px;

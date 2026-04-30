@@ -558,6 +558,99 @@ if (resetAllBtn) {
   });
 }
 
+// ── Camera Input section ──────────────────────────────────────────────────────
+(function initCameraInput() {
+  const sourceTypeEl  = document.getElementById("cameraSourceType");
+  const usbSection    = document.getElementById("cameraInputUsb");
+  const rtspSection   = document.getElementById("cameraInputRtsp");
+  const deviceSelect  = document.getElementById("cameraUsbDevice");
+  const refreshBtn    = document.getElementById("refreshCameraDevices");
+  const rtspUrlEl     = document.getElementById("cameraRtspUrl");
+  const applyBtn      = document.getElementById("applyCameraInput");
+  const statusEl      = document.getElementById("cameraInputStatus");
+
+  if (!sourceTypeEl) return;
+
+  async function loadDevices() {
+    if (deviceSelect) deviceSelect.innerHTML = "<option>Scanning…</option>";
+    try {
+      const r = await fetch("/api/camera/devices");
+      const data = await r.json();
+      if (!deviceSelect) return;
+      deviceSelect.innerHTML = "";
+      if (!data.devices || data.devices.length === 0) {
+        deviceSelect.innerHTML = "<option value=''>No devices found</option>";
+        return;
+      }
+      // Deduplicate: prefer the first /dev/videoN entry per camera name
+      const seen = new Set();
+      data.devices.forEach(({ device, name }) => {
+        if (seen.has(name)) return;
+        seen.add(name);
+        const opt = document.createElement("option");
+        opt.value = device;
+        opt.textContent = `${name} (${device})`;
+        deviceSelect.appendChild(opt);
+      });
+      // Pre-select the current active device
+      if (data.current?.type === "usb" && data.current.device) {
+        deviceSelect.value = data.current.device;
+      }
+      // Pre-fill RTSP URL if currently active
+      if (data.current?.type === "rtsp" && rtspUrlEl) {
+        rtspUrlEl.value = data.current.rtspUrl || "";
+        sourceTypeEl.value = "rtsp";
+        usbSection.style.display  = "none";
+        rtspSection.style.display = "";
+      }
+    } catch (e) {
+      if (deviceSelect) deviceSelect.innerHTML = "<option value=''>Error loading devices</option>";
+    }
+  }
+
+  // Toggle USB / RTSP panels on source type change
+  sourceTypeEl.addEventListener("change", () => {
+    const isRtsp = sourceTypeEl.value === "rtsp";
+    usbSection.style.display  = isRtsp ? "none" : "";
+    rtspSection.style.display = isRtsp ? "" : "none";
+  });
+
+  if (refreshBtn) refreshBtn.addEventListener("click", loadDevices);
+
+  if (applyBtn) {
+    applyBtn.addEventListener("click", async () => {
+      const type = sourceTypeEl.value;
+      const body = { type };
+      if (type === "usb") {
+        body.device = deviceSelect?.value || "";
+        if (!body.device) { statusEl.textContent = "⚠️ Select a device first."; return; }
+      } else if (type === "rtsp") {
+        body.rtspUrl = rtspUrlEl?.value.trim() || "";
+        if (!body.rtspUrl) { statusEl.textContent = "⚠️ Enter an RTSP URL first."; return; }
+      }
+      applyBtn.disabled = true;
+      statusEl.textContent = "Applying…";
+      try {
+        const r = await fetch("/api/camera/source", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json();
+        statusEl.textContent = data.success ? "✅ Applied" : `⚠️ ${data.error}`;
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+      } catch (e) {
+        statusEl.textContent = "⚠️ Network error";
+      } finally {
+        applyBtn.disabled = false;
+      }
+    });
+  }
+
+  // Load device list on page ready
+  loadDevices();
+})();
+
 // Keyboard controls
 // Hold Shift for large movements, otherwise small movements
 document.addEventListener("keydown", (e) => {

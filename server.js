@@ -1160,6 +1160,63 @@ app.get("/api/camera/config", (req, res) => {
   res.json({ success: true, config: camera.config });
 });
 
+// Active camera source — updated at runtime via /api/camera/source
+// Starts from the env/default USB device; can be switched to RTSP without restart.
+let activeCameraSource = { type: "usb", device: CAMERA_DEVICE, rtspUrl: "" };
+
+// List available V4L2 video capture devices
+app.get("/api/camera/devices", requireAuth, (req, res) => {
+  try {
+    const { execSync } = require("child_process");
+    const raw = execSync("v4l2-ctl --list-devices 2>/dev/null || true").toString();
+    // Output format:
+    //   Camera Model (usb-path):
+    //       /dev/video0
+    //       /dev/video1
+    const devices = [];
+    let currentName = "";
+    for (const line of raw.split("\n")) {
+      if (/^\s+/.test(line)) {
+        const dev = line.trim();
+        if (dev.startsWith("/dev/video")) {
+          devices.push({ device: dev, name: currentName });
+        }
+      } else if (line.trim()) {
+        currentName = line.replace(/:$/, "").trim();
+      }
+    }
+    res.json({ success: true, devices, current: activeCameraSource });
+  } catch (e) {
+    res.json({ success: false, error: e.message, devices: [], current: activeCameraSource });
+  }
+});
+
+// Switch the active camera source (USB device or RTSP URL)
+app.post("/api/camera/source", requireAuth, async (req, res) => {
+  const { type, device, rtspUrl } = req.body;
+  if (type === "usb") {
+    const dev = device || CAMERA_DEVICE;
+    activeCameraSource = { type: "usb", device: dev, rtspUrl: "" };
+    camera.device = dev; // update v4l2 controller device
+  } else if (type === "rtsp") {
+    if (!rtspUrl) return res.status(400).json({ success: false, error: "rtspUrl required" });
+    activeCameraSource = { type: "rtsp", device: CAMERA_DEVICE, rtspUrl };
+  } else {
+    return res.status(400).json({ success: false, error: "Unknown source type" });
+  }
+
+  // Restart idle preview with new source (only when not streaming)
+  if (!streamController.isStreaming) {
+    try {
+      await startPersistentIdlePreview();
+      io.emit("refreshIdlePreview");
+    } catch (e) {
+      console.error("⚠️ Failed to restart idle preview after source change:", e.message);
+    }
+  }
+  res.json({ success: true, source: activeCameraSource });
+});
+
 // API endpoint to get stream configuration
 app.get("/api/stream/config", (req, res) => {
   res.json({ success: true, config: streamController.streamConfig });
@@ -1767,9 +1824,28 @@ function buildIdlePreviewGstArgs(sinkArgs) {
   const config = streamController.streamConfig;
   const fs = require("fs");
 
+  // ── RTSP source: simple passthrough pipeline (no v4l2 / MPP, no overlays) ──
+  if (activeCameraSource.type === "rtsp" && activeCameraSource.rtspUrl) {
+    console.log(`📡 Building RTSP idle preview pipeline for ${activeCameraSource.rtspUrl}`);
+    return [
+      "rtspsrc", `location=${activeCameraSource.rtspUrl}`, "latency=100", "protocols=tcp",
+      "!", "decodebin",
+      "!", "videorate",
+      "!", "video/x-raw,framerate=1/1",
+      "!", "videoscale",
+      "!", "video/x-raw,width=1280,height=720",
+      "!", "videoconvert",
+      "!", "jpegenc", "quality=65",
+      "!", "multipartmux", "boundary=frame",
+      "!", ...sinkArgs,
+    ];
+  }
+
+  // ── USB source (default): full MPP pipeline with overlay support ──
+  const device = activeCameraSource.device || CAMERA_DEVICE;
   const gstArgs = [
     "v4l2src",
-    `device=${CAMERA_DEVICE}`,
+    `device=${device}`,
     "do-timestamp=true",
     "!",
     `image/jpeg,width=${config.width || 1920},height=${config.height || 1080},framerate=${config.framerate || 30}/1`,

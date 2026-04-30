@@ -100,140 +100,133 @@
           </div>
           <div class="settings-card-body" id="cameraSettingsBody">
 
-          <!-- Image Quality Controls -->
-          <div class="control-group">
-            <h4>Image Quality</h4>
+            <!-- ── Camera Input ── -->
+            <details class="cam-subsection">
+              <summary><span class="cam-subsection-title">📷 Camera Input</span></summary>
+              <div class="cam-subsection-body">
+                <div class="control-item">
+                  <label>Source Type</label>
+                  <select id="cameraSourceType">
+                    <option value="usb">USB Camera</option>
+                    <option value="rtsp">RTSP Stream</option>
+                    <option value="ndi" disabled>NDI (coming soon)</option>
+                  </select>
+                </div>
+                <div id="cameraInputUsb">
+                  <div class="control-item" style="margin-top:6px">
+                    <label>Device</label>
+                    <select id="cameraUsbDevice" style="flex:1"><option value="">Scanning…</option></select>
+                    <button id="refreshCameraDevices" class="btn-icon-small" title="Refresh device list">🔄</button>
+                  </div>
+                </div>
+                <div id="cameraInputRtsp" style="display:none">
+                  <div class="control-item" style="margin-top:6px">
+                    <label>URL</label>
+                    <input type="text" id="cameraRtspUrl" placeholder="rtsp://192.168.1.x/stream"
+                      style="flex:1;padding:4px 6px;background:rgba(6,16,27,0.8);border:1px solid rgba(18,199,255,0.3);border-radius:4px;color:rgba(255,255,255,0.85);font-size:12px" />
+                  </div>
+                  <p style="font-size:10px;color:rgba(255,255,255,0.4);margin:4px 0 0">
+                    ℹ️ Camera controls (PTZ, image settings) are not available for RTSP sources.
+                  </p>
+                </div>
+                <div style="margin-top:10px;display:flex;align-items:center;gap:10px">
+                  <button id="applyCameraInput" class="btn-apply-small">✅ Apply</button>
+                  <span id="cameraInputStatus" style="font-size:11px;color:rgba(255,255,255,0.5)"></span>
+                </div>
+              </div>
+            </details>
 
-            <div class="control-item">
-              <label for="brightness">Brightness</label>
-              <input
-                type="range"
-                id="brightness"
-                min="0"
-                max="100"
-                value="50"
-              />
-              <span class="value-display" id="brightnessValue">50</span>
-            </div>
+            <!-- ── Image Quality ── -->
+            <details class="cam-subsection" open>
+              <summary><span class="cam-subsection-title">🖼 Image Quality</span></summary>
+              <div class="cam-subsection-body">
+                <div class="control-item">
+                  <label for="brightness">Brightness</label>
+                  <input type="range" id="brightness" min="0" max="100" value="50" />
+                  <span class="value-display" id="brightnessValue">50</span>
+                </div>
+                <div class="control-item">
+                  <label for="contrast">Contrast</label>
+                  <input type="range" id="contrast" min="0" max="100" value="50" />
+                  <span class="value-display" id="contrastValue">50</span>
+                </div>
+                <div class="control-item">
+                  <label for="saturation">Saturation</label>
+                  <input type="range" id="saturation" min="0" max="100" value="50" />
+                  <span class="value-display" id="saturationValue">50</span>
+                </div>
+                <div class="control-item">
+                  <label for="sharpness">Sharpness</label>
+                  <input type="range" id="sharpness" min="0" max="100" value="50" />
+                  <span class="value-display" id="sharpnessValue">50</span>
+                </div>
+              </div>
+            </details>
 
-            <div class="control-item">
-              <label for="contrast">Contrast</label>
-              <input type="range" id="contrast" min="0" max="100" value="50" />
-              <span class="value-display" id="contrastValue">50</span>
-            </div>
+            <!-- ── Exposure ── -->
+            <details class="cam-subsection">
+              <summary><span class="cam-subsection-title">☀️ Exposure</span></summary>
+              <div class="cam-subsection-body">
+                <div class="control-item">
+                  <label for="exposureAuto">Auto Exposure</label>
+                  <select id="exposureAuto">
+                    <option value="0">Auto</option>
+                    <option value="1">Manual</option>
+                    <option value="2">Shutter Priority</option>
+                    <option value="3">Aperture Priority</option>
+                  </select>
+                </div>
+                <div class="control-item">
+                  <label for="exposureAbsolute">Exposure <small style="opacity:0.6">(×100µs)</small></label>
+                  <input type="range" id="exposureAbsolute" min="1" max="2500" value="330" />
+                  <span class="value-display" id="exposureAbsoluteValue">330</span>
+                </div>
+                <div class="control-item">
+                  <label for="gain">Gain</label>
+                  <input type="range" id="gain" min="1" max="64" value="1" />
+                  <span class="value-display" id="gainValue">1</span>
+                </div>
+                <div class="control-item">
+                  <label for="backlightCompensation">Backlight Comp.</label>
+                  <input type="range" id="backlightCompensation" min="0" max="18" value="9" />
+                  <span class="value-display" id="backlightCompensationValue">9</span>
+                </div>
+              </div>
+            </details>
 
-            <div class="control-item">
-              <label for="saturation">Saturation</label>
-              <input
-                type="range"
-                id="saturation"
-                min="0"
-                max="100"
-                value="50"
-              />
-              <span class="value-display" id="saturationValue">50</span>
-            </div>
+            <!-- ── White Balance ── -->
+            <details class="cam-subsection">
+              <summary><span class="cam-subsection-title">🌡 White Balance</span></summary>
+              <div class="cam-subsection-body">
+                <div class="control-item">
+                  <label for="whiteBalanceAuto">Auto WB</label>
+                  <input type="checkbox" id="whiteBalanceAuto" checked />
+                </div>
+                <div class="control-item">
+                  <label for="whiteBalanceTemp">Temperature</label>
+                  <input type="range" id="whiteBalanceTemp" min="2000" max="10000" value="5000" step="100" />
+                  <span class="value-display" id="whiteBalanceTempValue">5000</span>
+                </div>
+              </div>
+            </details>
 
-            <div class="control-item">
-              <label for="sharpness">Sharpness</label>
-              <input type="range" id="sharpness" min="0" max="100" value="50" />
-              <span class="value-display" id="sharpnessValue">50</span>
-            </div>
-          </div>
+            <!-- ── Focus ── -->
+            <details class="cam-subsection">
+              <summary><span class="cam-subsection-title">🔍 Focus</span></summary>
+              <div class="cam-subsection-body">
+                <div class="control-item">
+                  <label for="focusAuto">Auto Focus</label>
+                  <input type="checkbox" id="focusAuto" checked />
+                </div>
+                <div class="control-item">
+                  <label for="focusAbsolute">Focus</label>
+                  <input type="range" id="focusAbsolute" min="0" max="100" value="0" />
+                  <span class="value-display" id="focusAbsoluteValue">0</span>
+                </div>
+              </div>
+            </details>
 
-          <!-- Exposure Controls -->
-          <div class="control-group">
-            <h4>Exposure</h4>
-
-            <div class="control-item">
-              <label for="exposureAuto">Auto Exposure</label>
-              <select id="exposureAuto">
-                <option value="0">Auto</option>
-                <option value="1">Manual</option>
-                <option value="2">Shutter Priority</option>
-                <option value="3">Aperture Priority</option>
-              </select>
-            </div>
-
-            <div class="control-item">
-              <label for="exposureAbsolute">Exposure Time <small style="opacity:0.6">(×100µs — 167=60fps, 333=30fps, 2500=4fps)</small></label>
-              <input
-                type="range"
-                id="exposureAbsolute"
-                min="1"
-                max="2500"
-                value="330"
-              />
-              <span class="value-display" id="exposureAbsoluteValue">330</span>
-            </div>
-
-            <div class="control-item">
-              <label for="gain">Gain</label>
-              <input type="range" id="gain" min="1" max="64" value="1" />
-              <span class="value-display" id="gainValue">1</span>
-            </div>
-
-            <div class="control-item">
-              <label for="backlightCompensation">Backlight Compensation</label>
-              <input
-                type="range"
-                id="backlightCompensation"
-                min="0"
-                max="18"
-                value="9"
-              />
-              <span class="value-display" id="backlightCompensationValue"
-                >9</span
-              >
-            </div>
-          </div>
-
-          <!-- White Balance Controls -->
-          <div class="control-group">
-            <h4>White Balance</h4>
-
-            <div class="control-item">
-              <label for="whiteBalanceAuto">Auto White Balance</label>
-              <input type="checkbox" id="whiteBalanceAuto" checked />
-            </div>
-
-            <div class="control-item">
-              <label for="whiteBalanceTemp">Temperature</label>
-              <input
-                type="range"
-                id="whiteBalanceTemp"
-                min="2000"
-                max="10000"
-                value="5000"
-                step="100"
-              />
-              <span class="value-display" id="whiteBalanceTempValue">5000</span>
-            </div>
-          </div>
-
-          <!-- Focus Controls -->
-          <div class="control-group">
-            <h4>Focus</h4>
-
-            <div class="control-item">
-              <label for="focusAuto">Auto Focus</label>
-              <input type="checkbox" id="focusAuto" checked />
-            </div>
-
-            <div class="control-item">
-              <label for="focusAbsolute">Focus</label>
-              <input
-                type="range"
-                id="focusAbsolute"
-                min="0"
-                max="100"
-                value="0"
-              />
-              <span class="value-display" id="focusAbsoluteValue">0</span>
-            </div>
-          </div>
-
-          <button class="btn-reset" id="resetAll">Reset All Settings</button>
+            <button class="btn-reset" id="resetAll" style="margin:10px 0 4px">Reset All Settings</button>
           </div><!-- /.settings-card-body (camera settings) -->
 
           <!-- PTZ Card -->
