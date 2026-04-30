@@ -1595,9 +1595,10 @@ app.post("/api/mediamtx/auth", express.json(), (req, res) => {
   try {
     const { ip, action, path: streamPath, protocol } = req.body || {};
 
-    // Always allow the local GStreamer publisher and internal MediaMTX processes
+    // Always allow the local GStreamer publisher and internal MediaMTX processes.
+    // Do NOT log these — MediaMTX calls the hook for every internal API operation
+    // (HLS segment fetches, viewer list polls, etc.), flooding the journal.
     if (!ip || ip === "127.0.0.1" || ip === "::1") {
-      console.log(`🔐 Auth hook: allowed local ${protocol} ${action} from ${ip} on "${streamPath}"`);
       return res.sendStatus(200);
     }
 
