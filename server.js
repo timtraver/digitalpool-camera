@@ -71,6 +71,8 @@ function isHotspotRequest(req) {
 function requireAuth(req, res, next) {
   // MediaMTX auth hook — called from localhost by MediaMTX, never needs a session
   if (req.path === "/api/mediamtx/auth") return next();
+  // Health-check — used by the update poller to detect when the server is back up
+  if (req.path === "/api/status") return next();
 
   if (isHotspotRequest(req))          return next();   // hotspot bypass
   if (req.session && req.session.user) return next();  // logged-in session
