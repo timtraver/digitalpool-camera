@@ -568,6 +568,74 @@ sudo journalctl -u digitalpool-camera -f
 
 ---
 
+## 6b. System Reliability — Memory Limits & Watchdogs
+
+An unattended camera running 24/7 can become unreachable if a gradual memory leak fills RAM, or if a USB WiFi driver stalls and stops passing traffic. Three layers of protection prevent either scenario from requiring a physical power-cycle.
+
+### Layer 1 — Cgroup memory ceiling (already in the service file)
+
+The shipped `digitalpool-camera.service` already includes:
+
+```ini
+MemoryMax=1500M
+OOMScoreAdjust=-900
+```
+
+`MemoryMax` puts a hard cgroup ceiling on the Node.js process and **all its children** (GStreamer, ffmpeg, Python). If a leak occurs, systemd kills and restarts *only this service* cleanly before RAM pressure reaches the kernel level. `OOMScoreAdjust=-900` tells the OOM killer to strongly prefer killing anything else first if pressure does reach the kernel.
+
+No extra steps are needed — the service file is already set.
+
+### Layer 2 — Network watchdog (reboots if all interfaces are unreachable)
+
+The repository includes `network-watchdog.sh`, `network-watchdog.service`, and `network-watchdog.timer`. The timer runs every 10 minutes; if both Ethernet and WiFi have been unreachable for 20 consecutive minutes the script reboots the device cleanly.
+
+```bash
+# Copy the watchdog script
+sudo cp /home/ubuntu/digitalpool-camera/network-watchdog.sh /usr/local/bin/
+sudo chmod +x /usr/local/bin/network-watchdog.sh
+
+# Install the systemd units
+sudo cp /home/ubuntu/digitalpool-camera/network-watchdog.service \
+        /home/ubuntu/digitalpool-camera/network-watchdog.timer \
+        /etc/systemd/system/
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now network-watchdog.timer
+
+# Confirm the timer is scheduled
+systemctl list-timers network-watchdog.timer
+```
+
+### Layer 3 — Hardware watchdog (last resort if the kernel itself freezes)
+
+The RK3588 SoC has a hardware watchdog at `/dev/watchdog0`. If systemd stops petting it (because the kernel has completely locked up), the hardware forces a board reset after 60 seconds — even a kernel panic can't prevent this.
+
+```bash
+sudo mkdir -p /etc/systemd/system.conf.d
+
+sudo tee /etc/systemd/system.conf.d/watchdog.conf > /dev/null << 'EOF'
+[Manager]
+RuntimeWatchdogSec=60
+RebootWatchdogSec=10min
+EOF
+
+sudo systemctl daemon-reload
+
+# Verify it was picked up
+sudo systemctl show | grep -i watchdog
+# Should show: RuntimeWatchdogSec=1min
+```
+
+### Summary
+
+| Layer | Catches | Action |
+|---|---|---|
+| `MemoryMax=1500M` | Memory leak before it gets dangerous | Restarts the service cleanly |
+| `network-watchdog.timer` (every 10 min) | All interfaces unreachable for 20+ min | Clean system reboot |
+| Hardware watchdog (`RuntimeWatchdogSec=60`) | Complete kernel freeze | Hardware-forced board reset |
+
+---
+
 ## 7. WiFi Access Point (Hotspot)
 
 The app creates and manages a WiFi AP named **DigitalPool-Camera** using NetworkManager (`nmcli`). Because the service runs as the `ubuntu` user (not root), a **polkit rule** is required to grant it permission to add and activate NetworkManager connections. Without this the AP will silently fail with "Insufficient privileges".

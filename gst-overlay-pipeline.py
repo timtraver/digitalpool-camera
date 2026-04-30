@@ -333,6 +333,12 @@ def main():
         mux_element = pipeline.get_by_name("mux")
 
         if dec_element and mux_element:
+            # Guard flag: ensures we only build the audio chain once even if
+            # decodebin fires pad-added multiple times (e.g. RTSP reconnects).
+            # Without this, each reconnect leaks 5 new GStreamer elements that
+            # are added to the pipeline but never cleaned up.
+            _rtsp_audio_linked = [False]
+
             def on_rtsp_pad_added(element, pad, mux):
                 # Only handle audio pads — video is already wired in the string.
                 pad_caps = pad.get_current_caps() or pad.query_caps(None)
@@ -341,6 +347,11 @@ def main():
                 struct = pad_caps.get_structure(0)
                 if not struct or not struct.get_name().startswith("audio/"):
                     return
+
+                if _rtsp_audio_linked[0]:
+                    print("🔊 RTSP audio pad fired again — already linked, skipping", file=sys.stderr)
+                    return
+                _rtsp_audio_linked[0] = True
 
                 print("🔊 RTSP audio pad detected — linking passthrough to mux", file=sys.stderr)
 
@@ -402,7 +413,13 @@ def main():
             pass
 
     def check_png_update():
-        """Poll PNG file for changes and reload overlay when modified."""
+        """Poll PNG file for changes and reload overlay when modified.
+
+        gdkpixbufoverlay leaks the old GdkPixbuf on some GStreamer versions when
+        the 'location' property is changed while the pipeline is PLAYING.  To cap
+        leak rate we poll every 10 s (not 2 s), and we only set the property when
+        the file has actually changed — so a static overlay never triggers a reload.
+        """
         nonlocal last_mtime
         if not overlay_element:
             return True  # No overlay element — nothing to update
@@ -416,9 +433,11 @@ def main():
             pass  # File doesn't exist yet or was briefly removed during atomic write
         return True  # Keep the timer running
 
-    # Only poll for PNG updates when the overlay element is present
+    # Poll every 10 s instead of 2 s — reduces gdkpixbufoverlay pixbuf churn by 5x.
+    # Most overlays update at most once per second from Puppeteer; 10 s latency is
+    # imperceptible for scoreboard / timestamp overlays.
     if overlay_element:
-        GLib.timeout_add(2000, check_png_update)
+        GLib.timeout_add(10000, check_png_update)
 
     # Handle pipeline messages
     bus = pipeline.get_bus()
