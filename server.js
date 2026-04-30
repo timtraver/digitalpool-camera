@@ -9,6 +9,23 @@ const execAsync = promisify(exec);
 const fsSync = require("fs");
 const path = require("path");
 const os = require("os");
+const dgram = require("dgram");
+
+// ── Systemd watchdog keepalive ────────────────────────────────────────────────
+// WatchdogSec=120 in the service file requires periodic WATCHDOG=1 notifications
+// sent to NOTIFY_SOCKET. Without this, systemd restarts the service every
+// WatchdogSec seconds even when it is running perfectly.
+// We pet it at half the configured interval to stay comfortably within budget.
+if (process.env.WATCHDOG_USEC && process.env.NOTIFY_SOCKET) {
+  const watchdogMs = Math.max(5000, Math.floor(parseInt(process.env.WATCHDOG_USEC) / 2 / 1000));
+  const notifyPath = process.env.NOTIFY_SOCKET.replace(/^@/, "\0"); // support abstract sockets
+  console.log(`🐕 Systemd watchdog active — petting every ${watchdogMs / 1000}s`);
+  setInterval(() => {
+    const client = dgram.createSocket("unix_dgram");
+    const msg = Buffer.from("WATCHDOG=1");
+    client.send(msg, 0, msg.length, notifyPath, () => client.close());
+  }, watchdogMs);
+}
 const CameraController = require("./cameraController");
 const StreamController = require("./streamController");
 const WifiManager = require("./wifiManager");
@@ -1495,14 +1512,15 @@ app.get("/api/stream/viewers", requireAdmin, async (req, res) => {
       if (prev && s.bytesSent >= prev.bytes && (now - prev.time) >= 800) {
         const elapsed = (now - prev.time) / 1000;
         mbps = parseFloat(((s.bytesSent - prev.bytes) * 8 / elapsed / 1_000_000).toFixed(2));
-        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps, kickBase: s._kickBase, ip };
+        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps, kickBase: s._kickBase, ip, connectedAt: prev.connectedAt };
       } else if (!prev) {
-        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps: null, kickBase: s._kickBase, ip };
+        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps: null, kickBase: s._kickBase, ip, connectedAt: now };
       }
 
       viewers.push({
         id: s.id, remoteAddr: s.remoteAddr, ip,
         type: s._type, state: s.state, bytesSent: s.bytesSent, mbps,
+        connectedAt: viewerBytesHistory[s.id].connectedAt,
       });
     }
 

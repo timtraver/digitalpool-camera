@@ -1529,6 +1529,18 @@ socket.on("streamDrift", ({ ppm }) => {
   // Shared button style fragments
   const BTN_BASE = `border:none;color:#fff;font-size:10px;padding:2px 5px;border-radius:3px;cursor:pointer;font-family:monospace;white-space:nowrap;`;
 
+  // Format milliseconds into a compact "Xh Ym Zs" duration string.
+  // Seconds are shown for the first 2 minutes, then suppressed to keep it tidy.
+  function fmtDuration(ms) {
+    const totalSec = Math.floor(ms / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    if (h > 0)  return `${h}h ${m}m`;
+    if (m >= 2) return `${m}m`;
+    return `${m}m ${s}s`;
+  }
+
   // Protocol badge colours (subtle, readable on dark bg)
   const PROTO_COLOR = {
     RTSP:   "rgba(30,120,220,0.85)",
@@ -1557,12 +1569,15 @@ socket.on("streamDrift", ({ ppm }) => {
       return;
     }
 
+    const now = Date.now();
     viewers.forEach((v) => {
-      const ip   = v.ip || v.remoteAddr || "unknown";
-      const rate = v.mbps !== null ? v.mbps.toFixed(2) + " Mbps" : "…";
+      const ip       = v.ip || v.remoteAddr || "unknown";
+      const rate     = v.mbps !== null ? v.mbps.toFixed(2) + " Mbps" : "…";
+      const duration = v.connectedAt ? fmtDuration(now - v.connectedAt) : "…";
       html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
         ${protoBadge(v.type)}
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${ip}">${ip}</span>
+        <span style="color:rgba(255,255,255,0.4);margin:0 4px;min-width:40px;text-align:right;font-size:10px;" title="Connected for ${duration}">${duration}</span>
         <span style="color:#12c7ff;margin:0 6px;min-width:68px;text-align:right;">${rate}</span>
         <button id="kick-${v.id}" data-id="${v.id}" style="${BTN_BASE}background:rgba(200,80,80,0.75);">Kick</button>
         <button id="ban-${v.id}"  data-id="${v.id}" style="${BTN_BASE}background:rgba(160,40,40,0.85);margin-left:3px;">Ban</button>
