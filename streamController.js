@@ -50,6 +50,8 @@ class StreamController extends EventEmitter {
   constructor(cameraDevice = "/dev/video0") {
     super();
     this.cameraDevice = cameraDevice;
+    // Active input source — updated via setInputSource() when the user switches in the UI.
+    this.inputSource = { type: "usb", device: cameraDevice, rtspUrl: "" };
     this.gstProcess = null;
     this.ffmpegProcess = null; // Separate ffmpeg process for SRT+audio hybrid
     this.isStreaming = false;
@@ -110,6 +112,18 @@ class StreamController extends EventEmitter {
       // Save defaults so a config file always exists
       this.saveConfig();
     }
+  }
+
+  /**
+   * Update the active input source used by all pipeline builders.
+   * Call this whenever the user switches from USB to RTSP (or back) in the UI.
+   */
+  setInputSource(source) {
+    this.inputSource = { ...source };
+    if (source.type === "usb" && source.device) {
+      this.cameraDevice = source.device;
+    }
+    console.log(`📷 StreamController input source updated: ${source.type}${source.type === "rtsp" ? " → " + source.rtspUrl : " → " + this.cameraDevice}`);
   }
 
   /**
@@ -926,6 +940,9 @@ class StreamController extends EventEmitter {
       tsColor.toString(),
       tsBackground,
       scriptCodec,
+      // Input source type and RTSP URL (args 22-23) — empty strings for USB
+      this.inputSource.type || "usb",
+      this.inputSource.rtspUrl || "",
     ];
 
     return {
@@ -975,34 +992,42 @@ class StreamController extends EventEmitter {
       return this._buildPNGOverlayPipeline();
     }
 
-    let pipeline = [
-      // Video source - use MJPEG format which most USB cameras support at high resolution
-      "v4l2src",
-      `device=${this.cameraDevice}`,
-      "do-timestamp=true", // Use pipeline clock timestamps for better sync
-      "!",
-      `image/jpeg,width=${width},height=${height},framerate=${framerate}/1`,
-      "!",
-      "jpegparse",
-      "!",
-      "mppjpegdec",
-      "!",
-      // videorate: enforce exactly framerate fps using GStreamer running-time timestamps.
-      // do-timestamp=true stamps each frame with CLOCK_MONOTONIC at the moment it
-      // arrives from the V4L2 driver. The USB camera's crystal may run slightly slow
-      // (observed ~0.07%), so frames arrive at e.g. 29.979 fps instead of 30 fps —
-      // consecutive timestamps are ~33.356 ms apart instead of 33.333 ms. Without
-      // correction this accumulates: 86 s of latency after 33 hours, or ~2 s per
-      // 45 minutes. videorate inserts a duplicate frame once every ~1 428 frames
-      // (~48 s at 30 fps) so the pipeline always outputs exactly framerate frames
-      // per GStreamer running-time second (wall-clock accurate via NTP-synced
-      // CLOCK_MONOTONIC). After this element, video PTS advance at the correct rate
-      // indefinitely — eliminating all ongoing drift.
-      "videorate",
-      "!",
-      `video/x-raw,framerate=${framerate}/1`,
-      "!",
-    ];
+    let pipeline;
+    if (this.inputSource.type === "rtsp" && this.inputSource.rtspUrl) {
+      // RTSP source: decode the incoming stream, normalise resolution/rate, then
+      // re-encode with overlays.  videoconvert is required immediately after
+      // decodebin because decodebin emits dynamic caps (NV12, I420, BGRx, etc.)
+      // that downstream fixed-caps elements (videoscale caps filter, videorate)
+      // cannot negotiate without an explicit conversion step.
+      pipeline = [
+        "rtspsrc", `location=${this.inputSource.rtspUrl}`, "latency=200", "protocols=tcp",
+        "!", "decodebin",
+        "!", "videoconvert",
+        "!", "videoscale",
+        "!", `video/x-raw,width=${width},height=${height}`,
+        "!", "videorate",
+        "!", `video/x-raw,framerate=${framerate}/1`,
+        "!",
+      ];
+    } else {
+      pipeline = [
+        // USB camera: MJPEG capture → MPP hardware JPEG decode → rate control
+        "v4l2src",
+        `device=${this.cameraDevice}`,
+        "do-timestamp=true",
+        "!",
+        `image/jpeg,width=${width},height=${height},framerate=${framerate}/1`,
+        "!",
+        "jpegparse",
+        "!",
+        "mppjpegdec",
+        "!",
+        "videorate",
+        "!",
+        `video/x-raw,framerate=${framerate}/1`,
+        "!",
+      ];
+    }
 
     // Add overlays if any individual overlay is enabled
     const hasAnyOverlay = this.streamConfig.overlayEnabled || this.streamConfig.showTimestamp;

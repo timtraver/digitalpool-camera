@@ -72,6 +72,9 @@ def main():
     # H.265 is incompatible with RTMP (FLV container only supports H.264)
     requested_codec = sys.argv[21] if len(sys.argv) > 21 else "h264"
     codec = "h264" if protocol == "rtmp" else requested_codec
+    # Input source type and RTSP URL (optional — default to USB v4l2src)
+    input_type    = sys.argv[22] if len(sys.argv) > 22 else "usb"
+    input_rtsp_url = sys.argv[23] if len(sys.argv) > 23 else ""
 
     bitrate_kbps = bitrate // 1000
 
@@ -194,23 +197,38 @@ def main():
         if has_png_overlay else ''
     )
 
+    # Build the capture/decode source section based on input type.
+    # Both paths end with raw video at the configured framerate, ready for
+    # overlay compositing and encoding by the common downstream pipeline.
+    if input_type == "rtsp" and input_rtsp_url:
+        print(f"📡 Input source: RTSP → {input_rtsp_url}", file=sys.stderr)
+        # decodebin emits dynamic caps — videoconvert + videoscale normalise them
+        # to a fixed resolution/format before videorate enforces the target fps.
+        source_str = (
+            f'rtspsrc location={input_rtsp_url} latency=200 protocols=tcp '
+            f'! decodebin '
+            f'! videoconvert '
+            f'! videoscale '
+            f'! video/x-raw,width={width},height={height} '
+            f'! videorate ! video/x-raw,framerate={framerate}/1 '
+        )
+    else:
+        print(f"📹 Input source: USB v4l2src → {camera_device}", file=sys.stderr)
+        source_str = (
+            f'v4l2src device={camera_device} do-timestamp=true '
+            f'! image/jpeg,width={width},height={height},framerate={framerate}/1 '
+            f'! jpegparse ! mppjpegdec '
+            f'! videorate ! video/x-raw,framerate={framerate}/1 '
+        )
+
     # Thread architecture (each queue creates a new thread boundary):
-    #   Thread 1: v4l2src → mppjpegdec (capture)
+    #   Thread 1: source (v4l2src or rtspsrc+decodebin) — capture/decode
     #   Thread 2: queue → videoconvert(BGRA) → overlay → tee (overlay compositing)
     #   Thread 3: queue → videoconvert(NV12) → mpph264enc → h264parse → queue → mux → fdsink (encode+stream)
     #   Thread 4: queue → videorate → videoscale → jpegenc → tcpserversink (preview)
     #   Audio is handled by ffmpeg (ALSA capture) outside this pipeline.
     pipeline_str = (
-        f'v4l2src device={camera_device} do-timestamp=true '
-        f'! image/jpeg,width={width},height={height},framerate={framerate}/1 '
-        f'! jpegparse ! mppjpegdec '
-        # videorate: enforce exactly framerate fps using GStreamer running-time timestamps.
-        # do-timestamp=true stamps each decoded frame with CLOCK_MONOTONIC at arrival time.
-        # The USB camera crystal runs ~0.07% slow, so frames arrive at ~29.979 fps instead
-        # of 30 fps. videorate inserts a duplicate frame once every ~1 428 frames (~48 s)
-        # so the pipeline always emits exactly framerate/1 frames per wall-clock second.
-        # This eliminates the observed 86 s / 33 h drift without re-encoding.
-        f'! videorate ! video/x-raw,framerate={framerate}/1 '
+        f'{source_str}'
         # Thread boundary: isolate overlay compositing from capture
         f'! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream '
         f'! videoconvert ! video/x-raw,format=BGRA '

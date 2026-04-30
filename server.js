@@ -1226,6 +1226,10 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     return res.status(400).json({ success: false, error: "Unknown source type" });
   }
 
+  // Keep the stream controller in sync so the NEXT "Start Stream" uses the
+  // correct source (v4l2src for USB, rtspsrc for RTSP).
+  streamController.setInputSource(activeCameraSource);
+
   if (!streamController.isStreaming) {
     try {
       await startPersistentIdlePreview();
@@ -1243,6 +1247,8 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
       console.error(`⚠️ Camera source (${type}) did not respond in time — reverting`);
       activeCameraSource = { ...previousSource, type: "usb", device: previousSource.device || CAMERA_DEVICE, rtspUrl: "" };
       camera.device = activeCameraSource.device;
+      // Also revert the stream controller so the next Start Stream uses USB again
+      streamController.setInputSource(activeCameraSource);
       try { await startPersistentIdlePreview(); } catch (_) {}
       io.emit("refreshIdlePreview");
       return res.json({ success: false, error: type === "rtsp"
