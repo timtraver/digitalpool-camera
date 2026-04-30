@@ -657,9 +657,9 @@ if (resetAllBtn) {
     });
   }
 
-  // Load device lists on page ready
+  // Load video device list on page ready.
+  // Audio devices are loaded on demand (refresh button) to avoid blocking startup.
   loadDevices();
-  loadAudioDevices();
   updateAudioDeviceRowVisibility();
 })();
 
@@ -2300,15 +2300,15 @@ function updateAudioDeviceRowVisibility() {
   }
 }
 
-async function loadAudioDevices(savedDevice) {
-  if (audioDeviceSelect) audioDeviceSelect.innerHTML = "<option>Scanning…</option>";
+async function loadAudioDevices() {
+  if (!audioDeviceSelect) return;
+  audioDeviceSelect.innerHTML = "<option>Scanning…</option>";
   try {
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), 5000);
     const r = await fetch("/api/audio/devices", { signal: ctrl.signal });
     clearTimeout(tid);
     const data = await r.json();
-    if (!audioDeviceSelect) return;
     audioDeviceSelect.innerHTML = "";
     if (!data.devices || data.devices.length === 0) {
       audioDeviceSelect.innerHTML = "<option value=''>No audio devices found</option>";
@@ -2320,10 +2320,12 @@ async function loadAudioDevices(savedDevice) {
       opt.textContent = name;
       audioDeviceSelect.appendChild(opt);
     });
-    const sel = savedDevice || data.current;
+    // Pre-select: prefer what was saved on last load, then server current
+    const saved = audioDeviceSelect.dataset.savedDevice;
+    const sel = saved || data.current;
     if (sel) audioDeviceSelect.value = sel;
   } catch (e) {
-    if (audioDeviceSelect) audioDeviceSelect.innerHTML = "<option value=''>Error loading audio devices</option>";
+    audioDeviceSelect.innerHTML = "<option value=''>Error — click 🔄 to retry</option>";
   }
 }
 
@@ -2343,11 +2345,11 @@ async function loadStreamConfig() {
       streamCodec.value = data.config.codec || "h264";
       audioEnabledCheckbox.checked = data.config.audioEnabled !== false; // default true
 
-      // Restore saved audio device (the loadAudioDevices call below will pre-select it)
+      // Store the saved audio device so the refresh button can pre-select it.
+      // We do NOT load audio devices automatically here — arecord can be slow
+      // and would block the page startup. The user clicks 🔄 when they need it.
       if (data.config.audioDevice && audioDeviceSelect) {
-        // loadAudioDevices is async; pass the saved value so it can pre-select
-        // after the <option> list has been populated.
-        loadAudioDevices(data.config.audioDevice);
+        audioDeviceSelect.dataset.savedDevice = data.config.audioDevice;
       }
       updateAudioDeviceRowVisibility();
 
