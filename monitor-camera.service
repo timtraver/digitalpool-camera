@@ -1,0 +1,7 @@
+[Unit]
+Description=Camera memory flight recorder — log per-process RSS every 5 min
+After=digitalpool-camera.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/monitor-camera.sh

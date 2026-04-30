@@ -628,6 +628,40 @@ sudo systemctl show | grep -i watchdog
 # Should show: RuntimeWatchdogSec=1min
 ```
 
+### Layer 4 — Memory flight recorder (diagnose crashes)
+
+The repository includes `monitor-camera.sh` which runs every 5 minutes and appends a per-process memory snapshot to `/var/log/digitalpool-monitor.log`. After any overnight crash, open this file to immediately see which process was growing and when it hit its limit.
+
+```bash
+# Install the flight recorder
+sudo cp /home/ubuntu/digitalpool-camera/monitor-camera.sh /usr/local/bin/
+sudo chmod +x /usr/local/bin/monitor-camera.sh
+sudo cp /home/ubuntu/digitalpool-camera/monitor-camera.service \
+        /home/ubuntu/digitalpool-camera/monitor-camera.timer \
+        /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now monitor-camera.timer
+
+# Verify it is running
+systemctl list-timers monitor-camera.timer
+
+# Watch the log live
+tail -f /var/log/digitalpool-monitor.log
+```
+
+Sample output every 5 minutes:
+```
+=== 2025-05-01 02:15:00 ===
+  SYS   total=7765 M  used=1823 M  free=5942 M  avail=5701 M
+  CGROUP  Memory: 823.4M (max: 1.4G ...)
+  PID=1234   RSS=180   MB  VSZ=512   MB  node
+  PID=5678   RSS=620   MB  VSZ=1100  MB  gst-overlay
+  PID=9012   RSS=85    MB  VSZ=320   MB  gst-launch
+  PID=3456   RSS=310   MB  VSZ=890   MB  chromium
+  NET   end1          gw=192.168.1.1
+  NET   wlan0         gw=192.168.50.1
+```
+
 ### Summary
 
 | Layer | Catches | Action |
@@ -635,6 +669,7 @@ sudo systemctl show | grep -i watchdog
 | `MemoryMax=1500M` | Memory leak before it gets dangerous | Restarts the service cleanly |
 | `network-watchdog.timer` (every 10 min) | All interfaces unreachable for 20+ min | Clean system reboot |
 | Hardware watchdog (`RuntimeWatchdogSec=60`) | Complete kernel freeze | Hardware-forced board reset |
+| `monitor-camera.timer` (every 5 min) | Per-process memory trend | Logs to `/var/log/digitalpool-monitor.log` |
 
 ---
 
