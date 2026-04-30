@@ -666,17 +666,20 @@ Ubuntu 24.04 manages wired ethernet via **netplan → systemd-networkd**, not Ne
 
 ### Required sudoers entries
 
-Two `sudo` commands are needed. Add them to the existing sudoers file created in § 7c:
+Three `sudo` commands are needed. Add them to the existing sudoers file created in § 7c:
 
 ```bash
 sudo tee -a /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
 ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/netplan/99-digitalpool-ethernet.yaml
 ubuntu ALL=(ALL) NOPASSWD: /usr/sbin/netplan apply
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/timedatectl set-timezone *
 EOF
 
 # Validate before applying
 sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
 ```
+
+The `timedatectl set-timezone` entry enables the **Timezone** selector in Admin Settings (🔐 Admin Settings → 🕐 Timezone). Without it the save will fail with a permission error.
 
 ### Setting a static IP
 

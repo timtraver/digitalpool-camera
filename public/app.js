@@ -2591,6 +2591,51 @@ loadDeviceIp();
     } catch { /* silently ignore */ }
   })();
 
+  // ── Timezone ──────────────────────────────────────────────────
+  (async () => {
+    try {
+      const r = await fetch("/api/timezone");
+      const d = await r.json();
+      if (!d.success) return;
+
+      const currentEl = document.getElementById("currentTimezone");
+      if (currentEl) currentEl.textContent = d.current || "—";
+
+      const input    = document.getElementById("timezoneInput");
+      const datalist = document.getElementById("timezoneList");
+      if (input && d.current) input.value = d.current;
+      if (datalist && d.timezones) {
+        datalist.innerHTML = d.timezones
+          .map(tz => `<option value="${tz}">`)
+          .join("");
+      }
+    } catch { /* silently ignore */ }
+  })();
+
+  document.getElementById("saveTimezoneBtn")?.addEventListener("click", async () => {
+    const msg   = document.getElementById("timezoneMsg");
+    const input = document.getElementById("timezoneInput");
+    const tz    = input?.value.trim();
+    if (!tz) { showMsg(msg, "❌ Please enter a timezone", true); return; }
+    try {
+      const r = await fetch("/api/timezone", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ timezone: tz }),
+      });
+      const d = await r.json();
+      if (d.success) {
+        showMsg(msg, `✅ Timezone set to ${d.timezone}`);
+        const currentEl = document.getElementById("currentTimezone");
+        if (currentEl) currentEl.textContent = d.timezone;
+      } else {
+        showMsg(msg, `❌ ${d.error}`, true);
+      }
+    } catch (e) {
+      showMsg(msg, `❌ ${e.message}`, true);
+    }
+  });
+
   // ── Software update (dpadmin only) ───────────────────────────
   if (currentUser.username !== "dpadmin") {
     document.getElementById("updateSoftwareBtn")?.closest("div")?.remove();

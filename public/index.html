@@ -722,6 +722,26 @@
               <div class="wifi-msg" id="remoteMsg"></div>
             </div>
 
+            <!-- Timezone -->
+            <div class="admin-section" id="timezoneSection">
+              <h4 class="admin-section-title">🕐 Timezone</h4>
+              <div class="wifi-info-row" style="margin-bottom:8px">
+                <span class="wifi-label">Current</span>
+                <span class="wifi-value" id="currentTimezone">—</span>
+              </div>
+              <div class="wifi-form">
+                <label>Set Timezone</label>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input type="text" id="timezoneInput" list="timezoneList"
+                         placeholder="e.g. America/Chicago" autocomplete="off"
+                         style="flex:1;font-size:12px" />
+                  <button class="btn-wifi-action" id="saveTimezoneBtn" style="white-space:nowrap">💾 Save</button>
+                </div>
+                <datalist id="timezoneList"></datalist>
+                <div class="wifi-msg" id="timezoneMsg"></div>
+              </div>
+            </div>
+
             <!-- Software Version -->
             <div class="admin-section" id="versionSection">
               <h4 class="admin-section-title">ℹ️ Software Version</h4>

@@ -752,6 +752,36 @@ app.post("/api/update", requireAdmin, async (req, res) => {
   }, 800);
 });
 
+// ── Timezone API (admin only) ─────────────────────────────────────────────────
+app.get("/api/timezone", requireAdmin, async (req, res) => {
+  try {
+    const [tzRes, listRes] = await Promise.all([
+      execAsync("timedatectl show --property=Timezone --value 2>/dev/null"),
+      execAsync("timedatectl list-timezones 2>/dev/null"),
+    ]);
+    const current   = tzRes.stdout.trim();
+    const timezones = listRes.stdout.trim().split("\n").filter(Boolean);
+    res.json({ success: true, current, timezones });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post("/api/timezone", requireAdmin, express.json(), async (req, res) => {
+  const tz = (req.body?.timezone || "").trim();
+  if (!tz) return res.status(400).json({ success: false, error: "Timezone is required" });
+  // Allow only safe timezone characters (e.g. America/New_York, UTC+5:30)
+  if (!/^[A-Za-z0-9/_+\-:]+$/.test(tz))
+    return res.status(400).json({ success: false, error: "Invalid timezone format" });
+  try {
+    await execAsync(`sudo timedatectl set-timezone "${tz}"`);
+    console.log(`🕐 Timezone set to: ${tz}`);
+    res.json({ success: true, timezone: tz });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // API endpoint to get device IP addresses
 app.get("/api/network", (req, res) => {
   const interfaces = os.networkInterfaces();
