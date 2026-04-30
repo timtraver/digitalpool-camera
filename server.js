@@ -1221,16 +1221,17 @@ app.get("/api/camera/devices", requireAuth, (req, res) => {
   }
 });
 
-// List available ALSA capture devices (microphones / audio inputs)
-app.get("/api/audio/devices", requireAuth, (req, res) => {
+// List available ALSA capture devices (microphones / audio inputs).
+// Uses execAsync (non-blocking) with a hard 3 s timeout so a hung ALSA
+// subsystem never stalls the Node.js event loop.
+app.get("/api/audio/devices", requireAuth, async (req, res) => {
   try {
-    const { execSync } = require("child_process");
     // arecord -l output format:
     //   card 3: Device [USB Audio Device], device 0: USB Audio [USB Audio]
-    const raw = execSync("arecord -l 2>/dev/null || true").toString();
+    const { stdout } = await execAsync("arecord -l 2>/dev/null || true", { timeout: 3000 });
     const devices = [];
     const re = /^card\s+(\d+):\s+\S+\s+\[([^\]]+)\],\s+device\s+(\d+):\s+\S+\s+\[([^\]]*)\]/;
-    for (const line of raw.split("\n")) {
+    for (const line of stdout.split("\n")) {
       const m = re.exec(line.trim());
       if (!m) continue;
       const [, card, cardName, device, devName] = m;
