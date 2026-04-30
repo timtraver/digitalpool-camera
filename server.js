@@ -1902,51 +1902,53 @@ function buildIdlePreviewGstArgs(sinkArgs) {
   const config = streamController.streamConfig;
   const fs = require("fs");
 
-  // ── RTSP source: simple passthrough pipeline (no v4l2 / MPP, no overlays) ──
+  // ── Source-specific front-end of the pipeline ──
+  // Both RTSP and USB paths produce the same normalised raw video after this block
+  // (1280×720, 1 fps, any raw format) so the shared overlay section below works
+  // identically for both sources.
+  let gstArgs;
+
   if (activeCameraSource.type === "rtsp" && activeCameraSource.rtspUrl) {
     console.log(`📡 Building RTSP idle preview pipeline for ${activeCameraSource.rtspUrl}`);
-    return [
+    gstArgs = [
       "rtspsrc", `location=${activeCameraSource.rtspUrl}`, "latency=200", "protocols=tcp",
       "!", "decodebin",
       // videoconvert immediately after decodebin: decodebin produces dynamic caps
-      // (NV12, I420, BGR, etc. depending on codec) and videorate/videoscale require
-      // a fixed raw format — videoconvert normalises whatever decodebin emits.
+      // (NV12, I420, BGR, etc.) — videoconvert normalises to a fixed raw format.
       "!", "videoconvert",
       "!", "videorate",
       "!", "video/x-raw,framerate=1/1",
       "!", "videoscale",
       "!", "video/x-raw,width=1280,height=720",
       "!", "videoconvert",
-      "!", "jpegenc", "quality=65",
-      "!", "multipartmux", "boundary=frame",
-      "!", ...sinkArgs,
+      "!",
+    ];
+  } else {
+    // ── USB source (default): full MPP pipeline ──
+    const device = activeCameraSource.device || CAMERA_DEVICE;
+    gstArgs = [
+      "v4l2src",
+      `device=${device}`,
+      "do-timestamp=true",
+      "!",
+      `image/jpeg,width=${config.width || 1920},height=${config.height || 1080},framerate=${config.framerate || 30}/1`,
+      "!",
+      "jpegparse",
+      "!",
+      "mppjpegdec",
+      "!",
+      "videorate",
+      "!",
+      "video/x-raw,framerate=1/1",
+      "!",
+      "videoscale",
+      "!",
+      "video/x-raw,width=1280,height=720",
+      "!",
+      "videoconvert",
+      "!",
     ];
   }
-
-  // ── USB source (default): full MPP pipeline with overlay support ──
-  const device = activeCameraSource.device || CAMERA_DEVICE;
-  const gstArgs = [
-    "v4l2src",
-    `device=${device}`,
-    "do-timestamp=true",
-    "!",
-    `image/jpeg,width=${config.width || 1920},height=${config.height || 1080},framerate=${config.framerate || 30}/1`,
-    "!",
-    "jpegparse",
-    "!",
-    "mppjpegdec",
-    "!",
-    "videorate",
-    "!",
-    "video/x-raw,framerate=1/1",
-    "!",
-    "videoscale",
-    "!",
-    "video/x-raw,width=1280,height=720",
-    "!",
-    "videoconvert",
-    "!",
-  ];
 
   // Check if the remote overlay PNG exists and should be shown
   const pngOverlayPath = "/tmp/graphics-overlay.png";
@@ -2188,18 +2190,14 @@ app.get("/video/stream", async (req, res) => {
   }
 
   // If no idle preview process is running, start one (but not during boot — boot handles it).
-  // For RTSP sources: don't auto-restart here — if the RTSP pipeline crashed it means the
-  // source is unreachable. The user must explicitly apply the source again via the UI.
-  // Auto-restart is safe only for USB (v4l2src) where the device is always present.
+  // Both USB and RTSP sources are restarted here; the source was validated and saved by the
+  // user so it should be reachable.  If it isn't, GStreamer will exit and the client's
+  // onerror retry loop will keep trying every second — no infinite tight loop is possible.
   if (!bootComplete) {
     console.log("⏳ Boot still in progress — waiting for idle preview to be started by boot sequence");
   } else if (!currentIdlePreviewProcess || currentIdlePreviewProcess.killed) {
-    if (activeCameraSource.type === "rtsp") {
-      console.log("⚠️  RTSP idle preview crashed — not auto-restarting (user must re-apply source)");
-    } else {
-      console.log("📹 No idle preview running — starting persistent idle preview...");
-      await startPersistentIdlePreview();
-    }
+    console.log(`📹 No idle preview running — starting persistent idle preview (source: ${activeCameraSource.type})...`);
+    await startPersistentIdlePreview();
   }
 
   res.writeHead(200, {
@@ -2887,8 +2885,12 @@ streamController.on("stopped", async () => {
 
   // Restart the persistent idle preview so clients see the camera feed again
   console.log("📹 Stream stopped — restarting persistent idle preview...");
-  // Brief delay to let the streaming process fully release the camera/RTSP source
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  // For RTSP sources, give the camera/server extra time to fully close the previous
+  // session (TEARDOWN + session cleanup) before we open a new rtspsrc connection.
+  // USB v4l2src is always ready so a shorter delay is fine.
+  const releaseDelay = activeCameraSource.type === "rtsp" ? 2500 : 1000;
+  console.log(`⏳ Waiting ${releaseDelay}ms for source to release (${activeCameraSource.type})...`);
+  await new Promise((resolve) => setTimeout(resolve, releaseDelay));
   await startPersistentIdlePreview();
 
   // For RTSP sources, the GStreamer pipeline needs time to negotiate the session
