@@ -609,16 +609,6 @@ if (resetAllBtn) {
   }
 
   // Toggle USB / RTSP panels on source type change, and update audio device row.
-  function updateAudioDeviceRowVisibility() {
-    const isRtsp = sourceTypeEl.value === "rtsp";
-    // Audio device selector is only relevant for local sources (USB).
-    // When RTSP input is active the stream's own audio is used (passthrough).
-    if (audioDeviceRow) {
-      audioDeviceRow.style.display =
-        (!isRtsp && audioEnabledCheckbox && audioEnabledCheckbox.checked) ? "" : "none";
-    }
-  }
-
   sourceTypeEl.addEventListener("change", () => {
     const isRtsp = sourceTypeEl.value === "rtsp";
     usbSection.style.display  = isRtsp ? "none" : "";
@@ -627,41 +617,8 @@ if (resetAllBtn) {
   });
 
   if (refreshBtn) refreshBtn.addEventListener("click", loadDevices);
-
-  // ── Audio device enumeration ────────────────────────────────────────────────
-  async function loadAudioDevices(savedDevice) {
-    if (audioDeviceSelect) audioDeviceSelect.innerHTML = "<option>Scanning…</option>";
-    try {
-      const r = await fetch("/api/audio/devices");
-      const data = await r.json();
-      if (!audioDeviceSelect) return;
-      audioDeviceSelect.innerHTML = "";
-      if (!data.devices || data.devices.length === 0) {
-        audioDeviceSelect.innerHTML = "<option value=''>No audio devices found</option>";
-        return;
-      }
-      data.devices.forEach(({ device, name }) => {
-        const opt = document.createElement("option");
-        opt.value = device;
-        opt.textContent = name;
-        audioDeviceSelect.appendChild(opt);
-      });
-      // Pre-select either the explicitly passed device, or the server's current
-      const sel = savedDevice || data.current;
-      if (sel) audioDeviceSelect.value = sel;
-    } catch (e) {
-      if (audioDeviceSelect) audioDeviceSelect.innerHTML = "<option value=''>Error loading audio devices</option>";
-    }
-  }
-
-  if (refreshAudioDevicesBtn) {
-    refreshAudioDevicesBtn.addEventListener("click", () => loadAudioDevices());
-  }
-
-  // Re-evaluate audio row visibility when the checkbox changes.
-  if (audioEnabledCheckbox) {
-    audioEnabledCheckbox.addEventListener("change", updateAudioDeviceRowVisibility);
-  }
+  if (refreshAudioDevicesBtn) refreshAudioDevicesBtn.addEventListener("click", () => loadAudioDevices());
+  if (audioEnabledCheckbox) audioEnabledCheckbox.addEventListener("change", updateAudioDeviceRowVisibility);
 
   if (applyBtn) {
     applyBtn.addEventListener("click", async () => {
@@ -2331,6 +2288,41 @@ socket.on("streamStatus", (status) => {
     drawOverlay();
   }
 });
+
+// ── Audio device helpers (module scope so loadStreamConfig can call them) ──────
+
+function updateAudioDeviceRowVisibility() {
+  const sourceTypeEl = document.getElementById("cameraSourceType");
+  const isRtsp = sourceTypeEl ? sourceTypeEl.value === "rtsp" : false;
+  if (audioDeviceRow) {
+    audioDeviceRow.style.display =
+      (!isRtsp && audioEnabledCheckbox && audioEnabledCheckbox.checked) ? "" : "none";
+  }
+}
+
+async function loadAudioDevices(savedDevice) {
+  if (audioDeviceSelect) audioDeviceSelect.innerHTML = "<option>Scanning…</option>";
+  try {
+    const r = await fetch("/api/audio/devices");
+    const data = await r.json();
+    if (!audioDeviceSelect) return;
+    audioDeviceSelect.innerHTML = "";
+    if (!data.devices || data.devices.length === 0) {
+      audioDeviceSelect.innerHTML = "<option value=''>No audio devices found</option>";
+      return;
+    }
+    data.devices.forEach(({ device, name }) => {
+      const opt = document.createElement("option");
+      opt.value = device;
+      opt.textContent = name;
+      audioDeviceSelect.appendChild(opt);
+    });
+    const sel = savedDevice || data.current;
+    if (sel) audioDeviceSelect.value = sel;
+  } catch (e) {
+    if (audioDeviceSelect) audioDeviceSelect.innerHTML = "<option value=''>Error loading audio devices</option>";
+  }
+}
 
 // Load stream configuration on page load
 async function loadStreamConfig() {
