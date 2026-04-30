@@ -629,7 +629,7 @@ if (resetAllBtn) {
         if (!body.rtspUrl) { statusEl.textContent = "⚠️ Enter an RTSP URL first."; return; }
       }
       applyBtn.disabled = true;
-      statusEl.textContent = "Applying…";
+      statusEl.textContent = type === "rtsp" ? "Connecting… (up to 12 s)" : "Applying…";
       try {
         const r = await fetch("/api/camera/source", {
           method: "POST",
@@ -637,9 +637,16 @@ if (resetAllBtn) {
           body: JSON.stringify(body),
         });
         const data = await r.json();
-        statusEl.textContent = data.success ? "✅ Applied" : `⚠️ ${data.error}`;
-        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+        if (data.success) {
+          statusEl.style.color = "rgba(80,220,120,0.9)";
+          statusEl.textContent = "✅ Applied";
+        } else {
+          statusEl.style.color = "rgba(255,160,80,0.9)";
+          statusEl.textContent = `⚠️ ${data.error}`;
+        }
+        setTimeout(() => { statusEl.textContent = ""; statusEl.style.color = ""; }, 6000);
       } catch (e) {
+        statusEl.style.color = "rgba(255,160,80,0.9)";
         statusEl.textContent = "⚠️ Network error";
       } finally {
         applyBtn.disabled = false;

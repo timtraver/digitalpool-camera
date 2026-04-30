@@ -1191,13 +1191,34 @@ app.get("/api/camera/devices", requireAuth, (req, res) => {
   }
 });
 
+// Poll until TCP port is accepting connections, or timeout.
+// Used to verify GStreamer actually started serving before telling the client.
+function waitForPort(port, timeoutMs = 8000) {
+  const net = require("net");
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    function attempt() {
+      const s = net.connect({ port, host: "127.0.0.1" });
+      s.once("connect", () => { s.destroy(); resolve(true); });
+      s.once("error", () => {
+        s.destroy();
+        if (Date.now() < deadline) setTimeout(attempt, 300);
+        else resolve(false);
+      });
+    }
+    attempt();
+  });
+}
+
 // Switch the active camera source (USB device or RTSP URL)
 app.post("/api/camera/source", requireAuth, async (req, res) => {
   const { type, device, rtspUrl } = req.body;
+  const previousSource = { ...activeCameraSource };
+
   if (type === "usb") {
     const dev = device || CAMERA_DEVICE;
     activeCameraSource = { type: "usb", device: dev, rtspUrl: "" };
-    camera.device = dev; // update v4l2 controller device
+    camera.device = dev;
   } else if (type === "rtsp") {
     if (!rtspUrl) return res.status(400).json({ success: false, error: "rtspUrl required" });
     activeCameraSource = { type: "rtsp", device: CAMERA_DEVICE, rtspUrl };
@@ -1205,15 +1226,33 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     return res.status(400).json({ success: false, error: "Unknown source type" });
   }
 
-  // Restart idle preview with new source (only when not streaming)
   if (!streamController.isStreaming) {
     try {
       await startPersistentIdlePreview();
-      io.emit("refreshIdlePreview");
     } catch (e) {
-      console.error("⚠️ Failed to restart idle preview after source change:", e.message);
+      console.error("⚠️ Failed to start idle preview after source change:", e.message);
     }
+
+    // For RTSP, give GStreamer up to 12 s to negotiate the session and open the port.
+    // For USB, 5 s is plenty.
+    const timeoutMs = type === "rtsp" ? 12000 : 5000;
+    const ready = await waitForPort(IDLE_PREVIEW_PORT, timeoutMs);
+
+    if (!ready) {
+      // Pipeline never came up — revert to previous USB source
+      console.error(`⚠️ Camera source (${type}) did not respond in time — reverting`);
+      activeCameraSource = { ...previousSource, type: "usb", device: previousSource.device || CAMERA_DEVICE, rtspUrl: "" };
+      camera.device = activeCameraSource.device;
+      try { await startPersistentIdlePreview(); } catch (_) {}
+      io.emit("refreshIdlePreview");
+      return res.json({ success: false, error: type === "rtsp"
+        ? "RTSP source did not respond. Check the URL is reachable and try again."
+        : "USB device did not start. Check the device path." });
+    }
+
+    io.emit("refreshIdlePreview");
   }
+
   res.json({ success: true, source: activeCameraSource });
 });
 
@@ -1828,8 +1867,12 @@ function buildIdlePreviewGstArgs(sinkArgs) {
   if (activeCameraSource.type === "rtsp" && activeCameraSource.rtspUrl) {
     console.log(`📡 Building RTSP idle preview pipeline for ${activeCameraSource.rtspUrl}`);
     return [
-      "rtspsrc", `location=${activeCameraSource.rtspUrl}`, "latency=100", "protocols=tcp",
+      "rtspsrc", `location=${activeCameraSource.rtspUrl}`, "latency=200", "protocols=tcp",
       "!", "decodebin",
+      // videoconvert immediately after decodebin: decodebin produces dynamic caps
+      // (NV12, I420, BGR, etc. depending on codec) and videorate/videoscale require
+      // a fixed raw format — videoconvert normalises whatever decodebin emits.
+      "!", "videoconvert",
       "!", "videorate",
       "!", "video/x-raw,framerate=1/1",
       "!", "videoscale",
@@ -2105,12 +2148,19 @@ app.get("/video/stream", async (req, res) => {
     return;
   }
 
-  // If no idle preview process is running, start one (but not during boot — boot handles it)
+  // If no idle preview process is running, start one (but not during boot — boot handles it).
+  // For RTSP sources: don't auto-restart here — if the RTSP pipeline crashed it means the
+  // source is unreachable. The user must explicitly apply the source again via the UI.
+  // Auto-restart is safe only for USB (v4l2src) where the device is always present.
   if (!bootComplete) {
     console.log("⏳ Boot still in progress — waiting for idle preview to be started by boot sequence");
   } else if (!currentIdlePreviewProcess || currentIdlePreviewProcess.killed) {
-    console.log("📹 No idle preview running — starting persistent idle preview...");
-    await startPersistentIdlePreview();
+    if (activeCameraSource.type === "rtsp") {
+      console.log("⚠️  RTSP idle preview crashed — not auto-restarting (user must re-apply source)");
+    } else {
+      console.log("📹 No idle preview running — starting persistent idle preview...");
+      await startPersistentIdlePreview();
+    }
   }
 
   res.writeHead(200, {
