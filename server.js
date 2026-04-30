@@ -1221,6 +1221,30 @@ app.get("/api/camera/devices", requireAuth, (req, res) => {
   }
 });
 
+// List available ALSA capture devices (microphones / audio inputs)
+app.get("/api/audio/devices", requireAuth, (req, res) => {
+  try {
+    const { execSync } = require("child_process");
+    // arecord -l output format:
+    //   card 3: Device [USB Audio Device], device 0: USB Audio [USB Audio]
+    const raw = execSync("arecord -l 2>/dev/null || true").toString();
+    const devices = [];
+    const re = /^card\s+(\d+):\s+\S+\s+\[([^\]]+)\],\s+device\s+(\d+):\s+\S+\s+\[([^\]]*)\]/;
+    for (const line of raw.split("\n")) {
+      const m = re.exec(line.trim());
+      if (!m) continue;
+      const [, card, cardName, device, devName] = m;
+      const hw = `hw:${card},${device}`;
+      const label = devName ? `${cardName} — ${devName} (${hw})` : `${cardName} (${hw})`;
+      devices.push({ device: hw, name: label });
+    }
+    const current = streamController.streamConfig.audioDevice || "hw:3,0";
+    res.json({ success: true, devices, current });
+  } catch (e) {
+    res.json({ success: false, error: e.message, devices: [] });
+  }
+});
+
 // Poll until TCP port is accepting connections, or timeout.
 // Used to verify GStreamer actually started serving before telling the client.
 function waitForPort(port, timeoutMs = 8000) {

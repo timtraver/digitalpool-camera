@@ -608,14 +608,60 @@ if (resetAllBtn) {
     }
   }
 
-  // Toggle USB / RTSP panels on source type change
+  // Toggle USB / RTSP panels on source type change, and update audio device row.
+  function updateAudioDeviceRowVisibility() {
+    const isRtsp = sourceTypeEl.value === "rtsp";
+    // Audio device selector is only relevant for local sources (USB).
+    // When RTSP input is active the stream's own audio is used (passthrough).
+    if (audioDeviceRow) {
+      audioDeviceRow.style.display =
+        (!isRtsp && audioEnabledCheckbox && audioEnabledCheckbox.checked) ? "" : "none";
+    }
+  }
+
   sourceTypeEl.addEventListener("change", () => {
     const isRtsp = sourceTypeEl.value === "rtsp";
     usbSection.style.display  = isRtsp ? "none" : "";
     rtspSection.style.display = isRtsp ? "" : "none";
+    updateAudioDeviceRowVisibility();
   });
 
   if (refreshBtn) refreshBtn.addEventListener("click", loadDevices);
+
+  // ── Audio device enumeration ────────────────────────────────────────────────
+  async function loadAudioDevices(savedDevice) {
+    if (audioDeviceSelect) audioDeviceSelect.innerHTML = "<option>Scanning…</option>";
+    try {
+      const r = await fetch("/api/audio/devices");
+      const data = await r.json();
+      if (!audioDeviceSelect) return;
+      audioDeviceSelect.innerHTML = "";
+      if (!data.devices || data.devices.length === 0) {
+        audioDeviceSelect.innerHTML = "<option value=''>No audio devices found</option>";
+        return;
+      }
+      data.devices.forEach(({ device, name }) => {
+        const opt = document.createElement("option");
+        opt.value = device;
+        opt.textContent = name;
+        audioDeviceSelect.appendChild(opt);
+      });
+      // Pre-select either the explicitly passed device, or the server's current
+      const sel = savedDevice || data.current;
+      if (sel) audioDeviceSelect.value = sel;
+    } catch (e) {
+      if (audioDeviceSelect) audioDeviceSelect.innerHTML = "<option value=''>Error loading audio devices</option>";
+    }
+  }
+
+  if (refreshAudioDevicesBtn) {
+    refreshAudioDevicesBtn.addEventListener("click", () => loadAudioDevices());
+  }
+
+  // Re-evaluate audio row visibility when the checkbox changes.
+  if (audioEnabledCheckbox) {
+    audioEnabledCheckbox.addEventListener("change", updateAudioDeviceRowVisibility);
+  }
 
   if (applyBtn) {
     applyBtn.addEventListener("click", async () => {
@@ -654,8 +700,10 @@ if (resetAllBtn) {
     });
   }
 
-  // Load device list on page ready
+  // Load device lists on page ready
   loadDevices();
+  loadAudioDevices();
+  updateAudioDeviceRowVisibility();
 })();
 
 // Keyboard controls
@@ -690,6 +738,9 @@ const streamBitrate = document.getElementById("streamBitrate");
 const streamFramerate = document.getElementById("streamFramerate");
 const streamCodec = document.getElementById("streamCodec");
 const audioEnabledCheckbox = document.getElementById("audioEnabled");
+const audioDeviceRow    = document.getElementById("audioDeviceRow");
+const audioDeviceSelect = document.getElementById("audioDeviceSelect");
+const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
 const startStreamBtn = document.getElementById("startStream");
 const stopStreamBtn = document.getElementById("stopStream");
 const streamStatusText = document.getElementById("streamStatusText");
@@ -843,6 +894,7 @@ startStreamBtn.addEventListener("click", async () => {
       destination: streamDestination.value,
       bitrate: parseInt(streamBitrate.value),
       audioEnabled: audioEnabledCheckbox.checked,
+      audioDevice: audioDeviceSelect ? audioDeviceSelect.value : "",
       width: 1920,
       height: 1080,
       framerate: parseInt(streamFramerate.value),
@@ -857,6 +909,7 @@ startStreamBtn.addEventListener("click", async () => {
       destination: streamDestination.value,
       bitrate: parseInt(streamBitrate.value),
       audioEnabled: audioEnabledCheckbox.checked,
+      audioDevice: audioDeviceSelect ? audioDeviceSelect.value : "",
       width: 1920,
       height: 1080,
       framerate: parseInt(streamFramerate.value),
@@ -2294,6 +2347,14 @@ async function loadStreamConfig() {
       streamFramerate.value = data.config.framerate || 30;
       streamCodec.value = data.config.codec || "h264";
       audioEnabledCheckbox.checked = data.config.audioEnabled !== false; // default true
+
+      // Restore saved audio device (the loadAudioDevices call below will pre-select it)
+      if (data.config.audioDevice && audioDeviceSelect) {
+        // loadAudioDevices is async; pass the saved value so it can pre-select
+        // after the <option> list has been populated.
+        loadAudioDevices(data.config.audioDevice);
+      }
+      updateAudioDeviceRowVisibility();
 
       // Enforce H.265 restriction on RTMP after restoring saved codec
       const h265Option = streamCodec.querySelector('option[value="h265"]');

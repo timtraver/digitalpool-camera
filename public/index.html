@@ -498,6 +498,13 @@
               <input type="checkbox" id="audioEnabled" checked />
             </div>
 
+            <!-- Audio source selector — hidden when audio disabled or RTSP input active -->
+            <div class="control-item" id="audioDeviceRow" style="display:none">
+              <label for="audioDeviceSelect">Audio Source:</label>
+              <select id="audioDeviceSelect" style="flex:1"><option value="">Scanning…</option></select>
+              <button id="refreshAudioDevices" class="btn-icon-small" title="Refresh audio device list">🔄</button>
+            </div>
+
             <div style="display: flex; gap: 8px; margin-top: 12px">
               <button
                 id="startStream"
