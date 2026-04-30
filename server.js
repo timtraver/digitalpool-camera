@@ -1512,8 +1512,8 @@ app.get("/video/test", (req, res) => {
 // the browser can fetch the live stream via port 3000.
 // MediaMTX serves HLS at http://localhost:8888/<path>/index.m3u8 + *.ts segments.
 // Available whenever GStreamer is pushing RTMP to MediaMTX (not SRT-direct mode).
-app.get("/video/hls-live/*", requireAuth, (req, res) => {
-  const file = req.params[0]; // 'index.m3u8' or a segment like 'seg001.ts'
+app.get("/video/hls-live/*file", requireAuth, (req, res) => {
+  const file = req.params.file; // 'index.m3u8' or a segment like 'seg001.ts'
   const upstreamUrl = `http://127.0.0.1:8888/live/${file}`;
 
   const proxyReq = http.get(upstreamUrl, { timeout: 4000 }, (upRes) => {
