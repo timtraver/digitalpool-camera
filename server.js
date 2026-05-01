@@ -2159,6 +2159,14 @@ function buildIdlePreviewGstArgs(sinkArgs) {
 let _idlePreviewStarting = false;
 let _idlePreviewStartQueue = null; // Promise for callers to wait on
 
+// Backoff state for the idle preview auto-restart.
+// Prevents a rapid restart storm when GStreamer keeps failing immediately
+// (e.g. camera unavailable, RTSP source down).
+let _lastIdlePreviewSpawnTime = 0;  // wall-clock ms of the most recent spawn
+let _idlePreviewFailStreak    = 0;  // consecutive quick-exit count
+// Cooldown schedule (ms) indexed by fail streak — capped at 60 s.
+const _IDLE_BACKOFF_MS = [0, 3000, 5000, 10000, 20000, 30000, 60000];
+
 async function startPersistentIdlePreview() {
   // Don't start if streaming is active
   if (streamController.isStreaming) {
@@ -2172,6 +2180,21 @@ async function startPersistentIdlePreview() {
     if (_idlePreviewStartQueue) {
       await _idlePreviewStartQueue;
     }
+    return;
+  }
+
+  // ── Backoff cooldown ─────────────────────────────────────────────────────
+  // If the process keeps dying within a few seconds of starting (camera
+  // unavailable, RTSP source down, etc.), enforce a growing wait so we don't
+  // spin the CPU with rapid GStreamer spawn→die cycles.
+  const backoffMs = _IDLE_BACKOFF_MS[Math.min(_idlePreviewFailStreak, _IDLE_BACKOFF_MS.length - 1)];
+  if (backoffMs > 0) {
+    console.log(`⏳ Idle preview backoff (streak=${_idlePreviewFailStreak}) — waiting ${backoffMs}ms...`);
+    await new Promise((r) => setTimeout(r, backoffMs));
+  }
+  // Re-check: if streaming started during the backoff wait, bail out.
+  if (streamController.isStreaming) {
+    console.log("⚠️  Not starting idle preview — stream started during backoff wait");
     return;
   }
 
@@ -2220,6 +2243,8 @@ async function startPersistentIdlePreview() {
 
     const gst = spawn("gst-launch-1.0", gstArgs);
     currentIdlePreviewProcess = gst;
+    const spawnTime = Date.now();
+    _lastIdlePreviewSpawnTime = spawnTime;
     console.log(`📹 Started idle preview process PID: ${gst.pid}`);
 
     gst.stdout.on("data", (data) => {
@@ -2234,9 +2259,28 @@ async function startPersistentIdlePreview() {
     });
 
     gst.on("close", (code) => {
-      console.log(`GStreamer idle preview exited with code ${code}`);
+      const lifetime = Date.now() - spawnTime;
+      console.log(`GStreamer idle preview exited with code ${code} (ran ${lifetime}ms)`);
       if (currentIdlePreviewProcess === gst) {
         currentIdlePreviewProcess = null;
+      }
+
+      // Track consecutive quick exits (< 8 s) to drive backoff on the next start.
+      if (lifetime < 8000) {
+        _idlePreviewFailStreak = Math.min(_idlePreviewFailStreak + 1, _IDLE_BACKOFF_MS.length - 1);
+        console.log(`⚠️  Idle preview died quickly — fail streak: ${_idlePreviewFailStreak}`);
+      } else {
+        _idlePreviewFailStreak = 0; // ran long enough → reset backoff
+      }
+
+      // Auto-restart when NOT streaming and NOT in the middle of a planned restart.
+      // This recovers the preview if GStreamer crashes on its own (e.g. USB device
+      // momentarily disconnected) without requiring a client page-reload.
+      if (!streamController.isStreaming && !_idlePreviewStarting && bootComplete) {
+        console.log(`📹 Idle preview died — scheduling auto-restart...`);
+        startPersistentIdlePreview()
+          .then(() => { io.emit("refreshIdlePreview"); })
+          .catch((err) => { console.error("⚠️  Idle preview auto-restart failed:", err.message); });
       }
     });
 
@@ -2471,20 +2515,30 @@ io.on("connection", (socket) => {
   socket.on("restartStream", async (config) => {
     console.log("🔄 Restarting stream...");
     isRestartInProgress = true;
-    io.emit("streamStatus", { ...streamController.getStatus(), status: "restarting" });
+    try {
+      io.emit("streamStatus", { ...streamController.getStatus(), status: "restarting" });
 
-    // Stop the running stream
-    if (streamController.isStreaming) {
-      io.emit("streamStatus", { ...streamController.getStatus(), status: "stopping" });
-      await streamController.stopStream();
+      // Stop the running stream
+      if (streamController.isStreaming) {
+        io.emit("streamStatus", { ...streamController.getStatus(), status: "stopping" });
+        await streamController.stopStream();
+      }
+
+      // Start the new stream — clear the flag first so normal "started"/"stopped"
+      // events are broadcast correctly going forward.
+      isRestartInProgress = false;
+      io.emit("streamStatus", { ...streamController.getStatus(), status: "starting" });
+      const result = await streamController.startStream(config);
+      socket.emit("streamResult", result);
+    } catch (err) {
+      console.error("⚠️  restartStream error:", err.message);
+      isRestartInProgress = false; // always clear so idle preview can restart
+      socket.emit("streamResult", { success: false, error: err.message });
+      // Trigger idle preview so clients aren't left with a blank screen
+      startPersistentIdlePreview()
+        .then(() => io.emit("refreshIdlePreview"))
+        .catch(() => {});
     }
-
-    // Start the new stream — clear the flag first so normal "started"/"stopped"
-    // events are broadcast correctly going forward.
-    isRestartInProgress = false;
-    io.emit("streamStatus", { ...streamController.getStatus(), status: "starting" });
-    const result = await streamController.startStream(config);
-    socket.emit("streamResult", result);
   });
 
   socket.on("getStreamStatus", () => {
@@ -2879,6 +2933,7 @@ app.use("/graphql", (req, res) => {
 // Start Puppeteer overlay BEFORE GStreamer starts (during "preparing" phase)
 // This ensures the PNG file exists when gdkpixbufoverlay tries to load it
 streamController.on("preparing", async () => {
+  try {
   // Kill idle preview process first — it holds the camera device open
   if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
     console.log("🛑 Killing idle preview before starting stream...");
@@ -2941,49 +2996,75 @@ streamController.on("preparing", async () => {
       console.error("❌ Failed to prepare overlay:", err.message);
     }
   }
+  } catch (err) {
+    console.error("⚠️  Error in stream 'preparing' handler — service continuing:", err.message);
+  }
 });
 
 // When stream stops, restart the persistent idle preview and manage Puppeteer refresh
 streamController.on("stopped", async () => {
-  // During an atomic restart, skip the idle preview restart — the restartStream
-  // handler will start a new stream immediately instead.
-  if (isRestartInProgress) {
-    console.log("🔄 Restart in progress — skipping idle preview restart");
-    return;
-  }
+  try {
+    // During an atomic restart, skip the idle preview restart — the restartStream
+    // handler will start a new stream immediately instead.
+    if (isRestartInProgress) {
+      console.log("🔄 Restart in progress — skipping idle preview restart");
+      return;
+    }
 
-  const hasRemote = streamController.streamConfig.remoteOverlayEnabled &&
-    streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
-  if (puppeteerOverlay && !hasRemote) {
-    puppeteerOverlay._stopPeriodicRefresh();
-    console.log("ℹ️  Stream stopped, no remote overlay — pausing refresh");
-  } else if (hasRemote) {
-    console.log("ℹ️  Stream stopped, remote overlay active — keeping refresh for idle preview");
-  }
+    const hasRemote = streamController.streamConfig.remoteOverlayEnabled &&
+      streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
+    if (puppeteerOverlay && !hasRemote) {
+      puppeteerOverlay._stopPeriodicRefresh();
+      console.log("ℹ️  Stream stopped, no remote overlay — pausing refresh");
+    } else if (hasRemote) {
+      console.log("ℹ️  Stream stopped, remote overlay active — keeping refresh for idle preview");
+    }
 
-  // Restart the persistent idle preview so clients see the camera feed again
-  console.log("📹 Stream stopped — restarting persistent idle preview...");
-  // For RTSP sources, give the camera/server extra time to fully close the previous
-  // session (TEARDOWN + session cleanup) before we open a new rtspsrc connection.
-  // USB v4l2src is always ready so a shorter delay is fine.
-  const releaseDelay = activeCameraSource.type === "rtsp" ? 2500 : 1000;
-  console.log(`⏳ Waiting ${releaseDelay}ms for source to release (${activeCameraSource.type})...`);
-  await new Promise((resolve) => setTimeout(resolve, releaseDelay));
-  await startPersistentIdlePreview();
+    // Restart the persistent idle preview so clients see the camera feed again
+    console.log("📹 Stream stopped — restarting persistent idle preview...");
+    // For RTSP sources, give the camera/server extra time to fully close the previous
+    // session (TEARDOWN + session cleanup) before we open a new rtspsrc connection.
+    // USB v4l2src is always ready so a shorter delay is fine.
+    const releaseDelay = activeCameraSource.type === "rtsp" ? 2500 : 1000;
+    console.log(`⏳ Waiting ${releaseDelay}ms for source to release (${activeCameraSource.type})...`);
+    await new Promise((resolve) => setTimeout(resolve, releaseDelay));
+    await startPersistentIdlePreview();
 
-  // For RTSP sources, the GStreamer pipeline needs time to negotiate the session
-  // before tcpserversink begins accepting connections.  Wait for the port to be
-  // ready (up to 12 s) before telling clients to reconnect — otherwise they hit
-  // the server before any frames are available and the preview stays blank.
-  const idleTimeoutMs = activeCameraSource.type === "rtsp" ? 12000 : 5000;
-  const idleReady = await waitForPort(IDLE_PREVIEW_PORT, idleTimeoutMs);
-  if (!idleReady) {
-    console.warn(`⚠️  Idle preview port not ready after ${idleTimeoutMs / 1000}s — clients will retry on their own`);
+    // For RTSP sources, the GStreamer pipeline needs time to negotiate the session
+    // before tcpserversink begins accepting connections.  Wait for the port to be
+    // ready (up to 12 s) before telling clients to reconnect — otherwise they hit
+    // the server before any frames are available and the preview stays blank.
+    const idleTimeoutMs = activeCameraSource.type === "rtsp" ? 12000 : 5000;
+    const idleReady = await waitForPort(IDLE_PREVIEW_PORT, idleTimeoutMs);
+    if (!idleReady) {
+      console.warn(`⚠️  Idle preview port not ready after ${idleTimeoutMs / 1000}s — clients will retry on their own`);
+    }
+    // Tell clients to reconnect to the idle preview
+    io.emit("refreshIdlePreview");
+  } catch (err) {
+    console.error("⚠️  Error in stream 'stopped' handler — service continuing:", err.message);
+    // Best-effort: tell clients to reconnect so they can retry on their own
+    try { io.emit("refreshIdlePreview"); } catch (_) {}
   }
-  // Tell clients to reconnect to the idle preview
-  io.emit("refreshIdlePreview");
 });
 
+
+// ── Global error safety net ───────────────────────────────────────────────
+// In Node.js v15+ an unhandled Promise rejection crashes the process.
+// Async event handlers (e.g. streamController.on("stopped", async () => {...}))
+// can throw even when they have inner try-catches — wrapping each one is
+// defence-in-depth, but this global handler is the last resort so a single
+// async exception can never take down the whole service.
+process.on("unhandledRejection", (reason) => {
+  console.error("⚠️  Unhandled Promise Rejection (service continuing):",
+    reason?.stack || reason?.message || reason);
+  // Do NOT call process.exit() — let systemd restart only on true crashes.
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("⚠️  Uncaught Exception (service continuing):", err.stack || err.message);
+  // Do NOT exit — the watchdog will restart if the service truly hangs.
+});
 
 // Graceful shutdown - close Puppeteer browser
 process.on("SIGINT", async () => {
