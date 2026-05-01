@@ -29,7 +29,7 @@ Environment=CAMERA_DEVICE=/dev/video0
 # out the WiFi driver.  A hard cgroup limit ensures the kernel kills only this
 # service's cgroup (cleanly, triggering Restart=always) rather than randomly
 # killing drivers or other system processes.
-MemoryMax=1500M
+MemoryMax=2500M
 MemorySwapMax=0
 
 # ── OOM priority ─────────────────────────────────────────────────────────────

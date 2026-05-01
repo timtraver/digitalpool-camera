@@ -32,6 +32,11 @@ class PuppeteerOverlay extends EventEmitter {
     // Puppeteer browser instance (reused across screenshots)
     this._browser = null;
     this._page = null;
+    // Periodic browser restart — Chromium accumulates memory over long sessions
+    // (V8 heap fragmentation, renderer-side caches). Closing and relaunching
+    // every hour resets that growth. The overlay is dark for ~2-3 s during restart.
+    this._browserRestartIntervalMs = 60 * 60 * 1000; // 1 hour
+    this._browserRestartTimer = null;
   }
 
   /**
@@ -150,10 +155,13 @@ class PuppeteerOverlay extends EventEmitter {
 
     // Do an immediate first render, then start the cycle
     this._renderUrlOverlay().then(() => scheduleNext());
+
+    // Schedule periodic browser restarts to keep Chromium memory bounded.
+    this._scheduleBrowserRestart();
   }
 
   /**
-   * Stop periodic refresh.
+   * Stop periodic refresh and cancel the browser-restart timer.
    */
   _stopPeriodicRefresh() {
     this._refreshActive = false;
@@ -162,6 +170,28 @@ class PuppeteerOverlay extends EventEmitter {
       this._refreshTimer = null;
       console.log("⏹️  Periodic overlay refresh stopped");
     }
+    if (this._browserRestartTimer) {
+      clearTimeout(this._browserRestartTimer);
+      this._browserRestartTimer = null;
+    }
+  }
+
+  /**
+   * Schedule a one-shot timer to close and relaunch Chromium after
+   * _browserRestartIntervalMs.  The next _renderUrlOverlay() call will
+   * reopen the browser via _ensureBrowser() automatically.
+   * Called recursively so restarts keep happening every interval.
+   */
+  _scheduleBrowserRestart() {
+    if (this._browserRestartTimer) clearTimeout(this._browserRestartTimer);
+    this._browserRestartTimer = setTimeout(async () => {
+      const intervalMin = Math.round(this._browserRestartIntervalMs / 60000);
+      console.log(`🔄 Scheduled Chromium restart (every ${intervalMin} min) — closing browser to reset memory…`);
+      await this._closeBrowser();
+      // _ensureBrowser() relaunches automatically on the next render cycle.
+      // Reschedule so restarts continue at the same interval.
+      this._scheduleBrowserRestart();
+    }, this._browserRestartIntervalMs);
   }
 
   /**
@@ -249,6 +279,15 @@ class PuppeteerOverlay extends EventEmitter {
         "--disable-translate",
         "--metrics-recording-only",
         "--no-first-run",
+        // Limit to one renderer process — prevents orphaned renderers from
+        // accumulating after failed navigations (two renderers were observed
+        // consuming ~256 MB when only one page is open).
+        "--renderer-process-limit=1",
+        // Cap V8's old-generation heap inside the renderer at 128 MB.
+        // The overlay page is a simple React/WebSocket app; it does not need
+        // a large heap, and this prevents V8's GC from retaining stale objects
+        // indefinitely during a long-running session.
+        "--js-flags=--max-old-space-size=128",
       ],
     });
 
@@ -374,7 +413,7 @@ class PuppeteerOverlay extends EventEmitter {
    */
   async stop() {
     console.log("🛑 Stopping overlay renderer...");
-    this._stopPeriodicRefresh();
+    this._stopPeriodicRefresh(); // also cancels _browserRestartTimer
     await this._closeBrowser();
     this.isRunning = false;
     // Clean up all temp files including the main overlay PNG

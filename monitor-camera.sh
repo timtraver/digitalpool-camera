@@ -52,6 +52,30 @@ log_proc() {
     fi
 }
 
+# ── Helper: sum RSS across ALL PIDs matching a pattern (multi-process apps) ───
+# Chromium spawns 5-6 processes; log_proc only captures one and silently misses
+# the rest.  This function reports the true total across every matching process.
+log_proc_all() {
+    local label="$1" pattern="$2"
+    local total_rss=0 count=0 first_pid="-"
+    while IFS= read -r pid; do
+        local kb
+        kb=$(awk '/VmRSS:/ {print $2}' "/proc/$pid/status" 2>/dev/null)
+        if [ -n "$kb" ]; then
+            total_rss=$(( total_rss + kb ))
+            count=$(( count + 1 ))
+            [ "$first_pid" = "-" ] && first_pid="$pid"
+        fi
+    done < <(pgrep -f "$pattern" 2>/dev/null)
+    if [ "$count" -gt 0 ]; then
+        local rss_mb=$(( total_rss / 1024 ))
+        printf "  %-12s  PIDs=%-4s  RSS=%-5s MB  (%d processes)\n" \
+               "$label" "$first_pid…" "$rss_mb" "$count"
+    else
+        printf "  %-12s  not running\n" "$label"
+    fi
+}
+
 {
     echo "=== $(date '+%Y-%m-%d %H:%M:%S') ==="
 
@@ -69,7 +93,7 @@ log_proc() {
     log_proc "node"        "node server.js"
     log_proc "gst-overlay" "gst-overlay-pipeline.py"
     log_proc "gst-launch"  "gst-launch-1.0"
-    log_proc "chromium"    "chromium"
+    log_proc_all "chromium"  "chromium"
     log_proc "ffmpeg"      "ffmpeg"
 
     # ── Network interfaces ────────────────────────────────────────────────────
