@@ -1171,6 +1171,10 @@ let _mjpegPreviewTimeout = null;
 let _snapshotPollActive = false;
 let _snapshotBlobUrl    = null;
 
+// Low Bandwidth Mode — when true, all preview modes use periodic JPEG snapshots
+// instead of continuous MJPEG/HLS streams.
+let lowBandwidthMode = false;
+
 /**
  * Stop snapshot polling and cancel any in-flight preview img/video elements.
  * Call this before any operation that will replace or restart the stream.
@@ -1179,6 +1183,8 @@ function cancelCurrentPreviewImg() {
   // Stop snapshot polling immediately
   _snapshotPollActive = false;
   if (_snapshotBlobUrl) { URL.revokeObjectURL(_snapshotBlobUrl); _snapshotBlobUrl = null; }
+  const lowBwLabel = document.getElementById("lowBwLabel");
+  if (lowBwLabel && !lowBandwidthMode) lowBwLabel.style.display = "none";
 
   for (const id of ["videoStream", "videoStreamNew"]) {
     const el = document.getElementById(id);
@@ -1192,10 +1198,61 @@ function cancelCurrentPreviewImg() {
 }
 
 /**
+ * Low-Bandwidth preview — polls /video/snapshot at the user-selected interval
+ * instead of opening a continuous MJPEG/HLS stream.  One HTTP request per
+ * interval; ~5–15 KB per frame vs. ~60–200 KB/s for a continuous stream.
+ * Works in both idle (GStreamer idle preview) and streaming (port 8555) states.
+ */
+function switchToSnapshotPreview() {
+  console.log("🔄 Switching to low-bandwidth snapshot preview...");
+  cancelCurrentPreviewImg(); // tears down any existing MJPEG/HLS/snapshot
+
+  const container = document.querySelector(".video-container");
+  const img = document.createElement("img");
+  img.id = "videoStream";
+  img.alt = "Camera Preview";
+  img.style.cssText = "width:100%;height:100%;object-fit:contain;display:block;background:#000";
+  container.insertBefore(img, container.firstChild);
+
+  _snapshotPollActive = true;
+
+  const lowBwLabel = document.getElementById("lowBwLabel");
+  if (lowBwLabel) lowBwLabel.style.display = "inline";
+
+  async function fetchNext() {
+    if (!_snapshotPollActive) return;
+
+    try {
+      const resp = await fetch("/video/snapshot?t=" + Date.now());
+      if (resp.ok) {
+        const blob = await resp.blob();
+        if (!_snapshotPollActive) { URL.revokeObjectURL(URL.createObjectURL(blob)); return; }
+        const url = URL.createObjectURL(blob);
+        if (_snapshotBlobUrl) URL.revokeObjectURL(_snapshotBlobUrl);
+        _snapshotBlobUrl = url;
+        const el = document.getElementById("videoStream");
+        if (el && !el._cancelled) el.src = url;
+      }
+    } catch (e) {
+      // Network error — silently retry on the next interval
+      console.warn("📸 Snapshot fetch failed:", e.message);
+    }
+
+    if (!_snapshotPollActive) return;
+    const secs = parseInt(document.getElementById("snapshotInterval")?.value || "3");
+    setTimeout(fetchNext, secs * 1000);
+  }
+
+  fetchNext(); // immediate first frame, then recurring
+}
+
+/**
  * Switch the preview area to the live HLS stream served by MediaMTX.
  * Falls back to TCP MJPEG (port 8555) if HLS is unavailable (e.g. SRT mode).
+ * When Low Bandwidth Mode is active, defers to switchToSnapshotPreview() instead.
  */
 function switchToHLSPreview() {
+  if (lowBandwidthMode) { switchToSnapshotPreview(); return; }
   console.log("🔄 Switching to HLS live preview...");
   const container = document.querySelector(".video-container");
 
@@ -1321,6 +1378,8 @@ function _switchToTCPMJPEG(container) {
  * slow/remote connections, preventing the runaway lag that occurred at 5 fps.
  */
 function switchToMJPEGPreview(onLoaded) {
+  // In Low Bandwidth Mode skip continuous MJPEG and use snapshot polling instead.
+  if (lowBandwidthMode) { switchToSnapshotPreview(); if (typeof onLoaded === "function") onLoaded(); return; }
   console.log("🔄 Switching to idle MJPEG preview (1 fps)...");
   const container = document.querySelector(".video-container");
   const oldElement = document.getElementById("videoStream");
@@ -3170,5 +3229,47 @@ loadDeviceIp();
       bodyEl.style.display = isOpen ? "none" : "block";
       if (chevronEl) chevronEl.textContent = isOpen ? "▶" : "▼";
     });
+  });
+})();
+
+
+// ── Low Bandwidth Mode — snapshot polling toggle ───────────────────────────
+(function () {
+  const checkbox = document.getElementById("lowBandwidthMode");
+  const intervalSel = document.getElementById("snapshotInterval");
+  if (!checkbox || !intervalSel) return;
+
+  // Restore saved preferences
+  const savedMode = localStorage.getItem("lowBandwidthMode") === "true";
+  const savedInterval = localStorage.getItem("snapshotInterval");
+  if (savedInterval) intervalSel.value = savedInterval;
+  if (savedMode) {
+    lowBandwidthMode = true;
+    checkbox.checked = true;
+  }
+
+  checkbox.addEventListener("change", () => {
+    lowBandwidthMode = checkbox.checked;
+    localStorage.setItem("lowBandwidthMode", lowBandwidthMode);
+
+    // Switch the live preview immediately to reflect the new mode
+    if (lowBandwidthMode) {
+      switchToSnapshotPreview();
+    } else {
+      // Restore the appropriate streaming preview
+      if (isCurrentlyStreaming) {
+        switchToHLSPreview();
+      } else {
+        switchToMJPEGPreview();
+      }
+    }
+  });
+
+  intervalSel.addEventListener("change", () => {
+    localStorage.setItem("snapshotInterval", intervalSel.value);
+    // Restart snapshot polling immediately with the new interval if active
+    if (lowBandwidthMode && _snapshotPollActive) {
+      switchToSnapshotPreview();
+    }
   });
 })();

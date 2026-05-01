@@ -59,6 +59,22 @@
               <span id="bitrateMax" style="color:rgba(255,255,255,0.3); font-size:10px;"></span>
             </span>
           </div>
+          <!-- Low Bandwidth Mode — reduces preview to periodic JPEG snapshots -->
+          <div style="display:flex; align-items:center; gap:8px; padding:3px 2px 0; flex-wrap:wrap;">
+            <label style="font-size:11px; color:rgba(255,255,255,0.5); font-family:monospace; display:flex; align-items:center; gap:5px; cursor:pointer;" title="Replaces continuous video with periodic snapshots — much lower bandwidth for remote access">
+              <input type="checkbox" id="lowBandwidthMode" style="cursor:pointer;" />
+              🌐 Low Bandwidth Mode
+            </label>
+            <select id="snapshotInterval" style="font-size:11px; background:rgba(30,30,50,0.85); color:rgba(255,255,255,0.75); border:1px solid rgba(255,255,255,0.15); border-radius:4px; padding:1px 5px; cursor:pointer;" title="Snapshot refresh interval">
+              <option value="1">every 1s</option>
+              <option value="2">every 2s</option>
+              <option value="3" selected>every 3s</option>
+              <option value="5">every 5s</option>
+              <option value="10">every 10s</option>
+            </select>
+            <span id="lowBwLabel" style="font-size:10px; color:rgba(255,200,80,0.7); display:none;">snapshot</span>
+          </div>
+
           <!-- Scrolling bitrate sparkline — only visible while streaming -->
           <div id="bitrateGraphWrap" style="display:none; margin-top:4px;">
             <canvas
