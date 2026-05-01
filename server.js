@@ -1475,6 +1475,39 @@ function saveBannedIPs() {
 
 loadBannedIPs();
 
+// ── Viewer connection persistence ─────────────────────────────────────────────
+// Tracks when each client IP first connected, keyed by IP address.
+// Survives page reloads and server restarts so the "Connected for" duration
+// in the UI is accurate even after refreshing the browser.
+//
+// Schema (one entry per IP):
+//   connectedAt {number}  — epoch ms when the continuous connection started
+//   lastSeen    {number}  — epoch ms of the most recent poll that saw this IP
+//
+// Grace window: if the same IP reappears within VIEWER_RECONNECT_GRACE_MS of
+// its lastSeen timestamp we treat it as still-connected (handles brief TCP
+// reconnects / RTSP keepalive blips that change the session ID).
+const VIEWER_CONN_FILE          = path.join(__dirname, "viewer-connections.json");
+const VIEWER_RECONNECT_GRACE_MS = 90_000;   // 90 s — blips shorter than this keep the original connectedAt
+let   viewerConnectedAt         = {};        // IP → { connectedAt, lastSeen }
+
+function loadViewerConnections() {
+  try {
+    if (fsSync.existsSync(VIEWER_CONN_FILE))
+      viewerConnectedAt = JSON.parse(fsSync.readFileSync(VIEWER_CONN_FILE, "utf8"));
+  } catch (_) { viewerConnectedAt = {}; }
+}
+
+function saveViewerConnections() {
+  try {
+    fsSync.writeFileSync(VIEWER_CONN_FILE, JSON.stringify(viewerConnectedAt, null, 2));
+  } catch (e) {
+    console.error("⚠️  Could not save viewer-connections.json:", e.message);
+  }
+}
+
+loadViewerConnections();
+
 // Extract just the IP address from a "host:port" remoteAddr string.
 // Handles both IPv4 ("1.2.3.4:5678") and IPv6 ("[::1]:5678").
 function extractIp(remoteAddr) {
@@ -1541,28 +1574,64 @@ app.get("/api/stream/viewers", requireAdmin, async (req, res) => {
         continue;
       }
 
+      // ── Resolve connectedAt (persistent, keyed by IP) ──────────────────────
+      // Priority:
+      //   1. viewerBytesHistory already has it for this session ID (same session, normal poll)
+      //   2. viewerConnectedAt[ip] exists and lastSeen is within the grace window
+      //      → same client, brief blip / session-ID change — keep original time
+      //   3. Otherwise → new continuous connection; record now
+      let connectedAt;
       const prev = viewerBytesHistory[s.id];
+      if (prev) {
+        connectedAt = prev.connectedAt;
+      } else if (ip && viewerConnectedAt[ip] &&
+                 (now - viewerConnectedAt[ip].lastSeen) <= VIEWER_RECONNECT_GRACE_MS) {
+        connectedAt = viewerConnectedAt[ip].connectedAt;
+      } else {
+        connectedAt = now;
+      }
+
+      // Always update the persistent IP record so lastSeen stays current
+      if (ip) {
+        viewerConnectedAt[ip] = { connectedAt, lastSeen: now };
+      }
+
+      // Per-session bytes/rate history (session-ID scoped, shorter lifetime)
       let mbps = prev ? prev.mbps : null;
       if (prev && s.bytesSent >= prev.bytes && (now - prev.time) >= 800) {
         const elapsed = (now - prev.time) / 1000;
         mbps = parseFloat(((s.bytesSent - prev.bytes) * 8 / elapsed / 1_000_000).toFixed(2));
-        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps, kickBase: s._kickBase, ip, connectedAt: prev.connectedAt };
+        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps, kickBase: s._kickBase, ip, connectedAt };
       } else if (!prev) {
-        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps: null, kickBase: s._kickBase, ip, connectedAt: now };
+        viewerBytesHistory[s.id] = { bytes: s.bytesSent, time: now, mbps: null, kickBase: s._kickBase, ip, connectedAt };
       }
 
       viewers.push({
         id: s.id, remoteAddr: s.remoteAddr, ip,
         type: s._type, state: s.state, bytesSent: s.bytesSent, mbps,
-        connectedAt: viewerBytesHistory[s.id].connectedAt,
+        connectedAt,
       });
     }
 
-    // Clean up history for sessions that are no longer active
-    const activeIds = new Set(viewers.map((v) => v.id));
+    // Clean up session history for sessions that are no longer active.
+    // For IPs that fully disconnected (not in activeIds), update lastSeen in the
+    // persistent map so the grace window is measured from their actual disconnect time.
+    const activeIds  = new Set(viewers.map((v) => v.id));
+    const activeIPs  = new Set(viewers.map((v) => v.ip).filter(Boolean));
+    let   connChanged = false;
     for (const id of Object.keys(viewerBytesHistory)) {
-      if (!activeIds.has(id)) delete viewerBytesHistory[id];
+      if (!activeIds.has(id)) {
+        const deadIp = viewerBytesHistory[id].ip;
+        // If the IP is no longer active at all, stamp lastSeen = now so the
+        // grace-window clock starts from the moment of disconnect.
+        if (deadIp && !activeIPs.has(deadIp) && viewerConnectedAt[deadIp]) {
+          viewerConnectedAt[deadIp].lastSeen = now;
+          connChanged = true;
+        }
+        delete viewerBytesHistory[id];
+      }
     }
+    if (connChanged || viewers.length > 0) saveViewerConnections();
 
     res.json({ success: true, viewers, bannedIPs });
   } catch (_) {
@@ -1574,8 +1643,15 @@ app.get("/api/stream/viewers", requireAdmin, async (req, res) => {
 // Uses the kickBase stored in viewerBytesHistory to pick the right protocol endpoint.
 app.post("/api/stream/kick/:id", requireAdmin, async (req, res) => {
   try {
-    const kickBase = viewerBytesHistory[req.params.id]?.kickBase || "/v3/rtspsessions/kick";
+    const entry   = viewerBytesHistory[req.params.id];
+    const kickBase = entry?.kickBase || "/v3/rtspsessions/kick";
     await mediamtxPost(`${kickBase}/${req.params.id}`);
+    // Clear both session and persistent IP records so the connection timer
+    // resets if this client reconnects.
+    if (entry?.ip) {
+      delete viewerConnectedAt[entry.ip];
+      saveViewerConnections();
+    }
     delete viewerBytesHistory[req.params.id];
     res.json({ success: true });
   } catch (err) {
@@ -1609,6 +1685,9 @@ app.post("/api/stream/ban/:id", requireAdmin, async (req, res) => {
     if (!bannedIPs.includes(ip)) { bannedIPs.push(ip); saveBannedIPs(); }
 
     await mediamtxPost(`${kickBase}/${req.params.id}`);
+    // Clear connection timestamp so the timer resets if they somehow reconnect
+    delete viewerConnectedAt[ip];
+    saveViewerConnections();
     delete viewerBytesHistory[req.params.id];
     res.json({ success: true, ip });
   } catch (err) {
