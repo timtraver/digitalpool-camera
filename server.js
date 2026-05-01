@@ -1738,7 +1738,6 @@ app.post("/api/mediamtx/auth", express.json(), (req, res) => {
       return res.sendStatus(403);
     }
 
-    console.log(`✅ Auth hook: allowed ${protocol} ${action} from ${ip} on "${streamPath}"`);
     res.sendStatus(200);
   } catch (err) {
     // Never let an unexpected error default to a rejection — log and allow
@@ -1889,10 +1888,7 @@ app.get("/video/hls-live/*file", requireAuth, (req, res) => {
 app.get("/video/hls/playlist.m3u8", (req, res) => {
   const fs = require("fs");
 
-  console.log("📺 HLS playlist requested");
-
   if (!streamController.isStreaming) {
-    console.log("⚠️  Stream not active");
     return res.status(404).send("Stream not active");
   }
 
@@ -1935,10 +1931,7 @@ app.get("/video/hls/playlist.m3u8", (req, res) => {
       playlist += file.name + "\n";
     }
 
-    // Only log occasionally to reduce spam (every 10th request)
-    if (Math.random() < 0.1) {
-      console.log("✅ Serving HLS playlist: segments", mediaSequence, "to", files[files.length - 1].num);
-    }
+
 
     res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -1955,14 +1948,9 @@ app.get("/video/hls/:segment", (req, res) => {
   const segmentPath = `/tmp/stream/${req.params.segment}`;
 
   if (!fs.existsSync(segmentPath)) {
-    console.log("⚠️  Segment not found:", req.params.segment);
     return res.status(404).send("Segment not found");
   }
 
-  // Only log occasionally to reduce spam
-  if (Math.random() < 0.05) {
-    console.log("✅ Serving segment:", req.params.segment);
-  }
 
   res.setHeader("Content-Type", "video/mp2t");
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -1972,10 +1960,7 @@ app.get("/video/hls/:segment", (req, res) => {
 
 // TCP preview endpoint - proxies the GStreamer TCP server
 app.get("/video/tcp-preview", (req, res) => {
-  console.log("📺 TCP preview connection requested");
-
   if (!streamController.isStreaming) {
-    console.log("⚠️  Stream not active, redirecting to regular preview");
     return res.redirect("/video/stream");
   }
 
@@ -1992,24 +1977,13 @@ app.get("/video/tcp-preview", (req, res) => {
   let bytesReceived = 0;
   let firstDataReceived = false;
 
-  client.on("connect", () => {
-    console.log("✅ Connected to GStreamer TCP server on port 8555");
-  });
+  client.on("connect", () => { /* connected */ });
 
   client.on("data", (data) => {
     bytesReceived += data.length;
-
-    if (!firstDataReceived) {
-      firstDataReceived = true;
-      console.log("📦 First data chunk received:", data.length, "bytes");
-      console.log("📝 First 100 bytes:", data.slice(0, 100).toString('hex'));
-    }
-
     try {
       res.write(data);
     } catch (e) {
-      console.log("Client disconnected from TCP preview");
-      console.log("📊 Total bytes sent:", bytesReceived);
       client.destroy();
     }
   });
@@ -2019,15 +1993,9 @@ app.get("/video/tcp-preview", (req, res) => {
     res.end();
   });
 
-  client.on("end", () => {
-    console.log("TCP preview stream ended");
-    res.end();
-  });
+  client.on("end", () => { res.end(); });
 
-  req.on("close", () => {
-    console.log("Client disconnected from TCP preview");
-    client.destroy();
-  });
+  req.on("close", () => { client.destroy(); });
 });
 
 // Track active idle preview process (only one at a time)
@@ -2116,19 +2084,16 @@ function buildIdlePreviewGstArgs(sinkArgs) {
       const exists = fs.existsSync(pngOverlayPath);
       const size = exists ? fs.statSync(pngOverlayPath).size : 0;
       pngExists = exists && size > 100;
-      console.log(`📋 Remote overlay check: exists=${exists}, size=${size}, pngExists=${pngExists}`);
     } catch (e) {
-      console.log(`📋 Remote overlay check error: ${e.message}`);
+      console.error(`❌ Remote overlay check error: ${e.message}`);
     }
   }
 
   const hasAnyOverlay = config.overlayEnabled || config.showTimestamp || (hasRemoteOverlay && pngExists);
-  console.log(`📋 Idle preview overlay flags: overlayEnabled=${config.overlayEnabled}, showTimestamp=${config.showTimestamp}, hasRemoteOverlay=${hasRemoteOverlay}, pngExists=${pngExists}, hasAnyOverlay=${hasAnyOverlay}`);
 
   if (hasAnyOverlay) {
     // Remote overlay PNG — rendered FIRST so text/timestamp appear on top of it
     if (hasRemoteOverlay && pngExists) {
-      console.log(`📸 Adding remote overlay PNG to idle preview: ${pngOverlayPath}`);
       gstArgs.push(
         "gdkpixbufoverlay",
         `location=${pngOverlayPath}`,
@@ -2317,23 +2282,21 @@ async function startPersistentIdlePreview() {
     ];
 
     const gstArgs = buildIdlePreviewGstArgs(sinkArgs);
-    console.log(`📹 Starting persistent idle preview on TCP port ${IDLE_PREVIEW_PORT}`);
-    console.log(`📋 GStreamer idle preview args: gst-launch-1.0 ${gstArgs.join(" ")}`);
+    console.log(`📹 Starting idle preview on TCP port ${IDLE_PREVIEW_PORT} (source: ${activeCameraSource.type})`);
 
     const gst = spawn("gst-launch-1.0", gstArgs);
     currentIdlePreviewProcess = gst;
     const spawnTime = Date.now();
     _lastIdlePreviewSpawnTime = spawnTime;
-    console.log(`📹 Started idle preview process PID: ${gst.pid}`);
 
-    gst.stdout.on("data", (data) => {
-      console.log(`GStreamer idle stdout: ${data.toString().trim()}`);
-    });
+    // stdout suppressed — GStreamer is extremely chatty with pipeline state transitions
+    gst.stdout.on("data", () => {});
 
     gst.stderr.on("data", (data) => {
       const msg = data.toString().trim();
-      if (msg) {
-        console.log(`GStreamer idle stderr: ${msg}`);
+      // Only log stderr lines that look like actual errors (suppress normal state lines)
+      if (msg && /error|warning|failed|cannot|unable/i.test(msg)) {
+        console.error(`GStreamer idle: ${msg}`);
       }
     });
 
@@ -2381,11 +2344,8 @@ async function startPersistentIdlePreview() {
 
 // Video stream endpoint using MJPEG — proxies the persistent idle preview TCP server
 app.get("/video/stream", async (req, res) => {
-  console.log("New video stream connection requested");
-
   // If streaming is active, don't try to access camera for idle preview
   if (streamController.isStreaming) {
-    console.log("⚠️  Stream is active - preview should use HLS at /video/hls/playlist.m3u8");
     res.status(503).send("Stream active - use HLS preview");
     return;
   }
@@ -2425,7 +2385,6 @@ app.get("/video/stream", async (req, res) => {
   let reqClosed = false;
 
   req.on("close", () => {
-    console.log("Client disconnected from preview");
     reqClosed = true;
     if (currentClient) {
       currentClient.destroy();
@@ -2442,16 +2401,10 @@ app.get("/video/stream", async (req, res) => {
     let totalBytesReceived = 0;
     let firstDataLogged = false;
 
-    client.on("connect", () => {
-      console.log(`✅ Connected to idle preview TCP server on port ${IDLE_PREVIEW_PORT}`);
-    });
+    client.on("connect", () => { /* connected */ });
 
     client.on("data", (data) => {
       totalBytesReceived += data.length;
-      if (!firstDataLogged) {
-        firstDataLogged = true;
-        console.log(`📦 First data from idle preview: ${data.length} bytes (first 50 hex: ${data.slice(0, 50).toString('hex')})`);
-      }
       try {
         res.write(data);
       } catch (err) {
@@ -2464,7 +2417,6 @@ app.get("/video/stream", async (req, res) => {
       if (reqClosed) return; // HTTP client already gone — stop silently
       if (retries < maxRetries) {
         retries++;
-        console.log(`⚠️  Preview TCP connection failed (attempt ${retries}/${maxRetries}): ${err.message}`);
         setTimeout(connectToPreview, 1000);
       } else {
         console.error(`❌ Could not connect to idle preview after ${maxRetries} attempts`);
@@ -2473,8 +2425,7 @@ app.get("/video/stream", async (req, res) => {
     });
 
     client.on("close", () => {
-      if (reqClosed) return; // req.on("close") already handled this
-      console.log("Preview TCP connection closed");
+      if (reqClosed) return;
       try { res.end(); } catch (e) { /* already ended */ }
     });
   }
@@ -2961,48 +2912,27 @@ app.use((req, res, next) => {
 });
 
 app.use("/fonts", (req, res) => {
-  const targetUrl = `https://digitalpool.com${req.originalUrl}`;
-  console.log("Proxying /fonts request:", req.originalUrl, "->", targetUrl);
-  proxyUrl(targetUrl, res, req);
+  proxyUrl(`https://digitalpool.com${req.originalUrl}`, res, req);
 });
 
 app.use("/static", (req, res) => {
-  const targetUrl = `https://digitalpool.com${req.originalUrl}`;
-  console.log("Proxying /static request:", req.originalUrl, "->", targetUrl);
-  proxyUrl(targetUrl, res, req);
+  proxyUrl(`https://digitalpool.com${req.originalUrl}`, res, req);
 });
 
 app.use("/tournaments", (req, res) => {
-  const targetUrl = `https://digitalpool.com${req.originalUrl}`;
-  console.log(
-    "Proxying /tournaments request:",
-    req.originalUrl,
-    "->",
-    targetUrl,
-  );
-  proxyUrl(targetUrl, res, req);
+  proxyUrl(`https://digitalpool.com${req.originalUrl}`, res, req);
 });
 
-// Proxy for version.json
 app.get("/version.json", (req, res) => {
-  const targetUrl = `https://digitalpool.com/version.json`;
-  console.log("Proxying /version.json request");
-  proxyUrl(targetUrl, res, req);
+  proxyUrl("https://digitalpool.com/version.json", res, req);
 });
 
-// Proxy for favicon
 app.get("/favicon.ico", (req, res) => {
-  const targetUrl = `https://digitalpool.com/favicon.ico`;
-  console.log("Proxying /favicon.ico request");
-  proxyUrl(targetUrl, res, req);
+  proxyUrl("https://digitalpool.com/favicon.ico", res, req);
 });
 
-// Proxy for GraphQL and other API endpoints
-// Use the actual production API endpoint
 app.use("/graphql", (req, res) => {
-  const targetUrl = `https://api-prod.digitalpool.com/v1/graphql`;
-  console.log("Proxying /graphql request:", req.originalUrl, "->", targetUrl);
-  proxyUrl(targetUrl, res, req);
+  proxyUrl("https://api-prod.digitalpool.com/v1/graphql", res, req);
 });
 
 // ============================================================================
