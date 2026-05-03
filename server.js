@@ -457,26 +457,35 @@ app.post("/api/remote/disable", requireAdmin, async (req, res) => {
 });
 
 // ── SSH (openssh-server) ── dpadmin only ────────────────────────────────────
-// Toggles the system ssh.service so SSH is off by default and only enabled
-// on demand by dpadmin.  Requires two NOPASSWD sudoers entries:
+// Toggles ssh.socket AND ssh.service so SSH is off by default and only
+// enabled on demand by dpadmin.  Modern Ubuntu uses socket activation, so
+// stopping ssh.service alone leaves ssh.socket listening on :22 and the
+// service is respawned on the next connection — both must be toggled.
+// Requires NOPASSWD sudoers entries:
 //   ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable --now ssh
 //   ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable --now ssh
+//   ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable --now ssh.socket
+//   ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable --now ssh.socket
 // Reachability is provided by Tailscale (port 22 on the tailnet IP); access
 // is gated by sshd's normal auth + Headscale tailnet membership.
 app.get("/api/remote/ssh/status", requireAdmin, async (req, res) => {
   const cfg = loadRemoteConfig();
-  // systemctl returns non-zero when inactive/disabled, so swallow the rejection
-  // and read the stdout that execAsync attaches to the error object.
+  // systemctl returns non-zero when inactive/disabled/missing, so swallow the
+  // rejection and read the stdout that execAsync attaches to the error object.
   const probe = async (cmd) => {
     try { return (await execAsync(cmd)).stdout.trim(); }
     catch (e) { return (e.stdout || "").trim(); }
   };
-  const [activeOut, enabledOut] = await Promise.all([
+  const [svcActive, svcEnabled, sockActive, sockEnabled] = await Promise.all([
     probe("systemctl is-active ssh"),
     probe("systemctl is-enabled ssh"),
+    probe("systemctl is-active ssh.socket"),
+    probe("systemctl is-enabled ssh.socket"),
   ]);
-  const active  = activeOut  === "active";
-  const enabled = enabledOut === "enabled";
+  // Either unit being up means SSH is reachable; either being enabled means
+  // it'll come back on reboot.
+  const active  = svcActive  === "active"  || sockActive  === "active";
+  const enabled = svcEnabled === "enabled" || sockEnabled === "enabled";
   let ip = null;
   try {
     const { stdout } = await execAsync("tailscale ip --4 2>/dev/null");
@@ -486,28 +495,44 @@ app.get("/api/remote/ssh/status", requireAdmin, async (req, res) => {
   res.json({ active, enabled, ip, persisted: !!cfg.sshEnabled, isDpAdmin });
 });
 
-app.post("/api/remote/ssh/enable", requireDpAdmin, async (req, res) => {
-  try {
-    await execAsync("sudo /usr/bin/systemctl enable --now ssh");
-    const cfg = loadRemoteConfig();
-    cfg.sshEnabled = true;
-    saveRemoteConfig(cfg);
-    res.json({ success: true, active: true });
-  } catch (e) {
-    res.status(500).json({ error: (e.stderr || e.message || "").trim() });
+// Helper: run a sudo command and tolerate "unit not found" / "no such file"
+// errors so a box without ssh.socket (or without ssh.service) doesn't fail
+// the whole toggle — we only need at least one of the two to succeed.
+async function tryUnitCmd(cmd) {
+  try { await execAsync(cmd); return { ok: true }; }
+  catch (e) {
+    const err = ((e.stderr || e.message || "") + "").toLowerCase();
+    if (err.includes("not found") || err.includes("no such")) return { ok: false, missing: true };
+    return { ok: false, error: (e.stderr || e.message || "").trim() };
   }
+}
+
+app.post("/api/remote/ssh/enable", requireDpAdmin, async (req, res) => {
+  // Enable socket first (it's the listener on modern Ubuntu); then service as
+  // a fallback for installs without socket activation.
+  const sock = await tryUnitCmd("sudo /usr/bin/systemctl enable --now ssh.socket");
+  const svc  = await tryUnitCmd("sudo /usr/bin/systemctl enable --now ssh");
+  if (!sock.ok && !svc.ok) {
+    return res.status(500).json({ error: sock.error || svc.error || "Failed to enable SSH" });
+  }
+  const cfg = loadRemoteConfig();
+  cfg.sshEnabled = true;
+  saveRemoteConfig(cfg);
+  res.json({ success: true, active: true });
 });
 
 app.post("/api/remote/ssh/disable", requireDpAdmin, async (req, res) => {
-  try {
-    await execAsync("sudo /usr/bin/systemctl disable --now ssh");
-    const cfg = loadRemoteConfig();
-    cfg.sshEnabled = false;
-    saveRemoteConfig(cfg);
-    res.json({ success: true, active: false });
-  } catch (e) {
-    res.status(500).json({ error: (e.stderr || e.message || "").trim() });
+  // Disable the socket first to stop accepting new connections immediately,
+  // then disable the service.  Existing sessions stay open by design.
+  const sock = await tryUnitCmd("sudo /usr/bin/systemctl disable --now ssh.socket");
+  const svc  = await tryUnitCmd("sudo /usr/bin/systemctl disable --now ssh");
+  if (!sock.ok && !svc.ok) {
+    return res.status(500).json({ error: sock.error || svc.error || "Failed to disable SSH" });
   }
+  const cfg = loadRemoteConfig();
+  cfg.sshEnabled = false;
+  saveRemoteConfig(cfg);
+  res.json({ success: true, active: false });
 });
 
 app.put("/api/remote/name", requireAdmin, express.json(), async (req, res) => {
