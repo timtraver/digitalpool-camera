@@ -1460,7 +1460,8 @@ socket.on("cpuLoad", ({ percent }) => {
 
 // ── GStreamer drift display ───────────────────────────────────────────────
 // Emitted every ~60 s from the GStreamer drift check. Colour-coded by magnitude.
-// Positive ppm = GStreamer clock running fast; negative = running slow.
+// Positive = GStreamer clock running fast; negative = running slow.
+// Displayed as seconds-per-hour (ppm × 3600 / 1e6) for human-relatability.
 const streamDriftEl = document.getElementById("streamDrift");
 socket.on("streamDrift", ({ ppm }) => {
   if (!streamDriftEl) return;
@@ -1469,11 +1470,14 @@ socket.on("streamDrift", ({ ppm }) => {
     streamDriftEl.style.color = "#12c7ff";
     return;
   }
-  const abs = Math.abs(ppm);
-  streamDriftEl.textContent = (ppm >= 0 ? "+" : "") + Math.round(ppm) + " ppm";
-  streamDriftEl.style.color = abs > 5000 ? "#f87171"   // red   — significant drift
-                            : abs > 1000 ? "#fbbf24"   // amber — mild drift
-                            :              "#4ade80";  // green — negligible
+  const sPerHr = ppm * 0.0036;
+  const abs    = Math.abs(sPerHr);
+  // 1 decimal under 10 s/hr, integer beyond — keeps the field width steady.
+  const shown = abs < 10 ? sPerHr.toFixed(1) : Math.round(sPerHr).toString();
+  streamDriftEl.textContent = (sPerHr >= 0 ? "+" : "") + shown + " s/hr";
+  streamDriftEl.style.color = abs > 18 ? "#f87171"   // red   — significant drift (>18 s/hr ≈ >5000 ppm)
+                            : abs >  4 ? "#fbbf24"   // amber — mild drift       (>4  s/hr ≈ >1100 ppm)
+                            :            "#4ade80";  // green — negligible
 });
 
 // ── Live TX bitrate sparkline ─────────────────────────────────────────────
