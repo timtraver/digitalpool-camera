@@ -3229,7 +3229,7 @@ loadDeviceIp();
         enableBtn.style.display  = "none";
         disableBtn.style.display = "";
         if (d.ip) {
-          hint.textContent = `tailscale ssh ubuntu@${d.ip}`;
+          hint.textContent = `ssh ubuntu@${d.ip}`;
           hintRow.style.display = "flex";
         } else {
           hintRow.style.display = "none";

@@ -456,29 +456,39 @@ app.post("/api/remote/disable", requireAdmin, async (req, res) => {
   }
 });
 
-// ── Tailscale SSH ── dpadmin only ───────────────────────────────────────────
-// Toggles the built-in SSH server in tailscaled (no openssh-server / sshd, no
-// new sudoers entry — uses the same `sudo tailscale …` permission already in
-// place for `tailscale up/down/set`).  Access is gated by Headscale ACLs.
+// ── SSH (openssh-server) ── dpadmin only ────────────────────────────────────
+// Toggles the system ssh.service so SSH is off by default and only enabled
+// on demand by dpadmin.  Requires two NOPASSWD sudoers entries:
+//   ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable --now ssh
+//   ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable --now ssh
+// Reachability is provided by Tailscale (port 22 on the tailnet IP); access
+// is gated by sshd's normal auth + Headscale tailnet membership.
 app.get("/api/remote/ssh/status", requireAdmin, async (req, res) => {
   const cfg = loadRemoteConfig();
-  let active = false;
-  let ip     = null;
+  // systemctl returns non-zero when inactive/disabled, so swallow the rejection
+  // and read the stdout that execAsync attaches to the error object.
+  const probe = async (cmd) => {
+    try { return (await execAsync(cmd)).stdout.trim(); }
+    catch (e) { return (e.stdout || "").trim(); }
+  };
+  const [activeOut, enabledOut] = await Promise.all([
+    probe("systemctl is-active ssh"),
+    probe("systemctl is-enabled ssh"),
+  ]);
+  const active  = activeOut  === "active";
+  const enabled = enabledOut === "enabled";
+  let ip = null;
   try {
-    const { stdout } = await execAsync("tailscale status --json 2>/dev/null");
-    const ts = JSON.parse(stdout);
-    // Presence of host keys on Self is the most reliable cross-version signal
-    // that tailscaled has the SSH server running.
-    active = Array.isArray(ts.Self?.SSH_HostKeys) && ts.Self.SSH_HostKeys.length > 0;
-    ip     = ts.TailscaleIPs?.[0] || ts.Self?.TailscaleIPs?.[0] || null;
+    const { stdout } = await execAsync("tailscale ip --4 2>/dev/null");
+    ip = stdout.trim() || null;
   } catch { /* tailscale not running */ }
   const isDpAdmin = req.session?.user?.username === "dpadmin";
-  res.json({ active, ip, persisted: !!cfg.sshEnabled, isDpAdmin });
+  res.json({ active, enabled, ip, persisted: !!cfg.sshEnabled, isDpAdmin });
 });
 
 app.post("/api/remote/ssh/enable", requireDpAdmin, async (req, res) => {
   try {
-    await execAsync("sudo tailscale set --ssh=true");
+    await execAsync("sudo /usr/bin/systemctl enable --now ssh");
     const cfg = loadRemoteConfig();
     cfg.sshEnabled = true;
     saveRemoteConfig(cfg);
@@ -490,7 +500,7 @@ app.post("/api/remote/ssh/enable", requireDpAdmin, async (req, res) => {
 
 app.post("/api/remote/ssh/disable", requireDpAdmin, async (req, res) => {
   try {
-    await execAsync("sudo tailscale set --ssh=false");
+    await execAsync("sudo /usr/bin/systemctl disable --now ssh");
     const cfg = loadRemoteConfig();
     cfg.sshEnabled = false;
     saveRemoteConfig(cfg);
