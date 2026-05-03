@@ -707,6 +707,8 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
           // Record the new active source so the button dims again
           activeSource = { ...data.source };
           applyCameraSourceUI(activeSource.type);
+          // Refresh resolution capabilities for the newly-active source.
+          if (typeof loadCameraCapabilities === "function") loadCameraCapabilities();
           statusEl.style.color = "rgba(80,220,120,0.9)";
           statusEl.textContent = data.streamRestarted ? "✅ Applied — stream restarted" : "✅ Applied";
         } else {
@@ -759,6 +761,7 @@ document.addEventListener("keydown", (e) => {
 const streamProtocol = document.getElementById("streamProtocol");
 const streamDestination = document.getElementById("streamDestination");
 const streamBitrate = document.getElementById("streamBitrate");
+const streamResolution = document.getElementById("streamResolution");
 const streamFramerate = document.getElementById("streamFramerate");
 const streamCodec = document.getElementById("streamCodec");
 // audioEnabledCheckbox, audioDeviceRow, audioDeviceSelect, refreshAudioDevicesBtn
@@ -906,6 +909,9 @@ startStreamBtn.addEventListener("click", async () => {
   startStreamBtn.disabled = true;
   stopStreamBtn.disabled = true;
 
+  // Parse "1920x1080" → { width: 1920, height: 1080 }
+  const [resW, resH] = (streamResolution.value || "1920x1080").split("x").map((n) => parseInt(n, 10));
+
   if (isRestart) {
     console.log("Restarting stream...");
     // Let the server handle the full stop→start cycle atomically.
@@ -917,8 +923,8 @@ startStreamBtn.addEventListener("click", async () => {
       bitrate: parseInt(streamBitrate.value),
       audioEnabled: audioEnabledCheckbox.checked,
       audioDevice: audioDeviceSelect ? audioDeviceSelect.value : "",
-      width: 1920,
-      height: 1080,
+      width: resW,
+      height: resH,
       framerate: parseInt(streamFramerate.value),
       codec: streamCodec.value,
     };
@@ -932,8 +938,8 @@ startStreamBtn.addEventListener("click", async () => {
       bitrate: parseInt(streamBitrate.value),
       audioEnabled: audioEnabledCheckbox.checked,
       audioDevice: audioDeviceSelect ? audioDeviceSelect.value : "",
-      width: 1920,
-      height: 1080,
+      width: resW,
+      height: resH,
       framerate: parseInt(streamFramerate.value),
       codec: streamCodec.value,
     };
@@ -1172,6 +1178,7 @@ createCustomDropdown(timestampBackground);
 
 // Stream control dropdowns
 createCustomDropdown(streamProtocol);
+createCustomDropdown(streamResolution);
 createCustomDropdown(streamBitrate);
 createCustomDropdown(streamFramerate);
 createCustomDropdown(streamCodec);
@@ -2486,6 +2493,10 @@ async function loadStreamConfig() {
       streamBitrate.value = data.config.bitrate || 5000000;
       streamFramerate.value = data.config.framerate || 30;
       streamCodec.value = data.config.codec || "h264";
+      const w = data.config.width || 1920, h = data.config.height || 1080;
+      const resKey = `${w}x${h}`;
+      // Only assign if the option exists; otherwise fall back to 1080p.
+      streamResolution.value = Array.from(streamResolution.options).some((o) => o.value === resKey) ? resKey : "1920x1080";
       audioEnabledCheckbox.checked = data.config.audioEnabled !== false; // default true
 
       // Store the saved audio device so the refresh button can pre-select it.
@@ -2545,12 +2556,69 @@ async function loadStreamConfig() {
         codecDropdown.dataset.value = codecOption.value;
       }
 
+      updateCustomDropdownDisplay(streamResolution);
+
       // Show/hide destination field and connection info box based on protocol
       updateConnectionInfo(data.config.protocol || "rtsp", deviceLocalIP);
+
+      // Apply fps constraints implied by current resolution, then refresh
+      // capability info so unsupported resolutions get greyed out.
+      applyResolutionConstraints();
+      loadCameraCapabilities();
     }
   } catch (error) {
     console.error("❌ Error loading stream config:", error);
   }
+}
+
+// Disable a custom-dropdown option (both the underlying <option> and its
+// rendered .custom-dropdown-option div). When the currently-selected value
+// becomes disabled, snap to fallbackValue.
+function setStreamOptionDisabled(selectEl, value, disabled, fallbackValue) {
+  const opt = Array.from(selectEl.options).find((o) => o.value === value);
+  if (opt) opt.disabled = disabled;
+  const optionsContainer = selectEl.parentElement.querySelector(".custom-dropdown-options");
+  if (optionsContainer) {
+    const div = optionsContainer.querySelector(`.custom-dropdown-option[data-value="${value}"]`);
+    if (div) {
+      div.style.opacity       = disabled ? "0.35" : "";
+      div.style.pointerEvents = disabled ? "none" : "";
+      div.style.cursor        = disabled ? "not-allowed" : "";
+    }
+  }
+  if (disabled && selectEl.value === value && fallbackValue != null) {
+    selectEl.value = fallbackValue;
+    updateCustomDropdownDisplay(selectEl);
+    selectEl.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+}
+
+// 4K caps the encoder at 30 fps on the Orange Pi 5 — disable 50/60 in that case.
+function applyResolutionConstraints() {
+  const is4K = streamResolution && streamResolution.value === "3840x2160";
+  setStreamOptionDisabled(streamFramerate, "50", is4K, "30");
+  setStreamOptionDisabled(streamFramerate, "60", is4K, "30");
+}
+
+// Query the backend for what the active source can deliver, and disable
+// resolutions the camera doesn't advertise. Call after loadStreamConfig and
+// after a successful camera-source switch.
+async function loadCameraCapabilities() {
+  if (!streamResolution) return;
+  try {
+    const r = await fetch("/api/camera/capabilities");
+    const d = await r.json();
+    setStreamOptionDisabled(streamResolution, "1280x720",  !d.supports720p,  "1920x1080");
+    setStreamOptionDisabled(streamResolution, "1920x1080", !d.supports1080p, "1280x720");
+    setStreamOptionDisabled(streamResolution, "3840x2160", !d.supports4K,    "1920x1080");
+    applyResolutionConstraints();
+  } catch (e) {
+    console.warn("⚠️  Could not load camera capabilities:", e.message);
+  }
+}
+
+if (streamResolution) {
+  streamResolution.addEventListener("change", applyResolutionConstraints);
 }
 
 // Load stream config on page load

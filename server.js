@@ -1308,6 +1308,48 @@ app.get("/api/camera/devices", requireAuth, (req, res) => {
   }
 });
 
+// Report which encode resolutions the active camera source supports.
+// For USB sources, parses `v4l2-ctl --list-formats-ext` to see whether the
+// device can deliver 720p / 1080p / 4K. For RTSP (or any non-USB source),
+// no V4L2 capability check applies, so all resolutions are reported as
+// available — the user can transcode to whatever the encoder will allow.
+app.get("/api/camera/capabilities", requireAuth, async (req, res) => {
+  if (activeCameraSource.type !== "usb") {
+    return res.json({
+      success: true,
+      source: activeCameraSource.type,
+      supports720p: true,
+      supports1080p: true,
+      supports4K: true,
+      maxWidth: 0,
+      maxHeight: 0,
+    });
+  }
+  const dev = activeCameraSource.device || CAMERA_DEVICE;
+  try {
+    const { stdout } = await execAsync(
+      `sudo v4l2-ctl -d ${dev} --list-formats-ext 2>/dev/null || true`,
+      { timeout: 4000 },
+    );
+    let maxW = 0, maxH = 0;
+    let supports720p = false, supports1080p = false, supports4K = false;
+    const re = /Size: Discrete (\d+)x(\d+)/g;
+    let m;
+    while ((m = re.exec(stdout)) !== null) {
+      const w = parseInt(m[1], 10), h = parseInt(m[2], 10);
+      if (w >= 1280 && h >= 720)  supports720p  = true;
+      if (w >= 1920 && h >= 1080) supports1080p = true;
+      if (w >= 3840 && h >= 2160) supports4K    = true;
+      if (w * h > maxW * maxH) { maxW = w; maxH = h; }
+    }
+    res.json({ success: true, source: "usb", device: dev, supports720p, supports1080p, supports4K, maxWidth: maxW, maxHeight: maxH });
+  } catch (e) {
+    // On parse / exec failure, fall back to the safe set (no 4K) so the UI
+    // doesn't accidentally enable an option the camera can't satisfy.
+    res.json({ success: false, error: e.message, supports720p: true, supports1080p: true, supports4K: false, maxWidth: 0, maxHeight: 0 });
+  }
+});
+
 // List available ALSA capture devices (microphones / audio inputs).
 // Uses execAsync (non-blocking) with a hard 3 s timeout so a hung ALSA
 // subsystem never stalls the Node.js event loop.

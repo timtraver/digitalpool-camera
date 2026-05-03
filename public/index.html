@@ -478,15 +478,11 @@
             </div>
 
             <div class="control-item">
-              <label>Bitrate:</label>
-              <select id="streamBitrate">
-                <option value="2000000">2 Mbps</option>
-                <option value="4000000">4 Mbps</option>
-                <option value="5000000" selected>5 Mbps</option>
-                <option value="8000000">8 Mbps</option>
-                <option value="10000000">10 Mbps</option>
-                <option value="15000000">15 Mbps</option>
-                <option value="20000000">20 Mbps</option>
+              <label>Resolution:</label>
+              <select id="streamResolution">
+                <option value="1280x720">720p</option>
+                <option value="1920x1080" selected>1080p</option>
+                <option value="3840x2160">4K (UHD)</option>
               </select>
             </div>
 
@@ -498,6 +494,19 @@
                 <option value="30" selected>30 fps</option>
                 <option value="50">50 fps</option>
                 <option value="60">60 fps</option>
+              </select>
+            </div>
+
+            <div class="control-item">
+              <label>Bitrate:</label>
+              <select id="streamBitrate">
+                <option value="2000000">2 Mbps</option>
+                <option value="4000000">4 Mbps</option>
+                <option value="5000000" selected>5 Mbps</option>
+                <option value="8000000">8 Mbps</option>
+                <option value="10000000">10 Mbps</option>
+                <option value="15000000">15 Mbps</option>
+                <option value="20000000">20 Mbps</option>
               </select>
             </div>
 
@@ -829,6 +838,6 @@
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-    <script src="app.js?v=9"></script>
+    <script src="app.js?v=10"></script>
   </body>
 </html>
