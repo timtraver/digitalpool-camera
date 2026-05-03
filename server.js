@@ -305,6 +305,14 @@ function requireAdmin(req, res, next) {
   res.status(403).json({ error: "Admin access required" });
 }
 
+// dpadmin-only — used for sensitive system toggles (SSH enable/disable, etc.)
+// Hotspot users are NOT implicitly dpadmin: physical-network presence shouldn't
+// grant the ability to open SSH on the box.
+function requireDpAdmin(req, res, next) {
+  if (req.session?.user?.username === "dpadmin") return next();
+  res.status(403).json({ error: "dpadmin access required" });
+}
+
 app.get("/api/users", requireAdmin, (req, res) => {
   res.json({ users: authManager.listUsers() });
 });
@@ -445,6 +453,50 @@ app.post("/api/remote/disable", requireAdmin, async (req, res) => {
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Tailscale SSH ── dpadmin only ───────────────────────────────────────────
+// Toggles the built-in SSH server in tailscaled (no openssh-server / sshd, no
+// new sudoers entry — uses the same `sudo tailscale …` permission already in
+// place for `tailscale up/down/set`).  Access is gated by Headscale ACLs.
+app.get("/api/remote/ssh/status", requireAdmin, async (req, res) => {
+  const cfg = loadRemoteConfig();
+  let active = false;
+  let ip     = null;
+  try {
+    const { stdout } = await execAsync("tailscale status --json 2>/dev/null");
+    const ts = JSON.parse(stdout);
+    // Presence of host keys on Self is the most reliable cross-version signal
+    // that tailscaled has the SSH server running.
+    active = Array.isArray(ts.Self?.SSH_HostKeys) && ts.Self.SSH_HostKeys.length > 0;
+    ip     = ts.TailscaleIPs?.[0] || ts.Self?.TailscaleIPs?.[0] || null;
+  } catch { /* tailscale not running */ }
+  const isDpAdmin = req.session?.user?.username === "dpadmin";
+  res.json({ active, ip, persisted: !!cfg.sshEnabled, isDpAdmin });
+});
+
+app.post("/api/remote/ssh/enable", requireDpAdmin, async (req, res) => {
+  try {
+    await execAsync("sudo tailscale set --ssh=true");
+    const cfg = loadRemoteConfig();
+    cfg.sshEnabled = true;
+    saveRemoteConfig(cfg);
+    res.json({ success: true, active: true });
+  } catch (e) {
+    res.status(500).json({ error: (e.stderr || e.message || "").trim() });
+  }
+});
+
+app.post("/api/remote/ssh/disable", requireDpAdmin, async (req, res) => {
+  try {
+    await execAsync("sudo tailscale set --ssh=false");
+    const cfg = loadRemoteConfig();
+    cfg.sshEnabled = false;
+    saveRemoteConfig(cfg);
+    res.json({ success: true, active: false });
+  } catch (e) {
+    res.status(500).json({ error: (e.stderr || e.message || "").trim() });
   }
 });
 

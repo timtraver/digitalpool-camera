@@ -2858,6 +2858,7 @@ loadDeviceIp();
     const remoteSec = document.getElementById("remoteAccessSection");
     if (remoteSec) remoteSec.style.display = "block";
     initRemoteAccess();
+    initRemoteSsh();
   }
 
   // ── Software version ─────────────────────────────────────────
@@ -3198,6 +3199,83 @@ loadDeviceIp();
       } catch (e) { showMsg(msg, `❌ ${e.message}`, true); }
       finally { disableBtn.disabled = false; }
     });
+  }
+
+  // ── Tailscale SSH (dpadmin only) ─────────────────────────────
+  async function initRemoteSsh() {
+    const block      = document.getElementById("remoteSshBlock");
+    const dot        = document.getElementById("remoteSshDot");
+    const text       = document.getElementById("remoteSshText");
+    const hintRow    = document.getElementById("remoteSshHintRow");
+    const hint       = document.getElementById("remoteSshHint");
+    const enableBtn  = document.getElementById("remoteSshEnableBtn");
+    const disableBtn = document.getElementById("remoteSshDisableBtn");
+    const msg        = document.getElementById("remoteSshMsg");
+    if (!block || !enableBtn || !disableBtn) return;
+
+    function showMsg(el, t, isError = false) {
+      if (!el) return;
+      el.textContent = t;
+      el.style.color = isError ? "#f87171" : "#4ade80";
+      setTimeout(() => { el.textContent = ""; }, 5000);
+    }
+
+    function render(d) {
+      if (!d.isDpAdmin) { block.style.display = "none"; return; }
+      block.style.display = "block";
+      if (d.active) {
+        dot.className = "remote-status-dot remote-dot-on";
+        text.textContent = "SSH: enabled";
+        enableBtn.style.display  = "none";
+        disableBtn.style.display = "";
+        if (d.ip) {
+          hint.textContent = `tailscale ssh ubuntu@${d.ip}`;
+          hintRow.style.display = "flex";
+        } else {
+          hintRow.style.display = "none";
+        }
+      } else {
+        dot.className = "remote-status-dot remote-dot-off";
+        text.textContent = "SSH: disabled";
+        hintRow.style.display = "none";
+        enableBtn.style.display  = "";
+        disableBtn.style.display = "none";
+      }
+    }
+
+    async function refresh() {
+      try {
+        const r = await fetch("/api/remote/ssh/status");
+        if (!r.ok) { block.style.display = "none"; return; }
+        render(await r.json());
+      } catch { block.style.display = "none"; }
+    }
+
+    enableBtn.addEventListener("click", async () => {
+      showMsg(msg, "⏳ Enabling SSH…");
+      enableBtn.disabled = true;
+      try {
+        const r = await fetch("/api/remote/ssh/enable", { method: "POST" });
+        const d = await r.json();
+        if (d.success) { showMsg(msg, "✅ SSH enabled"); await refresh(); }
+        else showMsg(msg, `❌ ${d.error}`, true);
+      } catch (e) { showMsg(msg, `❌ ${e.message}`, true); }
+      finally { enableBtn.disabled = false; }
+    });
+
+    disableBtn.addEventListener("click", async () => {
+      showMsg(msg, "⏳ Disabling SSH…");
+      disableBtn.disabled = true;
+      try {
+        const r = await fetch("/api/remote/ssh/disable", { method: "POST" });
+        const d = await r.json();
+        if (d.success) { showMsg(msg, "✅ SSH disabled"); await refresh(); }
+        else showMsg(msg, `❌ ${d.error}`, true);
+      } catch (e) { showMsg(msg, `❌ ${e.message}`, true); }
+      finally { disableBtn.disabled = false; }
+    });
+
+    await refresh();
   }
 
 })();
