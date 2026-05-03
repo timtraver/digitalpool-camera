@@ -631,6 +631,32 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
       if (deviceSelect) deviceSelect.innerHTML = "<option value=''>Error loading devices</option>";
     }
     updateApplyButton();
+    applyCameraSourceUI(activeSource.type);
+  }
+
+  // Hide camera-only controls (image quality / exposure / WB / focus, the Reset
+  // All button, and the entire PTZ card) when the active source isn't USB.
+  // Driven by the *applied* source, not the dropdown selection.
+  function applyCameraSourceUI(type) {
+    const isUsb = type === "usb";
+    const camBody = document.getElementById("cameraSettingsBody");
+    if (camBody) {
+      const inputSection = document.getElementById("cameraSourceType")?.closest(".cam-subsection");
+      camBody.querySelectorAll(".cam-subsection").forEach((sub) => {
+        if (sub === inputSection) return;
+        sub.style.display = isUsb ? "" : "none";
+      });
+      const resetBtn = document.getElementById("resetAll");
+      if (resetBtn) resetBtn.style.display = isUsb ? "" : "none";
+    }
+    // PTZ stays visible but is greyed out + non-interactive when source isn't USB.
+    const ptzToggle = document.getElementById("ptzToggle");
+    const ptzBody   = document.getElementById("ptzBody");
+    if (ptzToggle) ptzToggle.style.opacity = isUsb ? "" : "0.5";
+    if (ptzBody) {
+      ptzBody.style.opacity       = isUsb ? "" : "0.4";
+      ptzBody.style.pointerEvents = isUsb ? "" : "none";
+    }
   }
 
   // Toggle USB / RTSP panels on source type change, and update audio device row.
@@ -680,6 +706,7 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
         if (data.success) {
           // Record the new active source so the button dims again
           activeSource = { ...data.source };
+          applyCameraSourceUI(activeSource.type);
           statusEl.style.color = "rgba(80,220,120,0.9)";
           statusEl.textContent = data.streamRestarted ? "✅ Applied — stream restarted" : "✅ Applied";
         } else {
