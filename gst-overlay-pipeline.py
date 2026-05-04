@@ -200,6 +200,13 @@ def main():
     # for CLOCK_REALTIME (audio sync) — skip gdkpixbufoverlay entirely.
     has_png_overlay = bool(png_path)
 
+    # Determine if ANY overlay is active. When none are, skip the expensive
+    # software NV12→BGRA→NV12 round-trip entirely — the hardware encoder
+    # (mpph264enc) accepts NV12 directly from mppjpegdec. This is critical
+    # for high-resolution streams (e.g. 4K@30fps) where the colorspace
+    # conversion is the primary CPU/memory-bandwidth bottleneck.
+    has_any_overlay = has_png_overlay or bool(overlay_text) or show_timestamp == "true"
+
     # Pre-compute the gdkpixbufoverlay fragment so it can be safely interpolated
     # as a plain f-string variable inside pipeline_str (Python's implicit string
     # concatenation does not support ternary expressions mid-tuple).
@@ -208,6 +215,21 @@ def main():
         f'overlay-width={width} overlay-height={height} '
         if has_png_overlay else ''
     )
+
+    # When overlays are present we must convert to BGRA for compositing, then
+    # back to NV12 for the hardware encoder. When there are no overlays, skip
+    # both conversions — mppjpegdec already emits NV12 which mpph264enc accepts.
+    if has_any_overlay:
+        overlay_section = (
+            f'! videoconvert ! video/x-raw,format=BGRA '
+            f'{png_overlay_element}'
+            f'{text_overlay}'
+            f'{timestamp_overlay}'
+        )
+        encode_convert = f'! videoconvert ! video/x-raw,format=NV12 '
+    else:
+        overlay_section = ''
+        encode_convert = ''
 
     # Build the capture/decode source section based on input type.
     # Both paths end with raw video at the configured framerate, ready for
@@ -242,22 +264,20 @@ def main():
 
     # Thread architecture (each queue creates a new thread boundary):
     #   Thread 1: source (v4l2src or rtspsrc+decodebin) — capture/decode
-    #   Thread 2: queue → videoconvert(BGRA) → overlay → tee (overlay compositing)
-    #   Thread 3: queue → videoconvert(NV12) → mpph264enc → h264parse → queue → mux → fdsink (encode+stream)
+    #   Thread 2: queue → [if overlays: videoconvert(BGRA) → overlays → videoconvert(NV12)] → tee
+    #             (when no overlays: queue feeds tee directly in NV12 — no colorspace conversion)
+    #   Thread 3: queue → mpph264enc → h264parse → queue → mux → fdsink (encode+stream)
     #   Thread 4: queue → videorate → videoscale → jpegenc → tcpserversink (preview)
     #   Audio is handled by ffmpeg (ALSA capture) outside this pipeline.
     pipeline_str = (
         f'{source_str}'
-        # Thread boundary: isolate overlay compositing from capture
+        # Thread boundary: isolate overlay compositing (or just buffering) from capture
         f'! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream '
-        f'! videoconvert ! video/x-raw,format=BGRA '
-        f'{png_overlay_element}'
-        f'{text_overlay}'
-        f'{timestamp_overlay}'
+        f'{overlay_section}'
         f'! tee name=t '
         # Encode branch (own thread)
         f't. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
-        f'! videoconvert ! video/x-raw,format=NV12 '
+        f'{encode_convert}'
         # Constrained VBR: bps_max=1.6x target allows the encoder to burst for high-motion
         # frames (fast pool shots) rather than raising quantizer and pixelating.
         # SRT latency=500ms absorbs the short bursts; average bitrate stays near bps target.
