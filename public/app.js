@@ -3013,7 +3013,7 @@ loadDeviceIp();
     }
   });
 
-  // ── Software restart (any admin) ─────────────────────────────
+  // ── Power: restart software (any admin) ──────────────────────
   document.getElementById("restartSoftwareBtn")?.addEventListener("click", async () => {
     const btn = document.getElementById("restartSoftwareBtn");
     const msg = document.getElementById("restartSoftwareMsg");
@@ -3042,6 +3042,38 @@ loadDeviceIp();
       setTimeout(poll, 2000);
     };
     setTimeout(poll, 3000);
+  });
+
+  // ── Power: reboot device (any admin) ─────────────────────────
+  document.getElementById("rebootSystemBtn")?.addEventListener("click", async () => {
+    const btn = document.getElementById("rebootSystemBtn");
+    const msg = document.getElementById("rebootSystemMsg");
+
+    if (!confirm("Reboot the entire device? The camera will be offline for 30–60 seconds.")) return;
+
+    btn.disabled = true;
+    btn.textContent = "⏳ Rebooting…";
+    msg.textContent = "🔄 Device is rebooting — reconnect in about 30–60 seconds…";
+    msg.style.color = "#facc15";
+
+    try {
+      await fetch("/api/reboot", { method: "POST" });
+    } catch { /* device already rebooting */ }
+
+    // Reboot takes longer — wait 15s before starting to poll
+    const poll = async () => {
+      try {
+        const pr = await fetch("/api/status");
+        if (pr.ok) {
+          msg.textContent = "✅ Device back online — reloading…";
+          msg.style.color = "#4ade80";
+          setTimeout(() => window.location.reload(), 1500);
+          return;
+        }
+      } catch { /* still rebooting */ }
+      setTimeout(poll, 3000);
+    };
+    setTimeout(poll, 15000);
   });
 
   // ── Software update (dpadmin only) ───────────────────────────

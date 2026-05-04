@@ -830,6 +830,15 @@ app.post("/api/restart", requireAdmin, async (req, res) => {
   }, 800);
 });
 
+// API endpoint to reboot the entire device (admin only)
+app.post("/api/reboot", requireAdmin, async (req, res) => {
+  res.json({ success: true });
+  setTimeout(() => {
+    console.log("⚡ Device reboot requested via admin panel — running sudo reboot");
+    execAsync("sudo reboot").catch(() => {});
+  }, 800);
+});
+
 // API endpoint to pull latest code and restart the service (dpadmin only)
 // The server calls process.exit(0) after responding; systemd Restart=always brings it back.
 app.post("/api/update", requireAdmin, async (req, res) => {
