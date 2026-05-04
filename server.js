@@ -1276,8 +1276,12 @@ function loadCameraSource() {
     if (fsSync.existsSync(CAMERA_SOURCE_FILE)) {
       const saved = JSON.parse(fsSync.readFileSync(CAMERA_SOURCE_FILE, "utf8"));
       // Validate minimal shape before trusting it
-      if (saved && (saved.type === "usb" || saved.type === "rtsp")) {
-        console.log(`📷 Loaded camera source from file: ${saved.type}${saved.type === "rtsp" ? " → " + saved.rtspUrl : " → " + saved.device}`);
+      if (saved && (saved.type === "usb" || saved.type === "rtsp" || saved.type === "ndi")) {
+        let detail = "";
+        if (saved.type === "rtsp") detail = " → " + saved.rtspUrl;
+        else if (saved.type === "ndi") detail = " → " + (saved.ndiName || "(no name)");
+        else detail = " → " + saved.device;
+        console.log(`📷 Loaded camera source from file: ${saved.type}${detail}`);
         return saved;
       }
     }
@@ -1298,7 +1302,7 @@ function saveCameraSource(source) {
 // Active camera source — updated at runtime via /api/camera/source.
 // Initialised from disk so the chosen source survives restarts.
 const _savedSource = loadCameraSource();
-let activeCameraSource = _savedSource || { type: "usb", device: CAMERA_DEVICE, rtspUrl: "" };
+let activeCameraSource = _savedSource || { type: "usb", device: CAMERA_DEVICE, rtspUrl: "", ndiName: "" };
 
 // List available V4L2 video capture devices
 app.get("/api/camera/devices", requireAuth, (req, res) => {
@@ -1333,6 +1337,9 @@ app.get("/api/camera/devices", requireAuth, (req, res) => {
 // no V4L2 capability check applies, so all resolutions are reported as
 // available — the user can transcode to whatever the encoder will allow.
 app.get("/api/camera/capabilities", requireAuth, async (req, res) => {
+  // RTSP and NDI sources are network streams — no V4L2 capability check applies.
+  // All resolutions are reported as available; the transcoder will handle whatever
+  // the source delivers.
   if (activeCameraSource.type !== "usb") {
     return res.json({
       success: true,
@@ -1417,13 +1424,16 @@ function waitForPort(port, timeoutMs = 8000) {
 // If a live stream is running, it is stopped first, the new source is validated
 // via the idle preview, and then the stream is restarted automatically.
 app.post("/api/camera/source", requireAuth, async (req, res) => {
-  const { type, device, rtspUrl } = req.body;
+  const { type, device, rtspUrl, ndiName } = req.body;
 
   // ── Validate inputs before touching any state ────────────────────────────
   if (type === "rtsp" && !rtspUrl) {
     return res.status(400).json({ success: false, error: "rtspUrl required" });
   }
-  if (type !== "usb" && type !== "rtsp") {
+  if (type === "ndi" && !ndiName) {
+    return res.status(400).json({ success: false, error: "ndiName required" });
+  }
+  if (type !== "usb" && type !== "rtsp" && type !== "ndi") {
     return res.status(400).json({ success: false, error: "Unknown source type" });
   }
 
@@ -1439,18 +1449,20 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     io.emit("streamStatus", { ...streamController.getStatus(), status: "stopping" });
     console.log("📷 Camera source switch: stopping active stream…");
     await streamController.stopStream();
-    // Allow extra time for the old device/RTSP session to fully release.
-    const stopDelay = previousSource.type === "rtsp" ? 2500 : 1000;
+    // Allow extra time for the old device/RTSP/NDI session to fully release.
+    const stopDelay = (previousSource.type === "rtsp" || previousSource.type === "ndi") ? 2500 : 1000;
     await new Promise((r) => setTimeout(r, stopDelay));
   }
 
   // ── Step 2: Switch to the new source ────────────────────────────────────
   if (type === "usb") {
     const dev = device || CAMERA_DEVICE;
-    activeCameraSource = { type: "usb", device: dev, rtspUrl: "" };
+    activeCameraSource = { type: "usb", device: dev, rtspUrl: "", ndiName: "" };
     camera.device = dev;
+  } else if (type === "ndi") {
+    activeCameraSource = { type: "ndi", device: CAMERA_DEVICE, rtspUrl: "", ndiName };
   } else {
-    activeCameraSource = { type: "rtsp", device: CAMERA_DEVICE, rtspUrl };
+    activeCameraSource = { type: "rtsp", device: CAMERA_DEVICE, rtspUrl, ndiName: "" };
   }
   streamController.setInputSource(activeCameraSource);
 
@@ -1461,8 +1473,8 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     console.error("⚠️ Failed to start idle preview after source change:", e.message);
   }
 
-  // For RTSP, give GStreamer up to 12 s to negotiate; 5 s is plenty for USB.
-  const timeoutMs = type === "rtsp" ? 12000 : 5000;
+  // Give GStreamer time to negotiate: RTSP and NDI need up to 12 s; USB is fast.
+  const timeoutMs = (type === "rtsp" || type === "ndi") ? 12000 : 5000;
   const ready = await waitForPort(IDLE_PREVIEW_PORT, timeoutMs);
 
   if (!ready) {
@@ -1489,6 +1501,8 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
       success: false,
       error: type === "rtsp"
         ? "RTSP source did not respond. Check the URL is reachable and try again."
+        : type === "ndi"
+        ? "NDI source did not respond. Check the source name is correct and the NDI sender is active on the network."
         : "USB device did not start. Check the device path.",
     });
   }
@@ -2181,7 +2195,27 @@ function buildIdlePreviewGstArgs(sinkArgs) {
   // identically for both sources.
   let gstArgs;
 
-  if (activeCameraSource.type === "rtsp" && activeCameraSource.rtspUrl) {
+  if (activeCameraSource.type === "ndi" && activeCameraSource.ndiName) {
+    console.log(`📡 Building NDI idle preview pipeline for "${activeCameraSource.ndiName}"`);
+    gstArgs = [
+      "ndisrc",
+      `ndi-name="${activeCameraSource.ndiName}"`,
+      "connect-timeout=5000",
+      "name=ndisrc_el",
+      "ndisrc_el.video",
+      "!",
+      "queue", "max-size-buffers=3", "max-size-time=0", "max-size-bytes=0", "leaky=downstream",
+      "!",
+      "videoconvert",
+      "!",
+      "videorate",
+      "!",
+      "video/x-raw,framerate=1/1",
+      "!",
+      "videoconvert",
+      "!",
+    ];
+  } else if (activeCameraSource.type === "rtsp" && activeCameraSource.rtspUrl) {
     console.log(`📡 Building RTSP idle preview pipeline for ${activeCameraSource.rtspUrl}`);
     gstArgs = [
       "rtspsrc", `location=${activeCameraSource.rtspUrl}`, "latency=200", "protocols=tcp",
@@ -3182,7 +3216,7 @@ streamController.on("stopped", async () => {
     // For RTSP sources, give the camera/server extra time to fully close the previous
     // session (TEARDOWN + session cleanup) before we open a new rtspsrc connection.
     // USB v4l2src is always ready so a shorter delay is fine.
-    const releaseDelay = activeCameraSource.type === "rtsp" ? 2500 : 1000;
+    const releaseDelay = (activeCameraSource.type === "rtsp" || activeCameraSource.type === "ndi") ? 2500 : 1000;
     console.log(`⏳ Waiting ${releaseDelay}ms for source to release (${activeCameraSource.type})...`);
     await new Promise((resolve) => setTimeout(resolve, releaseDelay));
     await startPersistentIdlePreview();
@@ -3191,7 +3225,7 @@ streamController.on("stopped", async () => {
     // before tcpserversink begins accepting connections.  Wait for the port to be
     // ready (up to 12 s) before telling clients to reconnect — otherwise they hit
     // the server before any frames are available and the preview stays blank.
-    const idleTimeoutMs = activeCameraSource.type === "rtsp" ? 12000 : 5000;
+    const idleTimeoutMs = (activeCameraSource.type === "rtsp" || activeCameraSource.type === "ndi") ? 12000 : 5000;
     const idleReady = await waitForPort(IDLE_PREVIEW_PORT, idleTimeoutMs);
     if (!idleReady) {
       console.warn(`⚠️  Idle preview port not ready after ${idleTimeoutMs / 1000}s — clients will retry on their own`);

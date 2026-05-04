@@ -123,7 +123,11 @@ class StreamController extends EventEmitter {
     if (source.type === "usb" && source.device) {
       this.cameraDevice = source.device;
     }
-    console.log(`📷 StreamController input source updated: ${source.type}${source.type === "rtsp" ? " → " + source.rtspUrl : " → " + this.cameraDevice}`);
+    let sourceDetail = "";
+    if (source.type === "rtsp") sourceDetail = " → " + source.rtspUrl;
+    else if (source.type === "ndi") sourceDetail = " → " + (source.ndiName || "(no name)");
+    else sourceDetail = " → " + this.cameraDevice;
+    console.log(`📷 StreamController input source updated: ${source.type}${sourceDetail}`);
   }
 
   /**
@@ -249,10 +253,12 @@ class StreamController extends EventEmitter {
       const useFfmpegAudio =
         (this.streamConfig.protocol === "srt" || this.streamConfig.protocol === "rtmp" || this.streamConfig.protocol === "rtsp") &&
         this.streamConfig.audioEnabled &&
-        // RTSP input sources carry their own audio track — there is no local ALSA
-        // device to capture.  GStreamer's decodebin taps the audio pad directly
-        // inside the Python pipeline (RTSP passthrough mode); ffmpeg is not needed.
-        this.inputSource.type !== "rtsp";
+        // RTSP and NDI input sources carry their own embedded audio track — there is
+        // no local ALSA device to capture.  GStreamer handles audio internally inside
+        // the Python pipeline (RTSP pad-added passthrough; NDI static audio pad);
+        // the ffmpeg ALSA hybrid path is not needed.
+        this.inputSource.type !== "rtsp" &&
+        this.inputSource.type !== "ndi";
 
       // Check if we're using the compositor helper script
       if (gstArgs.useCompositorScript) {
@@ -939,10 +945,14 @@ class StreamController extends EventEmitter {
     // When the input is an RTSP source the audio is already in the network stream —
     // pass the sentinel "rtsp" so gst-overlay-pipeline.py knows to tap decodebin's
     // audio pad rather than opening a local ALSA device.
+    // When the input is NDI, pass "ndi" — gst-overlay-pipeline.py will wire the
+    // static ndisrc_el.audio pad directly into the mux (no ALSA, no pad-added).
     const audioDevice = this.streamConfig.audioEnabled
       ? (this.inputSource.type === "rtsp"
           ? "rtsp"
-          : (this.streamConfig.audioDevice || "hw:3,0"))
+          : this.inputSource.type === "ndi"
+            ? "ndi"
+            : (this.streamConfig.audioDevice || "hw:3,0"))
       : "";
 
     // H.265 is incompatible with RTMP (FLV container only supports H.264)
@@ -971,9 +981,10 @@ class StreamController extends EventEmitter {
       tsColor.toString(),
       tsBackground,
       scriptCodec,
-      // Input source type and RTSP URL (args 22-23) — empty strings for USB
+      // Input source type, RTSP URL, and NDI source name (args 22-24)
       this.inputSource.type || "usb",
       this.inputSource.rtspUrl || "",
+      this.inputSource.ndiName || "",   // arg 24 — empty for USB and RTSP sources
     ];
 
     return {
@@ -1024,7 +1035,31 @@ class StreamController extends EventEmitter {
     }
 
     let pipeline;
-    if (this.inputSource.type === "rtsp" && this.inputSource.rtspUrl) {
+    if (this.inputSource.type === "ndi" && this.inputSource.ndiName) {
+      // NDI source: tap the video pad of ndisrc directly.
+      // ndisrc exposes raw frames (often UYVY) on a "video" src pad — videoconvert
+      // normalises to whatever format the downstream elements can negotiate.
+      pipeline = [
+        "ndisrc",
+        `ndi-name="${this.inputSource.ndiName}"`,
+        "connect-timeout=5000",
+        "name=ndisrc_el",
+        "ndisrc_el.video",
+        "!",
+        "queue", "max-size-buffers=3", "max-size-time=0", "max-size-bytes=0", "leaky=downstream",
+        "!",
+        "videoconvert",
+        "!",
+        "videoscale",
+        "!",
+        `video/x-raw,width=${width},height=${height}`,
+        "!",
+        "videorate",
+        "!",
+        `video/x-raw,framerate=${framerate}/1`,
+        "!",
+      ];
+    } else if (this.inputSource.type === "rtsp" && this.inputSource.rtspUrl) {
       // RTSP source: decode the incoming stream, normalise resolution/rate, then
       // re-encode with overlays.  videoconvert is required immediately after
       // decodebin because decodebin emits dynamic caps (NV12, I420, BGRx, etc.)

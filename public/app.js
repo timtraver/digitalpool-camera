@@ -570,9 +570,11 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
   const sourceTypeEl  = document.getElementById("cameraSourceType");
   const usbSection    = document.getElementById("cameraInputUsb");
   const rtspSection   = document.getElementById("cameraInputRtsp");
+  const ndiSection    = document.getElementById("cameraInputNdi");
   const deviceSelect  = document.getElementById("cameraUsbDevice");
   const refreshBtn    = document.getElementById("refreshCameraDevices");
   const rtspUrlEl     = document.getElementById("cameraRtspUrl");
+  const ndiNameEl     = document.getElementById("cameraNdiName");
   const applyBtn      = document.getElementById("applyCameraInput");
   const statusEl      = document.getElementById("cameraInputStatus");
 
@@ -580,7 +582,7 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
 
   // Tracks what the server considers the active source so we can dim the button
   // when the UI selection already matches it.
-  let activeSource = { type: "usb", device: "", rtspUrl: "" };
+  let activeSource = { type: "usb", device: "", rtspUrl: "", ndiName: "" };
 
   function updateApplyButton() {
     if (!applyBtn) return;
@@ -589,6 +591,7 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
     if (matches) {
       if (type === "usb")  matches = (deviceSelect?.value || "") === activeSource.device;
       if (type === "rtsp") matches = (rtspUrlEl?.value.trim() || "") === (activeSource.rtspUrl || "");
+      if (type === "ndi")  matches = (ndiNameEl?.value.trim() || "") === (activeSource.ndiName || "");
     }
     applyBtn.disabled = matches;
   }
@@ -617,7 +620,7 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
       // Pre-select the current active device and record it as activeSource
       if (data.current?.type === "usb" && data.current.device) {
         deviceSelect.value = data.current.device;
-        activeSource = { type: "usb", device: data.current.device, rtspUrl: "" };
+        activeSource = { type: "usb", device: data.current.device, rtspUrl: "", ndiName: "" };
       }
       // Pre-fill RTSP URL if currently active
       if (data.current?.type === "rtsp" && rtspUrlEl) {
@@ -625,7 +628,17 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
         sourceTypeEl.value = "rtsp";
         usbSection.style.display  = "none";
         rtspSection.style.display = "";
-        activeSource = { type: "rtsp", device: "", rtspUrl: data.current.rtspUrl || "" };
+        if (ndiSection) ndiSection.style.display = "none";
+        activeSource = { type: "rtsp", device: "", rtspUrl: data.current.rtspUrl || "", ndiName: "" };
+      }
+      // Pre-fill NDI source name if currently active
+      if (data.current?.type === "ndi" && ndiNameEl) {
+        ndiNameEl.value = data.current.ndiName || "";
+        sourceTypeEl.value = "ndi";
+        usbSection.style.display  = "none";
+        rtspSection.style.display = "none";
+        if (ndiSection) ndiSection.style.display = "";
+        activeSource = { type: "ndi", device: "", rtspUrl: "", ndiName: data.current.ndiName || "" };
       }
     } catch (e) {
       if (deviceSelect) deviceSelect.innerHTML = "<option value=''>Error loading devices</option>";
@@ -659,17 +672,19 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
     }
   }
 
-  // Toggle USB / RTSP panels on source type change, and update audio device row.
+  // Toggle USB / RTSP / NDI panels on source type change, and update audio device row.
   sourceTypeEl.addEventListener("change", () => {
-    const isRtsp = sourceTypeEl.value === "rtsp";
-    usbSection.style.display  = isRtsp ? "none" : "";
-    rtspSection.style.display = isRtsp ? "" : "none";
+    const type = sourceTypeEl.value;
+    usbSection.style.display              = type === "usb"  ? "" : "none";
+    rtspSection.style.display             = type === "rtsp" ? "" : "none";
+    if (ndiSection) ndiSection.style.display = type === "ndi"  ? "" : "none";
     updateAudioDeviceRowVisibility();
     updateApplyButton();
   });
 
   if (deviceSelect) deviceSelect.addEventListener("change", updateApplyButton);
   if (rtspUrlEl)    rtspUrlEl.addEventListener("input",  updateApplyButton);
+  if (ndiNameEl)    ndiNameEl.addEventListener("input",  updateApplyButton);
 
   if (refreshBtn) refreshBtn.addEventListener("click", loadDevices);
   if (refreshAudioDevicesBtn) refreshAudioDevicesBtn.addEventListener("click", () => loadAudioDevices());
@@ -685,13 +700,16 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
       } else if (type === "rtsp") {
         body.rtspUrl = rtspUrlEl?.value.trim() || "";
         if (!body.rtspUrl) { statusEl.textContent = "⚠️ Enter an RTSP URL first."; return; }
+      } else if (type === "ndi") {
+        body.ndiName = ndiNameEl?.value.trim() || "";
+        if (!body.ndiName) { statusEl.textContent = "⚠️ Enter an NDI source name first."; return; }
       }
       applyBtn.disabled = true;
       // Show a contextual message — if streaming, we'll stop → switch → restart.
       if (isCurrentlyStreaming) {
         statusEl.style.color = "rgba(255,160,80,0.9)";
         statusEl.textContent = "Switching… stopping stream & reconnecting";
-      } else if (type === "rtsp") {
+      } else if (type === "rtsp" || type === "ndi") {
         statusEl.textContent = "Connecting… (up to 12 s)";
       } else {
         statusEl.textContent = "Applying…";
@@ -2443,10 +2461,13 @@ socket.on("streamStatus", (status) => {
 
 function updateAudioDeviceRowVisibility() {
   const sourceTypeEl = document.getElementById("cameraSourceType");
-  const isRtsp = sourceTypeEl ? sourceTypeEl.value === "rtsp" : false;
+  const sourceType = sourceTypeEl ? sourceTypeEl.value : "usb";
+  // RTSP and NDI carry their own embedded audio — no local ALSA device is needed.
+  // Hide the audio device selector for those source types.
+  const isEmbeddedAudio = (sourceType === "rtsp" || sourceType === "ndi");
   if (audioDeviceRow) {
     audioDeviceRow.style.display =
-      (!isRtsp && audioEnabledCheckbox && audioEnabledCheckbox.checked) ? "" : "none";
+      (!isEmbeddedAudio && audioEnabledCheckbox && audioEnabledCheckbox.checked) ? "" : "none";
   }
 }
 

@@ -125,7 +125,7 @@
                   <select id="cameraSourceType">
                     <option value="usb">USB Camera</option>
                     <option value="rtsp">RTSP Stream</option>
-                    <option value="ndi" disabled>NDI (coming soon)</option>
+                    <option value="ndi">NDI</option>
                   </select>
                 </div>
                 <div id="cameraInputUsb">
@@ -143,6 +143,16 @@
                   </div>
                   <p style="font-size:10px;color:rgba(255,255,255,0.4);margin:4px 0 0">
                     ℹ️ Camera controls (PTZ, image settings) are not available for RTSP sources.
+                  </p>
+                </div>
+                <div id="cameraInputNdi" style="display:none">
+                  <div class="control-item" style="margin-top:6px">
+                    <label>NDI Source</label>
+                    <input type="text" id="cameraNdiName" placeholder="e.g. DESKTOP-ABC (OBS)"
+                      style="flex:1;padding:4px 6px;background:rgba(6,16,27,0.8);border:1px solid rgba(18,199,255,0.3);border-radius:4px;color:rgba(255,255,255,0.85);font-size:12px" />
+                  </div>
+                  <p style="font-size:10px;color:rgba(255,255,255,0.4);margin:4px 0 0">
+                    ℹ️ Enter the NDI source name exactly as advertised on the network (e.g. "DESKTOP-ABC (OBS)"). Camera controls are not available for NDI sources.
                   </p>
                 </div>
                 <div style="margin-top:10px;display:flex;align-items:center;gap:10px">
@@ -523,7 +533,7 @@
               <input type="checkbox" id="audioEnabled" checked />
             </div>
 
-            <!-- Audio source selector — hidden when audio disabled or RTSP input active -->
+            <!-- Audio source selector — hidden when audio disabled or RTSP/NDI input active -->
             <div class="control-item" id="audioDeviceRow" style="display:none">
               <label for="audioDeviceSelect">Audio Source:</label>
               <select id="audioDeviceSelect" style="flex:1"><option value="">Click 🔄 to load devices</option></select>

@@ -75,6 +75,8 @@ def main():
     # Input source type and RTSP URL (optional — default to USB v4l2src)
     input_type    = sys.argv[22] if len(sys.argv) > 22 else "usb"
     input_rtsp_url = sys.argv[23] if len(sys.argv) > 23 else ""
+    # NDI source name (arg 24, optional — only used when input_type == "ndi")
+    input_ndi_name = sys.argv[24] if len(sys.argv) > 24 else ""
 
     bitrate_kbps = bitrate // 1000
 
@@ -126,6 +128,15 @@ def main():
     #      the audio pad to audioconvert → audioresample → avenc_aac → mux.
     use_rtsp_audio = (audio_device == "rtsp")
     if use_rtsp_audio:
+        audio_device = ""  # treat as no-ALSA for output_sink selection below
+
+    # Detect NDI audio passthrough sentinel set by streamController.js.
+    # When input_type is "ndi" and audioEnabled is true, Node.js passes "ndi"
+    # as the audio_device arg.  ndisrc exposes a static "audio" src pad which
+    # we wire directly in the pipeline string (no pad-added callback needed
+    # because the pad is always present, not dynamic).
+    use_ndi_audio = (audio_device == "ndi")
+    if use_ndi_audio:
         audio_device = ""  # treat as no-ALSA for output_sink selection below
 
     # Build protocol-specific output sink
@@ -262,9 +273,26 @@ def main():
         encode_convert = ''
 
     # Build the capture/decode source section based on input type.
-    # Both paths end with raw video at the configured framerate, ready for
+    # All paths end with raw video at the configured framerate, ready for
     # overlay compositing and encoding by the common downstream pipeline.
-    if input_type == "rtsp" and input_rtsp_url:
+    if input_type == "ndi" and input_ndi_name:
+        print(f"📡 Input source: NDI → {input_ndi_name}", file=sys.stderr)
+        # ndisrc exposes two static src pads: "video" and "audio".
+        # We name the element "ndisrc_el" so the audio chain below can reference
+        # "ndisrc_el.audio" directly in the pipeline string — no pad-added callback
+        # is needed because NDI pads are always present (not dynamic like decodebin).
+        # videoconvert normalises NDI's native UYVY/NV12/etc. to a pipeline-friendly
+        # format; videoscale + videorate enforce the target resolution and frame rate.
+        source_str = (
+            f'ndisrc name=ndisrc_el ndi-name="{input_ndi_name}" connect-timeout=5000 '
+            f'ndisrc_el.video '
+            f'! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream '
+            f'! videoconvert '
+            f'! videoscale '
+            f'! video/x-raw,width={width},height={height} '
+            f'! videorate ! video/x-raw,framerate={framerate}/1 '
+        )
+    elif input_type == "rtsp" and input_rtsp_url:
         print(f"📡 Input source: RTSP → {input_rtsp_url}", file=sys.stderr)
         # decodebin emits dynamic caps — videoconvert + videoscale normalise them
         # to a fixed resolution/format before videorate enforces the target fps.
@@ -339,7 +367,7 @@ def main():
            f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream ')
         + output_sink +
         (
-            # Audio branch: audiomixer → voaacenc → mux.
+            # ALSA audio branch: audiomixer → voaacenc → mux.
             # audiomixer runs at a fixed pipeline-clock rate and fills any USB mic gap
             # with silence — mpegtsmux always sees continuous audio → no video stall.
             # Both streams share the single pipeline clock → automatic A/V sync.
@@ -357,6 +385,22 @@ def main():
             f'! audio/x-raw,rate=48000,channels=2 '
             f'! amix. '
             if audio_device and audio_mux_target else ''
+        ) +
+        (
+            # NDI audio branch: tap the ndisrc element's static "audio" pad.
+            # No pad-added handler needed — NDI always exposes the audio pad.
+            # audioconvert + audioresample normalise whatever raw format NDI delivers
+            # (32-bit float, 48 kHz, N channels) to the standard 16-bit 48 kHz stereo
+            # expected by avenc_aac.
+            f'ndisrc_el.audio '
+            f'! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
+            f'! audioconvert ! audioresample '
+            f'! audio/x-raw,rate=48000,channels=2 '
+            f'! avenc_aac bitrate=128000 '
+            f'! aacparse '
+            f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream '
+            f'! {audio_mux_target} '
+            if use_ndi_audio and audio_mux_target else ''
         ) +
         # Preview branch (own thread, low priority)
         f't. ! queue max-size-buffers=10 leaky=downstream '
