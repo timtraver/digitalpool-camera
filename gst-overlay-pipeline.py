@@ -487,11 +487,12 @@ def main():
             print("⚠️  RTSP audio: could not find 'dec' or 'mux' element — audio disabled", file=sys.stderr)
 
     # ── NDI audio passthrough ──────────────────────────────────────────────────
-    # ndisrcdemux creates the "audio" pad dynamically when the NDI source carries
-    # an audio track.  We connect a pad-added handler so the pad is only wired
-    # when it actually appears.  If the NDI source has no audio the callback never
-    # fires and flvmux outputs video-only without stalling — unlike the static
-    # pipeline-string approach which would pre-request mux.audio and block forever.
+    # ndisrcdemux fires pad-added during the PAUSED state (unlike decodebin which
+    # fires during PLAYING).  Calling sync_state_with_parent() on avenc_aac while
+    # the pipeline is mid-transition blocks the state machine.  The fix: the
+    # pad-added callback only *records* the pending pad; GLib.idle_add schedules
+    # the actual element creation and linking on the main loop, which runs after
+    # the pipeline has fully reached PLAYING.
     if use_ndi_audio:
         ndi_demux_el = pipeline.get_by_name("ndi_demux")
         mux_element  = pipeline.get_by_name("mux")
@@ -499,28 +500,21 @@ def main():
         if ndi_demux_el and mux_element:
             _ndi_audio_linked = [False]
 
-            def on_ndi_pad_added(element, pad, mux):
-                # ndisrcdemux emits both "video" and "audio" pads; only handle audio.
-                if pad.get_name() != "audio":
-                    return
-
+            def _do_link_ndi_audio(pad, mux):
+                """Runs on the GLib main loop (PLAYING state) — safe to add elements."""
                 if _ndi_audio_linked[0]:
-                    print("🔊 NDI audio pad fired again — already linked, skipping", file=sys.stderr)
-                    return
-                _ndi_audio_linked[0] = True
+                    return False  # idle_add: returning False removes the callback
 
-                print("🔊 NDI audio pad detected — linking passthrough to mux", file=sys.stderr)
-
-                audioqueue  = Gst.ElementFactory.make("queue",        None)
-                audioconv   = Gst.ElementFactory.make("audioconvert", None)
-                audiores    = Gst.ElementFactory.make("audioresample", None)
-                aacenc      = Gst.ElementFactory.make("avenc_aac",    None)
-                aacparse_el = Gst.ElementFactory.make("aacparse",     None)
-                audioout_q  = Gst.ElementFactory.make("queue",        None)
+                audioqueue  = Gst.ElementFactory.make("queue",         None)
+                audioconv   = Gst.ElementFactory.make("audioconvert",  None)
+                audiores    = Gst.ElementFactory.make("audioresample",  None)
+                aacenc      = Gst.ElementFactory.make("avenc_aac",     None)
+                aacparse_el = Gst.ElementFactory.make("aacparse",      None)
+                audioout_q  = Gst.ElementFactory.make("queue",         None)
 
                 if not all([audioqueue, audioconv, audiores, aacenc, aacparse_el, audioout_q]):
                     print("❌ Could not create NDI audio passthrough elements", file=sys.stderr)
-                    return
+                    return False
 
                 aacenc.set_property("bitrate", 128000)
 
@@ -539,12 +533,26 @@ def main():
                 # flvmux (RTMP) uses "audio"; mpegtsmux (SRT) uses "audio_%u".
                 mux_factory = mux.get_factory().get_name() if mux.get_factory() else ""
                 pad_name = "audio" if mux_factory == "flvmux" else "audio_%u"
-                mux_sink = mux.get_request_pad(pad_name)
+                mux_sink = mux.request_pad_simple(pad_name)
                 if mux_sink:
                     audioout_q.get_static_pad("src").link(mux_sink)
+                    _ndi_audio_linked[0] = True
                     print(f"🔊 NDI audio linked to {mux_factory}.{pad_name}", file=sys.stderr)
                 else:
                     print(f"⚠️  Could not get {mux_factory} audio request pad — audio skipped", file=sys.stderr)
+
+                return False  # run once
+
+            def on_ndi_pad_added(element, pad, mux):
+                # ndisrcdemux emits both "video" and "audio" pads; only handle audio.
+                if pad.get_name() != "audio":
+                    return
+                if _ndi_audio_linked[0]:
+                    print("🔊 NDI audio pad fired again — already linked, skipping", file=sys.stderr)
+                    return
+                print("🔊 NDI audio pad detected — scheduling link on main loop", file=sys.stderr)
+                # Defer to main loop so the pipeline finishes PAUSED→PLAYING first.
+                GLib.idle_add(_do_link_ndi_audio, pad, mux)
 
             ndi_demux_el.connect("pad-added", on_ndi_pad_added, mux_element)
             print("🔊 NDI audio passthrough: pad-added handler installed", file=sys.stderr)
