@@ -460,10 +460,11 @@ def main():
 
                 aacenc.set_property("bitrate", 128000)
 
+                # Step 1: add all elements (stay in NULL state).
                 for elem in [audioqueue, audioconv, audiores, aacenc, aacparse_el]:
                     pipeline.add(elem)
-                    elem.sync_state_with_parent()
 
+                # Step 2: link fully so caps are known before state sync.
                 pad.link(audioqueue.get_static_pad("sink"))
                 audioqueue.link(audioconv)
                 audioconv.link(audiores)
@@ -474,12 +475,16 @@ def main():
                 # flvmux (RTMP) uses "audio"; mpegtsmux (SRT) uses "audio_%u".
                 mux_factory = mux.get_factory().get_name() if mux.get_factory() else ""
                 pad_name = "audio" if mux_factory == "flvmux" else "audio_%u"
-                mux_sink = mux.get_request_pad(pad_name)
+                mux_sink = mux.request_pad_simple(pad_name)
                 if mux_sink:
                     aacparse_el.get_static_pad("src").link(mux_sink)
                     print(f"🔊 RTSP audio linked to {mux_factory}.{pad_name}", file=sys.stderr)
                 else:
                     print(f"⚠️  Could not get {mux_factory} audio request pad", file=sys.stderr)
+
+                # Step 3: sync state after full linking.
+                for elem in [audioqueue, audioconv, audiores, aacenc, aacparse_el]:
+                    elem.sync_state_with_parent()
 
             dec_element.connect("pad-added", on_rtsp_pad_added, mux_element)
             print("🔊 RTSP audio passthrough: pad-added handler installed", file=sys.stderr)
@@ -501,7 +506,14 @@ def main():
             _ndi_audio_linked = [False]
 
             def _do_link_ndi_audio(pad, mux):
-                """Runs on the GLib main loop (PLAYING state) — safe to add elements."""
+                """Runs on the GLib main loop — safe to add elements dynamically.
+
+                Critical ordering: add ALL elements first, link them fully (so caps
+                can be negotiated), THEN call sync_state_with_parent() on each.
+                Syncing an unlinked avenc_aac to PAUSED without caps causes it to
+                block its state change, deadlocking the pipeline's PAUSED→PLAYING
+                transition.
+                """
                 if _ndi_audio_linked[0]:
                     return False  # idle_add: returning False removes the callback
 
@@ -518,10 +530,11 @@ def main():
 
                 aacenc.set_property("bitrate", 128000)
 
+                # Step 1: add all elements to the pipeline (they stay in NULL state).
                 for elem in [audioqueue, audioconv, audiores, aacenc, aacparse_el, audioout_q]:
                     pipeline.add(elem)
-                    elem.sync_state_with_parent()
 
+                # Step 2: link the full chain so caps can be negotiated before state sync.
                 pad.link(audioqueue.get_static_pad("sink"))
                 audioqueue.link(audioconv)
                 audioconv.link(audiores)
@@ -536,11 +549,16 @@ def main():
                 mux_sink = mux.request_pad_simple(pad_name)
                 if mux_sink:
                     audioout_q.get_static_pad("src").link(mux_sink)
-                    _ndi_audio_linked[0] = True
-                    print(f"🔊 NDI audio linked to {mux_factory}.{pad_name}", file=sys.stderr)
                 else:
                     print(f"⚠️  Could not get {mux_factory} audio request pad — audio skipped", file=sys.stderr)
+                    return False
 
+                # Step 3: sync state AFTER linking so each element has caps context.
+                for elem in [audioqueue, audioconv, audiores, aacenc, aacparse_el, audioout_q]:
+                    elem.sync_state_with_parent()
+
+                _ndi_audio_linked[0] = True
+                print(f"🔊 NDI audio linked to {mux_factory}.{pad_name}", file=sys.stderr)
                 return False  # run once
 
             def on_ndi_pad_added(element, pad, mux):
