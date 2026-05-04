@@ -557,23 +557,30 @@ def main():
                     return
                 if _ndi_audio_linked[0]:
                     return
-                print("🔊 NDI audio pad detected — blocking pad until link completes", file=sys.stderr)
+                print("🔊 NDI audio pad detected — dropping frames until chain linked", file=sys.stderr)
 
-                # Block the pad IMMEDIATELY so ndisrcdemux cannot push audio
-                # buffers downstream before the chain is linked.  Without this,
-                # the push returns GST_FLOW_NOT_LINKED which propagates back to
-                # ndisrc and kills the entire pipeline.
+                # Use a DROP probe (not BLOCK) to silently discard audio frames
+                # until the downstream chain is set up on the main loop.
+                #
+                # BLOCK_DOWNSTREAM would deadlock: the probe suspends the
+                # streaming thread, but idle_add calls sync_state_with_parent()
+                # which needs that same thread free to ack the state change.
+                #
+                # DROP returns GST_FLOW_OK to ndisrcdemux before GStreamer even
+                # checks whether the pad is linked, so NOT_LINKED is never
+                # returned.  The handful of audio frames dropped during the
+                # < 50 ms setup window are inaudible.
                 probe_id = pad.add_probe(
-                    Gst.PadProbeType.BLOCK_DOWNSTREAM,
-                    lambda p, info: Gst.PadProbeReturn.OK,   # stay blocked
+                    Gst.PadProbeType.BUFFER,
+                    lambda p, info: Gst.PadProbeReturn.DROP,
                 )
 
-                def _do_link_then_unblock(pad, amix):
+                def _do_link_then_stop_dropping(pad, amix):
                     _do_link_ndi_audio_to_amix(pad, amix)
-                    pad.remove_probe(probe_id)   # unblock — data flows now
+                    pad.remove_probe(probe_id)   # stop dropping — audio flows
                     return False
 
-                GLib.idle_add(_do_link_then_unblock, pad, amix)
+                GLib.idle_add(_do_link_then_stop_dropping, pad, amix)
 
             ndi_demux_el.connect("pad-added", on_ndi_pad_added, ndi_amix_el)
             print("🔊 NDI audio: silent baseline + pad-added handler installed", file=sys.stderr)
