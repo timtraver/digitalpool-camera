@@ -26,9 +26,10 @@ TS_COLOR=${19:-$OVERLAY_COLOR}
 TS_BACKGROUND=${20:-$OVERLAY_BACKGROUND}
 # Codec selection: 'h264' or 'h265' (arg 21, optional — defaults to h264)
 CODEC=${21:-"h264"}
-# Input source type and RTSP URL (args 22-23, optional — defaults to USB)
+# Input source type, RTSP URL, and NDI source name (args 22-24, optional)
 INPUT_TYPE=${22:-"usb"}
 INPUT_RTSP_URL=${23:-""}
+INPUT_NDI_NAME=${24:-""}
 
 echo "🎨 Starting stream with dynamic PNG graphics overlay (Python GStreamer)..."
 echo "Camera: $CAMERA_DEVICE"
@@ -55,5 +56,5 @@ exec python3 "$SCRIPT_DIR/gst-overlay-pipeline.py" \
   "$OVERLAY_COLOR" "$OVERLAY_BACKGROUND" "$TIMESTAMP_FORMAT" \
   "$TITLE_POSITION" "$TIMESTAMP_POSITION" "$AUDIO_DEVICE" \
   "$TS_FONT_SIZE" "$TS_COLOR" "$TS_BACKGROUND" "$CODEC" \
-  "$INPUT_TYPE" "$INPUT_RTSP_URL"
+  "$INPUT_TYPE" "$INPUT_RTSP_URL" "$INPUT_NDI_NAME"
 
