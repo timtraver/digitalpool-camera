@@ -207,12 +207,41 @@ def main():
     # conversion is the primary CPU/memory-bandwidth bottleneck.
     has_any_overlay = has_png_overlay or bool(overlay_text) or show_timestamp == "true"
 
+    # Maximum resolution at which overlay compositing runs in software.
+    # NV12↔BGRA conversion scales with pixel count — at 4K@30fps it requires
+    # ~2 GB/s of memory bandwidth, which stalls the pipeline on this hardware.
+    # Anything above 1080p is downscaled proportionally before compositing and
+    # then encoded at that lower resolution (the encode resolution = overlay
+    # resolution, not the original capture resolution).
+    # Benefit: 4K→1080p downsampling still looks sharper than a native 1080p
+    # capture because the full-sensor readout is used.
+    OVERLAY_MAX_WIDTH  = 1920
+    OVERLAY_MAX_HEIGHT = 1080
+
+    if has_any_overlay and (width > OVERLAY_MAX_WIDTH or height > OVERLAY_MAX_HEIGHT):
+        scale_factor   = min(OVERLAY_MAX_WIDTH / width, OVERLAY_MAX_HEIGHT / height)
+        overlay_width  = int(width  * scale_factor)
+        overlay_height = int(height * scale_factor)
+        # Codec requirement: dimensions must be even
+        overlay_width  = overlay_width  - (overlay_width  % 2)
+        overlay_height = overlay_height - (overlay_height % 2)
+        prescale = (
+            f'! videoscale '
+            f'! video/x-raw,width={overlay_width},height={overlay_height} '
+        )
+        print(f"📐 Overlays active — scaling {width}x{height} → {overlay_width}x{overlay_height} before compositing", file=sys.stderr)
+    else:
+        overlay_width  = width
+        overlay_height = height
+        prescale = ''
+
     # Pre-compute the gdkpixbufoverlay fragment so it can be safely interpolated
     # as a plain f-string variable inside pipeline_str (Python's implicit string
     # concatenation does not support ternary expressions mid-tuple).
+    # Uses overlay_width/overlay_height (post-scale) so the PNG fills the frame.
     png_overlay_element = (
         f'! gdkpixbufoverlay name=overlay location={png_path} '
-        f'overlay-width={width} overlay-height={height} '
+        f'overlay-width={overlay_width} overlay-height={overlay_height} '
         if has_png_overlay else ''
     )
 
@@ -221,6 +250,7 @@ def main():
     # both conversions — mppjpegdec already emits NV12 which mpph264enc accepts.
     if has_any_overlay:
         overlay_section = (
+            f'{prescale}'
             f'! videoconvert ! video/x-raw,format=BGRA '
             f'{png_overlay_element}'
             f'{text_overlay}'
@@ -264,7 +294,7 @@ def main():
 
     # Thread architecture (each queue creates a new thread boundary):
     #   Thread 1: source (v4l2src or rtspsrc+decodebin) — capture/decode
-    #   Thread 2: queue → [if overlays: videoconvert(BGRA) → overlays → videoconvert(NV12)] → tee
+    #   Thread 2: queue → [if overlays: videoscale(if>1080p) → videoconvert(BGRA) → overlays → videoconvert(NV12)] → tee
     #             (when no overlays: queue feeds tee directly in NV12 — no colorspace conversion)
     #   Thread 3: queue → mpph264enc → h264parse → queue → mux → fdsink (encode+stream)
     #   Thread 4: queue → videorate → videoscale → jpegenc → tcpserversink (preview)

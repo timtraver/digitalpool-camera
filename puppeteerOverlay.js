@@ -391,7 +391,6 @@ class PuppeteerOverlay extends EventEmitter {
       // Atomic rename so GStreamer never reads a partial file
       fs.renameSync(tempPath, this.pngPath);
 
-      console.log(`📸 URL overlay PNG updated from: ${this._overlayUrl}`);
       this.emit("updated", this.pngPath);
     } catch (err) {
       // Always log — silently swallowing errors makes debugging impossible.
