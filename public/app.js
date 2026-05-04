@@ -3013,6 +3013,37 @@ loadDeviceIp();
     }
   });
 
+  // ── Software restart (any admin) ─────────────────────────────
+  document.getElementById("restartSoftwareBtn")?.addEventListener("click", async () => {
+    const btn = document.getElementById("restartSoftwareBtn");
+    const msg = document.getElementById("restartSoftwareMsg");
+
+    if (!confirm("Restart the camera software now?")) return;
+
+    btn.disabled = true;
+    btn.textContent = "⏳ Restarting…";
+    msg.textContent = "🔄 Restarting service…";
+    msg.style.color = "#facc15";
+
+    try {
+      await fetch("/api/restart", { method: "POST" });
+    } catch { /* server already restarting */ }
+
+    const poll = async () => {
+      try {
+        const pr = await fetch("/api/status");
+        if (pr.ok) {
+          msg.textContent = "✅ Restarted — reloading…";
+          msg.style.color = "#4ade80";
+          setTimeout(() => window.location.reload(), 1500);
+          return;
+        }
+      } catch { /* still restarting */ }
+      setTimeout(poll, 2000);
+    };
+    setTimeout(poll, 3000);
+  });
+
   // ── Software update (dpadmin only) ───────────────────────────
   if (currentUser.username !== "dpadmin") {
     document.getElementById("updateSoftwareBtn")?.closest("div")?.remove();

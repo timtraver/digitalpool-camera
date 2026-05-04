@@ -820,6 +820,16 @@ app.get("/api/version", (req, res) => {
   }
 });
 
+// API endpoint to restart the service without updating code (admin only)
+// process.exit(0) causes systemd (Restart=always) to bring it straight back up.
+app.post("/api/restart", requireAdmin, async (req, res) => {
+  res.json({ success: true });
+  setTimeout(() => {
+    console.log("🔄 Restart requested via admin panel — restarting service via process.exit");
+    process.exit(0);
+  }, 800);
+});
+
 // API endpoint to pull latest code and restart the service (dpadmin only)
 // The server calls process.exit(0) after responding; systemd Restart=always brings it back.
 app.post("/api/update", requireAdmin, async (req, res) => {
