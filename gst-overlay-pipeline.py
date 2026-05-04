@@ -192,16 +192,20 @@ def main():
             audio_mux_target = None  # No audio in GStreamer mux — ffmpeg handles it
         else:
             # No ALSA audio — GStreamer handles RTMP directly via flvmux.
-            # NDI and RTSP audio are wired dynamically via pad-added callbacks
-            # (see below) so flvmux never requests an audio pad upfront.  This
-            # ensures flvmux starts emitting FLV immediately from the first video
-            # frame even when the NDI source carries no audio track.
+            # For NDI audio: a static audiotestsrc→audiomixer→avenc_aac chain is
+            # wired to mux.audio in the pipeline string so flvmux always has audio
+            # data flowing (silence until NDI audio arrives).  The pad-added
+            # callback then mixes real NDI audio into the audiomixer.
+            # For RTSP audio: the pad-added callback requests mux.audio directly.
             output_sink = (
                 f'! video/x-h264,stream-format=avc,alignment=au '
                 f'! flvmux name=mux streamable=true '
                 f'! rtmpsink location={rtmp_url} sync=false async=false '
             )
-            audio_mux_target = None  # Audio wired at runtime by pad-added callback
+            if use_ndi_audio:
+                audio_mux_target = 'mux.audio'  # static chain references it
+            else:
+                audio_mux_target = None  # RTSP audio / video-only: pad-added or nothing
     else:
         print(f"❌ Unsupported protocol: {protocol}", file=sys.stderr)
         sys.exit(1)
@@ -387,14 +391,14 @@ def main():
             if audio_device and audio_mux_target else ''
         ) +
         (
-            # NDI audio branch: tap the ndisrcdemux "audio" pad.
-            # ndisrcdemux delivers audio/x-raw directly — no extra decoder needed.
-            # audioconvert + audioresample normalise to the 16-bit 48 kHz stereo
-            # expected by avenc_aac.
-            f'ndi_demux.audio '
-            f'! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
-            f'! audioconvert ! audioresample '
+            # NDI audio branch: a silent audiotestsrc feeds an audiomixer so
+            # flvmux always has audio data (never stalls waiting for the first
+            # NDI audio buffer).  The pad-added callback mixes real NDI audio
+            # into ndi_amix when it arrives; until then only silence is encoded.
+            # avenc_aac lives here (static) — no dynamic encoder state-syncing.
+            f'audiotestsrc is-live=true volume=0 '
             f'! audio/x-raw,rate=48000,channels=2 '
+            f'! audiomixer name=ndi_amix '
             f'! avenc_aac bitrate=128000 '
             f'! aacparse '
             f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream '
@@ -492,90 +496,67 @@ def main():
             print("⚠️  RTSP audio: could not find 'dec' or 'mux' element — audio disabled", file=sys.stderr)
 
     # ── NDI audio passthrough ──────────────────────────────────────────────────
-    # ndisrcdemux fires pad-added during the PAUSED state (unlike decodebin which
-    # fires during PLAYING).  Calling sync_state_with_parent() on avenc_aac while
-    # the pipeline is mid-transition blocks the state machine.  The fix: the
-    # pad-added callback only *records* the pending pad; GLib.idle_add schedules
-    # the actual element creation and linking on the main loop, which runs after
-    # the pipeline has fully reached PLAYING.
+    # The static pipeline string contains:
+    #   audiotestsrc is-live=true volume=0 ! audiomixer name=ndi_amix ! avenc_aac ! … ! mux.audio
+    # This keeps flvmux fed with audio at all times (silence until real NDI audio
+    # arrives) so it never stalls waiting for the first audio buffer.  When
+    # ndisrcdemux creates its "audio" pad we only add two lightweight converter
+    # elements (audioconvert + audioresample) and link them to the already-running
+    # audiomixer — avenc_aac is static so no encoder state-sync during transitions.
     if use_ndi_audio:
         ndi_demux_el = pipeline.get_by_name("ndi_demux")
-        mux_element  = pipeline.get_by_name("mux")
+        ndi_amix_el  = pipeline.get_by_name("ndi_amix")
 
-        if ndi_demux_el and mux_element:
+        if ndi_demux_el and ndi_amix_el:
             _ndi_audio_linked = [False]
 
-            def _do_link_ndi_audio(pad, mux):
-                """Runs on the GLib main loop — safe to add elements dynamically.
-
-                Critical ordering: add ALL elements first, link them fully (so caps
-                can be negotiated), THEN call sync_state_with_parent() on each.
-                Syncing an unlinked avenc_aac to PAUSED without caps causes it to
-                block its state change, deadlocking the pipeline's PAUSED→PLAYING
-                transition.
-                """
+            def _do_link_ndi_audio_to_amix(pad, amix):
+                """Mix real NDI audio into ndi_amix (runs on GLib main loop).
+                Only adds audioconvert + audioresample — no encoder state-syncing."""
                 if _ndi_audio_linked[0]:
-                    return False  # idle_add: returning False removes the callback
-
-                audioqueue  = Gst.ElementFactory.make("queue",         None)
-                audioconv   = Gst.ElementFactory.make("audioconvert",  None)
-                audiores    = Gst.ElementFactory.make("audioresample",  None)
-                aacenc      = Gst.ElementFactory.make("avenc_aac",     None)
-                aacparse_el = Gst.ElementFactory.make("aacparse",      None)
-                audioout_q  = Gst.ElementFactory.make("queue",         None)
-
-                if not all([audioqueue, audioconv, audiores, aacenc, aacparse_el, audioout_q]):
-                    print("❌ Could not create NDI audio passthrough elements", file=sys.stderr)
                     return False
 
-                aacenc.set_property("bitrate", 128000)
+                audioconv = Gst.ElementFactory.make("audioconvert",  None)
+                audiores  = Gst.ElementFactory.make("audioresample", None)
 
-                # Step 1: add all elements to the pipeline (they stay in NULL state).
-                for elem in [audioqueue, audioconv, audiores, aacenc, aacparse_el, audioout_q]:
+                if not all([audioconv, audiores]):
+                    print("❌ Could not create NDI audio converter elements", file=sys.stderr)
+                    return False
+
+                # Step 1: add (stay in NULL).
+                for elem in [audioconv, audiores]:
                     pipeline.add(elem)
 
-                # Step 2: link the full chain so caps can be negotiated before state sync.
-                pad.link(audioqueue.get_static_pad("sink"))
-                audioqueue.link(audioconv)
+                # Step 2: link — ndi_demux.audio → audioconvert → audioresample → amix.
+                pad.link(audioconv.get_static_pad("sink"))
                 audioconv.link(audiores)
-                audiores.link(aacenc)
-                aacenc.link(aacparse_el)
-                aacparse_el.link(audioout_q)
-
-                # Request the audio sink pad from the mux.
-                # flvmux (RTMP) uses "audio"; mpegtsmux (SRT) uses "audio_%u".
-                mux_factory = mux.get_factory().get_name() if mux.get_factory() else ""
-                pad_name = "audio" if mux_factory == "flvmux" else "audio_%u"
-                mux_sink = mux.request_pad_simple(pad_name)
-                if mux_sink:
-                    audioout_q.get_static_pad("src").link(mux_sink)
+                amix_sink = amix.request_pad_simple("sink_%u")
+                if amix_sink:
+                    audiores.get_static_pad("src").link(amix_sink)
                 else:
-                    print(f"⚠️  Could not get {mux_factory} audio request pad — audio skipped", file=sys.stderr)
+                    print("⚠️  Could not get audiomixer sink pad — NDI audio skipped", file=sys.stderr)
                     return False
 
-                # Step 3: sync state AFTER linking so each element has caps context.
-                for elem in [audioqueue, audioconv, audiores, aacenc, aacparse_el, audioout_q]:
+                # Step 3: sync state after linking.
+                for elem in [audioconv, audiores]:
                     elem.sync_state_with_parent()
 
                 _ndi_audio_linked[0] = True
-                print(f"🔊 NDI audio linked to {mux_factory}.{pad_name}", file=sys.stderr)
+                print("🔊 NDI audio mixed into audiomixer", file=sys.stderr)
                 return False  # run once
 
-            def on_ndi_pad_added(element, pad, mux):
-                # ndisrcdemux emits both "video" and "audio" pads; only handle audio.
+            def on_ndi_pad_added(element, pad, amix):
                 if pad.get_name() != "audio":
                     return
                 if _ndi_audio_linked[0]:
-                    print("🔊 NDI audio pad fired again — already linked, skipping", file=sys.stderr)
                     return
-                print("🔊 NDI audio pad detected — scheduling link on main loop", file=sys.stderr)
-                # Defer to main loop so the pipeline finishes PAUSED→PLAYING first.
-                GLib.idle_add(_do_link_ndi_audio, pad, mux)
+                print("🔊 NDI audio pad detected — scheduling mix on main loop", file=sys.stderr)
+                GLib.idle_add(_do_link_ndi_audio_to_amix, pad, amix)
 
-            ndi_demux_el.connect("pad-added", on_ndi_pad_added, mux_element)
-            print("🔊 NDI audio passthrough: pad-added handler installed", file=sys.stderr)
+            ndi_demux_el.connect("pad-added", on_ndi_pad_added, ndi_amix_el)
+            print("🔊 NDI audio: silent baseline + pad-added handler installed", file=sys.stderr)
         else:
-            print("⚠️  NDI audio: could not find 'ndi_demux' or 'mux' element — audio disabled", file=sys.stderr)
+            print("⚠️  NDI audio: could not find 'ndi_demux' or 'ndi_amix' — audio disabled", file=sys.stderr)
 
     # Attach the global CLOCK_REALTIME system clock to this pipeline.
     # The clock-type was already set to REALTIME at module load (above Gst.init).
