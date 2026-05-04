@@ -192,21 +192,16 @@ def main():
             audio_mux_target = None  # No audio in GStreamer mux — ffmpeg handles it
         else:
             # No ALSA audio — GStreamer handles RTMP directly via flvmux.
-            # NDI / RTSP audio is wired into flvmux via the audio branch below
-            # (or via the pad-added callback for RTSP).  flvmux uses "audio" as
-            # its request-pad name; GStreamer pipeline syntax accepts "mux.audio".
+            # NDI and RTSP audio are wired dynamically via pad-added callbacks
+            # (see below) so flvmux never requests an audio pad upfront.  This
+            # ensures flvmux starts emitting FLV immediately from the first video
+            # frame even when the NDI source carries no audio track.
             output_sink = (
                 f'! video/x-h264,stream-format=avc,alignment=au '
                 f'! flvmux name=mux streamable=true '
                 f'! rtmpsink location={rtmp_url} sync=false async=false '
             )
-            if use_ndi_audio or use_rtsp_audio:
-                # flvmux request pad for audio; wired by the NDI branch string or
-                # the RTSP pad-added callback respectively.
-                audio_mux_target = 'mux.audio'
-                print(f"🎤 RTMP direct mode — flvmux with {'NDI' if use_ndi_audio else 'RTSP'} audio", file=sys.stderr)
-            else:
-                audio_mux_target = None  # Video-only RTMP
+            audio_mux_target = None  # Audio wired at runtime by pad-added callback
     else:
         print(f"❌ Unsupported protocol: {protocol}", file=sys.stderr)
         sys.exit(1)
@@ -490,6 +485,71 @@ def main():
             print("🔊 RTSP audio passthrough: pad-added handler installed", file=sys.stderr)
         else:
             print("⚠️  RTSP audio: could not find 'dec' or 'mux' element — audio disabled", file=sys.stderr)
+
+    # ── NDI audio passthrough ──────────────────────────────────────────────────
+    # ndisrcdemux creates the "audio" pad dynamically when the NDI source carries
+    # an audio track.  We connect a pad-added handler so the pad is only wired
+    # when it actually appears.  If the NDI source has no audio the callback never
+    # fires and flvmux outputs video-only without stalling — unlike the static
+    # pipeline-string approach which would pre-request mux.audio and block forever.
+    if use_ndi_audio:
+        ndi_demux_el = pipeline.get_by_name("ndi_demux")
+        mux_element  = pipeline.get_by_name("mux")
+
+        if ndi_demux_el and mux_element:
+            _ndi_audio_linked = [False]
+
+            def on_ndi_pad_added(element, pad, mux):
+                # ndisrcdemux emits both "video" and "audio" pads; only handle audio.
+                if pad.get_name() != "audio":
+                    return
+
+                if _ndi_audio_linked[0]:
+                    print("🔊 NDI audio pad fired again — already linked, skipping", file=sys.stderr)
+                    return
+                _ndi_audio_linked[0] = True
+
+                print("🔊 NDI audio pad detected — linking passthrough to mux", file=sys.stderr)
+
+                audioqueue  = Gst.ElementFactory.make("queue",        None)
+                audioconv   = Gst.ElementFactory.make("audioconvert", None)
+                audiores    = Gst.ElementFactory.make("audioresample", None)
+                aacenc      = Gst.ElementFactory.make("avenc_aac",    None)
+                aacparse_el = Gst.ElementFactory.make("aacparse",     None)
+                audioout_q  = Gst.ElementFactory.make("queue",        None)
+
+                if not all([audioqueue, audioconv, audiores, aacenc, aacparse_el, audioout_q]):
+                    print("❌ Could not create NDI audio passthrough elements", file=sys.stderr)
+                    return
+
+                aacenc.set_property("bitrate", 128000)
+
+                for elem in [audioqueue, audioconv, audiores, aacenc, aacparse_el, audioout_q]:
+                    pipeline.add(elem)
+                    elem.sync_state_with_parent()
+
+                pad.link(audioqueue.get_static_pad("sink"))
+                audioqueue.link(audioconv)
+                audioconv.link(audiores)
+                audiores.link(aacenc)
+                aacenc.link(aacparse_el)
+                aacparse_el.link(audioout_q)
+
+                # Request the audio sink pad from the mux.
+                # flvmux (RTMP) uses "audio"; mpegtsmux (SRT) uses "audio_%u".
+                mux_factory = mux.get_factory().get_name() if mux.get_factory() else ""
+                pad_name = "audio" if mux_factory == "flvmux" else "audio_%u"
+                mux_sink = mux.get_request_pad(pad_name)
+                if mux_sink:
+                    audioout_q.get_static_pad("src").link(mux_sink)
+                    print(f"🔊 NDI audio linked to {mux_factory}.{pad_name}", file=sys.stderr)
+                else:
+                    print(f"⚠️  Could not get {mux_factory} audio request pad — audio skipped", file=sys.stderr)
+
+            ndi_demux_el.connect("pad-added", on_ndi_pad_added, mux_element)
+            print("🔊 NDI audio passthrough: pad-added handler installed", file=sys.stderr)
+        else:
+            print("⚠️  NDI audio: could not find 'ndi_demux' or 'mux' element — audio disabled", file=sys.stderr)
 
     # Attach the global CLOCK_REALTIME system clock to this pipeline.
     # The clock-type was already set to REALTIME at module load (above Gst.init).
