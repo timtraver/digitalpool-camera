@@ -132,9 +132,9 @@ def main():
 
     # Detect NDI audio passthrough sentinel set by streamController.js.
     # When input_type is "ndi" and audioEnabled is true, Node.js passes "ndi"
-    # as the audio_device arg.  ndisrc exposes a static "audio" src pad which
-    # we wire directly in the pipeline string (no pad-added callback needed
-    # because the pad is always present, not dynamic).
+    # as the audio_device arg.  ndisrcdemux exposes an "audio" src pad (dynamic,
+    # but referenced by name in the pipeline string — gst-parse waits for it).
+    # No ALSA device or pad-added callback is needed.
     use_ndi_audio = (audio_device == "ndi")
     if use_ndi_audio:
         audio_device = ""  # treat as no-ALSA for output_sink selection below
@@ -277,15 +277,16 @@ def main():
     # overlay compositing and encoding by the common downstream pipeline.
     if input_type == "ndi" and input_ndi_name:
         print(f"📡 Input source: NDI → {input_ndi_name}", file=sys.stderr)
-        # ndisrc exposes two static src pads: "video" and "audio".
-        # We name the element "ndisrc_el" so the audio chain below can reference
-        # "ndisrc_el.audio" directly in the pipeline string — no pad-added callback
-        # is needed because NDI pads are always present (not dynamic like decodebin).
-        # videoconvert normalises NDI's native UYVY/NV12/etc. to a pipeline-friendly
-        # format; videoscale + videorate enforce the target resolution and frame rate.
+        # ndisrc outputs application/x-ndi (proprietary).  ndisrcdemux splits that
+        # into separate "video" (video/x-raw) and "audio" (audio/x-raw) src pads.
+        # Both pads are "Sometimes" (dynamic) — gst-parse handles the named-pad
+        # references automatically, waiting for the pads to appear at PLAYING time.
+        # Name the demux "ndi_demux" so the audio chain below can reference
+        # "ndi_demux.audio" without a separate pad-added callback.
         source_str = (
-            f'ndisrc name=ndisrc_el ndi-name="{input_ndi_name}" connect-timeout=5000 '
-            f'ndisrc_el.video '
+            f'ndisrc ndi-name="{input_ndi_name}" connect-timeout=5000 '
+            f'! ndisrcdemux name=ndi_demux '
+            f'ndi_demux.video '
             f'! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream '
             f'! videoconvert '
             f'! videoscale '
@@ -387,12 +388,11 @@ def main():
             if audio_device and audio_mux_target else ''
         ) +
         (
-            # NDI audio branch: tap the ndisrc element's static "audio" pad.
-            # No pad-added handler needed — NDI always exposes the audio pad.
-            # audioconvert + audioresample normalise whatever raw format NDI delivers
-            # (32-bit float, 48 kHz, N channels) to the standard 16-bit 48 kHz stereo
+            # NDI audio branch: tap the ndisrcdemux "audio" pad.
+            # ndisrcdemux delivers audio/x-raw directly — no extra decoder needed.
+            # audioconvert + audioresample normalise to the 16-bit 48 kHz stereo
             # expected by avenc_aac.
-            f'ndisrc_el.audio '
+            f'ndi_demux.audio '
             f'! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
             f'! audioconvert ! audioresample '
             f'! audio/x-raw,rate=48000,channels=2 '

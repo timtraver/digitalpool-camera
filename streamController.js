@@ -1036,15 +1036,14 @@ class StreamController extends EventEmitter {
 
     let pipeline;
     if (this.inputSource.type === "ndi" && this.inputSource.ndiName) {
-      // NDI source: tap the video pad of ndisrc directly.
-      // ndisrc exposes raw frames (often UYVY) on a "video" src pad — videoconvert
-      // normalises to whatever format the downstream elements can negotiate.
+      // NDI source: ndisrc outputs application/x-ndi; ndisrcdemux splits it into
+      // separate "video" (video/x-raw) and "audio" (audio/x-raw) dynamic pads.
       pipeline = [
         "ndisrc",
         `ndi-name="${this.inputSource.ndiName}"`,
         "connect-timeout=5000",
-        "name=ndisrc_el",
-        "ndisrc_el.video",
+        "!", "ndisrcdemux", "name=ndi_demux",
+        "ndi_demux.video",
         "!",
         "queue", "max-size-buffers=3", "max-size-time=0", "max-size-bytes=0", "leaky=downstream",
         "!",
