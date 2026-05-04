@@ -786,13 +786,18 @@ sudo tee -a /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
 ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/netplan/99-digitalpool-ethernet.yaml
 ubuntu ALL=(ALL) NOPASSWD: /usr/sbin/netplan apply
 ubuntu ALL=(ALL) NOPASSWD: /usr/bin/timedatectl set-timezone *
+ubuntu ALL=(ALL) NOPASSWD: /usr/sbin/reboot
 EOF
 
 # Validate before applying
 sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
 ```
 
-The `timedatectl set-timezone` entry enables the **Timezone** selector in Admin Settings (🔐 Admin Settings → 🕐 Timezone). Without it the save will fail with a permission error.
+| Entry | Enables |
+|---|---|
+| `netplan` / `tee` | Ethernet IP configuration in Admin Settings |
+| `timedatectl set-timezone` | Timezone selector in Admin Settings (🕐 Timezone) |
+| `reboot` | **⚡ Power → Reboot Device** button in Admin Settings |
 
 ### Setting a static IP
 
