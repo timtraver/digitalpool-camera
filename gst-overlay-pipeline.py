@@ -191,17 +191,22 @@ def main():
             )
             audio_mux_target = None  # No audio in GStreamer mux — ffmpeg handles it
         else:
-            # No audio — GStreamer handles RTMP directly via flvmux (no drift to worry about).
-            # Do NOT add a second h264parse here. The h264parse config-interval=-1 upstream
-            # negotiates stream-format=avc,alignment=au directly with flvmux through the
-            # queue. A second parse re-splits SPS+PPS+IDR access units into separate NAL
-            # buffers with identical DTS values, causing MediaMTX to drop readers.
+            # No ALSA audio — GStreamer handles RTMP directly via flvmux.
+            # NDI / RTSP audio is wired into flvmux via the audio branch below
+            # (or via the pad-added callback for RTSP).  flvmux uses "audio" as
+            # its request-pad name; GStreamer pipeline syntax accepts "mux.audio".
             output_sink = (
                 f'! video/x-h264,stream-format=avc,alignment=au '
                 f'! flvmux name=mux streamable=true '
                 f'! rtmpsink location={rtmp_url} sync=false async=false '
             )
-            audio_mux_target = None  # No audio
+            if use_ndi_audio or use_rtsp_audio:
+                # flvmux request pad for audio; wired by the NDI branch string or
+                # the RTSP pad-added callback respectively.
+                audio_mux_target = 'mux.audio'
+                print(f"🎤 RTMP direct mode — flvmux with {'NDI' if use_ndi_audio else 'RTSP'} audio", file=sys.stderr)
+            else:
+                audio_mux_target = None  # Video-only RTMP
     else:
         print(f"❌ Unsupported protocol: {protocol}", file=sys.stderr)
         sys.exit(1)
@@ -355,16 +360,15 @@ def main():
             # emits a sequence header + IDR NALU with identical DTS → MediaMTX drops the
             # connection with "DTS is not monotonically increasing".
             # All other paths use -1 so OBS/players can resync after any packet loss.
-            f'! h264parse config-interval={"0" if protocol == "rtmp" and audio_device else "-1"} '
+            f'! h264parse config-interval={"0" if protocol == "rtmp" and (audio_device or use_ndi_audio or use_rtsp_audio) else "-1"} '
         )
         # Thread boundary before mux to decouple encoder from network I/O.
-        # RTMP without audio still uses flvmux (which requires DTS monotonicity) —
-        # no leaky, 2s buffer. All other paths use mpegtsmux with a single video-only
-        # input so leaky=downstream is safe and 500ms is sufficient.
+        # All RTMP paths (video-only, NDI audio, RTSP audio) use flvmux which
+        # requires strict DTS monotonicity — no leaky, 2s buffer.
+        # SRT or RTMP+ALSA-audio (mpegtsmux, video-only branch): 500 ms leaky queue
+        # is safe because mpegtsmux has only one input and never stalls on audio.
         + (f'! queue max-size-buffers=0 max-size-time=2000000000 max-size-bytes=0 '
            if protocol == "rtmp" and not audio_device else
-           # SRT or RTMP+audio (mpegtsmux, video-only): 500 ms absorbs PNG overlay
-           # reload CPU spikes; leaky is safe since mpegtsmux never waits on audio.
            f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream ')
         + output_sink +
         (
