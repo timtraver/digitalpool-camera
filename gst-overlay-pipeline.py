@@ -355,11 +355,15 @@ def main():
             f'! video/x-h264,stream-format=byte-stream '
             # RTMP+audio hybrid: config-interval=0 — SPS/PPS go only into the MPEG-TS PMT.
             # ffmpeg reads them once at startup and writes ONE AVC sequence header in FLV.
-            # With config-interval=-1, ffmpeg sees inline SPS/PPS before every IDR and
-            # emits a sequence header + IDR NALU with identical DTS → MediaMTX drops the
-            # connection with "DTS is not monotonically increasing".
-            # All other paths use -1 so OBS/players can resync after any packet loss.
-            f'! h264parse config-interval={"0" if protocol == "rtmp" and (audio_device or use_ndi_audio or use_rtsp_audio) else "-1"} '
+            # config-interval=0 is only needed for the ALSA hybrid mode where ffmpeg
+            # reads the MPEG-TS stdout.  In that path a DTS monotonicity issue arises
+            # because ffmpeg re-emits inline SPS+PPS+IDR as two buffers with the same
+            # DTS, causing MediaMTX to drop the connection.
+            # For pure-GStreamer paths (NDI, RTSP audio, video-only RTMP), mpph264enc
+            # uses header-mode=each-idr which already inlines SPS+PPS before every IDR;
+            # keeping config-interval=-1 lets h264parse pass them through as-is so
+            # flvmux always sees the decoder configuration record alongside the keyframe.
+            f'! h264parse config-interval={"0" if protocol == "rtmp" and audio_device else "-1"} '
         )
         # Thread boundary before mux to decouple encoder from network I/O.
         # All RTMP paths (video-only, NDI audio, RTSP audio) use flvmux which
@@ -395,10 +399,13 @@ def main():
             # flvmux always has audio data (never stalls waiting for the first
             # NDI audio buffer).  The pad-added callback mixes real NDI audio
             # into ndi_amix when it arrives; until then only silence is encoded.
-            # avenc_aac lives here (static) — no dynamic encoder state-syncing.
+            # audioconvert + audioresample after the mixer ensure avenc_aac gets
+            # a supported format (S16LE/F32LE) regardless of audiomixer's output.
             f'audiotestsrc is-live=true volume=0 '
             f'! audio/x-raw,rate=48000,channels=2 '
             f'! audiomixer name=ndi_amix '
+            f'! audioconvert ! audioresample '
+            f'! audio/x-raw,rate=48000,channels=2 '
             f'! avenc_aac bitrate=128000 '
             f'! aacparse '
             f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream '
