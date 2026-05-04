@@ -48,18 +48,34 @@ def discover(timeout_ms: int = 5000) -> list:
         return [{"error": "NDIlib_initialize() returned false"}]
 
     # ── Create finder ─────────────────────────────────────────────────────────
-    ndi.NDIlib_find_create_v3.restype  = ctypes.c_void_p
-    ndi.NDIlib_find_create_v3.argtypes = [ctypes.POINTER(_NDIlib_find_create_t)]
+    # NDI SDK versions export different symbol names for the finder constructor.
+    # libndi.so.6 (as installed on this system) exports NDIlib_find_create_v2
+    # and NDIlib_find_create but NOT v3.  Probe in descending preference so the
+    # script also works on other SDK versions without changes.
+    create_fn = None
+    for sym in ("NDIlib_find_create_v2", "NDIlib_find_create"):
+        try:
+            fn = getattr(ndi, sym)
+            fn.restype  = ctypes.c_void_p
+            fn.argtypes = [ctypes.POINTER(_NDIlib_find_create_t)]
+            create_fn   = fn
+            break
+        except (AttributeError, OSError):
+            continue
+
+    if create_fn is None:
+        ndi.NDIlib_destroy()
+        return [{"error": "No NDIlib_find_create symbol found in NDI library"}]
 
     settings = _NDIlib_find_create_t(
         show_local_sources=True,
         p_groups=None,
         p_extra_ips=None,
     )
-    finder = ndi.NDIlib_find_create_v3(ctypes.byref(settings))
+    finder = create_fn(ctypes.byref(settings))
     if not finder:
         ndi.NDIlib_destroy()
-        return [{"error": "NDIlib_find_create_v3() returned NULL"}]
+        return [{"error": "NDIlib_find_create() returned NULL"}]
 
     # ── Wait for sources ──────────────────────────────────────────────────────
     ndi.NDIlib_find_wait_for_sources.restype  = ctypes.c_bool
