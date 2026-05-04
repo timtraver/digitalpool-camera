@@ -557,8 +557,23 @@ def main():
                     return
                 if _ndi_audio_linked[0]:
                     return
-                print("🔊 NDI audio pad detected — scheduling mix on main loop", file=sys.stderr)
-                GLib.idle_add(_do_link_ndi_audio_to_amix, pad, amix)
+                print("🔊 NDI audio pad detected — blocking pad until link completes", file=sys.stderr)
+
+                # Block the pad IMMEDIATELY so ndisrcdemux cannot push audio
+                # buffers downstream before the chain is linked.  Without this,
+                # the push returns GST_FLOW_NOT_LINKED which propagates back to
+                # ndisrc and kills the entire pipeline.
+                probe_id = pad.add_probe(
+                    Gst.PadProbeType.BLOCK_DOWNSTREAM,
+                    lambda p, info: Gst.PadProbeReturn.OK,   # stay blocked
+                )
+
+                def _do_link_then_unblock(pad, amix):
+                    _do_link_ndi_audio_to_amix(pad, amix)
+                    pad.remove_probe(probe_id)   # unblock — data flows now
+                    return False
+
+                GLib.idle_add(_do_link_then_unblock, pad, amix)
 
             ndi_demux_el.connect("pad-added", on_ndi_pad_added, ndi_amix_el)
             print("🔊 NDI audio: silent baseline + pad-added handler installed", file=sys.stderr)
