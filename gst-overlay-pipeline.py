@@ -288,14 +288,24 @@ def main():
         # Name the demux "ndi_demux" so the audio chain below can reference
         # "ndi_demux.audio" without a separate pad-added callback.
         source_str = (
-            f'ndisrc ndi-name="{input_ndi_name}" connect-timeout=5000 '
+            # timestamp-mode=receive-time stamps each frame with the Pi's own
+            # CLOCK_REALTIME at the moment the frame arrives over the network.
+            # This aligns NDI frame timing with the GStreamer pipeline clock so
+            # videorate doesn't see a clock skew between source and pipeline and
+            # avoids the aggressive drop/duplicate pattern that causes choppiness.
+            f'ndisrc ndi-name="{input_ndi_name}" connect-timeout=5000 timestamp-mode=receive-time '
             f'! ndisrcdemux name=ndi_demux '
             f'ndi_demux.video '
-            f'! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream '
+            # 500 ms time-based buffer (not a tiny 3-frame limit) absorbs NDI's
+            # inherent network jitter without dropping frames on any burst.
+            f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream '
             f'! videoconvert '
             f'! videoscale '
             f'! video/x-raw,width={width},height={height} '
-            f'! videorate ! video/x-raw,framerate={framerate}/1 '
+            # drop-only=true: never duplicate frames to pad up to target fps.
+            # NDI Scan Converter already sends at 60 fps; duplication just
+            # adds judder when a frame arrives slightly late.
+            f'! videorate drop-only=true ! video/x-raw,framerate={framerate}/1 '
         )
     elif input_type == "rtsp" and input_rtsp_url:
         print(f"📡 Input source: RTSP → {input_rtsp_url}", file=sys.stderr)
