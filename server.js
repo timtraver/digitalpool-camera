@@ -1401,6 +1401,38 @@ app.get("/api/audio/devices", requireAuth, async (req, res) => {
   }
 });
 
+// Discover NDI sources on the local network.
+// Spawns ndi-discover.py which uses the NDI SDK via ctypes to enumerate
+// mDNS/UDP announcements.  The optional ?timeout query param controls how
+// long the script waits (ms); default 5000.  The process itself is given
+// an extra 3 s on top of that for startup overhead.
+app.get("/api/ndi/sources", requireAuth, async (req, res) => {
+  const timeoutMs = Math.min(Math.max(parseInt(req.query.timeout, 10) || 5000, 1000), 15000);
+  const scriptPath = path.join(__dirname, "ndi-discover.py");
+  try {
+    const { stdout } = await execAsync(
+      `python3 "${scriptPath}" ${timeoutMs}`,
+      { timeout: timeoutMs + 4000 }
+    );
+    let sources;
+    try {
+      sources = JSON.parse(stdout.trim() || "[]");
+    } catch {
+      sources = [];
+    }
+    // Separate real sources from error objects the script may emit
+    const errors  = sources.filter(s => s.error);
+    const results = sources.filter(s => s.name);
+    if (errors.length && !results.length) {
+      return res.json({ success: false, error: errors[0].error, sources: [] });
+    }
+    res.json({ success: true, sources: results });
+  } catch (e) {
+    console.error("❌ NDI discovery error:", e.message);
+    res.json({ success: false, error: e.message, sources: [] });
+  }
+});
+
 // Poll until TCP port is accepting connections, or timeout.
 // Used to verify GStreamer actually started serving before telling the client.
 function waitForPort(port, timeoutMs = 8000) {

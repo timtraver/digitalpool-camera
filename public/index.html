@@ -150,9 +150,17 @@
                     <label>NDI Source</label>
                     <input type="text" id="cameraNdiName" placeholder="e.g. DESKTOP-ABC (OBS)"
                       style="flex:1;padding:4px 6px;background:rgba(6,16,27,0.8);border:1px solid rgba(18,199,255,0.3);border-radius:4px;color:rgba(255,255,255,0.85);font-size:12px" />
+                    <button id="ndiSearchBtn" class="btn-icon-small" title="Search for NDI sources on the network">🔍</button>
                   </div>
-                  <p style="font-size:10px;color:rgba(255,255,255,0.4);margin:4px 0 0">
-                    ℹ️ Enter the NDI source name exactly as advertised on the network (e.g. "DESKTOP-ABC (OBS)"). Camera controls are not available for NDI sources.
+                  <!-- Discovered NDI sources dropdown — hidden until search completes -->
+                  <div id="ndiSourceList" style="display:none;margin-top:4px">
+                    <select id="ndiSourceSelect"
+                      style="width:100%;padding:4px 6px;background:rgba(6,16,27,0.8);border:1px solid rgba(18,199,255,0.3);border-radius:4px;color:rgba(255,255,255,0.85);font-size:12px">
+                      <option value="">— select a discovered source —</option>
+                    </select>
+                  </div>
+                  <p id="ndiSearchStatus" style="font-size:10px;color:rgba(255,255,255,0.4);margin:4px 0 0">
+                    ℹ️ Type a source name or click 🔍 to discover NDI sources on the network. Camera controls are not available for NDI sources.
                   </p>
                 </div>
                 <div style="margin-top:10px;display:flex;align-items:center;gap:10px">

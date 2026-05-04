@@ -567,16 +567,20 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
 
 // ── Camera Input section ──────────────────────────────────────────────────────
 (function initCameraInput() {
-  const sourceTypeEl  = document.getElementById("cameraSourceType");
-  const usbSection    = document.getElementById("cameraInputUsb");
-  const rtspSection   = document.getElementById("cameraInputRtsp");
-  const ndiSection    = document.getElementById("cameraInputNdi");
-  const deviceSelect  = document.getElementById("cameraUsbDevice");
-  const refreshBtn    = document.getElementById("refreshCameraDevices");
-  const rtspUrlEl     = document.getElementById("cameraRtspUrl");
-  const ndiNameEl     = document.getElementById("cameraNdiName");
-  const applyBtn      = document.getElementById("applyCameraInput");
-  const statusEl      = document.getElementById("cameraInputStatus");
+  const sourceTypeEl    = document.getElementById("cameraSourceType");
+  const usbSection      = document.getElementById("cameraInputUsb");
+  const rtspSection     = document.getElementById("cameraInputRtsp");
+  const ndiSection      = document.getElementById("cameraInputNdi");
+  const deviceSelect    = document.getElementById("cameraUsbDevice");
+  const refreshBtn      = document.getElementById("refreshCameraDevices");
+  const rtspUrlEl       = document.getElementById("cameraRtspUrl");
+  const ndiNameEl       = document.getElementById("cameraNdiName");
+  const ndiSearchBtn    = document.getElementById("ndiSearchBtn");
+  const ndiSourceList   = document.getElementById("ndiSourceList");
+  const ndiSourceSelect = document.getElementById("ndiSourceSelect");
+  const ndiSearchStatus = document.getElementById("ndiSearchStatus");
+  const applyBtn        = document.getElementById("applyCameraInput");
+  const statusEl        = document.getElementById("cameraInputStatus");
 
   if (!sourceTypeEl) return;
 
@@ -689,6 +693,69 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
   if (refreshBtn) refreshBtn.addEventListener("click", loadDevices);
   if (refreshAudioDevicesBtn) refreshAudioDevicesBtn.addEventListener("click", () => loadAudioDevices());
   if (audioEnabledCheckbox) audioEnabledCheckbox.addEventListener("change", updateAudioDeviceRowVisibility);
+
+  // ── NDI source discovery ───────────────────────────────────────────────────
+  // Clicking 🔍 calls /api/ndi/sources, waits up to 5 s for the SDK to find
+  // any sources on the network, then shows a dropdown so the user can pick one.
+  // Selecting from the dropdown auto-fills the text input and enables Apply.
+  if (ndiSearchBtn) {
+    ndiSearchBtn.addEventListener("click", async () => {
+      ndiSearchBtn.disabled  = true;
+      ndiSearchBtn.textContent = "⏳";
+      if (ndiSearchStatus) {
+        ndiSearchStatus.style.color = "rgba(255,255,255,0.55)";
+        ndiSearchStatus.textContent = "🔍 Searching for NDI sources… (up to 5 s)";
+      }
+      if (ndiSourceList)   ndiSourceList.style.display = "none";
+      if (ndiSourceSelect) ndiSourceSelect.innerHTML   = '<option value="">— select a discovered source —</option>';
+
+      try {
+        const r    = await fetch("/api/ndi/sources?timeout=5000");
+        const data = await r.json();
+
+        if (!data.success || !data.sources || data.sources.length === 0) {
+          if (ndiSearchStatus) {
+            ndiSearchStatus.style.color = "rgba(255,160,80,0.9)";
+            ndiSearchStatus.textContent = data.error
+              ? `⚠️ Discovery error: ${data.error}`
+              : "⚠️ No NDI sources found. Make sure your NDI source is active on the same network.";
+          }
+        } else {
+          // Populate the dropdown
+          data.sources.forEach(({ name, url }) => {
+            const opt = document.createElement("option");
+            opt.value       = name;
+            opt.textContent = url ? `${name}  [${url}]` : name;
+            ndiSourceSelect.appendChild(opt);
+          });
+          if (ndiSourceList) ndiSourceList.style.display = "";
+          if (ndiSearchStatus) {
+            ndiSearchStatus.style.color = "rgba(80,220,120,0.9)";
+            ndiSearchStatus.textContent = `✅ Found ${data.sources.length} source${data.sources.length === 1 ? "" : "s"} — select one below or type a name above.`;
+          }
+        }
+      } catch (e) {
+        if (ndiSearchStatus) {
+          ndiSearchStatus.style.color = "rgba(255,160,80,0.9)";
+          ndiSearchStatus.textContent = "⚠️ Network error during NDI discovery.";
+        }
+      } finally {
+        ndiSearchBtn.disabled    = false;
+        ndiSearchBtn.textContent = "🔍";
+      }
+    });
+  }
+
+  // Selecting a discovered source auto-fills the name input and enables Apply.
+  if (ndiSourceSelect) {
+    ndiSourceSelect.addEventListener("change", () => {
+      const chosen = ndiSourceSelect.value;
+      if (chosen && ndiNameEl) {
+        ndiNameEl.value = chosen;
+        updateApplyButton();
+      }
+    });
+  }
 
   if (applyBtn) {
     applyBtn.addEventListener("click", async () => {
