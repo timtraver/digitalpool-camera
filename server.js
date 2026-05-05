@@ -423,14 +423,29 @@ app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) =>
     const authKey     = process.env.HEADSCALE_AUTHKEY || "";
 
     if (force) {
-      // Wipe the local Tailscale node key so this device gets a new identity.
-      // tailscale logout deregisters gracefully; if it fails (e.g. already
-      // logged out) we fall through — the stale state dir is removed either way.
-      console.log("🔄 Remote enable (force): logging out existing Tailscale identity…");
+      // Re-register as a brand-new device (cloned SD card path).
+      //
+      // IMPORTANT: deleting /var/lib/tailscale/ while tailscaled is running has
+      // NO effect — the daemon holds the node key in memory and will recreate the
+      // files immediately.  The daemon MUST be stopped first, then state cleared,
+      // then restarted so it initialises from a blank slate before tailscale up
+      // runs and gets a fresh identity + new IP from Headscale.
+      //
+      // Sequence: logout → stop daemon → clear state → start daemon → tailscale up
+      console.log("🔄 Force re-register: logging out of Headscale…");
       await execAsync("sudo tailscale logout 2>/dev/null").catch(() => {});
+
+      console.log("🔄 Force re-register: stopping tailscaled daemon…");
+      await execAsync("sudo /usr/bin/systemctl stop tailscaled").catch(() => {});
+      await new Promise(r => setTimeout(r, 1000)); // wait for daemon to fully exit
+
+      console.log("🔄 Force re-register: clearing node state…");
       await execAsync("sudo rm -rf /var/lib/tailscale/").catch(() => {});
-      // Give the daemon a moment to reset
-      await new Promise(r => setTimeout(r, 1500));
+
+      console.log("🔄 Force re-register: starting fresh tailscaled daemon…");
+      await execAsync("sudo /usr/bin/systemctl start tailscaled").catch(() => {});
+      await new Promise(r => setTimeout(r, 2000)); // wait for daemon to initialise
+      console.log("🔄 Force re-register: daemon ready — running tailscale up…");
     }
 
     // Build the tailscale up command.
