@@ -388,6 +388,51 @@ function saveRemoteConfig(cfg) {
   fsSync.writeFileSync(REMOTE_CONFIG_FILE, JSON.stringify(cfg, null, 2));
 }
 
+/**
+ * Rename a node in Headscale's own database (the "givenName" / display name).
+ *
+ * Tailscale's `--hostname` flag only updates what the *client* reports.
+ * Headscale stores its own "name" field that is set at first registration and
+ * does not change automatically when the hostname changes.  The only way to
+ * update it is via the Headscale admin REST API.
+ *
+ * Requires HEADSCALE_API_KEY in .env (create with: headscale apikeys create).
+ * Silently skips if the key is not configured.
+ *
+ * @param {string} tailscaleIp  - The device's current 100.x.x.x address
+ * @param {string} newName      - The desired Headscale node name
+ */
+async function headscaleRenameNode(tailscaleIp, newName) {
+  const apiKey     = process.env.HEADSCALE_API_KEY || "";
+  const serverUrl  = (process.env.HEADSCALE_URL || "").replace(/\/$/, "");
+  if (!apiKey || !serverUrl) return; // not configured — skip silently
+
+  try {
+    // 1. List all nodes and find ours by Tailscale IP
+    const listOut = await execAsync(
+      `curl -sf -H "Authorization: Bearer ${apiKey}" "${serverUrl}/api/v1/node" 2>/dev/null`
+    );
+    const data  = JSON.parse(listOut.stdout);
+    const nodes = data.nodes || data.machines || [];  // field name varies by version
+    const node  = nodes.find(n =>
+      (n.ip_addresses || n.ipAddresses || []).some(ip => ip === tailscaleIp)
+    );
+    if (!node) {
+      console.warn(`⚠️  Headscale rename: no node found with IP ${tailscaleIp}`);
+      return;
+    }
+
+    // 2. Rename it
+    const nodeId = node.id;
+    await execAsync(
+      `curl -sf -X POST -H "Authorization: Bearer ${apiKey}" "${serverUrl}/api/v1/node/${nodeId}/rename/${newName}" 2>/dev/null`
+    );
+    console.log(`✅ Headscale: node ${nodeId} renamed to "${newName}"`);
+  } catch (e) {
+    console.warn("⚠️  Headscale rename API call failed:", e.message);
+  }
+}
+
 app.get("/api/remote/status", requireAdmin, async (req, res) => {
   const cfg = loadRemoteConfig();
   try {
@@ -467,6 +512,10 @@ app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) =>
     const { stdout: ipOut } = await execAsync("tailscale ip --4 2>/dev/null").catch(() => ({ stdout: "" }));
     const ip = ipOut.trim();
     if (ip) {
+      // Update the Headscale node name (givenName) to match — Tailscale's
+      // --hostname flag only updates what the client reports; the Headscale
+      // database name needs a separate API call to stay in sync.
+      await headscaleRenameNode(ip, name);
       res.json({ success: true, ip, deviceName: name, reregistered: force });
     } else {
       res.status(500).json({ error: "Tailscale started but could not get IP. Check service logs." });
@@ -580,12 +629,17 @@ app.put("/api/remote/name", requireAdmin, express.json(), async (req, res) => {
   const cfg = loadRemoteConfig();
   cfg.deviceName = name;
   saveRemoteConfig(cfg);
-  // If tailscale is running, update the hostname live
+  // If tailscale is running, update hostname AND Headscale givenName live
   try {
     const { stdout } = await execAsync("tailscale status --json 2>/dev/null");
     const ts = JSON.parse(stdout);
     if (ts.BackendState === "Running") {
       await execAsync(`sudo tailscale set --hostname=${name}`);
+      // Also rename in Headscale's own database — tailscale set --hostname only
+      // updates what the client reports; the Headscale node name needs the API.
+      const { stdout: ipOut } = await execAsync("tailscale ip --4 2>/dev/null").catch(() => ({ stdout: "" }));
+      const ip = ipOut.trim();
+      if (ip) await headscaleRenameNode(ip, name);
     }
   } catch { /* tailscale not running — name saved for next enable */ }
   res.json({ success: true, deviceName: name });
