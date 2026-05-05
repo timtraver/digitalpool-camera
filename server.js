@@ -2233,24 +2233,28 @@ function buildIdlePreviewGstArgs(sinkArgs) {
       "ndisrc",
       `ndi-name="${activeCameraSource.ndiName}"`,
       "connect-timeout=5000",
-      // receive-time stamps each frame with the Pi's CLOCK_REALTIME at arrival.
-      // The default (receive-time-vs-timecode) cross-references the Mac's NDI
-      // timecode which drifts against the Pi clock and makes videorate choppy.
-      "timestamp-mode=receive-time",
+      // do-timestamp=true: GStreamer base class stamps each frame with the
+      // pipeline's own running time the moment it is pushed out of ndisrc.
+      // This avoids any clock skew between the NDI source's timecodes and the
+      // gst-launch pipeline clock, which was causing videorate to stall frames
+      // for 3+ seconds while waiting for timestamps to align.
+      "do-timestamp=true",
       "!", "ndisrcdemux", "name=ndi_demux",
       "ndi_demux.video",
       "!",
-      // 500 ms time-based buffer absorbs NDI network jitter without dropping frames.
-      "queue", "max-size-buffers=0", "max-size-time=500000000", "max-size-bytes=0", "leaky=downstream",
+      // 2-buffer leaky queue: just enough to decouple the demuxer thread from
+      // videoconvert without accumulating latency.  leaky=downstream drops the
+      // oldest buffer (head) when full, keeping the freshest frame in play.
+      "queue", "max-size-buffers=2", "max-size-time=0", "max-size-bytes=0", "leaky=downstream",
       "!",
       "videoconvert",
       "!",
-      // drop-only=true: never duplicate frames to pad to 1 fps.
-      // NDI runs at 30-60 fps; we only want one frame per second for the preview
-      // thumbnail — drop-only lets videorate discard the excess without judder.
+      // 5 fps is visually smooth for an idle preview thumbnail and cheap on CPU.
+      // drop-only=true ensures videorate only discards excess frames from the
+      // 30-60 fps NDI source; it never duplicates a late frame (no judder).
       "videorate", "drop-only=true",
       "!",
-      "video/x-raw,framerate=1/1",
+      "video/x-raw,framerate=5/1",
       "!",
       "videoconvert",
       "!",

@@ -296,9 +296,11 @@ def main():
             f'ndisrc ndi-name="{input_ndi_name}" connect-timeout=5000 timestamp-mode=receive-time '
             f'! ndisrcdemux name=ndi_demux '
             f'ndi_demux.video '
-            # 500 ms time-based buffer (not a tiny 3-frame limit) absorbs NDI's
-            # inherent network jitter without dropping frames on any burst.
-            f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream '
+            # Name this queue "ndi_vq" so the pad-added handler below can find
+            # it by name and link it manually if gst_parse_launch loses the
+            # pad-added race against the first ndisrcdemux push.
+            # 500 ms time-based buffer absorbs NDI network jitter without dropping frames.
+            f'! queue name=ndi_vq max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream '
             f'! videoconvert '
             f'! videoscale '
             f'! video/x-raw,width={width},height={height} '
@@ -596,6 +598,64 @@ def main():
             print("🔊 NDI audio: silent baseline + pad-added handler installed", file=sys.stderr)
         else:
             print("⚠️  NDI audio: could not find 'ndi_demux' or 'ndi_amix' — audio disabled", file=sys.stderr)
+
+    # ── NDI video pad: NOT_LINKED race guard ──────────────────────────────────
+    # gst_parse_launch registers its own pad-added listener to link
+    # "ndi_demux.video → ndi_vq" but the Teltek ndisrcdemux can push its first
+    # buffer before that link completes, returning NOT_LINKED which kills the
+    # whole pipeline.
+    #
+    # Fix: install a BUFFER DROP probe the instant the video pad appears (before
+    # any push).  On the GLib main loop we then confirm the link is established
+    # (or do it manually if gst_parse lost the race), then remove the probe so
+    # video flows normally.  The handful of frames dropped during the <50 ms
+    # setup window are imperceptible.
+    if input_type == "ndi":
+        _ndi_vdmx_el = pipeline.get_by_name("ndi_demux")
+        if _ndi_vdmx_el:
+            _ndi_video_linked = [False]
+
+            def on_ndi_video_pad_added(element, pad, pl):
+                if pad.get_name() != "video":
+                    return
+                if _ndi_video_linked[0]:
+                    return
+
+                print("🎥 NDI video pad detected — installing DROP probe", file=sys.stderr)
+                probe_id_box = [None]
+                probe_id_box[0] = pad.add_probe(
+                    Gst.PadProbeType.BUFFER,
+                    lambda p, info: Gst.PadProbeReturn.DROP,
+                )
+
+                def _verify_link_and_unblock():
+                    if _ndi_video_linked[0]:
+                        return False
+                    peer = pad.get_peer()
+                    if peer is None:
+                        # gst_parse didn't finish the link — do it manually.
+                        ndi_vq = pl.get_by_name("ndi_vq")
+                        if ndi_vq:
+                            ret = pad.link(ndi_vq.get_static_pad("sink"))
+                            ndi_vq.sync_state_with_parent()
+                            print(f"🎥 NDI video pad manually linked: {ret}", file=sys.stderr)
+                        else:
+                            print("⚠️  ndi_vq not found — NDI video may stall", file=sys.stderr)
+                    else:
+                        print("🎥 NDI video pad linked by pipeline — DROP probe removed", file=sys.stderr)
+
+                    if probe_id_box[0] is not None:
+                        pad.remove_probe(probe_id_box[0])
+                        probe_id_box[0] = None
+                    _ndi_video_linked[0] = True
+                    return False  # run once
+
+                GLib.idle_add(_verify_link_and_unblock)
+
+            _ndi_vdmx_el.connect("pad-added", on_ndi_video_pad_added, pipeline)
+            print("🎥 NDI video: DROP probe race-guard installed", file=sys.stderr)
+        else:
+            print("⚠️  NDI video guard: could not find 'ndi_demux'", file=sys.stderr)
 
     # Attach the global CLOCK_REALTIME system clock to this pipeline.
     # The clock-type was already set to REALTIME at module load (above Gst.init).
