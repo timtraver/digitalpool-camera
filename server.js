@@ -491,47 +491,39 @@ app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) =>
     if (force) {
       // Re-register as a brand-new device (cloned SD card path).
       //
-      // IMPORTANT: We must delete the old node from Headscale BEFORE we logout
-      // and wipe the identity.  tailscale logout does NOT remove the node from
-      // Headscale — it just disconnects.  If we don't delete first, tailscale up
-      // will create a second node and Headscale ends up with both entries.
-      //
       // Sequence:
-      //   1. Get current IP (still connected, identity intact)
-      //   2. Delete old node from Headscale via API  ← prevents duplicate
-      //   3. tailscale logout (disconnect cleanly)
-      //   4. Stop daemon (flush in-memory key)
-      //   5. Clear /var/lib/tailscale/ (destroy node key on disk)
-      //   6. Start daemon (initialises from blank state)
-      //   7. tailscale up --hostname=<name> --authkey=... → fresh node, new IP
+      //   1. Get current IP (while identity is still intact)
+      //   2. Delete old node from Headscale via API
+      //   3. HARD STOP daemon (NO tailscale logout — logout sends a signal to
+      //      Headscale that can trigger a ghost re-registration event, creating
+      //      a second node.  We've already deleted via API so logout is redundant.)
+      //   4. Clear /var/lib/tailscale/ (destroys node private key on disk)
+      //   5. Start daemon fresh (NeedsLogin state — will not auto-connect)
+      //   6. tailscale up --authkey=... → exactly ONE new node in Headscale
 
-      // Step 1 — grab current IP while we still have an identity
+      // Step 1 — capture current IP before we lose the identity
       console.log("🔄 Force re-register: reading current Tailscale IP…");
       const { stdout: oldIpOut } = await execAsync("tailscale ip --4 2>/dev/null").catch(() => ({ stdout: "" }));
       const oldIp = oldIpOut.trim();
 
-      // Step 2 — delete the old node from Headscale so no duplicate is left behind
+      // Step 2 — delete old node from Headscale BEFORE stopping the daemon
       if (oldIp) {
         console.log(`🔄 Force re-register: deleting old Headscale node (${oldIp})…`);
         await headscaleDeleteNode(oldIp);
       } else {
-        console.warn("⚠️  Force re-register: no current IP found — skipping Headscale delete (node may already be gone)");
+        console.warn("⚠️  Force re-register: no current IP — node may already be gone from Headscale");
       }
 
-      // Step 3 — logout (disconnect from Headscale cleanly)
-      console.log("🔄 Force re-register: logging out of Tailscale…");
-      await execAsync("sudo tailscale logout 2>/dev/null").catch(() => {});
-
-      // Step 4 — stop daemon so it flushes the in-memory node key
+      // Step 3 — hard stop (skip tailscale logout to avoid ghost registrations)
       console.log("🔄 Force re-register: stopping tailscaled daemon…");
       await execAsync("sudo /usr/bin/systemctl stop tailscaled").catch(() => {});
       await new Promise(r => setTimeout(r, 1000));
 
-      // Step 5 — wipe node key and all state from disk
+      // Step 4 — wipe all state including the private node key
       console.log("🔄 Force re-register: clearing node state…");
       await execAsync("sudo rm -rf /var/lib/tailscale/").catch(() => {});
 
-      // Step 6 — restart daemon with a blank slate
+      // Step 5 — start daemon with blank state (enters NeedsLogin, won't auto-connect)
       console.log("🔄 Force re-register: starting fresh tailscaled daemon…");
       await execAsync("sudo /usr/bin/systemctl start tailscaled").catch(() => {});
       await new Promise(r => setTimeout(r, 2000));
