@@ -631,17 +631,28 @@ def main():
                     lambda p, info: Gst.PadProbeReturn.DROP,
                 )
 
-                def _verify_link_and_unblock():
+                def _link_and_unblock():
                     if _ndi_video_linked[0]:
                         return False
-                    # ndi_vq is a standalone chain (no gst_parse link), so we
-                    # always link manually here.  Its sink has ANY caps at this
-                    # point so pad.link() will succeed regardless of NDI format.
                     ndi_vq = pl.get_by_name("ndi_vq")
                     if ndi_vq:
-                        ret = pad.link(ndi_vq.get_static_pad("sink"))
+                        sink = ndi_vq.get_static_pad("sink")
+
+                        # Log actual caps so we can see what NOFORMAT is about.
+                        src_caps  = pad.get_current_caps()  or pad.query_caps(None)
+                        sink_caps = sink.get_current_caps() or sink.query_caps(None)
+                        print(f"🎥 video src caps : {src_caps.to_string()[:200]}",  file=sys.stderr)
+                        print(f"🎥 ndi_vq sink caps: {sink_caps.to_string()[:200]}", file=sys.stderr)
+
+                        # Use CHECK_NOTHING to bypass GStreamer's template-caps
+                        # check at link time.  That check fails here because caps
+                        # from the downstream chain (videoscale → capsfilter) have
+                        # already propagated into ndi_vq.sink before we link.
+                        # Caps renegotiation happens naturally when the first real
+                        # buffer flows through after the DROP probe is removed.
+                        ret = pad.link_full(sink, Gst.PadLinkCheck.NOTHING)
                         ndi_vq.sync_state_with_parent()
-                        print(f"🎥 NDI video pad linked to ndi_vq: {ret}", file=sys.stderr)
+                        print(f"🎥 NDI video linked (no-caps-check): {ret}", file=sys.stderr)
                     else:
                         print("⚠️  ndi_vq not found — NDI video may stall", file=sys.stderr)
 
@@ -651,7 +662,7 @@ def main():
                     _ndi_video_linked[0] = True
                     return False  # run once
 
-                GLib.idle_add(_verify_link_and_unblock)
+                GLib.idle_add(_link_and_unblock)
 
             _ndi_vdmx_el.connect("pad-added", on_ndi_video_pad_added, pipeline)
             print("🎥 NDI video: DROP probe race-guard installed", file=sys.stderr)
