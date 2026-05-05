@@ -696,6 +696,20 @@ def main():
                         pad.remove_probe(probe_id_box[0])
                         probe_id_box[0] = None
                     _ndi_video_linked[0] = True
+
+                    # Re-kick the pipeline state machine.
+                    #
+                    # flvmux / GstAggregator blocks PAUSED→PLAYING waiting for
+                    # one preroll buffer from every connected sink pad.  The video
+                    # sink pad of flvmux is downstream of ndisrc (a live source),
+                    # but because the video chain was wired AFTER the initial
+                    # set_state(PLAYING) call, GStreamer's state machine hasn't
+                    # seen the NO_PREROLL return propagate through the chain yet.
+                    # Calling set_state(PLAYING) here — with the chain now fully
+                    # connected — forces GStreamer to re-evaluate the topology,
+                    # propagate ndisrc's NO_PREROLL flag up to flvmux, and finally
+                    # complete the PAUSED→PLAYING transition.
+                    pl.set_state(Gst.State.PLAYING)
                     return False  # run once
 
                 GLib.idle_add(_build_chain_and_unblock)
