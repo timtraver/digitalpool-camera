@@ -671,52 +671,47 @@ def main():
                     vscale = Gst.ElementFactory.make("videoscale",   None)
                     vcaps  = Gst.ElementFactory.make("capsfilter",   None)
                     vrate  = Gst.ElementFactory.make("videorate",    None)
-                    vcaps2 = Gst.ElementFactory.make("capsfilter",   None)
 
-                    if not all([vconv, vscale, vcaps, vrate, vcaps2]):
+                    if not all([vconv, vscale, vcaps, vrate]):
                         print("❌ Could not create NDI video chain elements", file=sys.stderr)
                         _ndi_video_linked[0] = True
                         return False
 
+                    # Single capsfilter enforces both size AND framerate downstream
+                    # of videorate so the encoder always receives a stable format.
                     vcaps.set_property("caps",
-                        Gst.Caps.from_string(f"video/x-raw,width={width},height={height}"))
-                    vcaps2.set_property("caps",
-                        Gst.Caps.from_string(f"video/x-raw,framerate={framerate}/1"))
+                        Gst.Caps.from_string(
+                            f"video/x-raw,width={width},height={height},framerate={framerate}/1"))
                     vrate.set_property("drop-only", True)
 
-                    for el in [vconv, vscale, vcaps, vrate, vcaps2]:
+                    for el in [vconv, vscale, vcaps, vrate]:
                         pl.add(el)
 
-                    # ndi_demux.video → vconv → vscale → capsfilter(W×H)
-                    #   → videorate(drop-only) → capsfilter(fps) → ndi_in_q
+                    # ndi_demux.video → vconv → vscale → videorate(drop-only)
+                    #   → capsfilter(W×H @fps) → ndi_in_q
+                    #
+                    # Use link_full(CHECK_NOTHING) throughout: freshly-created elements
+                    # have no negotiated caps yet, and GStreamer's link-time template
+                    # check can spuriously return NOFORMAT when upstream elements
+                    # (especially capsfilter) have already fixed some fields but the
+                    # peer is still ANY.  Real caps negotiation happens when the first
+                    # buffer flows — CHECK_NOTHING just establishes the structural link.
                     def _link(src_pad, sink_pad, label):
-                        ret = src_pad.link(sink_pad)
+                        ret = src_pad.link_full(sink_pad, Gst.PadLinkCheck.NOTHING)
                         if ret != Gst.PadLinkReturn.OK:
                             print(f"❌ NDI video link FAILED [{label}]: {ret}", file=sys.stderr)
                         else:
                             print(f"🔗 NDI video link OK  [{label}]", file=sys.stderr)
                         return ret
 
-                    _link(pad,                              vconv.get_static_pad("sink"),   "demux→vconv")
-                    _link(vconv.get_static_pad("src"),     vscale.get_static_pad("sink"),  "vconv→vscale")
-                    _link(vscale.get_static_pad("src"),    vcaps.get_static_pad("sink"),   "vscale→vcaps")
-                    _link(vcaps.get_static_pad("src"),     vrate.get_static_pad("sink"),   "vcaps→vrate")
-                    _link(vrate.get_static_pad("src"),     vcaps2.get_static_pad("sink"),  "vrate→vcaps2")
-                    lret = _link(vcaps2.get_static_pad("src"), ndi_in_q.get_static_pad("sink"), "vcaps2→ndi_in_q")
-                    if lret != Gst.PadLinkReturn.OK:
-                        ndi_in_q_sink = ndi_in_q.get_static_pad("sink")
-                        peer = ndi_in_q_sink.get_peer() if ndi_in_q_sink else None
-                        print(f"   ndi_in_q.sink peer at failure: {peer}", file=sys.stderr)
+                    _link(pad,                           vconv.get_static_pad("sink"),  "demux→vconv")
+                    _link(vconv.get_static_pad("src"),   vscale.get_static_pad("sink"), "vconv→vscale")
+                    _link(vscale.get_static_pad("src"),  vrate.get_static_pad("sink"),  "vscale→vrate")
+                    _link(vrate.get_static_pad("src"),   vcaps.get_static_pad("sink"),  "vrate→vcaps")
+                    _link(vcaps.get_static_pad("src"),   ndi_in_q.get_static_pad("sink"), "vcaps→ndi_in_q")
 
-                    for el in [vconv, vscale, vcaps, vrate, vcaps2]:
+                    for el in [vconv, vscale, vcaps, vrate]:
                         el.sync_state_with_parent()
-
-                    # Log the caps on the vcaps2 src and ndi_in_q sink to confirm
-                    # caps negotiation will succeed when the first buffer flows.
-                    v2caps = vcaps2.get_static_pad("src").get_current_caps()
-                    iqcaps = ndi_in_q.get_static_pad("sink").get_current_caps()
-                    print(f"🎥 vcaps2.src caps  : {v2caps.to_string()[:120] if v2caps else 'ANY'}", file=sys.stderr)
-                    print(f"🎥 ndi_in_q.sink caps: {iqcaps.to_string()[:120] if iqcaps else 'ANY'}", file=sys.stderr)
 
                     print("🎥 NDI video chain built and linked dynamically", file=sys.stderr)
 
