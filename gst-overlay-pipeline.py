@@ -689,15 +689,34 @@ def main():
 
                     # ndi_demux.video → vconv → vscale → capsfilter(W×H)
                     #   → videorate(drop-only) → capsfilter(fps) → ndi_in_q
-                    pad.link(vconv.get_static_pad("sink"))
-                    vconv.link(vscale)
-                    vscale.link(vcaps)
-                    vcaps.link(vrate)
-                    vrate.link(vcaps2)
-                    vcaps2.get_static_pad("src").link(ndi_in_q.get_static_pad("sink"))
+                    def _link(src_pad, sink_pad, label):
+                        ret = src_pad.link(sink_pad)
+                        if ret != Gst.PadLinkReturn.OK:
+                            print(f"❌ NDI video link FAILED [{label}]: {ret}", file=sys.stderr)
+                        else:
+                            print(f"🔗 NDI video link OK  [{label}]", file=sys.stderr)
+                        return ret
+
+                    _link(pad,                              vconv.get_static_pad("sink"),   "demux→vconv")
+                    _link(vconv.get_static_pad("src"),     vscale.get_static_pad("sink"),  "vconv→vscale")
+                    _link(vscale.get_static_pad("src"),    vcaps.get_static_pad("sink"),   "vscale→vcaps")
+                    _link(vcaps.get_static_pad("src"),     vrate.get_static_pad("sink"),   "vcaps→vrate")
+                    _link(vrate.get_static_pad("src"),     vcaps2.get_static_pad("sink"),  "vrate→vcaps2")
+                    lret = _link(vcaps2.get_static_pad("src"), ndi_in_q.get_static_pad("sink"), "vcaps2→ndi_in_q")
+                    if lret != Gst.PadLinkReturn.OK:
+                        ndi_in_q_sink = ndi_in_q.get_static_pad("sink")
+                        peer = ndi_in_q_sink.get_peer() if ndi_in_q_sink else None
+                        print(f"   ndi_in_q.sink peer at failure: {peer}", file=sys.stderr)
 
                     for el in [vconv, vscale, vcaps, vrate, vcaps2]:
                         el.sync_state_with_parent()
+
+                    # Log the caps on the vcaps2 src and ndi_in_q sink to confirm
+                    # caps negotiation will succeed when the first buffer flows.
+                    v2caps = vcaps2.get_static_pad("src").get_current_caps()
+                    iqcaps = ndi_in_q.get_static_pad("sink").get_current_caps()
+                    print(f"🎥 vcaps2.src caps  : {v2caps.to_string()[:120] if v2caps else 'ANY'}", file=sys.stderr)
+                    print(f"🎥 ndi_in_q.sink caps: {iqcaps.to_string()[:120] if iqcaps else 'ANY'}", file=sys.stderr)
 
                     print("🎥 NDI video chain built and linked dynamically", file=sys.stderr)
 
