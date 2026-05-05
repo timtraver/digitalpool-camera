@@ -560,9 +560,11 @@ if (resetAllBtn) {
 
 // Declared here (before initCameraInput IIFE) so the IIFE can reference them
 // without hitting the const Temporal Dead Zone.
-const audioEnabledCheckbox  = document.getElementById("audioEnabled");
-const audioDeviceRow        = document.getElementById("audioDeviceRow");
-const audioDeviceSelect     = document.getElementById("audioDeviceSelect");
+const audioEnabledCheckbox   = document.getElementById("audioEnabled");
+const audioSourceRow         = document.getElementById("audioSourceRow");
+const audioSourceTypeSelect  = document.getElementById("audioSourceType");
+const audioDeviceRow         = document.getElementById("audioDeviceRow");
+const audioDeviceSelect      = document.getElementById("audioDeviceSelect");
 const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
 
 // ── Camera Input section ──────────────────────────────────────────────────────
@@ -693,6 +695,7 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
   if (refreshBtn) refreshBtn.addEventListener("click", loadDevices);
   if (refreshAudioDevicesBtn) refreshAudioDevicesBtn.addEventListener("click", () => loadAudioDevices());
   if (audioEnabledCheckbox) audioEnabledCheckbox.addEventListener("change", updateAudioDeviceRowVisibility);
+  if (audioSourceTypeSelect) audioSourceTypeSelect.addEventListener("change", updateAudioDeviceRowVisibility);
 
   // ── NDI source discovery ───────────────────────────────────────────────────
   // Clicking 🔍 calls /api/ndi/sources, waits up to 5 s for the SDK to find
@@ -849,7 +852,8 @@ const streamBitrate = document.getElementById("streamBitrate");
 const streamResolution = document.getElementById("streamResolution");
 const streamFramerate = document.getElementById("streamFramerate");
 const streamCodec = document.getElementById("streamCodec");
-// audioEnabledCheckbox, audioDeviceRow, audioDeviceSelect, refreshAudioDevicesBtn
+// audioEnabledCheckbox, audioSourceRow, audioSourceTypeSelect,
+// audioDeviceRow, audioDeviceSelect, refreshAudioDevicesBtn
 // are declared before the initCameraInput IIFE above.
 const startStreamBtn = document.getElementById("startStream");
 const stopStreamBtn = document.getElementById("stopStream");
@@ -1007,6 +1011,7 @@ startStreamBtn.addEventListener("click", async () => {
       destination: streamDestination.value,
       bitrate: parseInt(streamBitrate.value),
       audioEnabled: audioEnabledCheckbox.checked,
+      audioSource: audioSourceTypeSelect ? audioSourceTypeSelect.value : "video",
       audioDevice: audioDeviceSelect ? audioDeviceSelect.value : "",
       width: resW,
       height: resH,
@@ -1022,6 +1027,7 @@ startStreamBtn.addEventListener("click", async () => {
       destination: streamDestination.value,
       bitrate: parseInt(streamBitrate.value),
       audioEnabled: audioEnabledCheckbox.checked,
+      audioSource: audioSourceTypeSelect ? audioSourceTypeSelect.value : "video",
       audioDevice: audioDeviceSelect ? audioDeviceSelect.value : "",
       width: resW,
       height: resH,
@@ -2528,13 +2534,24 @@ socket.on("streamStatus", (status) => {
 
 function updateAudioDeviceRowVisibility() {
   const sourceTypeEl = document.getElementById("cameraSourceType");
-  const sourceType = sourceTypeEl ? sourceTypeEl.value : "usb";
-  // RTSP and NDI carry their own embedded audio — no local ALSA device is needed.
-  // Hide the audio device selector for those source types.
-  const isEmbeddedAudio = (sourceType === "rtsp" || sourceType === "ndi");
+  const inputType    = sourceTypeEl ? sourceTypeEl.value : "usb";
+  const audioEnabled = audioEnabledCheckbox && audioEnabledCheckbox.checked;
+  const audioSource  = audioSourceTypeSelect ? audioSourceTypeSelect.value : "video";
+
+  // "Audio From" selector only makes sense for RTSP and NDI sources, which carry
+  // embedded audio.  For USB the audio always comes from an ALSA device, so the
+  // "From video source" option would be misleading — hide the selector in that case.
+  const showAudioSourcePicker = audioEnabled && (inputType === "rtsp" || inputType === "ndi");
+  if (audioSourceRow) {
+    audioSourceRow.style.display = showAudioSourcePicker ? "" : "none";
+  }
+
+  // ALSA device picker is visible when:
+  //   • USB source (audio always from ALSA), or
+  //   • RTSP/NDI source AND user has selected "External device"
+  const showDevicePicker = audioEnabled && (inputType === "usb" || audioSource === "external");
   if (audioDeviceRow) {
-    audioDeviceRow.style.display =
-      (!isEmbeddedAudio && audioEnabledCheckbox && audioEnabledCheckbox.checked) ? "" : "none";
+    audioDeviceRow.style.display = showDevicePicker ? "" : "none";
   }
 }
 
@@ -2586,6 +2603,11 @@ async function loadStreamConfig() {
       // Only assign if the option exists; otherwise fall back to 1080p.
       streamResolution.value = Array.from(streamResolution.options).some((o) => o.value === resKey) ? resKey : "1920x1080";
       audioEnabledCheckbox.checked = data.config.audioEnabled !== false; // default true
+
+      // Restore audio source type selection (default "video").
+      if (audioSourceTypeSelect) {
+        audioSourceTypeSelect.value = data.config.audioSource || "video";
+      }
 
       // Store the saved audio device so the refresh button can pre-select it.
       // We do NOT load audio devices automatically here — arecord can be slow

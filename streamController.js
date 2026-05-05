@@ -95,8 +95,9 @@ class StreamController extends EventEmitter {
       timestampFormat: "%Y-%m-%d %H:%M:%S",
       logoPath: "", // Path to logo image overlay
       // Audio settings
-      audioEnabled: true, // Include audio from camera mic in stream
-      audioDevice: "hw:3,0", // ALSA device for camera microphone
+      audioEnabled: true,      // Include audio in stream
+      audioSource: "video",    // "video" = use embedded source audio; "external" = ALSA device
+      audioDevice: "hw:3,0",   // ALSA device used when audioSource === "external"
       // Skia graphics overlay
       skiaGraphicsEnabled: false, // Enable Skia graphics overlay
       skiaGraphicsPort: 8556, // Port where Skia graphics server is running
@@ -253,12 +254,13 @@ class StreamController extends EventEmitter {
       const useFfmpegAudio =
         (this.streamConfig.protocol === "srt" || this.streamConfig.protocol === "rtmp" || this.streamConfig.protocol === "rtsp") &&
         this.streamConfig.audioEnabled &&
-        // RTSP and NDI input sources carry their own embedded audio track — there is
-        // no local ALSA device to capture.  GStreamer handles audio internally inside
-        // the Python pipeline (RTSP pad-added passthrough; NDI static audio pad);
-        // the ffmpeg ALSA hybrid path is not needed.
-        this.inputSource.type !== "rtsp" &&
-        this.inputSource.type !== "ndi";
+        // When audioSource === "external" the user has chosen a plugged-in ALSA
+        // device regardless of what the video input type is — enable the hybrid
+        // ffmpeg audio path for all input types in that case.
+        // When audioSource === "video", RTSP/NDI sources carry embedded audio that
+        // GStreamer handles internally; the ffmpeg ALSA hybrid is not needed.
+        (this.streamConfig.audioSource === "external" ||
+          (this.inputSource.type !== "rtsp" && this.inputSource.type !== "ndi"));
 
       // Check if we're using the compositor helper script
       if (gstArgs.useCompositorScript) {
@@ -942,17 +944,29 @@ class StreamController extends EventEmitter {
     // Only pass timestamp if the Timestamp checkbox is enabled
     const effectiveShowTimestamp = this.streamConfig.showTimestamp ? "true" : "false";
 
-    // When the input is an RTSP source the audio is already in the network stream —
-    // pass the sentinel "rtsp" so gst-overlay-pipeline.py knows to tap decodebin's
-    // audio pad rather than opening a local ALSA device.
-    // When the input is NDI, pass "ndi" — gst-overlay-pipeline.py will wire the
-    // static ndisrc_el.audio pad directly into the mux (no ALSA, no pad-added).
+    // Resolve the audio device string passed to gst-overlay-pipeline.py:
+    //
+    //   audioSource === "external"  → always use the ALSA device string.
+    //     The Python script detects a non-sentinel value and switches to the
+    //     fdsink hybrid output so ffmpeg can mux the ALSA audio in.
+    //
+    //   audioSource === "video" + RTSP input  → sentinel "rtsp".
+    //     gst-overlay-pipeline.py installs a pad-added handler on decodebin
+    //     to tap the embedded RTSP audio track.
+    //
+    //   audioSource === "video" + NDI input   → sentinel "ndi".
+    //     gst-overlay-pipeline.py wires the ndisrcdemux audio pad into an
+    //     audiomixer → avenc_aac chain in the static pipeline string.
+    //
+    //   audioSource === "video" + USB input   → ALSA device (camera mic).
     const audioDevice = this.streamConfig.audioEnabled
-      ? (this.inputSource.type === "rtsp"
-          ? "rtsp"
-          : this.inputSource.type === "ndi"
-            ? "ndi"
-            : (this.streamConfig.audioDevice || "hw:3,0"))
+      ? (this.streamConfig.audioSource === "external"
+          ? (this.streamConfig.audioDevice || "hw:3,0")
+          : (this.inputSource.type === "rtsp"
+              ? "rtsp"
+              : this.inputSource.type === "ndi"
+                ? "ndi"
+                : (this.streamConfig.audioDevice || "hw:3,0")))
       : "";
 
     // H.265 is incompatible with RTMP (FLV container only supports H.264)

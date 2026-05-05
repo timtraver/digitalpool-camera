@@ -541,9 +541,18 @@
               <input type="checkbox" id="audioEnabled" checked />
             </div>
 
-            <!-- Audio source selector — hidden when audio disabled or RTSP/NDI input active -->
+            <!-- Audio source type — always visible when audio is enabled -->
+            <div class="control-item" id="audioSourceRow" style="display:none">
+              <label for="audioSourceType">Audio From:</label>
+              <select id="audioSourceType" style="flex:1">
+                <option value="video">Video source (embedded)</option>
+                <option value="external">External device (mic/USB)</option>
+              </select>
+            </div>
+
+            <!-- ALSA device selector — only shown when "External device" is chosen -->
             <div class="control-item" id="audioDeviceRow" style="display:none">
-              <label for="audioDeviceSelect">Audio Source:</label>
+              <label for="audioDeviceSelect">Audio Device:</label>
               <select id="audioDeviceSelect" style="flex:1"><option value="">Click 🔄 to load devices</option></select>
               <button id="refreshAudioDevices" class="btn-icon-small" title="Refresh audio device list">🔄</button>
             </div>
