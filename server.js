@@ -100,13 +100,15 @@ let isRestartInProgress = false;
 // Initialize stream controller
 const streamController = new StreamController(CAMERA_DEVICE);
 
-// Initialize WiFi Manager — always-on AP hotspot
+// WiFi Manager — the hotspot is started by digitalpool-hotspot.service (systemd)
+// before this process launches.  Here we only start the interface monitor so
+// the /api/wifi/* endpoints and the 30-second AP health-check work correctly.
 const wifiManager = new WifiManager();
-wifiManager.initialize()
+wifiManager.startMonitor()
   .then(ok => ok
-    ? console.log("✅ WiFi AP hotspot initialised")
-    : console.warn("⚠️  WiFi AP not available (no wireless interface or nmcli missing)"))
-  .catch(err => console.error("❌ WiFi Manager init error:", err.message));
+    ? console.log("✅ WiFi Manager: hotspot monitor running")
+    : console.warn("⚠️  WiFi Manager: no wireless interface found — hotspot API limited"))
+  .catch(err => console.error("❌ WiFi Manager monitor error:", err.message));
 
 // Initialize Puppeteer overlay (if available)
 let puppeteerOverlay = null;

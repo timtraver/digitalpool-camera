@@ -60,12 +60,67 @@ class WifiManager extends EventEmitter {
     return r.ok && r.out.length > 0;
   }
 
+  /**
+   * Return the interface name the existing AP profile is bound to, or null if
+   * it is unbound (wildcard) or the profile doesn't exist.
+   */
+  async _profileBoundIface() {
+    const r = await this._run(
+      `nmcli -t -f connection.interface-name connection show "${AP_CONNECTION_NAME}" 2>/dev/null`
+    );
+    if (!r.ok || !r.out) return null;
+    const match = r.out.match(/connection\.interface-name:(.*)/);
+    if (!match) return null;
+    const iface = match[1].trim();
+    // NM reports '--' when the field is unset (unbound / wildcard)
+    return (iface && iface !== '--') ? iface : null;
+  }
+
   async _isAPActive() {
     const r = await this._run(`nmcli -t -f NAME,STATE connection show --active 2>/dev/null`);
     return r.ok && r.out.includes(AP_CONNECTION_NAME);
   }
 
   // ─── public API ────────────────────────────────────────────────────────────
+
+  /**
+   * Lightweight startup used when the hotspot is managed by the system service
+   * (digitalpool-hotspot.service).  Does NOT create NM profiles or start the AP —
+   * that is the system service's responsibility.  This method just:
+   *   1. Detects which WiFi interface is active so API methods work.
+   *   2. Reads the current SSID from the NM profile so getStatus() is accurate.
+   *   3. Starts the 30-second health monitor that restarts the AP if it drops.
+   */
+  async startMonitor() {
+    this.wifiIface = await this._findWifiIface();
+    if (!this.wifiIface) {
+      console.warn('⚠️  WiFi Manager: no wireless interface found — API will be limited');
+      return false;
+    }
+
+    // Read the SSID that the system service stored in the NM profile.
+    const ssidR = await this._run(
+      `nmcli -t -f 802-11-wireless.ssid connection show "${AP_CONNECTION_NAME}" 2>/dev/null`
+    );
+    if (ssidR.ok && ssidR.out) {
+      const m = ssidR.out.match(/802-11-wireless\.ssid:(.*)/);
+      if (m && m[1].trim()) this.apSsid = m[1].trim();
+    }
+
+    this._startMonitor();
+    console.log(`✅ WiFi Manager: monitoring hotspot on ${this.wifiIface} (SSID: ${this.apSsid})`);
+    return true;
+  }
+
+  /**
+   * Ensure this.wifiIface is populated.  Called lazily by API methods so they
+   * work even if startMonitor() hasn't been awaited yet (e.g. very early requests).
+   */
+  async _ensureIface() {
+    if (!this.wifiIface) {
+      this.wifiIface = await this._findWifiIface();
+    }
+  }
 
   /**
    * Wait until NetworkManager reports the interface as ready (state >= 30 / disconnected).
@@ -134,9 +189,20 @@ class WifiManager extends EventEmitter {
     await this._waitForDevice();
 
     if (!(await this._profileExists())) {
+      console.log('📡 WiFi Manager: no AP profile found — creating one');
       if (!(await this._createProfile())) return false;
     } else {
-      console.log('✅ WiFi Manager: AP profile already exists');
+      // Profile exists — but it may be bound to a different adapter (e.g. after
+      // cloning the SD card to a device with a different WiFi dongle).  If the
+      // bound interface doesn't match what we detected, delete and recreate so
+      // the hotspot comes up on the correct hardware automatically.
+      const boundIface = await this._profileBoundIface();
+      if (boundIface && boundIface !== this.wifiIface) {
+        console.log(`⚠️  AP profile is bound to "${boundIface}" but active interface is "${this.wifiIface}" — recreating for new hardware`);
+        if (!(await this._createProfile())) return false;
+      } else {
+        console.log(`✅ WiFi Manager: AP profile exists and matches interface (${this.wifiIface})`);
+      }
     }
 
     await this._ensureCaptivePortalDnsmasq();
@@ -278,6 +344,7 @@ class WifiManager extends EventEmitter {
    * in the background.  If the cache is empty we fall back to iw scan.
    */
   async scanNetworks() {
+    await this._ensureIface();
     const apActive = await this._isAPActive();
 
     if (!apActive) {
@@ -341,6 +408,7 @@ class WifiManager extends EventEmitter {
    * Connect to a WiFi network as a client. The AP continues running.
    */
   async connectToNetwork(ssid, password) {
+    await this._ensureIface();
     console.log(`📡 Connecting to: ${ssid}`);
     const pw = password ? `password "${password}"` : '';
     const r = await this._run(

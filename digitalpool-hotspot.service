@@ -1,0 +1,36 @@
+[Unit]
+Description=DigitalPool Camera WiFi Hotspot
+Documentation=https://github.com/your-org/digitalpool-camera
+# Start after NetworkManager is running so nmcli commands work.
+After=NetworkManager.service
+Wants=NetworkManager.service
+# Hotspot must be up before the camera app starts so the admin UI is
+# reachable via WiFi from the very first moment the app is running.
+Before=digitalpool-camera.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# ExecStart brings up the hotspot; ExecStop tears it down cleanly.
+ExecStart=/usr/local/sbin/dp-hotspot.sh
+ExecStop=/bin/bash -c '\
+    nmcli connection down "DigitalPool-Hotspot" 2>/dev/null || true; \
+    IFACE=$(nmcli -t -f DEVICE,TYPE device 2>/dev/null | grep :wifi | head -1 | cut -d: -f1); \
+    [ -n "$IFACE" ] && iptables -t nat -D PREROUTING -i "$IFACE" -p tcp --dport 80 \
+        -j REDIRECT --to-port ${PORT:-3000} 2>/dev/null || true'
+
+# Run as root — required for nmcli profile creation and iptables.
+User=root
+
+# Increase timeout: USB WiFi dongles can take up to 60 s to enumerate
+# after boot.  dp-hotspot.sh waits internally, but systemd must not
+# kill it before it finishes.
+TimeoutStartSec=120
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dp-hotspot
+
+[Install]
+WantedBy=multi-user.target
