@@ -617,6 +617,22 @@ def main():
             _ndi_video_linked = [False]
 
             def on_ndi_video_pad_added(element, pad, pl):
+                # ── Audio pad: always guard, even when use_ndi_audio=False ──
+                # When use_ndi_audio is False the audio pad-added handler above
+                # is never installed.  ndisrcdemux still creates an "audio" src
+                # pad and immediately starts pushing buffers.  Without a sink the
+                # push returns NOT_LINKED which propagates back through ndisrc and
+                # kills the whole pipeline.  Install a permanent DROP probe so
+                # those buffers are silently discarded before GStreamer checks
+                # whether the pad is linked.
+                if pad.get_name() == "audio" and not use_ndi_audio:
+                    pad.add_probe(
+                        Gst.PadProbeType.BUFFER,
+                        lambda p, info: Gst.PadProbeReturn.DROP,
+                    )
+                    print("🔇 NDI audio pad: DROP probe installed (audio not used)", file=sys.stderr)
+                    return
+
                 if pad.get_name() != "video":
                     return
                 if _ndi_video_linked[0]:
