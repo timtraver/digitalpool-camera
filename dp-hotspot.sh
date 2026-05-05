@@ -40,6 +40,17 @@ if [ -z "$IFACE" ]; then
 fi
 echo "📡 WiFi interface: $IFACE"
 
+# Derive a device-unique SSID from the last 4 hex chars of the adapter MAC
+# (upper-case, colons stripped).  Two cameras at the same venue won't clash.
+MAC_RAW=$(cat /sys/class/net/"$IFACE"/address 2>/dev/null | tr -d ':' | tr 'a-f' 'A-F' || true)
+MAC_SUFFIX="${MAC_RAW: -4}"
+if [ ${#MAC_SUFFIX} -eq 4 ]; then
+    DEFAULT_SSID="DigitalPool-${MAC_SUFFIX}"
+    echo "📡 Device SSID suffix: ${MAC_SUFFIX}  →  ${DEFAULT_SSID}"
+else
+    echo "⚠️  Could not read MAC — using generic SSID: $DEFAULT_SSID" >&2
+fi
+
 # ── Step 2: wait for the interface to be ready (NM state ≥ 30) ──────────────
 echo "⏳ Waiting for $IFACE (up to ${MAX_WAIT}s)..."
 nmcli device set "$IFACE" managed yes 2>/dev/null || true

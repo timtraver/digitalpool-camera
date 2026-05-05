@@ -3493,7 +3493,7 @@ loadDeviceIp();
     }
 
     function render(d) {
-      if (!d.isDpAdmin) { block.style.display = "none"; return; }
+      if (!d.canToggleSsh && !d.isDpAdmin) { block.style.display = "none"; return; }
       block.style.display = "block";
       if (d.active) {
         dot.className = "remote-status-dot remote-dot-on";

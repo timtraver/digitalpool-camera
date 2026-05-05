@@ -16,8 +16,9 @@ const EventEmitter = require('events');
 
 const execAsync = promisify(exec);
 
-const AP_CONNECTION_NAME = 'DigitalPool-Hotspot';
-const DEFAULT_AP_SSID     = 'DigitalPool-Camera';
+const AP_CONNECTION_NAME  = 'DigitalPool-Hotspot';
+const DEFAULT_AP_SSID     = 'DigitalPool-Camera'; // generic fallback — overridden at profile creation
+const AP_SSID_PREFIX      = 'DigitalPool';         // prefix for MAC-based SSIDs
 const DEFAULT_AP_PASSWORD = 'Digitalpool';   // min 8 chars for WPA2
 const DEFAULT_AP_IP       = '192.168.50.1';
 const AP_SUBNET_PREFIX    = '24';
@@ -270,7 +271,31 @@ class WifiManager extends EventEmitter {
     }
   }
 
+  /**
+   * Build a device-unique SSID: "DigitalPool-<XXXX>" where XXXX is the last
+   * 4 hex chars (2 bytes) of the WiFi adapter's MAC address, upper-cased.
+   * Two devices with different dongles in the same room will have different SSIDs.
+   * Falls back to DEFAULT_AP_SSID if the MAC cannot be read.
+   */
+  async _defaultSsid() {
+    try {
+      const { stdout } = await execAsync(
+        `cat /sys/class/net/${this.wifiIface}/address 2>/dev/null`
+      );
+      const mac    = stdout.trim().replace(/:/g, '').toUpperCase();
+      const suffix = mac.slice(-4);
+      if (suffix.length === 4) return `${AP_SSID_PREFIX}-${suffix}`;
+    } catch { /* fall through */ }
+    return DEFAULT_AP_SSID;
+  }
+
   async _createProfile() {
+    // Personalise the SSID for this device if it's still the generic boot-time
+    // default.  Uses the last 4 hex chars of the WiFi adapter MAC so two units
+    // in the same room show up as e.g. "DigitalPool-A1B2" / "DigitalPool-C3D4".
+    if (this.apSsid === DEFAULT_AP_SSID) {
+      this.apSsid = await this._defaultSsid();
+    }
     console.log(`📡 Creating AP profile "${AP_CONNECTION_NAME}" (SSID: ${this.apSsid})`);
     // Remove stale profile if any
     await this._run(`nmcli connection delete "${AP_CONNECTION_NAME}" 2>/dev/null`);

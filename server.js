@@ -458,9 +458,8 @@ app.post("/api/remote/disable", requireAdmin, async (req, res) => {
   }
 });
 
-// ── SSH (openssh-server) ── dpadmin only ────────────────────────────────────
-// Toggles ssh.socket AND ssh.service so SSH is off by default and only
-// enabled on demand by dpadmin.  Modern Ubuntu uses socket activation, so
+// ── SSH (openssh-server) ── admin + dpadmin ──────────────────────────────────
+// Toggles ssh.socket AND ssh.service.  Modern Ubuntu uses socket activation, so
 // stopping ssh.service alone leaves ssh.socket listening on :22 and the
 // service is respawned on the next connection — both must be toggled.
 // Requires NOPASSWD sudoers entries:
@@ -468,8 +467,8 @@ app.post("/api/remote/disable", requireAdmin, async (req, res) => {
 //   ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable --now ssh
 //   ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable --now ssh.socket
 //   ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable --now ssh.socket
-// Reachability is provided by Tailscale (port 22 on the tailnet IP); access
-// is gated by sshd's normal auth + Headscale tailnet membership.
+// Any admin-role user (including hotspot users) can toggle SSH so that a user
+// connected to the WiFi hotspot can enable SSH access without needing dpadmin.
 app.get("/api/remote/ssh/status", requireAdmin, async (req, res) => {
   const cfg = loadRemoteConfig();
   // systemctl returns non-zero when inactive/disabled/missing, so swallow the
@@ -493,8 +492,11 @@ app.get("/api/remote/ssh/status", requireAdmin, async (req, res) => {
     const { stdout } = await execAsync("tailscale ip --4 2>/dev/null");
     ip = stdout.trim() || null;
   } catch { /* tailscale not running */ }
-  const isDpAdmin = req.session?.user?.username === "dpadmin";
-  res.json({ active, enabled, ip, persisted: !!cfg.sshEnabled, isDpAdmin });
+  // canToggleSsh: true for any admin-role user (including hotspot users and dpadmin)
+  const canToggleSsh = isHotspotRequest(req) ||
+    req.session?.user?.role === "admin" ||
+    req.session?.user?.username === "dpadmin";
+  res.json({ active, enabled, ip, persisted: !!cfg.sshEnabled, isDpAdmin: canToggleSsh, canToggleSsh });
 });
 
 // Helper: run a sudo command and tolerate "unit not found" / "no such file"
@@ -509,7 +511,7 @@ async function tryUnitCmd(cmd) {
   }
 }
 
-app.post("/api/remote/ssh/enable", requireDpAdmin, async (req, res) => {
+app.post("/api/remote/ssh/enable", requireAdmin, async (req, res) => {
   // Enable socket first (it's the listener on modern Ubuntu); then service as
   // a fallback for installs without socket activation.
   const sock = await tryUnitCmd("sudo /usr/bin/systemctl enable --now ssh.socket");
@@ -523,7 +525,7 @@ app.post("/api/remote/ssh/enable", requireDpAdmin, async (req, res) => {
   res.json({ success: true, active: true });
 });
 
-app.post("/api/remote/ssh/disable", requireDpAdmin, async (req, res) => {
+app.post("/api/remote/ssh/disable", requireAdmin, async (req, res) => {
   // Disable the socket first to stop accepting new connections immediately,
   // then disable the service.  Existing sessions stay open by design.
   const sock = await tryUnitCmd("sudo /usr/bin/systemctl disable --now ssh.socket");
