@@ -3471,6 +3471,32 @@ loadDeviceIp();
       } catch (e) { showMsg(msg, `❌ ${e.message}`, true); }
       finally { disableBtn.disabled = false; }
     });
+
+    // "Register as New Device" — used after cloning an SD card to a new unit.
+    // Sends force:true which makes the server wipe /var/lib/tailscale/ before
+    // re-running tailscale up, so Headscale assigns a completely fresh IP.
+    const reregBtn = document.getElementById("remoteReregisterBtn");
+    reregBtn?.addEventListener("click", async () => {
+      const name = nameInput?.value.trim();
+      if (!name) { showMsg(msg, "❌ Enter a device name first", true); return; }
+      if (!confirm(`Register "${name}" as a brand-new device?\n\nThis will clear the existing Tailscale identity — the old entry in Headscale will become stale and a new IP will be assigned.\n\nOnly do this on a freshly cloned SD card, not on the original device.`)) return;
+      showMsg(msg, "⏳ Clearing identity and re-registering…");
+      reregBtn.disabled = true;
+      try {
+        const r = await fetch("/api/remote/enable", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceName: name, force: true }),
+        });
+        const d = await r.json();
+        if (d.success) {
+          showMsg(msg, `✅ Registered as new device — IP: ${d.ip}`);
+          setConnected(d.ip, d.deviceName);
+        } else {
+          showMsg(msg, `❌ ${d.error}`, true);
+        }
+      } catch (e) { showMsg(msg, `❌ ${e.message}`, true); }
+      finally { reregBtn.disabled = false; }
+    });
   }
 
   // ── Tailscale SSH (dpadmin only) ─────────────────────────────

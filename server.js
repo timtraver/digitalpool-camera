@@ -411,12 +411,27 @@ app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) =>
     .replace(/[^a-z0-9-]/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
+  // force:true = cloned-device / re-registration path — clears node identity first
+  // so Headscale treats this as a brand-new device and assigns a fresh IP.
+  const force = !!req.body?.force;
+
   cfg.deviceName = name;
   cfg.enabled    = true;
   saveRemoteConfig(cfg);
   try {
     const loginServer = process.env.HEADSCALE_URL || "";
     const authKey     = process.env.HEADSCALE_AUTHKEY || "";
+
+    if (force) {
+      // Wipe the local Tailscale node key so this device gets a new identity.
+      // tailscale logout deregisters gracefully; if it fails (e.g. already
+      // logged out) we fall through — the stale state dir is removed either way.
+      console.log("🔄 Remote enable (force): logging out existing Tailscale identity…");
+      await execAsync("sudo tailscale logout 2>/dev/null").catch(() => {});
+      await execAsync("sudo rm -rf /var/lib/tailscale/").catch(() => {});
+      // Give the daemon a moment to reset
+      await new Promise(r => setTimeout(r, 1500));
+    }
 
     // Build the tailscale up command.
     // With a Headscale pre-auth key, registration is fully automatic — no auth URL needed.
@@ -432,12 +447,12 @@ app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) =>
       console.warn("tailscale up warning:", e.stderr || e.message);
     }
 
-    // Give tailscale a moment to get an IP
-    await new Promise(r => setTimeout(r, 2000));
+    // Give tailscale a moment to get an IP (longer after a forced re-register)
+    await new Promise(r => setTimeout(r, force ? 4000 : 2000));
     const { stdout: ipOut } = await execAsync("tailscale ip --4 2>/dev/null").catch(() => ({ stdout: "" }));
     const ip = ipOut.trim();
     if (ip) {
-      res.json({ success: true, ip, deviceName: name });
+      res.json({ success: true, ip, deviceName: name, reregistered: force });
     } else {
       res.status(500).json({ error: "Tailscale started but could not get IP. Check service logs." });
     }
