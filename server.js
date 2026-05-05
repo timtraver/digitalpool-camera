@@ -531,23 +531,40 @@ app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) =>
     }
 
     // Build the tailscale up command.
-    // With a Headscale pre-auth key, registration is fully automatic — no auth URL needed.
-    let upCmd = `sudo tailscale up --hostname=${name} --accept-routes --timeout=15s`;
+    // --reset ensures any stale flags from the previous identity are cleared.
+    // Omit --timeout so the command doesn't exit early on a fresh state wipe —
+    // the daemon will keep trying in the background and we poll for Running below.
+    let upCmd = `sudo tailscale up --hostname=${name} --accept-routes --reset`;
     if (loginServer) upCmd += ` --login-server=${loginServer}`;
     if (authKey)     upCmd += ` --authkey=${authKey}`;
 
     try {
-      await execAsync(upCmd);
+      await execAsync(upCmd, { timeout: 30000 });
     } catch (e) {
       // Non-zero exit is sometimes returned even on success (e.g. "already running")
-      // so we fall through and check the IP rather than failing immediately.
+      // so we fall through and poll for the Running state below.
       console.warn("tailscale up warning:", e.stderr || e.message);
     }
 
-    // Give tailscale a moment to get an IP (longer after a forced re-register)
-    await new Promise(r => setTimeout(r, force ? 4000 : 2000));
-    const { stdout: ipOut } = await execAsync("tailscale ip --4 2>/dev/null").catch(() => ({ stdout: "" }));
-    const ip = ipOut.trim();
+    // Poll tailscale status until BackendState === "Running" (up to 30 s).
+    // tailscale ip --4 returns an IP as soon as Headscale assigns one, but the
+    // node shows as offline in Headscale until the Wireguard session is fully
+    // established.  We must wait for Running, not just for an IP.
+    let ip = "";
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+      try {
+        const { stdout: stJson } = await execAsync("tailscale status --json 2>/dev/null");
+        const st = JSON.parse(stJson);
+        if (st.BackendState === "Running" && st.TailscaleIPs?.length) {
+          ip = st.TailscaleIPs[0];
+          break;
+        }
+        console.log(`⏳ Tailscale BackendState: ${st.BackendState} — waiting…`);
+      } catch { /* status not ready yet */ }
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
     if (ip) {
       // Update the Headscale node name (givenName) to match — Tailscale's
       // --hostname flag only updates what the client reports; the Headscale
@@ -555,7 +572,7 @@ app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) =>
       await headscaleRenameNode(ip, name);
       res.json({ success: true, ip, deviceName: name, reregistered: force });
     } else {
-      res.status(500).json({ error: "Tailscale started but could not get IP. Check service logs." });
+      res.status(500).json({ error: "Tailscale registered but did not reach Running state within 30 s. Check service logs." });
     }
   } catch (e) {
     res.status(500).json({ error: e.message });
