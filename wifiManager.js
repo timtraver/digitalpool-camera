@@ -84,12 +84,19 @@ class WifiManager extends EventEmitter {
   // ─── public API ────────────────────────────────────────────────────────────
 
   /**
-   * Lightweight startup used when the hotspot is managed by the system service
-   * (digitalpool-hotspot.service).  Does NOT create NM profiles or start the AP —
-   * that is the system service's responsibility.  This method just:
-   *   1. Detects which WiFi interface is active so API methods work.
-   *   2. Reads the current SSID from the NM profile so getStatus() is accurate.
-   *   3. Starts the 30-second health monitor that restarts the AP if it drops.
+   * Primary startup called by server.js.  Designed to work in two modes:
+   *
+   *   A) System-service mode (normal):
+   *      digitalpool-hotspot.service already ran and the AP is up.
+   *      This method just detects the interface, reads the SSID, and starts
+   *      the health monitor — no profile creation or AP start needed.
+   *
+   *   B) Fallback mode (system service not installed / cloned device pre-install):
+   *      The AP is not running yet.  This method performs a full initialisation:
+   *      profile check/create (with new-hardware detection), dnsmasq config,
+   *      AP start, and then the health monitor.  This means the hotspot works
+   *      out-of-the-box on any cloned SD card even before the one-time install
+   *      step has been run.
    */
   async startMonitor() {
     this.wifiIface = await this._findWifiIface();
@@ -98,13 +105,36 @@ class WifiManager extends EventEmitter {
       return false;
     }
 
-    // Read the SSID that the system service stored in the NM profile.
+    // Read the SSID from the NM profile so getStatus() is accurate.
     const ssidR = await this._run(
       `nmcli -t -f 802-11-wireless.ssid connection show "${AP_CONNECTION_NAME}" 2>/dev/null`
     );
     if (ssidR.ok && ssidR.out) {
       const m = ssidR.out.match(/802-11-wireless\.ssid:(.*)/);
       if (m && m[1].trim()) this.apSsid = m[1].trim();
+    }
+
+    if (await this._isAPActive()) {
+      // Mode A — system service already started the AP.
+      console.log(`✅ WiFi Manager: hotspot already running (system service) — starting monitor on ${this.wifiIface}`);
+    } else {
+      // Mode B — AP is not up; run full initialisation as a fallback.
+      console.log('📡 WiFi Manager: hotspot not running — running full initialisation (system service may not be installed)');
+      await this._waitForDevice();
+
+      if (!(await this._profileExists())) {
+        console.log('📡 WiFi Manager: no AP profile found — creating one');
+        if (!(await this._createProfile())) return false;
+      } else {
+        const boundIface = await this._profileBoundIface();
+        if (boundIface && boundIface !== this.wifiIface) {
+          console.log(`⚠️  AP profile bound to "${boundIface}", current interface "${this.wifiIface}" — recreating`);
+          if (!(await this._createProfile())) return false;
+        }
+      }
+
+      await this._ensureCaptivePortalDnsmasq();
+      await this._startAP();
     }
 
     this._startMonitor();

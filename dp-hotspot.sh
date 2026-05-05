@@ -68,10 +68,10 @@ if nmcli connection show "$PROFILE_NAME" &>/dev/null; then
         echo "⚠️  Profile bound to '$BOUND', current interface '$IFACE' — recreating"
         # Preserve existing credentials before deleting
         OLD_SSID=$(nmcli -t -f 802-11-wireless.ssid connection show "$PROFILE_NAME" 2>/dev/null \
-                   | cut -d: -f2 | tr -d '[:space:]' || true)
+                   | cut -d: -f2- | tr -d '[:space:]' || true)
         OLD_PSK=$(nmcli --show-secrets -t -f 802-11-wireless-security.psk \
                   connection show "$PROFILE_NAME" 2>/dev/null \
-                  | cut -d: -f2 | tr -d '[:space:]' || true)
+                  | cut -d: -f2- | tr -d '[:space:]' || true)
         SSID="${OLD_SSID:-$DEFAULT_SSID}"
         PASSWORD="${OLD_PSK:-$DEFAULT_PASSWORD}"
         nmcli connection delete "$PROFILE_NAME" 2>/dev/null || true
