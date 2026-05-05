@@ -26,7 +26,7 @@ class PuppeteerOverlay extends EventEmitter {
     // URL mode
     this._overlayUrl = null;        // Remote URL to screenshot (null = local HTML mode)
     this._refreshTimer = null;      // Periodic refresh timer for URL mode
-    this._refreshIntervalMs = 5000; // How often to re-screenshot the URL (ms)
+    this._refreshIntervalMs = 2000; // How often to re-screenshot the URL (ms)
     this._jsDelay = 2000;           // Time to wait for JS execution before screenshot (ms)
     this._zoom = 100;               // CSS zoom level for overlay page (50-200%)
     // Puppeteer browser instance (reused across screenshots)

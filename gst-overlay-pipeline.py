@@ -811,11 +811,12 @@ def main():
             pass  # File doesn't exist yet or was briefly removed during atomic write
         return True  # Keep the timer running
 
-    # Poll every 10 s instead of 2 s — reduces gdkpixbufoverlay pixbuf churn by 5x.
-    # Most overlays update at most once per second from Puppeteer; 10 s latency is
-    # imperceptible for scoreboard / timestamp overlays.
+    # Poll every 2 s — matches the Puppeteer screenshot interval so the pipeline
+    # picks up each new PNG within ~2 s of it being written.  gdkpixbufoverlay
+    # leaks the old GdkPixbuf on each reload, so we still gate the set_property
+    # call on an actual mtime change to avoid pointless reloads on static overlays.
     if overlay_element:
-        GLib.timeout_add(10000, check_png_update)
+        GLib.timeout_add(2000, check_png_update)
 
     # Handle pipeline messages
     bus = pipeline.get_bus()
