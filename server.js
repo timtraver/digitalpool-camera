@@ -389,47 +389,68 @@ function saveRemoteConfig(cfg) {
 }
 
 /**
+ * Look up a Headscale node by its Tailscale IP address.
+ * Returns the node object or null.  Shared by rename and delete helpers.
+ */
+async function headscaleFindNode(tailscaleIp) {
+  const apiKey    = process.env.HEADSCALE_API_KEY || "";
+  const serverUrl = (process.env.HEADSCALE_URL || "").replace(/\/$/, "");
+  if (!apiKey || !serverUrl) return null;
+
+  const listOut = await execAsync(
+    `curl -sf -H "Authorization: Bearer ${apiKey}" "${serverUrl}/api/v1/node" 2>/dev/null`
+  );
+  const data  = JSON.parse(listOut.stdout);
+  const nodes = data.nodes || data.machines || []; // field name varies by Headscale version
+  return nodes.find(n =>
+    (n.ip_addresses || n.ipAddresses || []).some(ip => ip === tailscaleIp)
+  ) || null;
+}
+
+/**
  * Rename a node in Headscale's own database (the "givenName" / display name).
- *
- * Tailscale's `--hostname` flag only updates what the *client* reports.
- * Headscale stores its own "name" field that is set at first registration and
- * does not change automatically when the hostname changes.  The only way to
- * update it is via the Headscale admin REST API.
- *
- * Requires HEADSCALE_API_KEY in .env (create with: headscale apikeys create).
- * Silently skips if the key is not configured.
- *
- * @param {string} tailscaleIp  - The device's current 100.x.x.x address
- * @param {string} newName      - The desired Headscale node name
+ * Tailscale's --hostname flag only updates what the client reports; Headscale
+ * stores a separate name field that must be updated via the admin API.
+ * Silently skips if HEADSCALE_API_KEY is not configured.
  */
 async function headscaleRenameNode(tailscaleIp, newName) {
-  const apiKey     = process.env.HEADSCALE_API_KEY || "";
-  const serverUrl  = (process.env.HEADSCALE_URL || "").replace(/\/$/, "");
-  if (!apiKey || !serverUrl) return; // not configured — skip silently
+  const apiKey    = process.env.HEADSCALE_API_KEY || "";
+  const serverUrl = (process.env.HEADSCALE_URL || "").replace(/\/$/, "");
+  if (!apiKey || !serverUrl) return;
 
   try {
-    // 1. List all nodes and find ours by Tailscale IP
-    const listOut = await execAsync(
-      `curl -sf -H "Authorization: Bearer ${apiKey}" "${serverUrl}/api/v1/node" 2>/dev/null`
-    );
-    const data  = JSON.parse(listOut.stdout);
-    const nodes = data.nodes || data.machines || [];  // field name varies by version
-    const node  = nodes.find(n =>
-      (n.ip_addresses || n.ipAddresses || []).some(ip => ip === tailscaleIp)
-    );
-    if (!node) {
-      console.warn(`⚠️  Headscale rename: no node found with IP ${tailscaleIp}`);
-      return;
-    }
-
-    // 2. Rename it
-    const nodeId = node.id;
+    const node = await headscaleFindNode(tailscaleIp);
+    if (!node) { console.warn(`⚠️  Headscale rename: no node found with IP ${tailscaleIp}`); return; }
     await execAsync(
-      `curl -sf -X POST -H "Authorization: Bearer ${apiKey}" "${serverUrl}/api/v1/node/${nodeId}/rename/${newName}" 2>/dev/null`
+      `curl -sf -X POST -H "Authorization: Bearer ${apiKey}" "${serverUrl}/api/v1/node/${node.id}/rename/${newName}" 2>/dev/null`
     );
-    console.log(`✅ Headscale: node ${nodeId} renamed to "${newName}"`);
+    console.log(`✅ Headscale: node ${node.id} renamed to "${newName}"`);
   } catch (e) {
-    console.warn("⚠️  Headscale rename API call failed:", e.message);
+    console.warn("⚠️  Headscale rename failed:", e.message);
+  }
+}
+
+/**
+ * Delete a node from Headscale by its Tailscale IP.
+ * Used before force re-registration so the old node record is removed first —
+ * without this, tailscale up creates a second node and Headscale ends up with
+ * both the stale old entry AND the new one.
+ * Silently skips if HEADSCALE_API_KEY is not configured.
+ */
+async function headscaleDeleteNode(tailscaleIp) {
+  const apiKey    = process.env.HEADSCALE_API_KEY || "";
+  const serverUrl = (process.env.HEADSCALE_URL || "").replace(/\/$/, "");
+  if (!apiKey || !serverUrl) return;
+
+  try {
+    const node = await headscaleFindNode(tailscaleIp);
+    if (!node) { console.warn(`⚠️  Headscale delete: no node found with IP ${tailscaleIp}`); return; }
+    await execAsync(
+      `curl -sf -X DELETE -H "Authorization: Bearer ${apiKey}" "${serverUrl}/api/v1/node/${node.id}" 2>/dev/null`
+    );
+    console.log(`✅ Headscale: deleted old node ${node.id} (${tailscaleIp})`);
+  } catch (e) {
+    console.warn("⚠️  Headscale delete failed:", e.message);
   }
 }
 
