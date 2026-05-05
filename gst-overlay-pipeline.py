@@ -290,27 +290,22 @@ def main():
         source_str = (
             # timestamp-mode=receive-time stamps each frame with the Pi's own
             # CLOCK_REALTIME at the moment the frame arrives over the network.
-            # This aligns NDI frame timing with the GStreamer pipeline clock so
-            # videorate doesn't see a clock skew between source and pipeline and
-            # avoids the aggressive drop/duplicate pattern that causes choppiness.
             f'ndisrc ndi-name="{input_ndi_name}" connect-timeout=5000 timestamp-mode=receive-time '
             f'! ndisrcdemux name=ndi_demux '
-            # ── Intentional chain break (no "!" — no "ndi_demux.video" ref) ──
-            # Keeping "ndi_demux.video ! queue" in the parse string caused
-            # gst_parse_launch to pre-negotiate ndi_vq.sink caps from the
-            # downstream chain (videoscale → caps filter), so our later manual
-            # pad.link() returned GST_PAD_LINK_NOFORMAT.
-            # By starting ndi_vq as a standalone chain (space, not !), its sink
-            # has ANY caps at link time and the manual link in on_ndi_video_pad_added
-            # always succeeds.
-            f'queue name=ndi_vq max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream '
-            f'! videoconvert '
-            f'! videoscale '
-            f'! video/x-raw,width={width},height={height} '
-            # drop-only=true: never duplicate frames to pad up to target fps.
-            # NDI Scan Converter already sends at 60 fps; duplication just
-            # adds judder when a frame arrives slightly late.
-            f'! videorate drop-only=true ! video/x-raw,framerate={framerate}/1 '
+            # ── Intentional chain break (space, not !) ────────────────────────
+            # The video processing elements (videoconvert → videoscale →
+            # capsfilter → videorate) are built and linked DYNAMICALLY in
+            # on_ndi_video_pad_added when ndisrcdemux creates its video pad.
+            #
+            # If those elements were in the parse string they would be in PAUSED
+            # when the pipeline starts and the downstream caps (1920×1080 @60fps)
+            # would back-propagate into ndi_in_q.sink, making pad.link() return
+            # NOT_NEGOTIATED when the NDI source sends a different resolution.
+            #
+            # ndi_in_q is the static injection point for the dynamic chain and
+            # also serves as the thread-boundary queue that non-NDI sources get
+            # from the "! queue" line in pipeline_str (which is skipped for NDI).
+            f'queue name=ndi_in_q max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream '
         )
     elif input_type == "rtsp" and input_rtsp_url:
         print(f"📡 Input source: RTSP → {input_rtsp_url}", file=sys.stderr)
@@ -349,9 +344,12 @@ def main():
     #   Audio is handled by ffmpeg (ALSA capture) outside this pipeline.
     pipeline_str = (
         f'{source_str}'
-        # Thread boundary: isolate overlay compositing (or just buffering) from capture
-        f'! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream '
-        f'{overlay_section}'
+        # Thread boundary: isolate overlay compositing (or just buffering) from capture.
+        # NDI skips this queue — ndi_in_q (the chain-break queue in source_str) already
+        # acts as the thread boundary AND the dynamic-video injection point.
+        + ('' if input_type == 'ndi' else
+           '! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ')
+        + f'{overlay_section}'
         f'! tee name=t '
         # Encode branch (own thread)
         f't. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
@@ -631,30 +629,52 @@ def main():
                     lambda p, info: Gst.PadProbeReturn.DROP,
                 )
 
-                def _link_and_unblock():
+                def _build_chain_and_unblock():
                     if _ndi_video_linked[0]:
                         return False
-                    ndi_vq = pl.get_by_name("ndi_vq")
-                    if ndi_vq:
-                        sink = ndi_vq.get_static_pad("sink")
 
-                        # Log actual caps so we can see what NOFORMAT is about.
-                        src_caps  = pad.get_current_caps()  or pad.query_caps(None)
-                        sink_caps = sink.get_current_caps() or sink.query_caps(None)
-                        print(f"🎥 video src caps : {src_caps.to_string()[:200]}",  file=sys.stderr)
-                        print(f"🎥 ndi_vq sink caps: {sink_caps.to_string()[:200]}", file=sys.stderr)
+                    ndi_in_q = pl.get_by_name("ndi_in_q")
+                    if not ndi_in_q:
+                        print("⚠️  ndi_in_q not found — NDI video may stall", file=sys.stderr)
+                        _ndi_video_linked[0] = True
+                        return False
 
-                        # Use CHECK_NOTHING to bypass GStreamer's template-caps
-                        # check at link time.  That check fails here because caps
-                        # from the downstream chain (videoscale → capsfilter) have
-                        # already propagated into ndi_vq.sink before we link.
-                        # Caps renegotiation happens naturally when the first real
-                        # buffer flows through after the DROP probe is removed.
-                        ret = pad.link_full(sink, Gst.PadLinkCheck.NOTHING)
-                        ndi_vq.sync_state_with_parent()
-                        print(f"🎥 NDI video linked (no-caps-check): {ret}", file=sys.stderr)
-                    else:
-                        print("⚠️  ndi_vq not found — NDI video may stall", file=sys.stderr)
+                    # Build the video processing chain fresh here — no element
+                    # exists in the pipeline yet so ndi_in_q.sink has ANY caps
+                    # and accepts whatever format/size the NDI source sends.
+                    vconv  = Gst.ElementFactory.make("videoconvert", None)
+                    vscale = Gst.ElementFactory.make("videoscale",   None)
+                    vcaps  = Gst.ElementFactory.make("capsfilter",   None)
+                    vrate  = Gst.ElementFactory.make("videorate",    None)
+                    vcaps2 = Gst.ElementFactory.make("capsfilter",   None)
+
+                    if not all([vconv, vscale, vcaps, vrate, vcaps2]):
+                        print("❌ Could not create NDI video chain elements", file=sys.stderr)
+                        _ndi_video_linked[0] = True
+                        return False
+
+                    vcaps.set_property("caps",
+                        Gst.Caps.from_string(f"video/x-raw,width={width},height={height}"))
+                    vcaps2.set_property("caps",
+                        Gst.Caps.from_string(f"video/x-raw,framerate={framerate}/1"))
+                    vrate.set_property("drop-only", True)
+
+                    for el in [vconv, vscale, vcaps, vrate, vcaps2]:
+                        pl.add(el)
+
+                    # ndi_demux.video → vconv → vscale → capsfilter(W×H)
+                    #   → videorate(drop-only) → capsfilter(fps) → ndi_in_q
+                    pad.link(vconv.get_static_pad("sink"))
+                    vconv.link(vscale)
+                    vscale.link(vcaps)
+                    vcaps.link(vrate)
+                    vrate.link(vcaps2)
+                    vcaps2.get_static_pad("src").link(ndi_in_q.get_static_pad("sink"))
+
+                    for el in [vconv, vscale, vcaps, vrate, vcaps2]:
+                        el.sync_state_with_parent()
+
+                    print("🎥 NDI video chain built and linked dynamically", file=sys.stderr)
 
                     if probe_id_box[0] is not None:
                         pad.remove_probe(probe_id_box[0])
@@ -662,7 +682,7 @@ def main():
                     _ndi_video_linked[0] = True
                     return False  # run once
 
-                GLib.idle_add(_link_and_unblock)
+                GLib.idle_add(_build_chain_and_unblock)
 
             _ndi_vdmx_el.connect("pad-added", on_ndi_video_pad_added, pipeline)
             print("🎥 NDI video: DROP probe race-guard installed", file=sys.stderr)
