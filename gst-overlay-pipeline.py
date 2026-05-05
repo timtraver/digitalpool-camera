@@ -432,7 +432,16 @@ def main():
         f'! video/x-raw,width=1280,height=720 '
         f'! jpegenc quality=65 '
         f'! multipartmux boundary=--jpgboundary '
-        f'! tcpserversink host=0.0.0.0 port=8555 sync=false recover-policy=keyframe'
+        # async=false: tcpserversink must not participate in preroll.
+        # With the dynamic NDI video chain, ndi_in_q.sink is unlinked at
+        # parse time, so the preview branch (tee → queue → ... → tcpserversink)
+        # is not downstream of any live source at pipeline construction time.
+        # tcpserversink defaults to async=true (waits for a preroll buffer
+        # before acking the PAUSED state change), which blocks the pipeline
+        # from ever reaching PLAYING — a deadlock since ndisrc only pushes
+        # data in PLAYING state.  async=false opts this sink out of preroll
+        # so the PAUSED→PLAYING transition completes immediately.
+        f'! tcpserversink host=0.0.0.0 port=8555 sync=false async=false recover-policy=keyframe'
     )
 
     print(f"\nPipeline: {pipeline_str}\n", file=sys.stderr)
@@ -696,20 +705,6 @@ def main():
                         pad.remove_probe(probe_id_box[0])
                         probe_id_box[0] = None
                     _ndi_video_linked[0] = True
-
-                    # Re-kick the pipeline state machine.
-                    #
-                    # flvmux / GstAggregator blocks PAUSED→PLAYING waiting for
-                    # one preroll buffer from every connected sink pad.  The video
-                    # sink pad of flvmux is downstream of ndisrc (a live source),
-                    # but because the video chain was wired AFTER the initial
-                    # set_state(PLAYING) call, GStreamer's state machine hasn't
-                    # seen the NO_PREROLL return propagate through the chain yet.
-                    # Calling set_state(PLAYING) here — with the chain now fully
-                    # connected — forces GStreamer to re-evaluate the topology,
-                    # propagate ndisrc's NO_PREROLL flag up to flvmux, and finally
-                    # complete the PAUSED→PLAYING transition.
-                    pl.set_state(Gst.State.PLAYING)
                     return False  # run once
 
                 GLib.idle_add(_build_chain_and_unblock)
