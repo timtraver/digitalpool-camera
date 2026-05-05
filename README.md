@@ -10,7 +10,7 @@ A Node.js web service for the **Orange Pi 5 (RK3588)** that turns a USB PTZ came
 |---|---|
 | 🎥 **Live preview** | MJPEG preview stream at 5 fps served by GStreamer over TCP |
 | 📡 **Professional streaming** | SRT (server mode, port 8891), RTMP (push), RTSP (via MediaMTX) |
-| ⚡ **Hardware encoding** | Rockchip MPP `mpph264enc` — 1080p30 at <5 % CPU |
+| ⚡ **Hardware encoding** | Rockchip MPP `mpph264enc` / `mpph265enc` — 1080p30 at <5 % CPU |
 | 🎙️ **Audio** | ALSA mic capture muxed into stream via FFmpeg; long-term A/V sync via `CLOCK_REALTIME` |
 | 🎨 **Graphics overlay** | Transparent PNG composited by `gdkpixbufoverlay`; rendered by Puppeteer (headless Chromium) from any remote URL |
 | 📝 **Text / timestamp overlay** | `textoverlay` elements in GStreamer pipeline |
@@ -19,6 +19,7 @@ A Node.js web service for the **Orange Pi 5 (RK3588)** that turns a USB PTZ came
 | 📶 **WiFi AP hotspot** | Always-on access point (`DigitalPool-Camera`) via NetworkManager |
 | 🌐 **Proxy / GraphQL** | Proxies `digitalpool.com` API so the overlay page can run on-device |
 | 🔄 **Auto-start** | Systemd service (`digitalpool-camera.service`) starts on boot |
+| 📲 **NDI input** | Receive NDI / NDI HX / HX2 / HX3 network video sources — auto-detects compressed vs raw, hardware-decodes on RK3588 |
 
 ---
 
@@ -287,11 +288,19 @@ sudo apt install -y \
   librockchip-vpu0
 ```
 
-> **Verify the encoders and decoder are available:**
+> **Verify the encoders and decoders are available:**
 > ```bash
-> gst-inspect-1.0 mpph264enc
-> gst-inspect-1.0 mpph265enc
-> gst-inspect-1.0 mppjpegdec
+> gst-inspect-1.0 mpph264enc    # H.264 hardware encoder
+> gst-inspect-1.0 mpph265enc    # H.265 hardware encoder
+> gst-inspect-1.0 mpph264dec    # H.264 hardware decoder (NDI HX / HX2)
+> gst-inspect-1.0 mpph265dec    # H.265 hardware decoder (NDI HX3)
+> gst-inspect-1.0 mppjpegdec    # JPEG hardware decoder
+> ```
+>
+> All five elements must be present for the full feature set. If any are missing, reinstall `gstreamer1.0-rockchip1` and clear the plugin registry:
+> ```bash
+> sudo apt install --reinstall gstreamer1.0-rockchip1
+> rm -f ~/.cache/gstreamer-1.0/registry.aarch64.bin
 > ```
 
 ### 2d. GDK Pixbuf overlay (PNG compositing into the stream)
@@ -452,6 +461,122 @@ For every incoming viewer connection (RTSP, SRT, RTMP, WebRTC) MediaMTX calls `P
 
 > **Note:** Without the auth hook the ban feature still works, but banned clients can connect briefly before the auto-kick on the next 2-second poll removes them. The auth hook eliminates that window entirely.
 
+### 2l. NDI (Network Device Interface) Support
+
+NDI lets the Orange Pi 5 receive a network video feed from any NDI sender on the same LAN — OBS, NewTek TriCaster, Mac Scan Converter, vMix, etc. — and re-stream it through the normal hardware-encode pipeline. Both standard NDI (uncompressed `video/x-raw`) and the compressed variants **NDI HX / HX2** (H.264) and **NDI HX3** (H.265) are supported; the pipeline auto-detects the format at runtime.
+
+Two components are required: the **NDI SDK runtime library** (`libndi.so.6`) and the **GStreamer NDI plugin** (Teltek `gst-plugin-ndi`, providing `ndisrc` and `ndisrcdemux`).
+
+#### Step 1 — Install the NDI SDK runtime library
+
+Download the NDI SDK for Linux from the official NDI developer site:
+
+> **Download:** https://ndi.video/for-developers/ndi-sdk/download/
+> Choose **Linux** → download the `.tar.gz` or self-extracting `.sh` installer.
+
+Extract / run the installer, then copy the shared library to `/usr/local/lib`:
+
+```bash
+# Example — exact filename varies by SDK version:
+# tar -xzf NDI_SDK_Linux.tar.gz
+# The library will be inside the extracted directory, e.g.:
+sudo cp ./NDI\ SDK\ for\ Linux/lib/aarch64-linux-gnu/libndi.so.6 /usr/local/lib/
+sudo chmod 755 /usr/local/lib/libndi.so.6
+
+# Refresh the dynamic linker cache so other programs can find it:
+sudo ldconfig
+
+# Verify:
+ldconfig -p | grep libndi
+# Should print:  libndi.so.6 (libc6,AArch64) => /usr/local/lib/libndi.so.6
+```
+
+> **Version note:** The app and `ndi-discover.py` hard-code the path `/usr/local/lib/libndi.so.6`. If you install a different major version (e.g. `.so.5` or `.so.7`), either create a symlink or update that path.
+
+```bash
+# Symlink example for a different major version:
+sudo ln -sf /usr/local/lib/libndi.so.X /usr/local/lib/libndi.so.6
+sudo ldconfig
+```
+
+#### Step 2 — Install the GStreamer NDI plugin (Teltek gst-plugin-ndi)
+
+The GStreamer NDI plugin is written in Rust and provides the `ndisrc` and `ndisrcdemux` elements used by this app. Build it from source on the Orange Pi:
+
+```bash
+# Install Rust toolchain (if not already present):
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# Install GStreamer development headers (needed for linking):
+sudo apt install -y \
+  libgstreamer1.0-dev \
+  libgstreamer-plugins-base1.0-dev \
+  libgstreamer-plugins-bad1.0-dev
+
+# Clone and build the Teltek plugin:
+git clone https://github.com/teltek/gst-plugin-ndi.git
+cd gst-plugin-ndi
+
+# Point the build system at the NDI SDK headers (adjust path to match your SDK):
+export NDI_SDK_DIR="$HOME/NDI SDK for Linux"
+# Or if you only copied the .so (no headers), set the library path:
+export LIBRARY_PATH=/usr/local/lib:$LIBRARY_PATH
+
+cargo build --release
+
+# Install the compiled plugin into the system GStreamer plugin directory:
+sudo cp target/release/libgstndi.so \
+     /usr/lib/aarch64-linux-gnu/gstreamer-1.0/
+
+# Refresh the GStreamer plugin registry:
+gst-inspect-1.0 ndisrc   # must succeed — prints element details
+gst-inspect-1.0 ndisrcdemux
+```
+
+> **Tip:** If you do not have the NDI SDK headers, the plugin repository also publishes pre-built binaries in its Releases section for some architectures. Check https://github.com/teltek/gst-plugin-ndi/releases.
+
+#### Step 3 — Verify the complete NDI stack
+
+```bash
+# 1. NDI library loads:
+python3 /home/ubuntu/digitalpool-camera/ndi-discover.py 3000
+# Should print a JSON array — empty [] if no NDI sources are on the network,
+# or a list like: [{"name": "MY-MAC (Scan Converter)", "url": "192.168.1.5:5960"}]
+
+# 2. GStreamer elements present:
+gst-inspect-1.0 ndisrc
+gst-inspect-1.0 ndisrcdemux
+
+# 3. For NDI HX/HX3 — hardware decoders must be present:
+gst-inspect-1.0 mpph264dec   # H.264 hardware decoder (NDI HX / HX2)
+gst-inspect-1.0 mpph265dec   # H.265 hardware decoder (NDI HX3)
+# If missing: sudo apt install --reinstall gstreamer1.0-rockchip1
+```
+
+#### NDI firewall rules
+
+NDI uses mDNS for source discovery and TCP/UDP for the actual video stream. Add these rules so NDI traffic can pass:
+
+```bash
+sudo ufw allow 5353/udp    # mDNS — NDI source discovery (multicast)
+sudo ufw allow 5960/tcp    # NDI connection initiation
+sudo ufw allow 5961/udp    # NDI video/audio stream data
+# NDI may also negotiate additional dynamic ports above 49152.
+# If discovery or streaming fails through a router, open the full range:
+# sudo ufw allow 49152:65535/udp
+sudo ufw reload
+```
+
+> **Same-subnet rule:** NDI discovery relies on mDNS multicast (`224.0.0.251`). The Orange Pi and the NDI sender **must be on the same Layer-2 network segment** — NDI does not cross routers unless a dedicated NDI routing/bridging solution is in use.
+
+#### Using NDI as the video source
+
+1. In the camera control UI go to **Input Source → NDI**.
+2. Click **Scan for NDI Sources** — the app runs `ndi-discover.py` and lists all visible senders.
+3. Select a source and click **Apply**. The idle preview will switch within ~12 seconds.
+4. Start the stream normally — the pipeline auto-detects standard vs HX/HX2/HX3 and inserts a hardware decoder if needed.
+
 ---
 
 ## 3. Install Node.js via nvm
@@ -507,6 +632,8 @@ npm install puppeteer-core@20.9.0
 
 ### 4a. Create the environment file
 
+The three core environment variables (`NODE_ENV`, `PORT`, `CAMERA_DEVICE`) are already hard-coded as `Environment=` lines inside `digitalpool-camera.service`, so the `.env` file is optional for a default setup. Create it if you want to **override** any of those values without editing the service file, or to add additional variables used by the app at startup:
+
 ```bash
 cat > /home/ubuntu/digitalpool-camera/.env << 'EOF'
 NODE_ENV=production
@@ -516,6 +643,8 @@ EOF
 ```
 
 Adjust `CAMERA_DEVICE` if your camera appears on a different node (check with `v4l2-ctl --list-devices`).
+
+> **Note:** Values set in `.env` take effect when `server.js` reads them at startup via `dotenv`. The `Environment=` lines in the service file are the authoritative defaults; `.env` overrides them for the Node.js process only (child processes like GStreamer are not affected by `.env`).
 
 ---
 
@@ -529,6 +658,10 @@ sudo ufw allow 8890/tcp    # RTMP  (MediaMTX ingest)
 sudo ufw allow 8891/udp    # SRT   (server mode)
 sudo ufw allow 8891/tcp    # SRT   (some clients use TCP)
 sudo ufw allow 8555/tcp    # GStreamer preview TCP sink
+# NDI source input (see section 2l for details)
+sudo ufw allow 5353/udp    # mDNS  (NDI source discovery)
+sudo ufw allow 5960/tcp    # NDI   (connection initiation)
+sudo ufw allow 5961/udp    # NDI   (stream data)
 sudo ufw reload
 ```
 
@@ -577,11 +710,12 @@ An unattended camera running 24/7 can become unreachable if a gradual memory lea
 The shipped `digitalpool-camera.service` already includes:
 
 ```ini
-MemoryMax=1500M
+MemoryMax=2500M
+MemorySwapMax=0
 OOMScoreAdjust=-900
 ```
 
-`MemoryMax` puts a hard cgroup ceiling on the Node.js process and **all its children** (GStreamer, ffmpeg, Python). If a leak occurs, systemd kills and restarts *only this service* cleanly before RAM pressure reaches the kernel level. `OOMScoreAdjust=-900` tells the OOM killer to strongly prefer killing anything else first if pressure does reach the kernel.
+`MemoryMax` puts a hard cgroup ceiling on the Node.js process and **all its children** (GStreamer, ffmpeg, Python). If a leak occurs, systemd kills and restarts *only this service* cleanly before RAM pressure reaches the kernel level. `MemorySwapMax=0` prevents child processes from swapping out (keeps latency predictable for live video). `OOMScoreAdjust=-900` tells the OOM killer to strongly prefer killing anything else first if pressure does reach the kernel.
 
 No extra steps are needed — the service file is already set.
 
@@ -666,7 +800,7 @@ Sample output every 5 minutes:
 
 | Layer | Catches | Action |
 |---|---|---|
-| `MemoryMax=1500M` | Memory leak before it gets dangerous | Restarts the service cleanly |
+| `MemoryMax=2500M` | Memory leak before it gets dangerous | Restarts the service cleanly |
 | `network-watchdog.timer` (every 10 min) | All interfaces unreachable for 20+ min | Clean system reboot |
 | Hardware watchdog (`RuntimeWatchdogSec=60`) | Complete kernel freeze | Hardware-forced board reset |
 | `monitor-camera.timer` (every 5 min) | Per-process memory trend | Logs to `/var/log/digitalpool-monitor.log` |
@@ -841,10 +975,21 @@ Key stream settings (configured via the UI, saved to `stream-config.json`):
 |---|---|---|
 | Protocol | `rtsp` | `rtsp`, `srt`, or `rtmp` |
 | Resolution | `1920×1080` | Width × Height |
-| Framerate | `30` fps | Capture and encode rate |
-| Bitrate | `5 Mbps` | H.264 target bitrate |
+| Framerate | `30` fps | Target encode framerate |
+| Bitrate | `5 Mbps` | H.264/H.265 target bitrate |
 | Audio device | `hw:3,0` | ALSA device for microphone |
 | Audio enabled | `true` | Mux audio into stream |
+
+**Input source settings** (persisted to `camera-source.json`):
+
+| Setting | Values | Description |
+|---|---|---|
+| Source type | `usb` / `rtsp` / `ndi` | Active input source |
+| USB device | `/dev/video0` | V4L2 device node (USB camera) |
+| RTSP URL | `rtsp://…` | Network camera URL |
+| NDI source name | e.g. `MY-MAC (Scan Converter)` | Exact NDI sender name as discovered |
+
+**NDI audio note:** When NDI is selected as the input source and Audio is enabled, the pipeline uses the NDI sender's embedded audio directly — no ALSA device is opened. The audio device selector in the UI is ignored for NDI sources.
 
 ---
 
@@ -927,15 +1072,24 @@ digitalpool-camera/
 ├── streamController.js        # GStreamer pipeline builder & stream lifecycle
 ├── cameraController.js        # v4l2-ctl wrappers (PTZ, image controls)
 ├── wifiManager.js             # NetworkManager AP hotspot management
+├── authManager.js             # Login / session / IP-ban management
 ├── puppeteerOverlay.js        # Headless Chromium → transparent PNG overlay
-├── gst-overlay-pipeline.py    # Python GStreamer pipeline (dynamic PNG reload)
-├── png-overlay-helper.sh      # Shell wrapper invoking the Python script
+├── gst-overlay-pipeline.py    # Python GStreamer pipeline (overlay, NDI, RTSP)
+├── ndi-discover.py            # NDI source discovery via libndi.so.6 (ctypes)
+├── png-overlay-helper.sh      # Shell wrapper invoking the Python pipeline script
 ├── digitalpool-camera.service # Systemd unit file
+├── network-watchdog.sh        # Network-health watchdog (reboots if offline 20 min)
+├── network-watchdog.service   # Systemd unit for watchdog
+├── network-watchdog.timer     # Systemd timer — runs every 10 minutes
+├── monitor-camera.sh          # Memory flight recorder (logs RSS every 5 min)
+├── monitor-camera.service     # Systemd unit for flight recorder
+├── monitor-camera.timer       # Systemd timer — runs every 5 minutes
 ├── package.json
 ├── .env                       # Environment variables (create — see Step 4a)
 ├── stream-config.json         # Auto-generated stream settings (persisted by UI)
 └── public/
     ├── index.html             # Web control interface
+    ├── login.html             # Login page
     ├── app.js                 # Client-side Socket.IO + UI logic
     ├── overlay.html           # Local scoreboard HTML template
     └── style.css
@@ -1004,12 +1158,17 @@ sudo usermod -aG audio ubuntu
 sudo systemctl restart digitalpool-camera   # picks up the new group immediately
 ```
 
-### Hardware encoder not found
+### Hardware encoder / decoder not found
 
 ```bash
 gst-inspect-1.0 mpph264enc
-# If missing:
-sudo apt install --reinstall gstreamer1.0-rockchip
+gst-inspect-1.0 mpph265enc
+gst-inspect-1.0 mpph264dec   # required for NDI HX / HX2
+gst-inspect-1.0 mpph265dec   # required for NDI HX3
+# If any are missing:
+sudo apt install --reinstall gstreamer1.0-rockchip1
+rm -f ~/.cache/gstreamer-1.0/registry.aarch64.bin
+gst-inspect-1.0 mpph264enc   # verify after reinstall
 ```
 
 ### SRT port not reachable from OBS
@@ -1077,6 +1236,80 @@ sudo usermod -aG audio ubuntu
 # Verify:
 groups ubuntu
 ```
+
+### NDI — no sources found / library not loading
+
+```bash
+# Check the library is at the expected path:
+ls -lh /usr/local/lib/libndi.so.6
+
+# Check ldconfig knows about it:
+ldconfig -p | grep libndi
+
+# If missing, re-copy and refresh:
+sudo cp /path/to/libndi.so.6 /usr/local/lib/
+sudo ldconfig
+
+# Run the discovery script directly (3 s timeout for quick test):
+python3 /home/ubuntu/digitalpool-camera/ndi-discover.py 3000
+# [] means no sources visible — confirm sender is on the same subnet
+# {"error": "Cannot load NDI library"} means libndi.so.6 is missing/wrong path
+```
+
+### NDI — GStreamer elements not found (`ndisrc`, `ndisrcdemux`)
+
+```bash
+# Check if the plugin .so is in the GStreamer plugin path:
+ls /usr/lib/aarch64-linux-gnu/gstreamer-1.0/libgstndi.so
+
+# If missing, rebuild and reinstall the plugin (see section 2l, Step 2).
+# After installing, force-refresh the GStreamer plugin registry:
+rm -f ~/.cache/gstreamer-1.0/registry.aarch64.bin
+gst-inspect-1.0 ndisrc   # must print element details, not "no such element"
+```
+
+### NDI — stream reaches PLAYING but no video in OBS / preview blank
+
+These are the most common pipeline-level failures and what each means:
+
+| Log message | Cause | Fix |
+|---|---|---|
+| `NOT_LINKED (-1)` | Audio pad pushed before a handler was installed | Already fixed in current code — check you have the latest `git pull` |
+| `NOT_NEGOTIATED (-4)` | Caps mismatch on first buffer | Already fixed — framerate constraint removed from dynamic chain |
+| `🎥 NDI video media type: video/x-h264` | NDI HX/HX2 source — hardware decode inserted | Normal — no action needed |
+| `🎥 NDI video media type: video/x-h265` | NDI HX3 source — hardware decode inserted | Normal — no action needed |
+| `❌ NDI video link FAILED` | Element creation failed (plugin missing?) | Verify `mpph264dec` / `mpph265dec` — see hardware encoder check above |
+
+```bash
+# Watch the NDI pipeline startup sequence live:
+sudo journalctl -u digitalpool-camera -f | grep -E "NDI|video pad|audio pad|paused|playing"
+```
+
+Expected healthy startup sequence:
+```
+🔊 NDI audio: silent baseline + pad-added handler installed
+🎥 NDI video: DROP probe race-guard installed
+Pipeline state: paused → playing
+🎥 NDI video pad detected — installing DROP probe
+🎥 NDI video media type: video/x-raw        ← or x-h264 / x-h265
+🎥 NDI video chain built and linked dynamically [standard (raw)]
+🔊 NDI audio pad detected — dropping frames until chain linked
+🔊 NDI audio mixed into audiomixer
+```
+
+### NDI HX3 — hardware decoder not found
+
+```bash
+gst-inspect-1.0 mpph264dec
+gst-inspect-1.0 mpph265dec
+# If either is missing:
+sudo apt install --reinstall gstreamer1.0-rockchip1
+# Then clear the plugin registry and retry:
+rm -f ~/.cache/gstreamer-1.0/registry.aarch64.bin
+gst-inspect-1.0 mpph264dec
+```
+
+The pipeline automatically falls back to software decoding (`avdec_h264` / `avdec_h265`) if hardware decoders are unavailable, but CPU usage will be higher.
 
 ### Follow live logs
 
