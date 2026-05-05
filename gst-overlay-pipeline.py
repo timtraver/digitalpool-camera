@@ -664,41 +664,73 @@ def main():
                         _ndi_video_linked[0] = True
                         return False
 
-                    # Build the video processing chain fresh here — no element
-                    # exists in the pipeline yet so ndi_in_q.sink has ANY caps
-                    # and accepts whatever format/size the NDI source sends.
-                    #
-                    # Deliberately NO framerate constraint here:
-                    #   videorate drop-only=True cannot bridge fractional-fps NDI
-                    #   sources (29.97, 59.94 …) to integer targets (30, 60) and
-                    #   returns NOT_NEGOTIATED on the first buffer.  The muxer and
-                    #   encoder use buffer timestamps for A/V sync — framerate in
-                    #   the caps is not required.  The preview branch already has
-                    #   its own "videorate ! video/x-raw,framerate=1/1" element.
+                    # ── Detect NDI HX3 (compressed) vs standard (raw) ──────────
+                    # ndisrcdemux sets caps on the video pad at add-time.
+                    # Standard NDI → video/x-raw   (UYVY, 4:2:2, various sizes)
+                    # NDI HX / HX2  → video/x-h264
+                    # NDI HX3       → video/x-h265
+                    # For compressed formats we insert parse + hardware decoder
+                    # before the raw-video processing chain.
+                    pad_caps = pad.get_current_caps() or pad.query_caps(None)
+                    media_type = ""
+                    if pad_caps and pad_caps.get_size() > 0:
+                        media_type = pad_caps.get_structure(0).get_name()
+                    print(f"🎥 NDI video media type: {media_type}", file=sys.stderr)
+
+                    is_h264 = media_type.startswith("video/x-h264")
+                    is_h265 = media_type.startswith("video/x-h265")
+                    is_compressed = is_h264 or is_h265
+
+                    # ── Create elements ────────────────────────────────────────
+                    parse_el  = None
+                    decode_el = None
+                    if is_h264:
+                        parse_el  = Gst.ElementFactory.make("h264parse",  None)
+                        # Try Rockchip MPP hardware decoder; fall back to software.
+                        decode_el = (Gst.ElementFactory.make("mpph264dec", None)
+                                     or Gst.ElementFactory.make("avdec_h264", None))
+                        hw = "mpph264dec" if decode_el and decode_el.get_factory().get_name() == "mpph264dec" else "avdec_h264"
+                        print(f"🎥 NDI HX/HX2 (H.264) — decoder: {hw}", file=sys.stderr)
+                    elif is_h265:
+                        parse_el  = Gst.ElementFactory.make("h265parse",  None)
+                        decode_el = (Gst.ElementFactory.make("mpph265dec", None)
+                                     or Gst.ElementFactory.make("avdec_h265", None))
+                        hw = "mpph265dec" if decode_el and decode_el.get_factory().get_name() == "mpph265dec" else "avdec_h265"
+                        print(f"🎥 NDI HX3 (H.265) — decoder: {hw}", file=sys.stderr)
+
                     vconv  = Gst.ElementFactory.make("videoconvert", None)
                     vscale = Gst.ElementFactory.make("videoscale",   None)
                     vcaps  = Gst.ElementFactory.make("capsfilter",   None)
 
-                    if not all([vconv, vscale, vcaps]):
-                        print("❌ Could not create NDI video chain elements", file=sys.stderr)
+                    base_elements = [vconv, vscale, vcaps]
+                    decode_elements = ([parse_el, decode_el] if is_compressed else [])
+                    all_elements = decode_elements + base_elements
+
+                    if not all(all_elements):
+                        missing = [n for n, e in zip(
+                            (["h26Xparse", "decoder"] if is_compressed else []) + ["vconv", "vscale", "vcaps"],
+                            all_elements) if not e]
+                        print(f"❌ Could not create NDI video chain elements: {missing}", file=sys.stderr)
                         _ndi_video_linked[0] = True
                         return False
 
-                    # Only constrain width × height; let NDI dictate framerate.
+                    # Deliberately NO framerate constraint:
+                    #   videorate drop-only cannot bridge fractional NDI framerates
+                    #   (29.97, 59.94…) to integer targets and causes NOT_NEGOTIATED.
+                    #   The muxer/encoder use buffer timestamps; framerate in caps is
+                    #   not required.  The preview branch has its own videorate(1fps).
                     vcaps.set_property("caps",
                         Gst.Caps.from_string(f"video/x-raw,width={width},height={height}"))
 
-                    for el in [vconv, vscale, vcaps]:
+                    for el in all_elements:
                         pl.add(el)
 
-                    # ndi_demux.video → vconv → vscale → capsfilter(W×H) → ndi_in_q
+                    # Chain: [parse → decoder →] vconv → vscale → capsfilter(W×H) → ndi_in_q
                     #
                     # Use link_full(CHECK_NOTHING) throughout: freshly-created elements
                     # have no negotiated caps yet, and GStreamer's link-time template
-                    # check can spuriously return NOFORMAT when upstream elements
-                    # (especially capsfilter) have already fixed some fields but the
-                    # peer is still ANY.  Real caps negotiation happens when the first
-                    # buffer flows — CHECK_NOTHING just establishes the structural link.
+                    # check can spuriously return NOFORMAT when upstream elements have
+                    # already fixed some fields.  Real negotiation happens on first buffer.
                     def _link(src_pad, sink_pad, label):
                         ret = src_pad.link_full(sink_pad, Gst.PadLinkCheck.NOTHING)
                         if ret != Gst.PadLinkReturn.OK:
@@ -707,15 +739,24 @@ def main():
                             print(f"🔗 NDI video link OK  [{label}]", file=sys.stderr)
                         return ret
 
-                    _link(pad,                          vconv.get_static_pad("sink"),    "demux→vconv")
-                    _link(vconv.get_static_pad("src"),  vscale.get_static_pad("sink"),   "vconv→vscale")
-                    _link(vscale.get_static_pad("src"), vcaps.get_static_pad("sink"),    "vscale→vcaps")
-                    _link(vcaps.get_static_pad("src"),  ndi_in_q.get_static_pad("sink"), "vcaps→ndi_in_q")
+                    first_sink = (parse_el.get_static_pad("sink") if is_compressed
+                                  else vconv.get_static_pad("sink"))
+                    entry_label = "demux→parse" if is_compressed else "demux→vconv"
+                    _link(pad, first_sink, entry_label)
 
-                    for el in [vconv, vscale, vcaps]:
+                    if is_compressed:
+                        _link(parse_el.get_static_pad("src"),  decode_el.get_static_pad("sink"), "parse→decoder")
+                        _link(decode_el.get_static_pad("src"), vconv.get_static_pad("sink"),     "decoder→vconv")
+
+                    _link(vconv.get_static_pad("src"),  vscale.get_static_pad("sink"),    "vconv→vscale")
+                    _link(vscale.get_static_pad("src"), vcaps.get_static_pad("sink"),     "vscale→vcaps")
+                    _link(vcaps.get_static_pad("src"),  ndi_in_q.get_static_pad("sink"),  "vcaps→ndi_in_q")
+
+                    for el in all_elements:
                         el.sync_state_with_parent()
 
-                    print("🎥 NDI video chain built and linked dynamically", file=sys.stderr)
+                    mode = "HX3 (H.265)" if is_h265 else "HX/HX2 (H.264)" if is_h264 else "standard (raw)"
+                    print(f"🎥 NDI video chain built and linked dynamically [{mode}]", file=sys.stderr)
 
                     if probe_id_box[0] is not None:
                         pad.remove_probe(probe_id_box[0])
