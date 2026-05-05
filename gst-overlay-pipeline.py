@@ -667,28 +667,31 @@ def main():
                     # Build the video processing chain fresh here — no element
                     # exists in the pipeline yet so ndi_in_q.sink has ANY caps
                     # and accepts whatever format/size the NDI source sends.
+                    #
+                    # Deliberately NO framerate constraint here:
+                    #   videorate drop-only=True cannot bridge fractional-fps NDI
+                    #   sources (29.97, 59.94 …) to integer targets (30, 60) and
+                    #   returns NOT_NEGOTIATED on the first buffer.  The muxer and
+                    #   encoder use buffer timestamps for A/V sync — framerate in
+                    #   the caps is not required.  The preview branch already has
+                    #   its own "videorate ! video/x-raw,framerate=1/1" element.
                     vconv  = Gst.ElementFactory.make("videoconvert", None)
                     vscale = Gst.ElementFactory.make("videoscale",   None)
                     vcaps  = Gst.ElementFactory.make("capsfilter",   None)
-                    vrate  = Gst.ElementFactory.make("videorate",    None)
 
-                    if not all([vconv, vscale, vcaps, vrate]):
+                    if not all([vconv, vscale, vcaps]):
                         print("❌ Could not create NDI video chain elements", file=sys.stderr)
                         _ndi_video_linked[0] = True
                         return False
 
-                    # Single capsfilter enforces both size AND framerate downstream
-                    # of videorate so the encoder always receives a stable format.
+                    # Only constrain width × height; let NDI dictate framerate.
                     vcaps.set_property("caps",
-                        Gst.Caps.from_string(
-                            f"video/x-raw,width={width},height={height},framerate={framerate}/1"))
-                    vrate.set_property("drop-only", True)
+                        Gst.Caps.from_string(f"video/x-raw,width={width},height={height}"))
 
-                    for el in [vconv, vscale, vcaps, vrate]:
+                    for el in [vconv, vscale, vcaps]:
                         pl.add(el)
 
-                    # ndi_demux.video → vconv → vscale → videorate(drop-only)
-                    #   → capsfilter(W×H @fps) → ndi_in_q
+                    # ndi_demux.video → vconv → vscale → capsfilter(W×H) → ndi_in_q
                     #
                     # Use link_full(CHECK_NOTHING) throughout: freshly-created elements
                     # have no negotiated caps yet, and GStreamer's link-time template
@@ -704,13 +707,12 @@ def main():
                             print(f"🔗 NDI video link OK  [{label}]", file=sys.stderr)
                         return ret
 
-                    _link(pad,                           vconv.get_static_pad("sink"),  "demux→vconv")
-                    _link(vconv.get_static_pad("src"),   vscale.get_static_pad("sink"), "vconv→vscale")
-                    _link(vscale.get_static_pad("src"),  vrate.get_static_pad("sink"),  "vscale→vrate")
-                    _link(vrate.get_static_pad("src"),   vcaps.get_static_pad("sink"),  "vrate→vcaps")
-                    _link(vcaps.get_static_pad("src"),   ndi_in_q.get_static_pad("sink"), "vcaps→ndi_in_q")
+                    _link(pad,                          vconv.get_static_pad("sink"),    "demux→vconv")
+                    _link(vconv.get_static_pad("src"),  vscale.get_static_pad("sink"),   "vconv→vscale")
+                    _link(vscale.get_static_pad("src"), vcaps.get_static_pad("sink"),    "vscale→vcaps")
+                    _link(vcaps.get_static_pad("src"),  ndi_in_q.get_static_pad("sink"), "vcaps→ndi_in_q")
 
-                    for el in [vconv, vscale, vcaps, vrate]:
+                    for el in [vconv, vscale, vcaps]:
                         el.sync_state_with_parent()
 
                     print("🎥 NDI video chain built and linked dynamically", file=sys.stderr)
