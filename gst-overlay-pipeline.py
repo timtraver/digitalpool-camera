@@ -295,12 +295,15 @@ def main():
             # avoids the aggressive drop/duplicate pattern that causes choppiness.
             f'ndisrc ndi-name="{input_ndi_name}" connect-timeout=5000 timestamp-mode=receive-time '
             f'! ndisrcdemux name=ndi_demux '
-            f'ndi_demux.video '
-            # Name this queue "ndi_vq" so the pad-added handler below can find
-            # it by name and link it manually if gst_parse_launch loses the
-            # pad-added race against the first ndisrcdemux push.
-            # 500 ms time-based buffer absorbs NDI network jitter without dropping frames.
-            f'! queue name=ndi_vq max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream '
+            # ── Intentional chain break (no "!" — no "ndi_demux.video" ref) ──
+            # Keeping "ndi_demux.video ! queue" in the parse string caused
+            # gst_parse_launch to pre-negotiate ndi_vq.sink caps from the
+            # downstream chain (videoscale → caps filter), so our later manual
+            # pad.link() returned GST_PAD_LINK_NOFORMAT.
+            # By starting ndi_vq as a standalone chain (space, not !), its sink
+            # has ANY caps at link time and the manual link in on_ndi_video_pad_added
+            # always succeeds.
+            f'queue name=ndi_vq max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream '
             f'! videoconvert '
             f'! videoscale '
             f'! video/x-raw,width={width},height={height} '
@@ -631,18 +634,16 @@ def main():
                 def _verify_link_and_unblock():
                     if _ndi_video_linked[0]:
                         return False
-                    peer = pad.get_peer()
-                    if peer is None:
-                        # gst_parse didn't finish the link — do it manually.
-                        ndi_vq = pl.get_by_name("ndi_vq")
-                        if ndi_vq:
-                            ret = pad.link(ndi_vq.get_static_pad("sink"))
-                            ndi_vq.sync_state_with_parent()
-                            print(f"🎥 NDI video pad manually linked: {ret}", file=sys.stderr)
-                        else:
-                            print("⚠️  ndi_vq not found — NDI video may stall", file=sys.stderr)
+                    # ndi_vq is a standalone chain (no gst_parse link), so we
+                    # always link manually here.  Its sink has ANY caps at this
+                    # point so pad.link() will succeed regardless of NDI format.
+                    ndi_vq = pl.get_by_name("ndi_vq")
+                    if ndi_vq:
+                        ret = pad.link(ndi_vq.get_static_pad("sink"))
+                        ndi_vq.sync_state_with_parent()
+                        print(f"🎥 NDI video pad linked to ndi_vq: {ret}", file=sys.stderr)
                     else:
-                        print("🎥 NDI video pad linked by pipeline — DROP probe removed", file=sys.stderr)
+                        print("⚠️  ndi_vq not found — NDI video may stall", file=sys.stderr)
 
                     if probe_id_box[0] is not None:
                         pad.remove_probe(probe_id_box[0])
