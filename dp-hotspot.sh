@@ -143,3 +143,42 @@ if iptables $RULE 2>/dev/null; then
 else
     echo "⚠️  iptables redirect failed (service runs as root — check kernel modules)" >&2
 fi
+
+# ── Step 8: SSH access over the hotspot ──────────────────────────────────────
+# Ensure sshd is running so devices connected to the hotspot can SSH in.
+# Also add an explicit INPUT ACCEPT for port 22 on the hotspot interface so
+# a restrictive default iptables policy (DROP) never blocks it.
+if systemctl is-enabled ssh  &>/dev/null || systemctl is-enabled sshd  &>/dev/null; then
+    : # already enabled — just make sure it's started
+else
+    echo "📡 Enabling SSH service..."
+    systemctl enable ssh 2>/dev/null || systemctl enable sshd 2>/dev/null || true
+fi
+systemctl start ssh 2>/dev/null || systemctl start sshd 2>/dev/null || true
+if systemctl is-active --quiet ssh 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null; then
+    echo "✅ SSH service is running"
+else
+    echo "⚠️  SSH service could not be started — SSH over hotspot unavailable" >&2
+fi
+
+# Allow SSH inbound on the hotspot interface (idempotent — delete first, then add)
+SSH_RULE="-A INPUT -i $IFACE -p tcp --dport 22 -j ACCEPT"
+iptables "${SSH_RULE/-A/-D}" 2>/dev/null || true
+if iptables $SSH_RULE 2>/dev/null; then
+    echo "✅ SSH (port 22) allowed inbound on $IFACE"
+else
+    echo "⚠️  Could not add SSH iptables rule — SSH may still work if INPUT policy is ACCEPT" >&2
+fi
+echo "ℹ️  SSH: connect with  ssh <username>@$AP_IP  from any hotspot client"
+
+# ── Check: warn if the running user has no password (auto-login accounts) ─────
+# Auto-login systems often have a blank password which sshd rejects by default.
+# We can't set a password automatically (security), but we can warn loudly.
+CURRENT_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "")}"
+if [ -n "$CURRENT_USER" ] && passwd -S "$CURRENT_USER" 2>/dev/null | grep -qE ' NP | L '; then
+    echo ""
+    echo "⚠️  WARNING: user '$CURRENT_USER' has no password or is locked." >&2
+    echo "   SSH will fail until a password is set.  Run on the device:" >&2
+    echo "     sudo passwd $CURRENT_USER" >&2
+    echo ""
+fi

@@ -18,7 +18,8 @@ ExecStop=/bin/bash -c '\
     nmcli connection down "DigitalPool-Hotspot" 2>/dev/null || true; \
     IFACE=$(nmcli -t -f DEVICE,TYPE device 2>/dev/null | grep :wifi | head -1 | cut -d: -f1); \
     [ -n "$IFACE" ] && iptables -t nat -D PREROUTING -i "$IFACE" -p tcp --dport 80 \
-        -j REDIRECT --to-port ${PORT:-3000} 2>/dev/null || true'
+        -j REDIRECT --to-port ${PORT:-3000} 2>/dev/null || true; \
+    [ -n "$IFACE" ] && iptables -D INPUT -i "$IFACE" -p tcp --dport 22 -j ACCEPT 2>/dev/null || true'
 
 # Run as root — required for nmcli profile creation and iptables.
 User=root
