@@ -143,16 +143,25 @@ for i in $(seq 1 "$MAX_RETRIES"); do
     fi
 done
 
-# ── Step 7: captive portal — iptables port-80 → app redirect ─────────────────
-# Devices probe http port 80; our app listens on $APP_PORT.  The PREROUTING
-# REDIRECT rule forwards them transparently without the user needing to type
-# the port number.
-RULE="-t nat -A PREROUTING -i $IFACE -p tcp --dport 80 -j REDIRECT --to-port $APP_PORT"
-iptables "${RULE/-A/-D}" 2>/dev/null || true   # remove stale rule first
-if iptables $RULE 2>/dev/null; then
+# ── Step 7: captive portal — iptables port redirect ──────────────────────────
+# Devices probe port 80 (HTTP) and port 443 (HTTPS — iOS 14+).
+# Our app listens on $APP_PORT (HTTP) and 3443 (HTTPS).
+HTTPS_PORT=3443
+
+RULE80="-t nat -A PREROUTING -i $IFACE -p tcp --dport 80 -j REDIRECT --to-port $APP_PORT"
+iptables "${RULE80/-A/-D}" 2>/dev/null || true   # remove stale rule first
+if iptables $RULE80 2>/dev/null; then
     echo "✅ Captive portal: port 80 → $APP_PORT redirect active on $IFACE"
 else
-    echo "⚠️  iptables redirect failed (service runs as root — check kernel modules)" >&2
+    echo "⚠️  iptables port 80 redirect failed (check kernel modules)" >&2
+fi
+
+RULE443="-t nat -A PREROUTING -i $IFACE -p tcp --dport 443 -j REDIRECT --to-port $HTTPS_PORT"
+iptables "${RULE443/-A/-D}" 2>/dev/null || true
+if iptables $RULE443 2>/dev/null; then
+    echo "✅ Captive portal: port 443 → $HTTPS_PORT redirect active on $IFACE"
+else
+    echo "⚠️  iptables port 443 redirect failed (check kernel modules)" >&2
 fi
 
 # ── Step 8: SSH access over the hotspot ──────────────────────────────────────

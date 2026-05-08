@@ -3163,6 +3163,35 @@ io.on("connection", (socket) => {
   });
 });
 
+// ── HTTPS captive portal server (port 3443) ───────────────────────────────
+// iOS 14+ probes https://captive.apple.com/hotspot-detect.html (port 443)
+// in addition to the HTTP probe.  iptables redirects port 443 → 3443.
+// iOS captive portal probes intentionally skip TLS cert validation, so a
+// self-signed cert is sufficient.
+// Generate the cert once on the device:
+//   sudo mkdir -p /etc/ssl/digitalpool
+//   sudo openssl req -x509 -newkey rsa:2048 \
+//     -keyout /etc/ssl/digitalpool/key.pem \
+//     -out    /etc/ssl/digitalpool/cert.pem \
+//     -days 3650 -nodes -subj '/CN=captive.apple.com'
+(function startHttpsCaptivePortal() {
+  const HTTPS_PORT  = 3443;
+  const KEY_PATH    = '/etc/ssl/digitalpool/key.pem';
+  const CERT_PATH   = '/etc/ssl/digitalpool/cert.pem';
+  try {
+    const httpsOptions = {
+      key:  fsSync.readFileSync(KEY_PATH),
+      cert: fsSync.readFileSync(CERT_PATH),
+    };
+    require('https').createServer(httpsOptions, app).listen(HTTPS_PORT, () => {
+      console.log(`🔒 HTTPS captive portal listening on port ${HTTPS_PORT} (iOS 14+ port-443 probes)`);
+    });
+  } catch (e) {
+    console.warn(`⚠️  HTTPS captive portal not started — cert missing at ${CERT_PATH}`);
+    console.warn(`   Generate it with: sudo openssl req -x509 -newkey rsa:2048 -keyout ${KEY_PATH} -out ${CERT_PATH} -days 3650 -nodes -subj '/CN=captive.apple.com'`);
+  }
+})();
+
 server.listen(PORT, async () => {
   console.log(`Camera control server running on port ${PORT}`);
   console.log(`Camera device: ${CAMERA_DEVICE}`);

@@ -324,27 +324,39 @@ class WifiManager extends EventEmitter {
     return true;
   }
 
-  // ── Captive portal: iptables port-80 → port-3000 redirect ────────────────
-  // Devices probe port 80; our app listens on 3000.  A PREROUTING REDIRECT
-  // rule forwards the traffic transparently so Express handles it.
+  // ── Captive portal: iptables port redirect ───────────────────────────────
+  // Devices probe port 80 (HTTP) and port 443 (HTTPS — iOS 14+); our app
+  // listens on 3000 (HTTP) and 3443 (HTTPS).  PREROUTING REDIRECT rules
+  // forward both transparently so Express handles them.
   // Requires a sudoers entry — see README § 7c.
   async _setupCaptivePortalIptables() {
-    const appPort = process.env.PORT || 3000;
-    const rule    = `-t nat -A PREROUTING -i "${this.wifiIface}" -p tcp --dport 80 -j REDIRECT --to-port ${appPort}`;
-    // Avoid duplicates: try to delete first (ignore failure), then add
-    await this._run(`sudo iptables ${rule.replace('-A', '-D')} 2>/dev/null`);
-    const r = await this._run(`sudo iptables ${rule}`);
-    if (r.ok) {
-      console.log(`✅ Captive portal: port 80 → ${appPort} redirect active on ${this.wifiIface}`);
-    } else {
-      console.warn('⚠️  Captive portal iptables rule failed (add sudoers entry — see README § 7c):', r.err.split('\n')[0]);
-    }
+    const appPort   = process.env.PORT || 3000;
+    const httpsPort = 3443;
+    const iface     = this.wifiIface;
+
+    // Port 80 → Express HTTP
+    const rule80 = `-t nat -A PREROUTING -i "${iface}" -p tcp --dport 80 -j REDIRECT --to-port ${appPort}`;
+    await this._run(`sudo iptables ${rule80.replace('-A', '-D')} 2>/dev/null`);
+    const r80 = await this._run(`sudo iptables ${rule80}`);
+    if (r80.ok) console.log(`✅ Captive portal: port 80 → ${appPort} redirect active on ${iface}`);
+    else        console.warn('⚠️  Captive portal iptables port 80 rule failed (add sudoers entry — see README § 7c):', r80.err.split('\n')[0]);
+
+    // Port 443 → Express HTTPS (iOS 14+ uses HTTPS for captive portal probes)
+    const rule443 = `-t nat -A PREROUTING -i "${iface}" -p tcp --dport 443 -j REDIRECT --to-port ${httpsPort}`;
+    await this._run(`sudo iptables ${rule443.replace('-A', '-D')} 2>/dev/null`);
+    const r443 = await this._run(`sudo iptables ${rule443}`);
+    if (r443.ok) console.log(`✅ Captive portal: port 443 → ${httpsPort} redirect active on ${iface}`);
+    else         console.warn('⚠️  Captive portal iptables port 443 rule failed:', r443.err.split('\n')[0]);
   }
 
   async _teardownCaptivePortalIptables() {
-    const appPort = process.env.PORT || 3000;
-    const rule    = `-t nat -D PREROUTING -i "${this.wifiIface}" -p tcp --dport 80 -j REDIRECT --to-port ${appPort}`;
-    await this._run(`sudo iptables ${rule} 2>/dev/null`);
+    const appPort   = process.env.PORT || 3000;
+    const httpsPort = 3443;
+    const iface     = this.wifiIface;
+    await Promise.all([
+      this._run(`sudo iptables -t nat -D PREROUTING -i "${iface}" -p tcp --dport 80  -j REDIRECT --to-port ${appPort}   2>/dev/null`),
+      this._run(`sudo iptables -t nat -D PREROUTING -i "${iface}" -p tcp --dport 443 -j REDIRECT --to-port ${httpsPort} 2>/dev/null`),
+    ]);
   }
   // ─────────────────────────────────────────────────────────────────────────
 
