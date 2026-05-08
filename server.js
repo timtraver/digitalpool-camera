@@ -264,6 +264,36 @@ app.get('/redirect',                     _sendCaptiveRedirect);
 app.get('/kindle-wifi/wifistub.html',    _sendCaptiveRedirect);
 // ─────────────────────────────────────────────────────────────────────────
 
+// ── Captive portal detection (no auth, no redirect) ─────────────────────────
+// iOS, Android, and Windows run connectivity checks when joining any WiFi
+// network.  If these fail the OS assumes "no internet" and automatically
+// switches to a known-good network.  We respond with the expected payloads so
+// the device stays connected to the hotspot.
+// Requires port 80 → 3000 redirect on the hotspot interface:
+//   sudo iptables -t nat -A PREROUTING -i wlx8c86ddaa1f53 -p tcp --dport 80 -j REDIRECT --to-port 3000
+
+// iOS / macOS
+app.get("/hotspot-detect.html", (req, res) => {
+  res.set("Content-Type", "text/html");
+  res.send("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+});
+app.get("/library/test/success.html", (req, res) => {
+  res.set("Content-Type", "text/html");
+  res.send("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+});
+app.get("/success.html", (req, res) => {
+  res.set("Content-Type", "text/html");
+  res.send("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+});
+
+// Android / Chrome OS
+app.get("/generate_204", (req, res) => res.status(204).end());
+app.get("/gen_204", (req, res) => res.status(204).end());
+app.get("/connecttest.txt", (req, res) => res.send("Microsoft Connect Test"));
+
+// Windows NCSI
+app.get("/ncsi.txt", (req, res) => res.send("Microsoft NCSI"));
+
 // ── Public auth routes (no requireAuth guard) ────────────────────────────────
 // Login page — serve the standalone HTML file directly
 app.get("/login", (req, res) => {
