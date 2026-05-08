@@ -8,8 +8,9 @@ const path = require("path");
 // packet, converted from 90 kHz ticks to seconds. Returns null if no PTS is
 // found (e.g. the chunk contains only PAT/PMT/adaptation-only packets).
 //
-// Used at FFmpeg spawn time to compute the -itsoffset needed to align
-// GStreamer's pipeline-clock timestamps with the audio's wall-clock timestamps.
+// Available for diagnostics / future use (e.g. logging the GStreamer running_time
+// at ffmpeg spawn time).  Not used in the main sync path — both audio and video
+// use -use_wallclock_as_timestamps 1 (av_gettime) for rate alignment.
 function extractMpegtsPts(buf) {
   for (let i = 0; i + 188 <= buf.length; i += 188) {
     if (buf[i] !== 0x47) continue;                    // MPEG-TS sync byte
@@ -241,29 +242,31 @@ class StreamController extends EventEmitter {
       //   separate ffmpeg process captures ALSA audio and muxes both streams.
       //
       // Clock alignment — the root fix for long-term A/V drift:
-      //   • GStreamer: pipeline clock forced to CLOCK_REALTIME in gst-overlay-pipeline.py
-      //     → MPEG-TS PTS values are running_time (starting near 0), advancing at the
-      //       NTP-corrected wall-clock rate.
-      //   • ffmpeg audio: -use_wallclock_as_timestamps 1 anchors ALSA timestamps to
-      //     av_gettime() (same CLOCK_REALTIME source) — eliminating USB oscillator drift.
-      //   • ffmpeg video: -itsoffset = (wall_now − first_gst_pts) shifts the GStreamer
-      //     running_time PTS to the current wall-clock epoch so both streams share the
-      //     same time base. extractMpegtsPts() reads the first PTS from the pipe to
-      //     compute this offset precisely.
-      //   Both streams advance at exactly the wall-clock rate → zero ongoing drift.
+      //   Both audio and video use -use_wallclock_as_timestamps 1 so ffmpeg stamps
+      //   every packet with av_gettime() (CLOCK_REALTIME, NTP-adjusted).  Both streams
+      //   therefore advance at exactly the same wall-clock rate — no drift can accumulate
+      //   regardless of session length.
       //
-      // Why NOT -use_wallclock_as_timestamps 1 on the video pipe?
-      //   When applied to a pipe input, ffmpeg replaces GStreamer's precise 30 Hz PTS
-      //   with the wall-clock time at each read() call. A single read() often returns
-      //   a burst of several frames — all stamped with the SAME millisecond → duplicate
-      //   DTS. The setts BSF then bumps each duplicate by 100 ticks (~1.1 ms at 90 kHz)
-      //   to satisfy RTMP's strict DTS-monotonicity. Those 100-tick bumps compound: at
-      //   30 fps, even a modest burst rate creates several ms/second of video running
-      //   ahead of audio, and aresample=async compensates by continuously inserting
-      //   audio samples — accumulating many minutes of drift over a 24-hour session.
-      //   GStreamer's own monotonic PTS carry none of this pathology; -itsoffset aligns
-      //   them once at startup, and since both clocks are CLOCK_REALTIME there is no
-      //   ongoing rate mismatch for setts or aresample to compensate for.
+      // Why -use_wallclock_as_timestamps 1 on the VIDEO pipe too?
+      //   v4l2src sets buffer PTS from the kernel capture timestamp, which uses
+      //   CLOCK_MONOTONIC (raw hardware oscillator).  Even with the GStreamer pipeline
+      //   clock forced to CLOCK_REALTIME, the PTS embedded in mpegtsmux output still
+      //   advance at the MONOTONIC rate.  On the Orange Pi 5 (RK3588), MONOTONIC runs
+      //   slightly slower than NTP-adjusted REALTIME, so a -itsoffset-only approach
+      //   causes audio to gradually overtake video (seen as audio starting a few seconds
+      //   behind, slowly catching up, then passing — growing worse over hours).
+      //   Replacing the MPEG-TS PTS with av_gettime() on the video pipe side eliminates
+      //   this rate mismatch at the source.
+      //
+      // The duplicate-DTS problem and its accumulation-free fix:
+      //   A single pipe read() often returns a burst of N frames that all get the SAME
+      //   av_gettime() millisecond.  For SRT, +genpts regenerates sequential PTS from
+      //   the frame duration and no further patching is needed.  For RTMP/FLV, DTS must
+      //   also be strictly monotonic; the setts BSF assigns each frame an absolute DTS:
+      //     DTS = STARTDTS + frame_number × frameTicks
+      //   Because STARTDTS is set once from the first frame's wall-clock timestamp and
+      //   frame_number (setts variable N) is an exact counter, every frame gets an
+      //   independent, correctly-spaced DTS — no relative bumping, no accumulation.
       const useFfmpegAudio =
         (this.streamConfig.protocol === "srt" || this.streamConfig.protocol === "rtmp" || this.streamConfig.protocol === "rtsp") &&
         this.streamConfig.audioEnabled &&
@@ -382,22 +385,22 @@ class StreamController extends EventEmitter {
       // Spawn ffmpeg for hybrid A/V mux: reads video-only MPEG-TS from GStreamer's
       // stdout and muxes it with ALSA audio capture.
       //
-      // Timestamp strategy — "wall-clock audio, itsoffset-aligned video":
+      // Timestamp strategy — "wall-clock timestamps on both streams":
       //
-      //  Audio  → -use_wallclock_as_timestamps 1 on the ALSA input replaces
-      //            USB-oscillator-derived timestamps with av_gettime() (CLOCK_REALTIME),
-      //            eliminating the ~0.12 % USB clock drift entirely.
+      //  Audio  → -use_wallclock_as_timestamps 1 replaces USB-oscillator-derived PTS
+      //            with av_gettime() (CLOCK_REALTIME), eliminating USB drift entirely.
       //
-      //  Video  → GStreamer's mpegtsmux embeds running_time PTS (starting near 0,
-      //            advancing at the CLOCK_REALTIME rate). ffmpeg reads the first PTS
-      //            via extractMpegtsPts() and applies -itsoffset = (wall_now − firstPts)
-      //            so the video epoch lines up with the audio epoch at spawn time.
-      //            Because both clocks are CLOCK_REALTIME there is no ongoing rate
-      //            mismatch — the one-time offset is sufficient for the life of the session.
-      //
-      //  No setts BSF needed: GStreamer guarantees strictly monotonic PTS, so ffmpeg
-      //  never sees duplicate DTS.  filter_units=remove_types=7-8 (RTMP only) is still
-      //  applied to strip inline SPS/PPS before the annexb→mp4 BSF runs (see output args).
+      //  Video  → -use_wallclock_as_timestamps 1 replaces GStreamer's MONOTONIC-rate PTS
+      //            (v4l2src uses kernel capture timestamps via CLOCK_MONOTONIC regardless
+      //            of the pipeline clock setting) with av_gettime() (CLOCK_REALTIME).
+      //            Both streams now advance at the same NTP-adjusted wall-clock rate.
+      //            +genpts regenerates sequential PTS for frames that arrive in a burst
+      //            (multiple frames per pipe read() — all stamped with the same ms).
+      //            For RTMP/FLV, DTS must also be strictly monotonic: the setts BSF
+      //            assigns each frame an ABSOLUTE DTS = STARTDTS + N × frameTicks.
+      //            N is setts' built-in frame counter (0-based, never resets), so each
+      //            frame gets an independent, evenly-spaced DTS — no relative bumping,
+      //            no error accumulation regardless of how many bursts occur.
       //
       // Applies to both SRT (→ mpegts) and RTMP (→ flv) when audio is enabled.
       if (useFfmpegAudio) {
@@ -421,35 +424,55 @@ class StreamController extends EventEmitter {
         ];
 
         // ── Part 2: Output args (built now) ─────────────────────────────────
+        // frameTicks: number of 90 kHz ticks per video frame at the configured
+        // frame rate.  Used by setts to assign absolute, evenly-spaced DTS so
+        // that burst pipe reads (multiple frames with identical wall-clock DTS)
+        // produce strictly monotonic output without any accumulated error.
+        const framerate   = this.streamConfig.framerate || 30;
+        const frameTicks  = Math.round(90000 / framerate);   // e.g. 3000 at 30 fps
+
         const ffmpegOutputArgs = [
           "-map", "1:v",         // video from GStreamer (input 1)
           "-map", "0:a",         // audio from ALSA     (input 0)
           "-c:v", "copy",        // pass H.264 through unchanged
-          // RTMP+audio hybrid: strip inline SPS/PPS (NAL types 7 & 8) from the
-          // H.264 byte-stream BEFORE ffmpeg's internal h264_annexb_to_mp4 BSF runs.
-          // With header-mode=each-idr the encoder prepends SPS+PPS before every IDR.
-          // When ffmpeg converts Annex B → AVCC for FLV it sees those inline headers
-          // and emits a new AVC sequence header tag + IDR tag with the SAME DTS —
-          // MediaMTX drops the connection: "DTS is not monotonically increasing".
-          // filter_units strips types 7 (SPS) and 8 (PPS) so the annexb→mp4 BSF
-          // only sees the IDR NALU; the sequence header was already written once at
-          // startup from the MPEG-TS PMT extradata, so DTS always strictly advances.
-          // SRT does not use this filter — inline SPS/PPS help OBS resync mid-stream.
+          // RTMP+audio hybrid: two BSFs chained with a comma:
           //
-          // setts is NOT used here: GStreamer's own monotonic running_time PTS mean
-          // ffmpeg never sees duplicate DTS, so no BSF patching is needed.
+          //  1. filter_units=remove_types=7-8
+          //     Strip inline SPS/PPS (NAL types 7 & 8) from the H.264 byte-stream
+          //     BEFORE ffmpeg's internal h264_annexb_to_mp4 BSF runs.
+          //     With header-mode=each-idr the encoder prepends SPS+PPS before every IDR.
+          //     When ffmpeg converts Annex B → AVCC for FLV it sees those inline headers
+          //     and emits a new AVC sequence header tag + IDR tag with the SAME DTS —
+          //     MediaMTX drops the connection: "DTS is not monotonically increasing".
+          //     filter_units strips them so the annexb→mp4 BSF only sees the IDR NALU;
+          //     the sequence header is written once at startup from the MPEG-TS PMT
+          //     extradata and DTS always strictly advances.
+          //     SRT does not use this filter — inline SPS/PPS help OBS resync mid-stream.
+          //
+          //  2. setts=pts=STARTPTS+N*<frameTicks>:dts=STARTDTS+N*<frameTicks>
+          //     Assign each video frame an ABSOLUTE DTS = STARTDTS + N × frameTicks.
+          //     STARTDTS is the wall-clock epoch of the first video frame (set once);
+          //     N is setts' built-in packet counter (0, 1, 2, …).
+          //     This guarantees strict DTS monotonicity in the FLV container (RTMP
+          //     requires it) without any relative bumping — so no error can accumulate
+          //     no matter how many burst pipe reads occur over a 24-hour session.
+          //     The formula uses no commas (ffmpeg's BSF option parser treats commas
+          //     as BSF-chain delimiters; only * and + are needed here).
           ...(protocol === "rtmp" || protocol === "rtsp"
-            ? ["-bsf:v", "filter_units=remove_types=7-8"]
+            ? ["-bsf:v",
+               `filter_units=remove_types=7-8,setts=` +
+               `pts=STARTPTS+N*${frameTicks}:` +
+               `dts=STARTDTS+N*${frameTicks}`]
             : []),
           "-c:a", "aac",
           "-b:a", "128k",
-          // aresample=async=1000: safety net for any sub-frame startup jitter between
-          // the ALSA buffer boundary and the first video frame.  Both inputs advance
-          // at the CLOCK_REALTIME rate so no ongoing correction is needed.
+          // aresample=async=1000: absorbs any sub-frame startup jitter between the
+          // ALSA buffer boundary and the first video frame.  Both streams share the
+          // same av_gettime() rate so no ongoing correction is ever needed.
           "-af", "aresample=async=1000",
-          // max_interleave_delta: with itsoffset alignment both streams share the
-          // same epoch, so the interleave delta stays near zero.
-          // 1 s cap is a safety margin. muxdelay=0 removes mux buffering.
+          // max_interleave_delta: both streams share the same wall-clock epoch, so
+          // the interleave delta stays near zero. 1 s cap is a safety margin.
+          // muxdelay=0 removes mux buffering.
           "-max_interleave_delta", "1000000",
           "-muxdelay", "0",
           // flush_packets=1 (RTMP/RTSP only): force ffmpeg to flush each encoded packet to
@@ -472,8 +495,8 @@ class StreamController extends EventEmitter {
         // GStreamer's MPP hardware encoder takes 1-2 s to produce its first
         // frame. Deferring the spawn until the first video chunk arrives ensures
         // ALSA capture (and its wall-clock timestamps) begins at the same instant
-        // as video. The first chunk also supplies the GStreamer running_time PTS
-        // used to compute -itsoffset, aligning video and audio to the same epoch.
+        // as video, so both streams start stamping with av_gettime() at ~the same
+        // wall-clock moment and the muxer normalises them both to start at ~0.
         //
         // NOTE: do NOT call gstStdout.pause() before attaching the listener.
         // pause() sets _readableState.flowing = false; a subsequent "data"
@@ -483,39 +506,30 @@ class StreamController extends EventEmitter {
         const gstStdout = this.gstProcess.stdout;
 
         gstStdout.once("data", (firstChunk) => {
-          // ── itsoffset-aligned video timestamps ──────────────────────────
-          // GStreamer's mpegtsmux embeds running_time PTS (starting near 0,
-          // advancing at the CLOCK_REALTIME rate set in gst-overlay-pipeline.py).
-          // ALSA audio uses -use_wallclock_as_timestamps 1 → av_gettime() epoch.
+          // ── Wall-clock timestamps on the video pipe ──────────────────────
+          // -use_wallclock_as_timestamps 1 replaces the MPEG-TS packet timestamps
+          // (which are CLOCK_MONOTONIC-derived from v4l2src kernel capture times)
+          // with av_gettime() (CLOCK_REALTIME).  This matches the rate used by
+          // the ALSA audio input and eliminates the MONOTONIC/REALTIME rate
+          // mismatch that causes audio to gradually overtake video over hours.
           //
-          // To align them: compute itsoffset = wall_now − firstPts.
-          //   video PTS after offset = running_time + itsoffset
-          //                          ≈ 0 + wall_now = current epoch  ✓
-          //   audio PTS              = wall_now (ALSA wall clock)    ✓
-          //
-          // Because both clocks are CLOCK_REALTIME, the rate is identical —
-          // no ongoing correction is ever needed.  aresample=async=1000 absorbs
-          // any sub-second startup jitter between the ALSA buffer boundary and
-          // the first video frame, then has nothing more to do.
-          const firstPts = extractMpegtsPts(firstChunk);
-          const wallNow  = Date.now() / 1000;
-          const itsoffset = firstPts != null ? (wallNow - firstPts) : wallNow;
-          console.log(
-            `🕒 A/V sync (${protocol.toUpperCase()}) — itsoffset=${itsoffset.toFixed(3)}s` +
-            ` (firstPts=${firstPts != null ? firstPts.toFixed(3) : "null"}s, wallNow=${wallNow.toFixed(3)}s)`
-          );
+          // +genpts: when a single pipe read() returns a burst of N frames they
+          // all receive the same av_gettime() millisecond.  +genpts regenerates
+          // sequential PTS for those frames based on the stream's frame duration,
+          // so the demuxer never sees duplicate PTS.  For RTMP the setts BSF (in
+          // the output args) handles DTS monotonicity using the absolute
+          // STARTDTS + N × frameTicks formula — no error can accumulate.
+          console.log(`🕒 A/V sync (${protocol.toUpperCase()}) — wall-clock timestamps on both audio and video (av_gettime / CLOCK_REALTIME)`);
 
           const ffmpegVideoArgs = [
-            "-itsoffset", itsoffset.toFixed(3),
-            // +nobuffer: don't accumulate an internal demux buffer — primary
-            // guard against latency growth over long sessions.
+            "-use_wallclock_as_timestamps", "1",
+            // +genpts: regenerate sequential PTS for burst-read frames.
+            // +nobuffer: don't accumulate an internal demux buffer (latency guard).
             // +discardcorrupt (SRT only): drop garbled MPEG-TS packets.
             // low_delay: minimise internal buffering at every stage.
-            // +genpts is NOT used: GStreamer's PTS are already sequential and
-            // monotonic, so there is no need to regenerate them.
             ...(protocol === "rtmp" || protocol === "rtsp"
-              ? ["-fflags", "+nobuffer", "-flags", "low_delay"]
-              : ["-fflags", "+nobuffer+discardcorrupt", "-flags", "low_delay"]),
+              ? ["-fflags", "+genpts+nobuffer", "-flags", "low_delay"]
+              : ["-fflags", "+genpts+nobuffer+discardcorrupt", "-flags", "low_delay"]),
             ...(protocol === "rtmp" || protocol === "rtsp"
               ? ["-probesize", "1048576", "-analyzeduration", "500000"]
               : ["-probesize", "32", "-analyzeduration", "0"]),
