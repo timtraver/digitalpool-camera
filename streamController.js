@@ -424,13 +424,6 @@ class StreamController extends EventEmitter {
         ];
 
         // ── Part 2: Output args (built now) ─────────────────────────────────
-        // frameTicks: number of 90 kHz ticks per video frame at the configured
-        // frame rate.  Used by setts to assign absolute, evenly-spaced DTS so
-        // that burst pipe reads (multiple frames with identical wall-clock DTS)
-        // produce strictly monotonic output without any accumulated error.
-        const framerate   = this.streamConfig.framerate || 30;
-        const frameTicks  = Math.round(90000 / framerate);   // e.g. 3000 at 30 fps
-
         const ffmpegOutputArgs = [
           "-map", "1:v",         // video from GStreamer (input 1)
           "-map", "0:a",         // audio from ALSA     (input 0)
@@ -449,26 +442,30 @@ class StreamController extends EventEmitter {
           //     extradata and DTS always strictly advances.
           //     SRT does not use this filter — inline SPS/PPS help OBS resync mid-stream.
           //
-          //  2. setts=pts=STARTPTS+N*<frameTicks>:dts=STARTDTS+N*<frameTicks>
-          //     Assign each video frame an ABSOLUTE DTS = STARTDTS + N × frameTicks.
-          //     STARTDTS is the wall-clock epoch of the first video frame (set once);
-          //     N is setts' built-in packet counter (0, 1, 2, …).
-          //     This guarantees strict DTS monotonicity in the FLV container (RTMP
-          //     requires it) without any relative bumping — so no error can accumulate
-          //     no matter how many burst pipe reads occur over a 24-hour session.
-          //     The formula uses no commas (ffmpeg's BSF option parser treats commas
-          //     as BSF-chain delimiters; only * and + are needed here).
+          //  2. setts — enforce strict DTS monotonicity for FLV without fixed-rate assumptions.
+          //     -use_wallclock_as_timestamps 1 stamps every packet with av_gettime().
+          //     A single pipe read() often returns a burst of N frames — all getting the
+          //     SAME millisecond timestamp → duplicate DTS → MediaMTX drops the connection.
+          //     The formula max(DTS, PREV_OUTDTS+100) bumps any duplicate by 100 ticks
+          //     (~1.1 ms at 90 kHz).  This is NOT a continuous accumulator: as soon as the
+          //     next non-duplicate frame arrives its av_gettime() value resets the baseline,
+          //     so the 100-tick bump is absorbed in the ~33 ms gap to the next real frame.
+          //     No N×frameTicks formula is used because that assumes a perfectly uniform
+          //     frame rate — any deviation from the configured FPS would immediately skew
+          //     all subsequent DTS values away from audio, causing severe A/V delay.
+          //     Uses the identity max(a,b) = (a+b+|a-b|)/2 to avoid commas inside the
+          //     BSF option string (ffmpeg's BSF parser treats commas as chain delimiters).
           ...(protocol === "rtmp" || protocol === "rtsp"
             ? ["-bsf:v",
-               `filter_units=remove_types=7-8,setts=` +
-               `pts=STARTPTS+N*${frameTicks}:` +
-               `dts=STARTDTS+N*${frameTicks}`]
+               "filter_units=remove_types=7-8,setts=" +
+               "dts=(DTS+PREV_OUTDTS+100+abs(DTS-PREV_OUTDTS-100))/2:" +
+               "pts=(PTS+PREV_OUTPTS+100+abs(PTS-PREV_OUTPTS-100))/2"]
             : []),
           "-c:a", "aac",
           "-b:a", "128k",
-          // aresample=async=1000: absorbs any sub-frame startup jitter between the
-          // ALSA buffer boundary and the first video frame.  Both streams share the
-          // same av_gettime() rate so no ongoing correction is ever needed.
+          // aresample=async=1000: safety net for any sub-frame startup jitter between
+          // the ALSA buffer boundary and the first video frame.  Both streams use
+          // av_gettime() (CLOCK_REALTIME) so no ongoing rate correction is needed.
           "-af", "aresample=async=1000",
           // max_interleave_delta: both streams share the same wall-clock epoch, so
           // the interleave delta stays near zero. 1 s cap is a safety margin.
@@ -517,8 +514,8 @@ class StreamController extends EventEmitter {
           // all receive the same av_gettime() millisecond.  +genpts regenerates
           // sequential PTS for those frames based on the stream's frame duration,
           // so the demuxer never sees duplicate PTS.  For RTMP the setts BSF (in
-          // the output args) handles DTS monotonicity using the absolute
-          // STARTDTS + N × frameTicks formula — no error can accumulate.
+          // the output args) enforces DTS monotonicity via max(DTS, PREV_OUTDTS+100),
+          // absorbing burst duplicates without assuming any fixed frame rate.
           console.log(`🕒 A/V sync (${protocol.toUpperCase()}) — wall-clock timestamps on both audio and video (av_gettime / CLOCK_REALTIME)`);
 
           const ffmpegVideoArgs = [
