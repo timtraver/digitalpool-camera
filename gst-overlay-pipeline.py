@@ -425,23 +425,27 @@ def main():
             f'! {audio_mux_target} '
             if use_ndi_audio and audio_mux_target else ''
         ) +
-        # Preview branch (own thread, low priority)
+        # Preview branch (own thread, low priority) — H.264 push to MediaMTX for WebRTC.
+        # Taps raw video from tee t, scales to 720p, encodes at 15 fps with the MPP hardware
+        # encoder, and pushes to rtmp://localhost:1935/preview.  MediaMTX serves this path as
+        # WebRTC via WHEP at http://localhost:8889/preview/whep, which the Node.js server
+        # proxies at /api/whep/preview so the admin browser fetches it over port 3000.
+        #
+        # async=false: rtmpsink must not participate in preroll (same reason as the old
+        # tcpserversink — with the dynamic NDI video chain, ndi_in_q.sink is unlinked at
+        # parse time, so the preview branch is not downstream of any live source at pipeline
+        # construction time.  A sink with async=true would block the PAUSED→PLAYING
+        # transition waiting for a preroll buffer that never arrives until PLAYING).
         f't. ! queue max-size-buffers=10 leaky=downstream '
-        f'! videorate ! video/x-raw,framerate=1/1 '
-        f'! videoconvert ! videoscale '
-        f'! video/x-raw,width=1280,height=720 '
-        f'! jpegenc quality=65 '
-        f'! multipartmux boundary=--jpgboundary '
-        # async=false: tcpserversink must not participate in preroll.
-        # With the dynamic NDI video chain, ndi_in_q.sink is unlinked at
-        # parse time, so the preview branch (tee → queue → ... → tcpserversink)
-        # is not downstream of any live source at pipeline construction time.
-        # tcpserversink defaults to async=true (waits for a preroll buffer
-        # before acking the PAUSED state change), which blocks the pipeline
-        # from ever reaching PLAYING — a deadlock since ndisrc only pushes
-        # data in PLAYING state.  async=false opts this sink out of preroll
-        # so the PAUSED→PLAYING transition completes immediately.
-        f'! tcpserversink host=0.0.0.0 port=8555 sync=false async=false recover-policy=keyframe'
+        f'! videoscale ! video/x-raw,width=1280,height=720 '
+        f'! videorate ! video/x-raw,framerate=15/1 '
+        f'! videoconvert ! video/x-raw,format=NV12 '
+        f'! mpph264enc bitrate=500000 header-mode=each-idr gop-size=15 '
+        f'! h264parse config-interval=-1 '
+        f'! video/x-h264,stream-format=avc,alignment=au '
+        f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream '
+        f'! flvmux streamable=true '
+        f'! rtmpsink location=rtmp://localhost:1935/preview sync=false async=false'
     )
 
     print(f"\nPipeline: {pipeline_str}\n", file=sys.stderr)

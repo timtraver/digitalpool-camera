@@ -1594,6 +1594,38 @@ function waitForPort(port, timeoutMs = 8000) {
   });
 }
 
+// Poll until MediaMTX reports an active publisher on the given path name, or timeout.
+// Used to verify the idle preview (or live) RTMP push is live before telling clients.
+function waitForRtmpPublisher(pathName, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    function attempt() {
+      const req = http.get(
+        { hostname: "127.0.0.1", port: 9997, path: `/v3/paths/get/${pathName}`, timeout: 1500 },
+        (res) => {
+          let body = "";
+          res.on("data", (d) => { body += d; });
+          res.on("end", () => {
+            try {
+              const data = JSON.parse(body);
+              // readyTime is set when a publisher is actively pushing frames
+              if (data.readyTime) { resolve(true); return; }
+            } catch (_) { /* ignore parse errors */ }
+            if (Date.now() < deadline) setTimeout(attempt, 500);
+            else resolve(false);
+          });
+        }
+      );
+      req.on("error", () => {
+        if (Date.now() < deadline) setTimeout(attempt, 500);
+        else resolve(false);
+      });
+      req.on("timeout", () => { req.destroy(); });
+    }
+    attempt();
+  });
+}
+
 // Switch the active camera source (USB device or RTSP URL).
 // If a live stream is running, it is stopped first, the new source is validated
 // via the idle preview, and then the stream is restarted automatically.
@@ -1649,7 +1681,7 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
 
   // Give GStreamer time to negotiate: RTSP and NDI need up to 12 s; USB is fast.
   const timeoutMs = (type === "rtsp" || type === "ndi") ? 12000 : 5000;
-  const ready = await waitForPort(IDLE_PREVIEW_PORT, timeoutMs);
+  const ready = await waitForRtmpPublisher("preview", timeoutMs);
 
   if (!ready) {
     // ── Revert on failure ────────────────────────────────────────────────
@@ -2220,6 +2252,70 @@ app.get("/video/hls-live/*file", requireAuth, (req, res) => {
   req.on("close", () => proxyReq.destroy()); // client disconnected — stop proxying
 });
 
+// ── MediaMTX WHEP proxy (WebRTC preview) ─────────────────────────────────────
+// Proxies WebRTC-HTTP Egress Protocol (WHEP) requests to MediaMTX on port 8889.
+// The browser cannot reach port 8889 directly (different port, no auth), so we
+// relay here behind the authenticated Express session.
+//
+// POST /api/whep/preview  →  POST http://127.0.0.1:8889/preview/whep   (start session)
+// PATCH/DELETE /api/whep/preview/<sessionId>  →  PATCH/DELETE http://127.0.0.1:8889/preview/whep/<sessionId>
+//
+// The Location header from MediaMTX is rewritten from the internal address
+// (http://127.0.0.1:8889/…) to a path rooted at /api/whep so the browser's
+// follow-up PATCH/DELETE requests stay on port 3000.
+app.all("/api/whep/*path", requireAuth, (req, res) => {
+  const subpath = req.params.path; // e.g. "preview" or "preview/abc123"
+
+  // POST /api/whep/preview → upstream POST http://127.0.0.1:8889/preview/whep
+  // PATCH/DELETE /api/whep/preview/abc123 → upstream http://127.0.0.1:8889/preview/whep/abc123
+  const upstreamPath = req.method === "POST"
+    ? `/${subpath}/whep`
+    : `/${subpath}`;          // subpath already contains "/whep/<sessionId>" for PATCH/DELETE
+
+  const options = {
+    hostname: "127.0.0.1",
+    port: 8889,
+    path: upstreamPath,
+    method: req.method,
+    headers: { "content-type": req.headers["content-type"] || "application/sdp" },
+    timeout: 6000,
+  };
+
+  // Collect SDP offer body from the browser (POST only; PATCH/DELETE have tiny or no body)
+  let reqBody = Buffer.alloc(0);
+  req.on("data", (chunk) => { reqBody = Buffer.concat([reqBody, chunk]); });
+  req.on("end", () => {
+    if (reqBody.length) options.headers["content-length"] = reqBody.length;
+
+    const proxyReq = http.request(options, (upRes) => {
+      res.status(upRes.statusCode);
+
+      // Forward headers, rewriting Location so the browser stays on port 3000
+      for (const [k, v] of Object.entries(upRes.headers)) {
+        if (k.toLowerCase() === "location") {
+          // http://127.0.0.1:8889/preview/whep/abc123 → /api/whep/preview/whep/abc123
+          const rewritten = v.replace(/^https?:\/\/[^/]+/, "/api/whep");
+          res.setHeader("Location", rewritten);
+        } else if (!["transfer-encoding", "connection"].includes(k.toLowerCase())) {
+          res.setHeader(k, v);
+        }
+      }
+
+      upRes.pipe(res);
+    });
+
+    proxyReq.on("error", (err) => {
+      console.error(`❌ WHEP proxy error (${upstreamPath}):`, err.message);
+      if (!res.headersSent) res.status(502).json({ error: "WHEP proxy failed" });
+    });
+    proxyReq.on("timeout", () => { proxyReq.destroy(); if (!res.headersSent) res.status(504).end(); });
+    req.on("close", () => proxyReq.destroy());
+
+    if (reqBody.length) proxyReq.write(reqBody);
+    proxyReq.end();
+  });
+});
+
 // Serve HLS playlist and segments for preview when streaming
 app.get("/video/hls/playlist.m3u8", (req, res) => {
   const fs = require("fs");
@@ -2356,17 +2452,17 @@ const colorToInt = (colorName) => {
 
 /**
  * Build GStreamer args for the idle preview pipeline.
- * @param {string[]} sinkArgs - Sink element args (e.g., tcpserversink or fdsink)
+ * Encodes at 15 fps H.264 and pushes to rtmp://localhost:1935/preview so MediaMTX
+ * can serve it as WebRTC via WHEP at /api/whep/preview.
  * @returns {string[]} Complete gst-launch-1.0 args
  */
-function buildIdlePreviewGstArgs(sinkArgs) {
+function buildIdlePreviewGstArgs() {
   const config = streamController.streamConfig;
   const fs = require("fs");
 
   // ── Source-specific front-end of the pipeline ──
-  // Both RTSP and USB paths produce the same normalised raw video after this block
-  // (1280×720, 1 fps, any raw format) so the shared overlay section below works
-  // identically for both sources.
+  // All paths produce normalised raw video (1280×720, 15 fps, any raw format)
+  // after this block so the shared overlay section works identically for all sources.
   let gstArgs;
 
   if (activeCameraSource.type === "ndi" && activeCameraSource.ndiName) {
@@ -2391,12 +2487,11 @@ function buildIdlePreviewGstArgs(sinkArgs) {
       "!",
       "videoconvert",
       "!",
-      // 5 fps is visually smooth for an idle preview thumbnail and cheap on CPU.
-      // drop-only=true ensures videorate only discards excess frames from the
-      // 30-60 fps NDI source; it never duplicates a late frame (no judder).
+      // 15 fps gives a smooth preview; drop-only=true means videorate only ever
+      // discards excess frames from the 30-60 fps NDI source — it never duplicates.
       "videorate", "drop-only=true",
       "!",
-      "video/x-raw,framerate=5/1",
+      "video/x-raw,framerate=15/1",
       "!",
       "videoconvert",
       "!",
@@ -2409,10 +2504,10 @@ function buildIdlePreviewGstArgs(sinkArgs) {
       // videoconvert immediately after decodebin: decodebin produces dynamic caps
       // (NV12, I420, BGR, etc.) — videoconvert normalises to a fixed raw format.
       "!", "videoconvert",
-      "!", "videorate",
-      "!", "video/x-raw,framerate=1/1",
       "!", "videoscale",
       "!", "video/x-raw,width=1280,height=720",
+      "!", "videorate",
+      "!", "video/x-raw,framerate=15/1",
       "!", "videoconvert",
       "!",
     ];
@@ -2430,13 +2525,13 @@ function buildIdlePreviewGstArgs(sinkArgs) {
       "!",
       "mppjpegdec",
       "!",
-      "videorate",
-      "!",
-      "video/x-raw,framerate=1/1",
-      "!",
       "videoscale",
       "!",
       "video/x-raw,width=1280,height=720",
+      "!",
+      "videorate",
+      "!",
+      "video/x-raw,framerate=15/1",
       "!",
       "videoconvert",
       "!",
@@ -2549,15 +2644,27 @@ function buildIdlePreviewGstArgs(sinkArgs) {
     }
   }
 
-  // JPEG encode and output
+  // H.264 encode and push to MediaMTX for WebRTC delivery.
+  // videoconvert→NV12 is required because mpph264enc (Rockchip MPP) only accepts NV12.
+  // config-interval=-1 on h264parse embeds SPS/PPS before every IDR so MediaMTX can
+  // start a new WebRTC session mid-stream without waiting for the next keyframe.
+  // async=false on rtmpsink lets the pipeline reach PLAYING before RTMP connects.
   gstArgs.push(
-    "jpegenc",
-    "quality=65",
+    "videoconvert",
     "!",
-    "multipartmux",
-    "boundary=frame",
+    "video/x-raw,format=NV12",
     "!",
-    ...sinkArgs
+    "mpph264enc", "bitrate=500000", "header-mode=each-idr", "gop-size=15",
+    "!",
+    "h264parse", "config-interval=-1",
+    "!",
+    "video/x-h264,stream-format=avc,alignment=au",
+    "!",
+    "queue", "max-size-buffers=0", "max-size-time=500000000", "max-size-bytes=0", "leaky=downstream",
+    "!",
+    "flvmux", "streamable=true",
+    "!",
+    "rtmpsink", "location=rtmp://localhost:1935/preview", "sync=false", "async=false",
   );
 
   return gstArgs;
@@ -2565,7 +2672,8 @@ function buildIdlePreviewGstArgs(sinkArgs) {
 
 /**
  * Start (or restart) the persistent idle preview GStreamer process.
- * Uses tcpserversink on IDLE_PREVIEW_PORT so clients can connect/disconnect freely.
+ * Encodes at 15 fps H.264 and pushes to rtmp://localhost:1935/preview so MediaMTX
+ * can serve it as WebRTC (WHEP) at /api/whep/preview.
  * Protected by a mutex to prevent concurrent calls from racing.
  */
 let _idlePreviewStarting = false;
@@ -2623,34 +2731,8 @@ async function startPersistentIdlePreview() {
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
 
-    // Kill any process using the idle preview port
-    try {
-      const { execSync } = require("child_process");
-      execSync(`fuser -k ${IDLE_PREVIEW_PORT}/tcp 2>/dev/null || true`);
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    } catch (e) { /* ignore */ }
-
-    // Double-check the port is free
-    try {
-      const { execSync } = require("child_process");
-      const portCheck = execSync(`fuser ${IDLE_PREVIEW_PORT}/tcp 2>/dev/null || true`).toString().trim();
-      if (portCheck) {
-        console.log(`⚠️  Port ${IDLE_PREVIEW_PORT} still in use: ${portCheck}, force killing...`);
-        execSync(`fuser -k ${IDLE_PREVIEW_PORT}/tcp 2>/dev/null || true`);
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-    } catch (e) { /* ignore */ }
-
-    const sinkArgs = [
-      "tcpserversink",
-      "host=0.0.0.0",
-      `port=${IDLE_PREVIEW_PORT}`,
-      "sync=false",
-      "recover-policy=keyframe",
-    ];
-
-    const gstArgs = buildIdlePreviewGstArgs(sinkArgs);
-    console.log(`📹 Starting idle preview on TCP port ${IDLE_PREVIEW_PORT} (source: ${activeCameraSource.type})`);
+    const gstArgs = buildIdlePreviewGstArgs();
+    console.log(`📹 Starting idle preview → rtmp://localhost:1935/preview (source: ${activeCameraSource.type})`);
 
     const gst = spawn("gst-launch-1.0", gstArgs);
     currentIdlePreviewProcess = gst;
@@ -3412,9 +3494,9 @@ streamController.on("stopped", async () => {
     // ready (up to 12 s) before telling clients to reconnect — otherwise they hit
     // the server before any frames are available and the preview stays blank.
     const idleTimeoutMs = (activeCameraSource.type === "rtsp" || activeCameraSource.type === "ndi") ? 12000 : 5000;
-    const idleReady = await waitForPort(IDLE_PREVIEW_PORT, idleTimeoutMs);
+    const idleReady = await waitForRtmpPublisher("preview", idleTimeoutMs);
     if (!idleReady) {
-      console.warn(`⚠️  Idle preview port not ready after ${idleTimeoutMs / 1000}s — clients will retry on their own`);
+      console.warn(`⚠️  Idle preview RTMP publisher not ready after ${idleTimeoutMs / 1000}s — clients will retry on their own`);
     }
     // Tell clients to reconnect to the idle preview
     io.emit("refreshIdlePreview");

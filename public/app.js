@@ -1067,10 +1067,10 @@ socket.on("refreshIdlePreview", () => {
     console.log("🔄 Refreshing idle preview for overlay changes...");
     const previewStatus = document.getElementById("overlayPreviewStatus");
     if (previewStatus) previewStatus.style.display = "block";
-    // Small delay to let the old GStreamer process fully die
+    // Small delay to let the old GStreamer process fully die before reconnecting
     setTimeout(() => {
-      switchToMJPEGPreview(() => {
-        // Callback fires when the preview image actually loads
+      switchToWebRTCPreview("preview", () => {
+        // Callback fires when the first WebRTC frame appears
         if (previewStatus) previewStatus.style.display = "none";
       });
     }, 400);
@@ -1163,21 +1163,15 @@ socket.on("streamStatus", (status) => {
       updateConnectionInfo(liveProtocol, deviceLocalIP);
     }
 
-    // Switch to TCP preview when streaming.
+    // Switch to WebRTC "live" preview when streaming.
     // Cancel any stale pending switch first so we never queue two connections.
-    if (_tcpPreviewTimeout) {
-      clearTimeout(_tcpPreviewTimeout);
-      _tcpPreviewTimeout = null;
-    }
-    // Also cancel any pending MJPEG switch that might race with us.
-    if (_mjpegPreviewTimeout) {
-      clearTimeout(_mjpegPreviewTimeout);
-      _mjpegPreviewTimeout = null;
-    }
+    if (_tcpPreviewTimeout)   { clearTimeout(_tcpPreviewTimeout);   _tcpPreviewTimeout   = null; }
+    if (_mjpegPreviewTimeout) { clearTimeout(_mjpegPreviewTimeout); _mjpegPreviewTimeout = null; }
+    if (_webrtcRetryTimer)    { clearTimeout(_webrtcRetryTimer);    _webrtcRetryTimer    = null; }
     _tcpPreviewTimeout = setTimeout(() => {
       _tcpPreviewTimeout = null;
-      switchToHLSPreview(); // Function switches to MJPEG-over-TCP on port 8555
-    }, 2000); // Wait for GStreamer TCP server to start (has retry logic)
+      switchToWebRTCPreview("live"); // WHEP viewer on the "live" MediaMTX path
+    }, 2000); // 2 s grace period for GStreamer + MediaMTX to start publishing
   } else {
     // Change Restart button back to Start button
     startStreamBtn.disabled = false;
@@ -1190,19 +1184,14 @@ socket.on("streamStatus", (status) => {
     setStreamStatus("idle", "Not Streaming");
     overlayNeedsRestart.style.display = "none";
 
-    // Switch back to MJPEG preview when not streaming.
-    // Cancel any stale TCP preview switch that might be pending.
-    if (_tcpPreviewTimeout) {
-      clearTimeout(_tcpPreviewTimeout);
-      _tcpPreviewTimeout = null;
-    }
-    if (_mjpegPreviewTimeout) {
-      clearTimeout(_mjpegPreviewTimeout);
-      _mjpegPreviewTimeout = null;
-    }
+    // Switch back to WebRTC "preview" path when the stream stops.
+    // Cancel any stale pending switch that might be in-flight.
+    if (_tcpPreviewTimeout)   { clearTimeout(_tcpPreviewTimeout);   _tcpPreviewTimeout   = null; }
+    if (_mjpegPreviewTimeout) { clearTimeout(_mjpegPreviewTimeout); _mjpegPreviewTimeout = null; }
+    if (_webrtcRetryTimer)    { clearTimeout(_webrtcRetryTimer);    _webrtcRetryTimer    = null; }
     _mjpegPreviewTimeout = setTimeout(() => {
       _mjpegPreviewTimeout = null;
-      switchToMJPEGPreview();
+      switchToWebRTCPreview("preview"); // idle camera feed via WHEP
     }, 500);
   }
 });
@@ -1287,10 +1276,13 @@ console.log("🚀 app.js loaded!");
 // Video preview switching functions
 let hlsPlayer = null;
 
-// Pending preview-switch timeout handles — only one of each should ever be queued
-// at a time, so we cancel any stale timer before scheduling a new one.
-let _tcpPreviewTimeout  = null;
+// Pending preview-switch timeout handles — only one should ever be queued at a time.
+let _tcpPreviewTimeout   = null;
 let _mjpegPreviewTimeout = null;
+let _webrtcRetryTimer    = null;   // retry timer when WHEP publisher not yet ready
+
+// Active WebRTC peer connection for the admin preview (null when closed)
+let _webrtcPc = null;
 
 // Snapshot polling state
 let _snapshotPollActive = false;
@@ -1301,7 +1293,8 @@ let _snapshotBlobUrl    = null;
 let lowBandwidthMode = false;
 
 /**
- * Stop snapshot polling and cancel any in-flight preview img/video elements.
+ * Stop snapshot polling, close any active WebRTC session, and cancel any
+ * in-flight preview img/video elements.
  * Call this before any operation that will replace or restart the stream.
  */
 function cancelCurrentPreviewImg() {
@@ -1311,11 +1304,16 @@ function cancelCurrentPreviewImg() {
   const lowBwLabel = document.getElementById("lowBwLabel");
   if (lowBwLabel && !lowBandwidthMode) lowBwLabel.style.display = "none";
 
+  // Cancel any pending WebRTC retry
+  if (_webrtcRetryTimer) { clearTimeout(_webrtcRetryTimer); _webrtcRetryTimer = null; }
+  // Close the active RTCPeerConnection (idempotent — safe to call if null)
+  if (_webrtcPc) { _webrtcPc.close(); _webrtcPc = null; }
+
   for (const id of ["videoStream", "videoStreamNew"]) {
     const el = document.getElementById(id);
     if (el) {
       el._cancelled = true;
-      if (el.tagName === "VIDEO") { el.pause(); el.src = ""; }
+      if (el.tagName === "VIDEO") { el.pause(); el.src = ""; el.srcObject = null; }
       else el.src = "";
       el.remove();
     }
@@ -1369,6 +1367,124 @@ function switchToSnapshotPreview() {
   }
 
   fetchNext(); // immediate first frame, then recurring
+}
+
+/**
+ * Switch the preview area to a WebRTC stream delivered via MediaMTX WHEP.
+ *
+ * @param {string}   streamPath  - MediaMTX path: "preview" (idle) or "live" (streaming)
+ * @param {Function} [onConnected] - called once the first video frame arrives
+ * @param {number}   [_attempt=0]  - internal retry counter (do not pass from call sites)
+ */
+async function switchToWebRTCPreview(streamPath, onConnected, _attempt = 0) {
+  if (lowBandwidthMode) { switchToSnapshotPreview(); if (typeof onConnected === "function") onConnected(); return; }
+  console.log(`🔄 Switching to WebRTC preview (path="${streamPath}", attempt=${_attempt})...`);
+
+  // Tear down everything that might currently own the preview area
+  cancelCurrentPreviewImg();
+
+  const container = document.querySelector(".video-container");
+
+  // Create the <video> element that will host the WebRTC stream
+  const video = document.createElement("video");
+  video.id        = "videoStream";
+  video.dataset.webrtc = "1";
+  video.muted     = true;
+  video.autoplay  = true;
+  video.playsInline = true;
+  video.style.cssText = "width:100%;height:100%;object-fit:contain;display:block;background:#000";
+  container.insertBefore(video, container.firstChild);
+
+  // Notify caller when the first frame actually appears
+  video.addEventListener("playing", function onPlaying() {
+    video.removeEventListener("playing", onPlaying);
+    if (typeof onConnected === "function") { onConnected(); onConnected = null; }
+  }, { once: true });
+
+  // Build the RTCPeerConnection (no STUN/TURN needed on a local network)
+  const pc = new RTCPeerConnection({ bundlePolicy: "max-bundle" });
+  _webrtcPc = pc;
+
+  // WHEP role is "viewer" — receive-only transceivers
+  pc.addTransceiver("video", { direction: "recvonly" });
+  pc.addTransceiver("audio", { direction: "recvonly" });
+
+  // Attach incoming media tracks to the <video> element
+  pc.ontrack = (evt) => {
+    if (evt.streams && evt.streams[0]) video.srcObject = evt.streams[0];
+  };
+
+  // Auto-reconnect if the ICE connection breaks unexpectedly
+  pc.addEventListener("iceconnectionstatechange", () => {
+    if (pc !== _webrtcPc) return; // stale connection
+    if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
+      console.warn(`⚠️ WebRTC "${streamPath}" ICE ${pc.iceConnectionState} — reconnecting in 3 s`);
+      _webrtcRetryTimer = setTimeout(() => switchToWebRTCPreview(streamPath, null, 0), 3000);
+    }
+  });
+
+  // Create SDP offer and set it as the local description
+  let offer;
+  try {
+    offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+  } catch (err) {
+    console.error("❌ WebRTC createOffer failed:", err);
+    if (_webrtcPc === pc) { pc.close(); _webrtcPc = null; }
+    return;
+  }
+
+  // Wait for ICE gathering to finish (or 2 s timeout — MediaMTX returns all candidates in answer anyway)
+  await new Promise((resolve) => {
+    if (pc.iceGatheringState === "complete") { resolve(); return; }
+    const done = () => resolve();
+    pc.addEventListener("icegatheringstatechange", done, { once: true });
+    setTimeout(() => { pc.removeEventListener("icegatheringstatechange", done); resolve(); }, 2000);
+  });
+
+  // POST the SDP offer to the WHEP proxy → MediaMTX
+  let whepRes;
+  try {
+    whepRes = await fetch(`/api/whep/${streamPath}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/sdp" },
+      body: pc.localDescription.sdp,
+    });
+  } catch (err) {
+    console.error("❌ WHEP POST network error:", err);
+    if (_webrtcPc === pc) { pc.close(); _webrtcPc = null; }
+    return;
+  }
+
+  // 404/503 = publisher not yet pushing to MediaMTX — retry with back-off
+  if (whepRes.status === 404 || whepRes.status === 503) {
+    if (_webrtcPc === pc) { pc.close(); _webrtcPc = null; }
+    if (_attempt < 12) {
+      const delay = Math.min(1000 + _attempt * 500, 4000);
+      console.log(`⏳ WHEP "${streamPath}" not ready (HTTP ${whepRes.status}) — retry ${_attempt + 1}/12 in ${delay} ms`);
+      _webrtcRetryTimer = setTimeout(() => switchToWebRTCPreview(streamPath, onConnected, _attempt + 1), delay);
+    } else {
+      console.warn(`❌ WebRTC "${streamPath}" gave up after 12 attempts — falling back to snapshot`);
+      switchToSnapshotPreview();
+    }
+    return;
+  }
+
+  if (!whepRes.ok) {
+    console.error(`❌ WHEP "${streamPath}" unexpected HTTP ${whepRes.status}`);
+    if (_webrtcPc === pc) { pc.close(); _webrtcPc = null; }
+    return;
+  }
+
+  // Apply the SDP answer returned by MediaMTX
+  const sdpAnswer = await whepRes.text();
+  try {
+    await pc.setRemoteDescription({ type: "answer", sdp: sdpAnswer });
+    console.log(`✅ WebRTC "${streamPath}" negotiation complete — waiting for first frame`);
+  } catch (err) {
+    console.error("❌ setRemoteDescription failed:", err);
+    if (_webrtcPc === pc) { pc.close(); _webrtcPc = null; }
+  }
 }
 
 /**
@@ -3632,11 +3748,11 @@ loadDeviceIp();
     if (lowBandwidthMode) {
       switchToSnapshotPreview();
     } else {
-      // Restore the appropriate streaming preview
+      // Restore the appropriate WebRTC preview
       if (isCurrentlyStreaming) {
-        switchToHLSPreview();
+        switchToWebRTCPreview("live");
       } else {
-        switchToMJPEGPreview();
+        switchToWebRTCPreview("preview");
       }
     }
   });

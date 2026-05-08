@@ -1494,9 +1494,11 @@ class StreamController extends EventEmitter {
       throw new Error(`Unsupported protocol: ${protocol}`);
     }
 
-    // Branch 2b: Preview stream (MJPEG over TCP) - from t (raw video before encoding)
-    // This taps the raw video BEFORE H.264 encoding, so no decoding needed!
-    // Much more efficient and reliable than decoding H.264
+    // Branch 2b: Preview stream — H.264 push to MediaMTX for WebRTC admin preview.
+    // Taps raw video (before H.264 encoding) from tee t, scales to 720p/15fps with the
+    // hardware MPP encoder, and pushes to rtmp://localhost:1935/preview.
+    // MediaMTX serves WebRTC via WHEP at http://localhost:8889/preview — the Node.js
+    // server proxies it at /api/whep/preview so the admin browser fetches it over port 3000.
     pipeline.push(
       "t.",
       "!",
@@ -1504,27 +1506,40 @@ class StreamController extends EventEmitter {
       "max-size-buffers=10",
       "leaky=downstream",
       "!",
-      "videorate", // Limit preview framerate to reduce CPU/bandwidth usage
+      "videoscale",
       "!",
-      "video/x-raw,framerate=2/1", // 2fps is sufficient for web preview
+      "video/x-raw,width=1280,height=720",
       "!",
-      "videoconvert", // Convert from NV12 (or other) to format suitable for videoscale/jpegenc
+      "videorate",
       "!",
-      "videoscale", // Scale down for lower bandwidth
+      "video/x-raw,framerate=15/1",
       "!",
-      "video/x-raw,width=1280,height=720", // 720p preview (lower bandwidth)
+      "videoconvert",
       "!",
-      "jpegenc",
-      "quality=65", // Lower quality to reduce preview bandwidth
+      "video/x-raw,format=NV12",
       "!",
-      "multipartmux",
-      "boundary=--jpgboundary",
+      "mpph264enc",
+      "bitrate=500000",
+      "header-mode=each-idr",
+      "gop-size=15",
       "!",
-      "tcpserversink",
-      "host=0.0.0.0",
-      "port=8555",
+      "h264parse",
+      "config-interval=-1",
+      "!",
+      "video/x-h264,stream-format=avc,alignment=au",
+      "!",
+      "queue",
+      "max-size-buffers=0",
+      "max-size-time=500000000",
+      "max-size-bytes=0",
+      "leaky=downstream",
+      "!",
+      "flvmux",
+      "streamable=true",
+      "!",
+      "rtmpsink",
+      "location=rtmp://localhost:1935/preview",
       "sync=false",
-      "recover-policy=keyframe",
     );
 
     // TODO: Compositor integration will be added in a future update

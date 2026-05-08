@@ -119,7 +119,46 @@ findmnt -o TARGET,OPTIONS / /boot/firmware
 
 You should see `noatime` listed in the options column. The change will persist automatically after the next reboot because it is now in `/etc/fstab`.
 
-### 1f. Prevent the root volume from filling up — log rotation
+### 1f. Prevent needrestart from auto-restarting the stream service
+
+Ubuntu's `unattended-upgrades` package runs nightly package upgrades automatically. After an upgrade it invokes `needrestart`, which detects that the camera service is using updated shared libraries and sends it `SIGTERM` — silently interrupting your live stream at whatever hour the upgrade runs (typically ~06:45).
+
+By default `needrestart` is set to **automatic** mode (`a`), meaning it restarts any affected service without prompting. Change it to **interactive** mode (`i`) so it only acts when a human is sitting at a terminal:
+
+```bash
+sudo nano /etc/needrestart/needrestart.conf
+```
+
+Find the line:
+```
+#$nrconf{restart} = 'i';
+```
+
+Uncomment it and change the value to `i` (it may already say `i` when uncommented — the key is that the line is **not commented out** and reads `i`, not `a`):
+```
+$nrconf{restart} = 'i';
+```
+
+Save and exit. The change takes effect on the next upgrade run — no restart required.
+
+> **Why not disable `unattended-upgrades` entirely?** Security patches still matter even on an appliance. Interactive mode keeps automatic security updates active but prevents any service from being restarted without a human present.
+
+**Verify the setting:**
+```bash
+grep 'nrconf{restart}' /etc/needrestart/needrestart.conf
+# Should print: $nrconf{restart} = 'i';
+```
+
+**To diagnose a past unexpected restart**, look in the journal at the exact minute the service stopped:
+```bash
+# Replace the timestamp with the time shown in your app log
+sudo journalctl --since "2026-05-08 06:43:00" --until "2026-05-08 06:46:30" --no-pager
+```
+If you see `apt-daily-upgrade.service` starting immediately before `digitalpool-camera.service: Deactivated successfully`, the cause is confirmed as `needrestart`.
+
+---
+
+### 1g. Prevent the root volume from filling up — log rotation
 
 An unattended device running 24/7 will accumulate logs from systemd-journald, the kernel, the application, and various system services. Left unchecked these will eventually fill the microSD card and crash everything. Two things control this: **journald** (the main log sink for all systemd services) and **logrotate** (for traditional `/var/log` files).
 
@@ -193,7 +232,7 @@ source ~/.bashrc
 
 Run `diskcheck` any time to see root volume free space and journal size together.
 
-### 1g. Add swap space
+### 1h. Add swap space
 
 The Orange Pi 5 has 4 GB of RAM and **no swap by default**. The camera service, GStreamer pipeline, and ffmpeg together can peak at 2–3 GB under load. Without swap, the OOM killer will silently terminate processes and make the device appear unresponsive. A 2 GB swap file gives the OS room to page out cold memory rather than killing services.
 
@@ -210,7 +249,7 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 free -h
 ```
 
-### 1h. Disable sleep and suspend
+### 1i. Disable sleep and suspend
 
 An IoT device running headless must never suspend — a missed keep-alive or an idle timeout will take the camera completely offline with no way to recover it remotely.
 
@@ -654,14 +693,37 @@ Adjust `CAMERA_DEVICE` if your camera appears on a different node (check with `v
 sudo ufw allow 3000/tcp    # Web UI / Socket.IO
 sudo ufw allow 8554/tcp    # RTSP  (MediaMTX)
 sudo ufw allow 8888/tcp    # HLS   (MediaMTX)
+sudo ufw allow 8889/udp    # WebRTC media (MediaMTX — admin preview + WHEP)
 sudo ufw allow 8890/tcp    # RTMP  (MediaMTX ingest)
 sudo ufw allow 8891/udp    # SRT   (server mode)
 sudo ufw allow 8891/tcp    # SRT   (some clients use TCP)
-sudo ufw allow 8555/tcp    # GStreamer preview TCP sink
 # NDI source input (see section 2l for details)
 sudo ufw allow 5353/udp    # mDNS  (NDI source discovery)
 sudo ufw allow 5960/tcp    # NDI   (connection initiation)
 sudo ufw allow 5961/udp    # NDI   (stream data)
+sudo ufw reload
+```
+
+To check which ports are currently open on an existing install:
+
+```bash
+sudo ufw status numbered
+```
+
+If port 8889/udp is missing from the list, add it and reload:
+
+```bash
+sudo ufw allow 8889/udp
+sudo ufw reload
+```
+
+If port 8555/tcp is still listed (old GStreamer MJPEG preview sink — no longer used), you can remove it:
+
+```bash
+# Find the rule number first
+sudo ufw status numbered | grep 8555
+# Then delete it (replace N with the number shown)
+sudo ufw delete N
 sudo ufw reload
 ```
 
