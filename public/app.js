@@ -1170,7 +1170,7 @@ socket.on("streamStatus", (status) => {
     if (_webrtcRetryTimer)    { clearTimeout(_webrtcRetryTimer);    _webrtcRetryTimer    = null; }
     _tcpPreviewTimeout = setTimeout(() => {
       _tcpPreviewTimeout = null;
-      switchToWebRTCPreview("live"); // WHEP viewer on the "live" MediaMTX path
+      switchToWebRTCPreview("preview"); // always the preview tee branch — works for all protocols
     }, 2000); // 2 s grace period for GStreamer + MediaMTX to start publishing
   } else {
     // Change Restart button back to Start button
@@ -3748,12 +3748,9 @@ loadDeviceIp();
     if (lowBandwidthMode) {
       switchToSnapshotPreview();
     } else {
-      // Restore the appropriate WebRTC preview
-      if (isCurrentlyStreaming) {
-        switchToWebRTCPreview("live");
-      } else {
-        switchToWebRTCPreview("preview");
-      }
+      // Restore the WebRTC preview — always "preview" path (the tee branch
+      // pushes to rtmp://localhost:1935/preview regardless of streaming protocol)
+      switchToWebRTCPreview("preview");
     }
   });
 
