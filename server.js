@@ -1747,6 +1747,21 @@ app.get("/api/stream/config", (req, res) => {
   res.json({ success: true, config: streamController.streamConfig });
 });
 
+// Returns the MediaMTX WHEP base URL the browser should use for WebRTC preview.
+// The browser connects directly to MediaMTX on port 8889 (CORS is open there).
+// Using req.socket.localAddress instead of window.location.hostname ensures the
+// URL matches the interface this connection arrived on, which is guaranteed to
+// be one of MediaMTX's ICE candidates (it's a live local interface).
+// This fixes Tailscale, hotspot, and any other non-LAN interface automatically.
+app.get("/api/stream/whep-base", requireAuth, (req, res) => {
+  let host = req.socket.localAddress || "127.0.0.1";
+  // Strip IPv6-mapped IPv4 prefix (e.g. ::ffff:192.168.1.81 → 192.168.1.81)
+  if (host.startsWith("::ffff:")) host = host.slice(7);
+  // Wrap bare IPv6 in brackets for a valid URL
+  const urlHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  res.json({ whepBase: `http://${urlHost}:8889` });
+});
+
 // API endpoint to reset camera to defaults
 app.post("/api/camera/reset", async (req, res) => {
   const result = await camera.resetToDefaults();

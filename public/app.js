@@ -1455,12 +1455,18 @@ async function switchToWebRTCPreview(streamPath, onConnected, _attempt = 0) {
     setTimeout(() => { pc.removeEventListener("icegatheringstatechange", onStateChange); resolve(); }, 5000);
   });
 
-  // POST the SDP offer directly to MediaMTX on port 8889.
+  // Ask the server which interface this HTTP connection arrived on and use
+  // that IP for the WHEP URL.  This guarantees the IP matches one of MediaMTX's
+  // ICE candidates (it's the live local interface), so WebRTC works regardless
+  // of whether the browser connected via LAN, hotspot, or Tailscale.
   // MediaMTX returns Access-Control-Allow-Origin: * so CORS is not an issue.
-  // Going direct avoids the Node.js proxy which causes ECONNRESET — MediaMTX
-  // rejects the full browser SDP through the proxy but accepts it natively.
-  // The device hostname is the same server the browser is already connected to.
-  const whepUrl = `http://${window.location.hostname}:8889/${streamPath}/whep`;
+  let whepBase = `http://${window.location.hostname}:8889`; // safe fallback
+  try {
+    const baseRes = await fetch("/api/stream/whep-base");
+    if (baseRes.ok) ({ whepBase } = await baseRes.json());
+  } catch (_) { /* use fallback */ }
+  const whepUrl = `${whepBase}/${streamPath}/whep`;
+  console.log(`📡 WHEP URL: ${whepUrl}`);
   let whepRes;
   try {
     whepRes = await fetch(whepUrl, {
