@@ -1405,9 +1405,12 @@ async function switchToWebRTCPreview(streamPath, onConnected, _attempt = 0) {
   const pc = new RTCPeerConnection({ bundlePolicy: "max-bundle" });
   _webrtcPc = pc;
 
-  // WHEP role is "viewer" — receive-only transceivers
+  // WHEP role is "viewer" — video-only receive transceiver.
+  // The preview path (rtmp://localhost:1935/preview) carries H264 video only —
+  // no audio track.  Adding an audio transceiver causes the browser SDP to
+  // include an m=audio section that MediaMTX cannot satisfy, which causes it
+  // to ECONNRESET the WHEP connection instead of returning a 201 answer.
   pc.addTransceiver("video", { direction: "recvonly" });
-  pc.addTransceiver("audio", { direction: "recvonly" });
 
   // Attach incoming media tracks to the <video> element
   pc.ontrack = (evt) => {
