@@ -2266,8 +2266,14 @@ app.get("/video/hls-live/*file", requireAuth, (req, res) => {
 // The Location header from MediaMTX is rewritten from the internal address
 // (http://127.0.0.1:8889/…) to a path rooted at /api/whep so the browser's
 // follow-up PATCH/DELETE requests stay on port 3000.
-app.all("/api/whep/*path", requireAuth, (req, res) => {
+// express.raw({ type: '*/*' }) MUST be used here instead of req.on("data").
+// The global express.json() middleware (and keep-alive connection reuse) can
+// leave the readable stream in a state where req.on("data") never fires, so
+// the proxy would forward an empty POST body and MediaMTX would hang up.
+// express.raw() buffers the entire body into req.body before this handler runs.
+app.all("/api/whep/*path", requireAuth, express.raw({ type: "*/*" }), (req, res) => {
   const subpath = req.params.path; // e.g. "preview" or "preview/abc123"
+  const reqBody = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
 
   // POST /api/whep/preview → upstream POST http://127.0.0.1:8889/preview/whep
   // PATCH/DELETE /api/whep/preview/abc123 → upstream http://127.0.0.1:8889/preview/whep/abc123
@@ -2281,42 +2287,36 @@ app.all("/api/whep/*path", requireAuth, (req, res) => {
     path: upstreamPath,
     method: req.method,
     headers: { "content-type": req.headers["content-type"] || "application/sdp" },
-    timeout: 6000,
+    timeout: 10000,
   };
+  if (reqBody.length > 0) options.headers["content-length"] = reqBody.length;
 
-  // Collect SDP offer body from the browser (POST only; PATCH/DELETE have tiny or no body)
-  let reqBody = Buffer.alloc(0);
-  req.on("data", (chunk) => { reqBody = Buffer.concat([reqBody, chunk]); });
-  req.on("end", () => {
-    if (reqBody.length) options.headers["content-length"] = reqBody.length;
+  const proxyReq = http.request(options, (upRes) => {
+    res.status(upRes.statusCode);
 
-    const proxyReq = http.request(options, (upRes) => {
-      res.status(upRes.statusCode);
-
-      // Forward headers, rewriting Location so the browser stays on port 3000
-      for (const [k, v] of Object.entries(upRes.headers)) {
-        if (k.toLowerCase() === "location") {
-          // http://127.0.0.1:8889/preview/whep/abc123 → /api/whep/preview/whep/abc123
-          const rewritten = v.replace(/^https?:\/\/[^/]+/, "/api/whep");
-          res.setHeader("Location", rewritten);
-        } else if (!["transfer-encoding", "connection"].includes(k.toLowerCase())) {
-          res.setHeader(k, v);
-        }
+    // Forward headers, rewriting Location so the browser stays on port 3000
+    for (const [k, v] of Object.entries(upRes.headers)) {
+      if (k.toLowerCase() === "location") {
+        // http://127.0.0.1:8889/preview/whep/abc123 → /api/whep/preview/whep/abc123
+        const rewritten = v.replace(/^https?:\/\/[^/]+/, "/api/whep");
+        res.setHeader("Location", rewritten);
+      } else if (!["transfer-encoding", "connection"].includes(k.toLowerCase())) {
+        res.setHeader(k, v);
       }
+    }
 
-      upRes.pipe(res);
-    });
-
-    proxyReq.on("error", (err) => {
-      console.error(`❌ WHEP proxy error (${upstreamPath}):`, err.message);
-      if (!res.headersSent) res.status(502).json({ error: "WHEP proxy failed" });
-    });
-    proxyReq.on("timeout", () => { proxyReq.destroy(); if (!res.headersSent) res.status(504).end(); });
-    req.on("close", () => proxyReq.destroy());
-
-    if (reqBody.length) proxyReq.write(reqBody);
-    proxyReq.end();
+    upRes.pipe(res);
   });
+
+  proxyReq.on("error", (err) => {
+    console.error(`❌ WHEP proxy error (${upstreamPath}):`, err.message);
+    if (!res.headersSent) res.status(502).json({ error: "WHEP proxy failed" });
+  });
+  proxyReq.on("timeout", () => { proxyReq.destroy(); if (!res.headersSent) res.status(504).end(); });
+  req.on("close", () => { try { proxyReq.destroy(); } catch (_) {} });
+
+  if (reqBody.length > 0) proxyReq.write(reqBody);
+  proxyReq.end();
 });
 
 // Serve HLS playlist and segments for preview when streaming

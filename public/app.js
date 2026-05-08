@@ -1434,12 +1434,22 @@ async function switchToWebRTCPreview(streamPath, onConnected, _attempt = 0) {
     return;
   }
 
-  // Wait for ICE gathering to finish (or 2 s timeout — MediaMTX returns all candidates in answer anyway)
+  // Wait for ICE gathering to reach "complete" (or 5 s timeout).
+  // Do NOT use { once: true } — icegatheringstatechange fires multiple times:
+  //   new → gathering → complete
+  // Using once resolves on the first event (new→gathering) and sends an SDP
+  // offer with no candidates.  MediaMTX has no address to send video to, and
+  // since we send no PATCH trickle-ICE requests, the session never connects.
   await new Promise((resolve) => {
     if (pc.iceGatheringState === "complete") { resolve(); return; }
-    const done = () => resolve();
-    pc.addEventListener("icegatheringstatechange", done, { once: true });
-    setTimeout(() => { pc.removeEventListener("icegatheringstatechange", done); resolve(); }, 2000);
+    const onStateChange = () => {
+      if (pc.iceGatheringState === "complete") {
+        pc.removeEventListener("icegatheringstatechange", onStateChange);
+        resolve();
+      }
+    };
+    pc.addEventListener("icegatheringstatechange", onStateChange);
+    setTimeout(() => { pc.removeEventListener("icegatheringstatechange", onStateChange); resolve(); }, 5000);
   });
 
   // POST the SDP offer to the WHEP proxy → MediaMTX
