@@ -221,45 +221,62 @@ setInterval(() => {
 }, 2000);
 
 // ── Captive portal detection ──────────────────────────────────────────────
-// When a device joins the hotspot the OS fires a connectivity probe.
-// Returning a 302 redirect tells the OS "this is a captive portal requiring
-// sign-in" → it marks the network as limited and keeps switching away to
-// cellular or a saved WiFi with real internet.
-// Instead we return the EXACT success payload each OS expects so it marks
-// the network as having internet and stops switching.
+// Probes arrive on two paths:
 //
-// Port 80 → 3000 redirect is set by the app on startup via iptables so
-// probes sent to any IP on port 80 are intercepted by these routes.
+//   HTTP  (port 80 → 3000, plain TCP):
+//     Return 302 → admin UI.  This opens the OS captive-portal mini-browser
+//     automatically so the user lands on the control panel without typing an IP.
 //
-//   iOS / macOS  → /hotspot-detect.html   expects 200 + "Success" HTML
-//   Android      → /generate_204, /gen_204 expects HTTP 204
-//   Windows NCSI → /ncsi.txt              expects plain "Microsoft NCSI"
-//   Amazon Fire  → /kindle-wifi/wifistub.html
+//   HTTPS (port 443 → 3443, TLS — iOS 14+):
+//     Return 200 Success.  iOS uses this check to decide whether the network
+//     has internet; a 200 tells it "yes" so it stops switching to cellular or
+//     a saved WiFi.  iOS skips cert validation for captive-portal probes, so
+//     a self-signed cert works fine.
+//
+// Net result: phone auto-opens the admin UI AND stays on the hotspot.
 
-const _CAPTIVE_SUCCESS_HTML = '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>';
+const _CAPTIVE_SUCCESS_HTML  = '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>';
+const _CAPTIVE_PORTAL_URL    = `http://${DEFAULT_AP_IP}:${PORT}`;
 
-function _sendCaptiveSuccess(req, res) {
-  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
-  res.set('Content-Type', 'text/html').set('Cache-Control', 'no-store').send(_CAPTIVE_SUCCESS_HTML);
+function _sendCaptiveResponse(req, res) {
+  // req.socket.encrypted is true when the request arrived via the HTTPS server
+  const isHttps = !!(req.socket && req.socket.encrypted);
+  const ip      = req.ip || (req.socket && req.socket.remoteAddress) || '?';
+  console.log(`📶 Captive portal probe (${isHttps ? 'HTTPS✓' : 'HTTP→redirect'}): ${req.method} ${req.path} Host:${req.headers.host} from ${ip}`);
+
+  if (isHttps) {
+    // HTTPS probe — return Success so iOS marks the network as "has internet"
+    res.set('Content-Type', 'text/html').set('Cache-Control', 'no-store').send(_CAPTIVE_SUCCESS_HTML);
+  } else {
+    // HTTP probe — redirect to admin UI to open the captive-portal mini-browser
+    res.set('Cache-Control', 'no-store').redirect(302, _CAPTIVE_PORTAL_URL);
+  }
 }
+
 function _sendCaptive204(req, res) {
-  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
-  res.status(204).end();
+  const isHttps = !!(req.socket && req.socket.encrypted);
+  const ip      = req.ip || (req.socket && req.socket.remoteAddress) || '?';
+  console.log(`📶 Captive portal probe (${isHttps ? 'HTTPS✓' : 'HTTP→redirect'}): ${req.method} ${req.path} from ${ip}`);
+  if (isHttps) {
+    res.status(204).end();
+  } else {
+    res.set('Cache-Control', 'no-store').redirect(302, _CAPTIVE_PORTAL_URL);
+  }
 }
 
 // Apple probes (iOS 6+, macOS)
-app.get('/hotspot-detect.html',          _sendCaptiveSuccess);
-app.get('/library/test/success.html',    _sendCaptiveSuccess);
-app.get('/success.html',                 _sendCaptiveSuccess);
+app.get('/hotspot-detect.html',          _sendCaptiveResponse);
+app.get('/library/test/success.html',    _sendCaptiveResponse);
+app.get('/success.html',                 _sendCaptiveResponse);
 // Android / Chrome probes
 app.get('/generate_204',                 _sendCaptive204);
 app.get('/gen_204',                      _sendCaptive204);
-// Windows NCSI
-app.get('/ncsi.txt',        (req, res) => { console.log(`📶 Captive NCSI probe from ${req.ip}`); res.send('Microsoft NCSI'); });
-app.get('/connecttest.txt', (req, res) => { console.log(`📶 Captive connecttest from ${req.ip}`); res.send('Microsoft Connect Test'); });
-app.get('/redirect',        (req, res) => { console.log(`📶 Captive redirect from ${req.ip}`); res.send('Microsoft Connect Test'); });
+// Windows NCSI — always return the exact expected text (redirect breaks NCSI)
+app.get('/ncsi.txt',        (req, res) => { console.log(`📶 Captive NCSI probe from ${req.ip}`);        res.send('Microsoft NCSI'); });
+app.get('/connecttest.txt', (req, res) => { console.log(`📶 Captive connecttest probe from ${req.ip}`); res.send('Microsoft Connect Test'); });
+app.get('/redirect',        (req, res) => { console.log(`📶 Captive redirect probe from ${req.ip}`);    res.send('Microsoft Connect Test'); });
 // Amazon Kindle / Fire OS
-app.get('/kindle-wifi/wifistub.html',    _sendCaptiveSuccess);
+app.get('/kindle-wifi/wifistub.html',    _sendCaptiveResponse);
 // ─────────────────────────────────────────────────────────────────────────
 
 // ── Public auth routes (no requireAuth guard) ────────────────────────────────
