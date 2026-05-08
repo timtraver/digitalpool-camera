@@ -221,72 +221,46 @@ setInterval(() => {
 }, 2000);
 
 // ── Captive portal detection ──────────────────────────────────────────────
-// Two-phase approach — gives the user the auto-open portal AND keeps the
-// phone connected:
+// iOS and Android run two independent checks when joining a WiFi network:
 //
-//  Phase 1 — first probe from a new device (IP not yet authenticated):
-//    HTTP  probe → 302 redirect → iOS/Android opens the captive-portal
-//                  mini-browser automatically, landing on the admin UI.
-//    HTTPS probe → 200 Success  → satisfies iOS 14+ internet check.
+//   HTTP probe  (port 80 → 3000):
+//     Always return 302 → admin UI.  This opens the OS captive-portal
+//     mini-browser on EVERY connection automatically, so the user always
+//     lands on the control panel without typing an IP address.
 //
-//  Phase 2 — after the device has visited any non-probe URL (i.e. the
-//    mini-browser loaded the admin UI and the IP is now in the auth set):
-//    ALL probes → 200 Success  → OS marks network as "has internet" and
-//                  stops trying to switch to cellular / saved WiFi.
+//   HTTPS probe (port 443 → 3443, iOS 14+):
+//     Always return 200 Success.  This is the internet-connectivity check —
+//     iOS uses it to decide whether to stay on the network.  A 200 here
+//     keeps the phone on the hotspot even while the HTTP probe returns a
+//     redirect.  These two checks are independent.
 //
-// Windows NCSI probes always get the exact text they expect; a redirect
-// breaks NCSI regardless of auth state.
+// Net result: portal opens on every connect AND phone never switches away.
+// Requires the self-signed cert at /etc/ssl/digitalpool/cert.pem (see README § 7c).
+//
+// Windows NCSI always gets the literal text it expects; a redirect breaks it.
 
 const _CAPTIVE_SUCCESS_HTML = '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>';
 const _CAPTIVE_PORTAL_URL   = `http://${DEFAULT_AP_IP}:${PORT}`;
 
-// Paths that are themselves captive-portal probes — excluded from auth tracking
-const _CAPTIVE_PROBE_PATHS = new Set([
-  '/hotspot-detect.html', '/library/test/success.html', '/success.html',
-  '/generate_204', '/gen_204', '/ncsi.txt', '/connecttest.txt', '/redirect',
-  '/kindle-wifi/wifistub.html',
-]);
-
-// IPs that have loaded the admin UI through the captive portal mini-browser
-const _captiveAuthedIPs = new Set();
-
-// Middleware: when a hotspot client visits ANY non-probe URL, mark it as
-// authenticated so subsequent probes return Success instead of a redirect.
-app.use((req, res, next) => {
-  if (!_CAPTIVE_PROBE_PATHS.has(req.path)) {
-    const cleanIp = (req.ip || '').replace(/^::ffff:/, '');
-    if (cleanIp.startsWith(DEFAULT_AP_IP.split('.').slice(0, 3).join('.')) &&
-        !_captiveAuthedIPs.has(cleanIp)) {
-      _captiveAuthedIPs.add(cleanIp);
-      console.log(`📶 Captive portal: ${cleanIp} authenticated (visited ${req.path})`);
-    }
-  }
-  next();
-});
-
 function _sendCaptiveResponse(req, res) {
-  const isHttps  = !!(req.socket && req.socket.encrypted);
-  const cleanIp  = (req.ip || req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
-  const isAuthed = _captiveAuthedIPs.has(cleanIp);
-
-  if (isHttps || isAuthed) {
-    // HTTPS probe OR already authenticated: return Success so the OS is happy
-    const label = isHttps ? 'HTTPS✓' : 'HTTP✓(authed)';
-    console.log(`📶 Captive portal probe (${label}): ${req.method} ${req.path} from ${cleanIp}`);
+  const isHttps = !!(req.socket && req.socket.encrypted);
+  const cleanIp = (req.ip || req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
+  if (isHttps) {
+    // HTTPS internet-connectivity check → always Success (keeps phone on hotspot)
+    console.log(`📶 Captive portal probe (HTTPS✓): ${req.method} ${req.path} from ${cleanIp}`);
     res.set('Content-Type', 'text/html').set('Cache-Control', 'no-store').send(_CAPTIVE_SUCCESS_HTML);
   } else {
-    // First HTTP probe: redirect → opens captive-portal mini-browser → admin UI
+    // HTTP captive-portal probe → always redirect → mini-browser opens every time
     console.log(`📶 Captive portal probe (HTTP→portal): ${req.method} ${req.path} from ${cleanIp}`);
     res.set('Cache-Control', 'no-store').redirect(302, _CAPTIVE_PORTAL_URL);
   }
 }
 
 function _sendCaptive204(req, res) {
-  const isHttps  = !!(req.socket && req.socket.encrypted);
-  const cleanIp  = (req.ip || req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
-  const isAuthed = _captiveAuthedIPs.has(cleanIp);
-  console.log(`📶 Captive portal probe (${isHttps || isAuthed ? '✓' : '→portal'}): ${req.method} ${req.path} from ${cleanIp}`);
-  if (isHttps || isAuthed) {
+  const isHttps = !!(req.socket && req.socket.encrypted);
+  const cleanIp = (req.ip || req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
+  console.log(`📶 Captive portal probe (${isHttps ? 'HTTPS✓' : 'HTTP→portal'}): ${req.method} ${req.path} from ${cleanIp}`);
+  if (isHttps) {
     res.status(204).end();
   } else {
     res.set('Cache-Control', 'no-store').redirect(302, _CAPTIVE_PORTAL_URL);
@@ -306,76 +280,6 @@ app.get('/connecttest.txt', (req, res) => { console.log(`📶 Captive connecttes
 app.get('/redirect',        (req, res) => { console.log(`📶 Captive redirect from ${req.ip}`);    res.send('Microsoft Connect Test'); });
 // Amazon Kindle / Fire OS
 app.get('/kindle-wifi/wifistub.html',    _sendCaptiveResponse);
-// ─────────────────────────────────────────────────────────────────────────
-
-// ── DHCP lease watcher — show captive portal on every reconnect ───────────────
-// dnsmasq writes a lease file when any device joins the hotspot and gets an IP.
-// Watching that file lets us de-auth the IP so the captive portal mini-browser
-// pops up again on every new connection instead of only the first time.
-//
-// De-auth logic:
-//   • New IP appears in lease file        → fresh connection → de-auth
-//   • MAC changes for an existing IP      → device changed   → de-auth
-//   • IP disappears (lease expired/released) → device left   → de-auth (for next time)
-//   • Only expiry changes (lease renewal) → device still here → no de-auth
-(function watchDhcpLeases() {
-  const NM_VAR_DIR = '/var/lib/NetworkManager';
-
-  function parseLeases(filePath) {
-    const leases = {};
-    try {
-      fsSync.readFileSync(filePath, 'utf8').split('\n').filter(Boolean).forEach(line => {
-        const [expiry, mac, ip] = line.split(' ');
-        if (ip) leases[ip] = { expiry: parseInt(expiry, 10), mac };
-      });
-    } catch (_) {}
-    return leases;
-  }
-
-  function startWatchingLeaseFile(filePath) {
-    let prev = parseLeases(filePath);
-    console.log(`📶 Captive portal: watching DHCP leases at ${filePath} (${Object.keys(prev).length} active)`);
-
-    fsSync.watch(filePath, () => {
-      const curr = parseLeases(filePath);
-
-      // New IP or MAC changed → device (re)connected
-      for (const [ip, lease] of Object.entries(curr)) {
-        const old = prev[ip];
-        if (!old || old.mac !== lease.mac) {
-          _captiveAuthedIPs.delete(ip);
-          console.log(`📶 Captive portal: ${ip} de-authed (new DHCP lease) → portal will show on next probe`);
-        }
-      }
-      // IP gone → device disconnected → de-auth for when it returns
-      for (const ip of Object.keys(prev)) {
-        if (!curr[ip]) _captiveAuthedIPs.delete(ip);
-      }
-      prev = curr;
-    });
-  }
-
-  try {
-    const watched = new Set();
-    // Watch any lease files that already exist (hotspot was up before app started)
-    fsSync.readdirSync(NM_VAR_DIR)
-      .filter(f => /^dnsmasq-.*\.leases$/.test(f))
-      .forEach(f => {
-        const fp = path.join(NM_VAR_DIR, f);
-        startWatchingLeaseFile(fp);
-        watched.add(fp);
-      });
-    // Also watch the directory for lease files that appear later (hotspot starts after app)
-    fsSync.watch(NM_VAR_DIR, (event, filename) => {
-      if (filename && /^dnsmasq-.*\.leases$/.test(filename)) {
-        const fp = path.join(NM_VAR_DIR, filename);
-        if (!watched.has(fp)) { watched.add(fp); startWatchingLeaseFile(fp); }
-      }
-    });
-  } catch (e) {
-    console.warn(`⚠️  Captive portal: could not watch DHCP leases — ${e.message}`);
-  }
-})();
 // ─────────────────────────────────────────────────────────────────────────
 
 // ── Public auth routes (no requireAuth guard) ────────────────────────────────
