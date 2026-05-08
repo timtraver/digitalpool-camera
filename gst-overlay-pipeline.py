@@ -440,7 +440,7 @@ def main():
         f'! videoscale ! video/x-raw,width=1280,height=720 '
         f'! videorate ! video/x-raw,framerate=15/1 '
         f'! videoconvert ! video/x-raw,format=NV12 '
-        f'! mpph264enc bitrate=500000 header-mode=each-idr gop-size=15 '
+        f'! mpph264enc bps=500000 header-mode=each-idr gop=15 '
         f'! h264parse config-interval=-1 '
         f'! video/x-h264,stream-format=avc,alignment=au '
         f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream '

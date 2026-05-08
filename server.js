@@ -2654,7 +2654,7 @@ function buildIdlePreviewGstArgs() {
     "!",
     "video/x-raw,format=NV12",
     "!",
-    "mpph264enc", "bitrate=500000", "header-mode=each-idr", "gop-size=15",
+    "mpph264enc", "bps=500000", "header-mode=each-idr", "gop=15",
     "!",
     "h264parse", "config-interval=-1",
     "!",
