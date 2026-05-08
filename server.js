@@ -2279,7 +2279,9 @@ app.all("/api/whep/*path", requireAuth, express.raw({ type: "*/*" }), (req, res)
   // PATCH/DELETE /api/whep/preview/abc123 → upstream http://127.0.0.1:8889/preview/whep/abc123
   const upstreamPath = req.method === "POST"
     ? `/${subpath}/whep`
-    : `/${subpath}`;          // subpath already contains "/whep/<sessionId>" for PATCH/DELETE
+    : `/${subpath}`;
+
+  console.log(`🔀 WHEP proxy: ${req.method} ${upstreamPath} bodyLen=${reqBody.length} ct=${req.headers["content-type"]}`);
 
   const options = {
     hostname: "127.0.0.1",
@@ -2288,16 +2290,17 @@ app.all("/api/whep/*path", requireAuth, express.raw({ type: "*/*" }), (req, res)
     method: req.method,
     headers: { "content-type": req.headers["content-type"] || "application/sdp" },
     timeout: 10000,
+    agent: false,   // no keep-alive pooling — always a fresh TCP connection to MediaMTX
   };
   if (reqBody.length > 0) options.headers["content-length"] = reqBody.length;
 
   const proxyReq = http.request(options, (upRes) => {
+    console.log(`✅ WHEP upstream response: HTTP ${upRes.statusCode} for ${upstreamPath}`);
     res.status(upRes.statusCode);
 
     // Forward headers, rewriting Location so the browser stays on port 3000
     for (const [k, v] of Object.entries(upRes.headers)) {
       if (k.toLowerCase() === "location") {
-        // http://127.0.0.1:8889/preview/whep/abc123 → /api/whep/preview/whep/abc123
         const rewritten = v.replace(/^https?:\/\/[^/]+/, "/api/whep");
         res.setHeader("Location", rewritten);
       } else if (!["transfer-encoding", "connection"].includes(k.toLowerCase())) {
@@ -2309,7 +2312,7 @@ app.all("/api/whep/*path", requireAuth, express.raw({ type: "*/*" }), (req, res)
   });
 
   proxyReq.on("error", (err) => {
-    console.error(`❌ WHEP proxy error (${upstreamPath}):`, err.message);
+    console.error(`❌ WHEP proxy error (${upstreamPath}): ${err.message} [code=${err.code}] bodyLen=${reqBody.length}`);
     if (!res.headersSent) res.status(502).json({ error: "WHEP proxy failed" });
   });
   proxyReq.on("timeout", () => { proxyReq.destroy(); if (!res.headersSent) res.status(504).end(); });
