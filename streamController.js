@@ -1540,6 +1540,7 @@ class StreamController extends EventEmitter {
       "rtmpsink",
       "location=rtmp://localhost:1935/preview",
       "sync=false",
+      "async=false",  // must not participate in preroll — the preview branch must never block PLAYING
     );
 
     // TODO: Compositor integration will be added in a future update
