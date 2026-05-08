@@ -1455,10 +1455,15 @@ async function switchToWebRTCPreview(streamPath, onConnected, _attempt = 0) {
     setTimeout(() => { pc.removeEventListener("icegatheringstatechange", onStateChange); resolve(); }, 5000);
   });
 
-  // POST the SDP offer to the WHEP proxy → MediaMTX
+  // POST the SDP offer directly to MediaMTX on port 8889.
+  // MediaMTX returns Access-Control-Allow-Origin: * so CORS is not an issue.
+  // Going direct avoids the Node.js proxy which causes ECONNRESET — MediaMTX
+  // rejects the full browser SDP through the proxy but accepts it natively.
+  // The device hostname is the same server the browser is already connected to.
+  const whepUrl = `http://${window.location.hostname}:8889/${streamPath}/whep`;
   let whepRes;
   try {
-    whepRes = await fetch(`/api/whep/${streamPath}`, {
+    whepRes = await fetch(whepUrl, {
       method: "POST",
       headers: { "Content-Type": "application/sdp" },
       body: pc.localDescription.sdp,
