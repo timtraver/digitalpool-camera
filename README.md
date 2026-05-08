@@ -971,17 +971,27 @@ sudo nmcli con down "DigitalPool-Hotspot" && sudo nmcli con up "DigitalPool-Hots
 
 ### 7c. Captive Portal (auto-open admin UI on connect)
 
-When a device connects to the hotspot it has no internet, so iOS, Android, and Windows each fire an HTTP "captive portal" probe to a well-known URL.  If the response is not what the OS expects it pops up a **"Sign in to network"** notification — tapping it opens a mini-browser that lands on the DigitalPool admin UI automatically.
+When a device connects to the hotspot it has no internet, so iOS, Android, and Windows each fire HTTP and HTTPS "captive portal" probes to well-known URLs. The app uses a **two-phase approach** that both auto-opens the admin UI *and* keeps the phone stably connected:
 
-Three pieces work together:
+| Phase | Trigger | Response | Effect |
+|---|---|---|---|
+| **1 — First probe** | New device, not yet authenticated | `302 → http://192.168.50.1:3000` | OS opens captive-portal mini-browser on admin UI |
+| **2 — After auth** | Device has loaded the admin UI | `200 OK` with `<HTML>Success</HTML>` | OS marks network as "has internet"; phone stays connected |
+
+The transition happens automatically: when the mini-browser follows the redirect and loads the admin UI, the server marks that device's IP as authenticated. All subsequent probes from that IP return `200 Success`, so iOS stops trying to switch to cellular or a saved WiFi network.
+
+**HTTPS probes** (iOS 14+, port 443) always return `200 Success` regardless of auth state — these are internet-connectivity checks, not captive-portal triggers, and a redirect on HTTPS causes iOS to mark the network as broken.
+
+Four pieces work together:
 
 | Piece | What it does |
 |---|---|
 | **dnsmasq wildcard** | Resolves every hostname to `192.168.50.1` so probe requests reach us |
-| **iptables PREROUTING** | Forwards port-80 traffic → port-3000 where Express listens |
-| **Express captive routes** | Returns OS-expected success responses: iOS/macOS → `200 OK` with `<HTML>Success</HTML>`; Android/Chrome → `204 No Content`; Windows → plain-text `Microsoft NCSI` |
+| **iptables port 80 → 3000** | Forwards HTTP traffic to Express |
+| **iptables port 443 → 3443** | Forwards HTTPS traffic to the Express HTTPS server |
+| **Self-signed TLS cert** | Allows the HTTPS server to respond to iOS 14+ internet-check probes |
 
-The app sets up pieces 1 and 2 automatically at startup — but both need `sudo` access.  Grant it with a single sudoers file:
+The app sets up the iptables rules automatically at startup — both need `sudo` access. Grant it with a single sudoers file:
 
 ```bash
 sudo tee /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
@@ -994,24 +1004,36 @@ EOF
 
 # Validate syntax before applying
 sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
+```
 
-# Pull the latest code from the repo
+Generate the self-signed TLS cert (one-time — persists across reboots):
+
+```bash
+sudo mkdir -p /etc/ssl/digitalpool
+sudo openssl req -x509 -newkey rsa:2048 \
+  -keyout /etc/ssl/digitalpool/key.pem \
+  -out    /etc/ssl/digitalpool/cert.pem \
+  -days 3650 -nodes -subj '/CN=captive.apple.com'
+```
+
+Then deploy and restart:
+
+```bash
 cd ~/digitalpool-camera && git pull
-
-# Restart the app to trigger captive portal setup
 sudo systemctl restart digitalpool-camera
 sudo journalctl -u digitalpool-camera -f
 ```
 
 You should see these lines in the log:
 ```
-✅ Captive portal dnsmasq config written — reloading NetworkManager
+🔒 HTTPS captive portal listening on port 3443 (iOS 14+ port-443 probes)
 ✅ Captive portal: port 80 → 3000 redirect active on wlx...
+✅ Captive portal: port 443 → 3443 redirect active on wlx...
 ```
 
-**Test it** — connect a phone to `DigitalPool-Camera` and wait 5–10 seconds.  iOS shows "Sign in to DigitalPool-Camera", Android shows a notification.  Tapping either opens the admin UI immediately.
+**Test it** — connect a phone to `DigitalPool-Camera` and wait 5–10 seconds. iOS shows "Sign in to DigitalPool-Camera" and tapping it opens the admin UI. The phone stays on the hotspot automatically after that.
 
-> **iptables rules are not persistent across reboots.** The app re-applies the rule every time it starts, so the rule is always in place as long as the service is running.  If you ever need to inspect active rules run: `sudo iptables -t nat -L PREROUTING -n -v`
+> **iptables rules are not persistent across reboots.** The app re-applies them every time it starts, so the rules are always in place as long as the service is running. To inspect active rules: `sudo iptables -t nat -L PREROUTING -n -v`
 
 ---
 
@@ -1492,15 +1514,25 @@ sudo nmcli con modify "DigitalPool-Hotspot" \
 sudo nmcli con down "DigitalPool-Hotspot" && sudo nmcli con up "DigitalPool-Hotspot"
 ```
 
-#### Captive portal sudoers (keeps phones connected to hotspot)
+#### Captive portal sudoers + TLS cert (auto-open admin UI on hotspot connect)
 
-Required for the captive portal and Ethernet/timezone/reboot controls to work.  See Section 7c for the full explanation.
+Required for the captive portal iptables rules and Ethernet/timezone/reboot controls to work. See Section 7c for the full explanation.
 
 ```bash
-# Check if already present — if this prints content, skip the rest
+# Check if sudoers file already present — if it prints content, skip that step
 sudo cat /etc/sudoers.d/digitalpool-captive 2>/dev/null
 
 # If missing, create it (paste the full block from Section 7c)
+
+# Check if TLS cert already present — if it prints content, skip that step
+sudo ls /etc/ssl/digitalpool/cert.pem 2>/dev/null
+
+# If missing, generate it (one-time — persists across reboots)
+sudo mkdir -p /etc/ssl/digitalpool
+sudo openssl req -x509 -newkey rsa:2048 \
+  -keyout /etc/ssl/digitalpool/key.pem \
+  -out    /etc/ssl/digitalpool/cert.pem \
+  -days 3650 -nodes -subj '/CN=captive.apple.com'
 ```
 
 #### Verify everything is healthy after update
@@ -1509,8 +1541,11 @@ sudo cat /etc/sudoers.d/digitalpool-captive 2>/dev/null
 # All three services must be active
 sudo systemctl status mediamtx digitalpool-camera network-watchdog.timer
 
-# Captive portal iptables rule must be present
-sudo iptables -t nat -L PREROUTING -n -v | grep 3000
+# Both captive portal iptables rules must be present
+sudo iptables -t nat -L PREROUTING -n -v | grep -E "3000|3443"
+
+# TLS cert for HTTPS captive portal must exist
+sudo ls /etc/ssl/digitalpool/cert.pem
 
 # MediaMTX ICE hosts injected
 grep webrtcAdditionalHosts /etc/mediamtx.yml

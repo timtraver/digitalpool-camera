@@ -308,6 +308,76 @@ app.get('/redirect',        (req, res) => { console.log(`📶 Captive redirect f
 app.get('/kindle-wifi/wifistub.html',    _sendCaptiveResponse);
 // ─────────────────────────────────────────────────────────────────────────
 
+// ── DHCP lease watcher — show captive portal on every reconnect ───────────────
+// dnsmasq writes a lease file when any device joins the hotspot and gets an IP.
+// Watching that file lets us de-auth the IP so the captive portal mini-browser
+// pops up again on every new connection instead of only the first time.
+//
+// De-auth logic:
+//   • New IP appears in lease file        → fresh connection → de-auth
+//   • MAC changes for an existing IP      → device changed   → de-auth
+//   • IP disappears (lease expired/released) → device left   → de-auth (for next time)
+//   • Only expiry changes (lease renewal) → device still here → no de-auth
+(function watchDhcpLeases() {
+  const NM_VAR_DIR = '/var/lib/NetworkManager';
+
+  function parseLeases(filePath) {
+    const leases = {};
+    try {
+      fsSync.readFileSync(filePath, 'utf8').split('\n').filter(Boolean).forEach(line => {
+        const [expiry, mac, ip] = line.split(' ');
+        if (ip) leases[ip] = { expiry: parseInt(expiry, 10), mac };
+      });
+    } catch (_) {}
+    return leases;
+  }
+
+  function startWatchingLeaseFile(filePath) {
+    let prev = parseLeases(filePath);
+    console.log(`📶 Captive portal: watching DHCP leases at ${filePath} (${Object.keys(prev).length} active)`);
+
+    fsSync.watch(filePath, () => {
+      const curr = parseLeases(filePath);
+
+      // New IP or MAC changed → device (re)connected
+      for (const [ip, lease] of Object.entries(curr)) {
+        const old = prev[ip];
+        if (!old || old.mac !== lease.mac) {
+          _captiveAuthedIPs.delete(ip);
+          console.log(`📶 Captive portal: ${ip} de-authed (new DHCP lease) → portal will show on next probe`);
+        }
+      }
+      // IP gone → device disconnected → de-auth for when it returns
+      for (const ip of Object.keys(prev)) {
+        if (!curr[ip]) _captiveAuthedIPs.delete(ip);
+      }
+      prev = curr;
+    });
+  }
+
+  try {
+    const watched = new Set();
+    // Watch any lease files that already exist (hotspot was up before app started)
+    fsSync.readdirSync(NM_VAR_DIR)
+      .filter(f => /^dnsmasq-.*\.leases$/.test(f))
+      .forEach(f => {
+        const fp = path.join(NM_VAR_DIR, f);
+        startWatchingLeaseFile(fp);
+        watched.add(fp);
+      });
+    // Also watch the directory for lease files that appear later (hotspot starts after app)
+    fsSync.watch(NM_VAR_DIR, (event, filename) => {
+      if (filename && /^dnsmasq-.*\.leases$/.test(filename)) {
+        const fp = path.join(NM_VAR_DIR, filename);
+        if (!watched.has(fp)) { watched.add(fp); startWatchingLeaseFile(fp); }
+      }
+    });
+  } catch (e) {
+    console.warn(`⚠️  Captive portal: could not watch DHCP leases — ${e.message}`);
+  }
+})();
+// ─────────────────────────────────────────────────────────────────────────
+
 // ── Public auth routes (no requireAuth guard) ────────────────────────────────
 // Login page — serve the standalone HTML file directly
 app.get("/login", (req, res) => {
