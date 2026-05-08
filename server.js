@@ -239,29 +239,21 @@ const _CAPTIVE_SUCCESS_HTML  = '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>S
 const _CAPTIVE_PORTAL_URL    = `http://${DEFAULT_AP_IP}:${PORT}`;
 
 function _sendCaptiveResponse(req, res) {
-  // req.socket.encrypted is true when the request arrived via the HTTPS server
-  const isHttps = !!(req.socket && req.socket.encrypted);
-  const ip      = req.ip || (req.socket && req.socket.remoteAddress) || '?';
-  console.log(`📶 Captive portal probe (${isHttps ? 'HTTPS✓' : 'HTTP→redirect'}): ${req.method} ${req.path} Host:${req.headers.host} from ${ip}`);
-
-  if (isHttps) {
-    // HTTPS probe — return Success so iOS marks the network as "has internet"
-    res.set('Content-Type', 'text/html').set('Cache-Control', 'no-store').send(_CAPTIVE_SUCCESS_HTML);
-  } else {
-    // HTTP probe — redirect to admin UI to open the captive-portal mini-browser
-    res.set('Cache-Control', 'no-store').redirect(302, _CAPTIVE_PORTAL_URL);
-  }
+  // Always return the OS-expected "Success" payload on both HTTP and HTTPS.
+  // Returning a 302 redirect on HTTP tells iOS "captive portal with no internet"
+  // which causes it to disconnect after a few retries.  Users navigate to the
+  // admin UI manually at http://192.168.50.1:3000 (shown on the pool table display).
+  const proto = (req.socket && req.socket.encrypted) ? 'HTTPS✓' : 'HTTP✓';
+  const ip    = req.ip || (req.socket && req.socket.remoteAddress) || '?';
+  console.log(`📶 Captive portal probe (${proto}): ${req.method} ${req.path} Host:${req.headers.host} from ${ip}`);
+  res.set('Content-Type', 'text/html').set('Cache-Control', 'no-store').send(_CAPTIVE_SUCCESS_HTML);
 }
 
 function _sendCaptive204(req, res) {
-  const isHttps = !!(req.socket && req.socket.encrypted);
-  const ip      = req.ip || (req.socket && req.socket.remoteAddress) || '?';
-  console.log(`📶 Captive portal probe (${isHttps ? 'HTTPS✓' : 'HTTP→redirect'}): ${req.method} ${req.path} from ${ip}`);
-  if (isHttps) {
-    res.status(204).end();
-  } else {
-    res.set('Cache-Control', 'no-store').redirect(302, _CAPTIVE_PORTAL_URL);
-  }
+  const proto = (req.socket && req.socket.encrypted) ? 'HTTPS✓' : 'HTTP✓';
+  const ip    = req.ip || (req.socket && req.socket.remoteAddress) || '?';
+  console.log(`📶 Captive portal probe (${proto}): ${req.method} ${req.path} from ${ip}`);
+  res.status(204).end();
 }
 
 // Apple probes (iOS 6+, macOS)
