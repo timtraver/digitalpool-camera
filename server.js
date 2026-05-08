@@ -221,93 +221,46 @@ setInterval(() => {
 }, 2000);
 
 // ── Captive portal detection ──────────────────────────────────────────────
-// When a device connects to the DigitalPool-Camera hotspot it has no
-// internet, so the OS fires a connectivity probe to a well-known URL on
-// port 80.  iptables PREROUTING redirects that traffic to port 3000 where
-// these routes catch it and redirect the device's captive-portal browser
-// to the admin UI.  Supported platforms:
-//   iOS / macOS  → /hotspot-detect.html  (captive.apple.com)
-//   Android      → /generate_204, /gen_204
-//   Windows NCSI → /ncsi.txt, /connecttest.txt, /redirect
+// When a device joins the hotspot the OS fires a connectivity probe.
+// Returning a 302 redirect tells the OS "this is a captive portal requiring
+// sign-in" → it marks the network as limited and keeps switching away to
+// cellular or a saved WiFi with real internet.
+// Instead we return the EXACT success payload each OS expects so it marks
+// the network as having internet and stops switching.
+//
+// Port 80 → 3000 redirect is set by the app on startup via iptables so
+// probes sent to any IP on port 80 are intercepted by these routes.
+//
+//   iOS / macOS  → /hotspot-detect.html   expects 200 + "Success" HTML
+//   Android      → /generate_204, /gen_204 expects HTTP 204
+//   Windows NCSI → /ncsi.txt              expects plain "Microsoft NCSI"
 //   Amazon Fire  → /kindle-wifi/wifistub.html
-const CAPTIVE_PORTAL_URL = `http://${DEFAULT_AP_IP}:${PORT}`;
 
-function _sendCaptiveRedirect(req, res, next) {
-  // Only intercept when the request arrived via the WiFi AP interface
-  // (local socket address is 192.168.50.1).  Requests coming in over
-  // Ethernet or any other interface fall through normally so they are
-  // never affected by the captive portal logic.
-  const localAddr = req.socket.localAddress || '';
-  if (!localAddr.includes(DEFAULT_AP_IP)) return next();
+const _CAPTIVE_SUCCESS_HTML = '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>';
 
-  // 302 redirect causes every OS captive-portal browser to follow it and
-  // land on the admin UI.  We also set the standard portal header so that
-  // RFC 8908-aware clients know a portal is present.
-  res
-    .set('Cache-Control', 'no-store')
-    .set('X-Captive-Portal', CAPTIVE_PORTAL_URL)
-    .redirect(302, CAPTIVE_PORTAL_URL);
+function _sendCaptiveSuccess(req, res) {
+  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
+  res.set('Content-Type', 'text/html').set('Cache-Control', 'no-store').send(_CAPTIVE_SUCCESS_HTML);
+}
+function _sendCaptive204(req, res) {
+  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
+  res.status(204).end();
 }
 
 // Apple probes (iOS 6+, macOS)
-app.get('/hotspot-detect.html',          _sendCaptiveRedirect);
-app.get('/library/test/success.html',    _sendCaptiveRedirect);
-app.get('/success.html',                 _sendCaptiveRedirect);
+app.get('/hotspot-detect.html',          _sendCaptiveSuccess);
+app.get('/library/test/success.html',    _sendCaptiveSuccess);
+app.get('/success.html',                 _sendCaptiveSuccess);
 // Android / Chrome probes
-app.get('/generate_204',                 _sendCaptiveRedirect);
-app.get('/gen_204',                      _sendCaptiveRedirect);
-// Windows NCSI probes
-app.get('/ncsi.txt',                     _sendCaptiveRedirect);
-app.get('/connecttest.txt',              _sendCaptiveRedirect);
-app.get('/redirect',                     _sendCaptiveRedirect);
-// Amazon Kindle / Fire OS
-app.get('/kindle-wifi/wifistub.html',    _sendCaptiveRedirect);
-// ─────────────────────────────────────────────────────────────────────────
-
-// ── Captive portal detection (no auth, no redirect) ─────────────────────────
-// iOS, Android, and Windows run connectivity checks when joining any WiFi
-// network.  If these fail the OS assumes "no internet" and automatically
-// switches to a known-good network.  We respond with the expected payloads so
-// the device stays connected to the hotspot.
-// Requires port 80 → 3000 redirect on the hotspot interface:
-//   sudo iptables -t nat -A PREROUTING -i wlx8c86ddaa1f53 -p tcp --dport 80 -j REDIRECT --to-port 3000
-
-// iOS / macOS
-app.get("/hotspot-detect.html", (req, res) => {
-  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
-  res.set("Content-Type", "text/html");
-  res.send("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
-});
-app.get("/library/test/success.html", (req, res) => {
-  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
-  res.set("Content-Type", "text/html");
-  res.send("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
-});
-app.get("/success.html", (req, res) => {
-  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
-  res.set("Content-Type", "text/html");
-  res.send("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
-});
-
-// Android / Chrome OS
-app.get("/generate_204", (req, res) => {
-  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
-  res.status(204).end();
-});
-app.get("/gen_204", (req, res) => {
-  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
-  res.status(204).end();
-});
-app.get("/connecttest.txt", (req, res) => {
-  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
-  res.send("Microsoft Connect Test");
-});
-
+app.get('/generate_204',                 _sendCaptive204);
+app.get('/gen_204',                      _sendCaptive204);
 // Windows NCSI
-app.get("/ncsi.txt", (req, res) => {
-  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
-  res.send("Microsoft NCSI");
-});
+app.get('/ncsi.txt',        (req, res) => { console.log(`📶 Captive NCSI probe from ${req.ip}`); res.send('Microsoft NCSI'); });
+app.get('/connecttest.txt', (req, res) => { console.log(`📶 Captive connecttest from ${req.ip}`); res.send('Microsoft Connect Test'); });
+app.get('/redirect',        (req, res) => { console.log(`📶 Captive redirect from ${req.ip}`); res.send('Microsoft Connect Test'); });
+// Amazon Kindle / Fire OS
+app.get('/kindle-wifi/wifistub.html',    _sendCaptiveSuccess);
+// ─────────────────────────────────────────────────────────────────────────
 
 // ── Public auth routes (no requireAuth guard) ────────────────────────────────
 // Login page — serve the standalone HTML file directly
