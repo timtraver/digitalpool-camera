@@ -8,7 +8,7 @@ A Node.js web service for the **Orange Pi 5 (RK3588)** that turns a USB PTZ came
 
 | Category | Details |
 |---|---|
-| 🎥 **Live preview** | MJPEG preview stream at 5 fps served by GStreamer over TCP |
+| 🎥 **Live preview** | WebRTC preview at 15 fps via MediaMTX WHEP protocol; hardware H.264 via Rockchip MPP |
 | 📡 **Professional streaming** | SRT (server mode, port 8891), RTMP (push), RTSP (via MediaMTX) |
 | ⚡ **Hardware encoding** | Rockchip MPP `mpph264enc` / `mpph265enc` — 1080p30 at <5 % CPU |
 | 🎙️ **Audio** | ALSA mic capture muxed into stream via FFmpeg; long-term A/V sync via `CLOCK_REALTIME` |
@@ -500,6 +500,31 @@ For every incoming viewer connection (RTSP, SRT, RTMP, WebRTC) MediaMTX calls `P
 
 > **Note:** Without the auth hook the ban feature still works, but banned clients can connect briefly before the auto-kick on the next 2-second poll removes them. The auth hook eliminates that window entirely.
 
+### 2k.2. MediaMTX — WebRTC ICE host update script
+
+The admin preview uses WebRTC (WHEP protocol). For WebRTC to work from every network interface — LAN, Tailscale (`100.x.x.x`), and the WiFi hotspot — MediaMTX must include each interface's IP address in its SDP ICE candidates. The `mediamtx-update-hosts.sh` script (included in the repo) detects all current non-loopback IPv4 addresses at startup and injects them into `webrtcAdditionalHosts` in `/etc/mediamtx.yml`.
+
+```bash
+# Install the script
+sudo cp ~/digitalpool-camera/mediamtx-update-hosts.sh /usr/local/bin/
+sudo chmod +x /usr/local/bin/mediamtx-update-hosts.sh
+
+# Hook it into the mediamtx systemd service as a pre-start step
+sudo mkdir -p /etc/systemd/system/mediamtx.service.d
+sudo tee /etc/systemd/system/mediamtx.service.d/update-hosts.conf << 'EOF'
+[Service]
+ExecStartPre=/usr/local/bin/mediamtx-update-hosts.sh
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl restart mediamtx
+
+# Verify — should list all local IPs including Tailscale and hotspot
+grep webrtcAdditionalHosts /etc/mediamtx.yml
+```
+
+The script runs automatically every time mediamtx starts, so it picks up new Tailscale IPs or hotspot interface changes without manual intervention.
+
 ### 2l. NDI (Network Device Interface) Support
 
 NDI lets the Orange Pi 5 receive a network video feed from any NDI sender on the same LAN — OBS, NewTek TriCaster, Mac Scan Converter, vMix, etc. — and re-stream it through the normal hardware-encode pipeline. Both standard NDI (uncompressed `video/x-raw`) and the compressed variants **NDI HX / HX2** (H.264) and **NDI HX3** (H.265) are supported; the pipeline auto-detects the format at runtime.
@@ -916,6 +941,34 @@ After connecting your phone or tablet to the hotspot, open `http://192.168.50.1:
 
 > The AP runs concurrently alongside any regular WiFi client connection (AP+STA mode), so the Orange Pi 5 can be connected to your venue network and still serve the hotspot at the same time.
 
+### 7b.1. Improve hotspot security and discoverability (one-time)
+
+By default NetworkManager creates the hotspot with WPA1/TKIP which causes modern phones to show a **"Weak Security"** warning and can slow down network discovery. Run this once after the app first creates the `DigitalPool-Hotspot` connection to upgrade it to WPA2/CCMP (AES):
+
+```bash
+# Confirm the connection exists first
+nmcli con show | grep Hotspot
+
+# Upgrade to WPA2 / AES — eliminates "Weak Security" warning
+sudo nmcli con modify "DigitalPool-Hotspot" \
+  802-11-wireless-security.proto rsn \
+  802-11-wireless-security.pairwise ccmp \
+  802-11-wireless-security.group ccmp \
+  802-11-wireless-security.pmf 1
+
+# Restart the hotspot to apply
+sudo nmcli con down "DigitalPool-Hotspot" && sudo nmcli con up "DigitalPool-Hotspot"
+```
+
+| Parameter | Value | Effect |
+|---|---|---|
+| `proto rsn` | WPA2 only | Drops WPA1 — eliminates "Weak Security" |
+| `pairwise ccmp` | AES unicast | Drops TKIP |
+| `group ccmp` | AES broadcast | Drops TKIP |
+| `pmf 1` | Protected Management Frames optional | Expected by iOS 15+ and Android 12+ |
+
+> **iOS Privacy Warning:** After rejoining, iOS may briefly show a "Privacy Warning" below the network name. This means the phone is using its real MAC address instead of a randomized one for this network. Fix it on the phone: **Settings → Wi-Fi → DigitalPool-A5D5 → enable Private Wi-Fi Address**. This is a phone-side setting and is not related to the AP configuration.
+
 ### 7c. Captive Portal (auto-open admin UI on connect)
 
 When a device connects to the hotspot it has no internet, so iOS, Android, and Windows each fire an HTTP "captive portal" probe to a well-known URL.  If the response is not what the OS expects it pops up a **"Sign in to network"** notification — tapping it opens a mini-browser that lands on the DigitalPool admin UI automatically.
@@ -926,7 +979,7 @@ Three pieces work together:
 |---|---|
 | **dnsmasq wildcard** | Resolves every hostname to `192.168.50.1` so probe requests reach us |
 | **iptables PREROUTING** | Forwards port-80 traffic → port-3000 where Express listens |
-| **Express captive routes** | Returns HTTP 302 → `http://192.168.50.1:3000` for all probe URLs |
+| **Express captive routes** | Returns OS-expected success responses: iOS/macOS → `200 OK` with `<HTML>Success</HTML>`; Android/Chrome → `204 No Content`; Windows → plain-text `Microsoft NCSI` |
 
 The app sets up pieces 1 and 2 automatically at startup — but both need `sudo` access.  Grant it with a single sudoers file:
 
@@ -1378,6 +1431,92 @@ The pipeline automatically falls back to software decoding (`avdec_h264` / `avde
 ```bash
 sudo journalctl -u digitalpool-camera -f
 sudo journalctl -u mediamtx -f
+```
+
+---
+
+## 16. Upgrading an Existing Appliance
+
+Use this section when deploying the latest code to an existing unit, or when setting up a brand-new appliance from a completed base install (Sections 1–6 already done).
+
+### 16a. Quick code update (every deployment)
+
+```bash
+cd ~/digitalpool-camera
+git pull
+npm install          # picks up any new npm dependencies
+sudo systemctl restart digitalpool-camera
+```
+
+Check that the service came back up:
+```bash
+sudo journalctl -u digitalpool-camera -f
+```
+
+### 16b. One-time setup steps for new features
+
+Run each block below **once** on any appliance that hasn't had it set up yet.  They are safe to re-run on an existing unit — they are idempotent.
+
+#### WebRTC preview — MediaMTX ICE host update script
+
+Required for the live WebRTC admin preview to work over LAN, Tailscale, and the hotspot simultaneously.
+
+```bash
+sudo cp ~/digitalpool-camera/mediamtx-update-hosts.sh /usr/local/bin/
+sudo chmod +x /usr/local/bin/mediamtx-update-hosts.sh
+
+sudo mkdir -p /etc/systemd/system/mediamtx.service.d
+sudo tee /etc/systemd/system/mediamtx.service.d/update-hosts.conf << 'EOF'
+[Service]
+ExecStartPre=/usr/local/bin/mediamtx-update-hosts.sh
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl restart mediamtx
+
+# Verify — should list all local IPs
+grep webrtcAdditionalHosts /etc/mediamtx.yml
+```
+
+#### Hotspot WiFi — WPA2/CCMP security upgrade
+
+Eliminates the "Weak Security" warning on iOS and Android.  Run **after** the app has started and created the `DigitalPool-Hotspot` connection (confirm with `nmcli con show | grep Hotspot`).
+
+```bash
+sudo nmcli con modify "DigitalPool-Hotspot" \
+  802-11-wireless-security.proto rsn \
+  802-11-wireless-security.pairwise ccmp \
+  802-11-wireless-security.group ccmp \
+  802-11-wireless-security.pmf 1
+
+sudo nmcli con down "DigitalPool-Hotspot" && sudo nmcli con up "DigitalPool-Hotspot"
+```
+
+#### Captive portal sudoers (keeps phones connected to hotspot)
+
+Required for the captive portal and Ethernet/timezone/reboot controls to work.  See Section 7c for the full explanation.
+
+```bash
+# Check if already present — if this prints content, skip the rest
+sudo cat /etc/sudoers.d/digitalpool-captive 2>/dev/null
+
+# If missing, create it (paste the full block from Section 7c)
+```
+
+#### Verify everything is healthy after update
+
+```bash
+# All three services must be active
+sudo systemctl status mediamtx digitalpool-camera network-watchdog.timer
+
+# Captive portal iptables rule must be present
+sudo iptables -t nat -L PREROUTING -n -v | grep 3000
+
+# MediaMTX ICE hosts injected
+grep webrtcAdditionalHosts /etc/mediamtx.yml
+
+# Hotspot is up
+nmcli con show --active | grep -i hotspot
 ```
 
 ---

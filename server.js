@@ -274,25 +274,40 @@ app.get('/kindle-wifi/wifistub.html',    _sendCaptiveRedirect);
 
 // iOS / macOS
 app.get("/hotspot-detect.html", (req, res) => {
+  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
   res.set("Content-Type", "text/html");
   res.send("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
 });
 app.get("/library/test/success.html", (req, res) => {
+  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
   res.set("Content-Type", "text/html");
   res.send("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
 });
 app.get("/success.html", (req, res) => {
+  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
   res.set("Content-Type", "text/html");
   res.send("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
 });
 
 // Android / Chrome OS
-app.get("/generate_204", (req, res) => res.status(204).end());
-app.get("/gen_204", (req, res) => res.status(204).end());
-app.get("/connecttest.txt", (req, res) => res.send("Microsoft Connect Test"));
+app.get("/generate_204", (req, res) => {
+  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
+  res.status(204).end();
+});
+app.get("/gen_204", (req, res) => {
+  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
+  res.status(204).end();
+});
+app.get("/connecttest.txt", (req, res) => {
+  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
+  res.send("Microsoft Connect Test");
+});
 
 // Windows NCSI
-app.get("/ncsi.txt", (req, res) => res.send("Microsoft NCSI"));
+app.get("/ncsi.txt", (req, res) => {
+  console.log(`📶 Captive portal probe: ${req.method} ${req.path} Host:${req.headers.host} from ${req.ip}`);
+  res.send("Microsoft NCSI");
+});
 
 // ── Public auth routes (no requireAuth guard) ────────────────────────────────
 // Login page — serve the standalone HTML file directly
