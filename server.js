@@ -153,6 +153,9 @@ streamController.on("preparing", () => {
 });
 
 streamController.on("started", () => {
+  // Clear the preparing/restart flag so idle-preview auto-restart is re-enabled
+  // once the stream eventually stops (it was set in the "preparing" handler).
+  isRestartInProgress = false;
   const status = streamController.getStatus();
   io.emit("streamStatus", { ...status, status: "started" });
 });
@@ -2768,7 +2771,9 @@ async function startPersistentIdlePreview() {
       // Auto-restart when NOT streaming and NOT in the middle of a planned restart.
       // This recovers the preview if GStreamer crashes on its own (e.g. USB device
       // momentarily disconnected) without requiring a client page-reload.
-      if (!streamController.isStreaming && !_idlePreviewStarting && bootComplete) {
+      // isRestartInProgress guards against restarting during stream "preparing" — the
+      // idle preview is intentionally killed there and must not race back to grab the camera.
+      if (!streamController.isStreaming && !_idlePreviewStarting && !isRestartInProgress && bootComplete) {
         console.log(`📹 Idle preview died — scheduling auto-restart...`);
         startPersistentIdlePreview()
           .then(() => { io.emit("refreshIdlePreview"); })
@@ -3393,20 +3398,27 @@ app.use("/graphql", (req, res) => {
 // This ensures the PNG file exists when gdkpixbufoverlay tries to load it
 streamController.on("preparing", async () => {
   try {
-  // Kill idle preview process first — it holds the camera device open
+  // Set the flag FIRST so the idle-preview auto-restart close handler cannot fire
+  // and race back to grab /dev/video0 before the streaming pipeline starts.
+  isRestartInProgress = true;
+
+  // Kill idle preview process and wait for actual exit (not a fixed timeout).
+  // A fixed sleep risks the streaming GStreamer starting before the V4L2 fd is
+  // released; waiting on "close" guarantees the kernel has freed the device.
   if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
     console.log("🛑 Killing idle preview before starting stream...");
-    currentIdlePreviewProcess.kill("SIGTERM");
+    const dyingProcess = currentIdlePreviewProcess;
     currentIdlePreviewProcess = null;
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  // Also free the TCP port
-  try {
-    const { execSync } = require("child_process");
-    execSync(`fuser -k ${IDLE_PREVIEW_PORT}/tcp 2>/dev/null || true`);
+    await new Promise((resolve) => {
+      dyingProcess.once("close", resolve);
+      dyingProcess.kill("SIGTERM");
+      // SIGKILL fallback if the process doesn't exit within 2 s
+      setTimeout(() => { try { dyingProcess.kill("SIGKILL"); } catch (_) {} }, 2000);
+    });
+    // Small buffer for the kernel to fully release the V4L2 file descriptor
     await new Promise((resolve) => setTimeout(resolve, 200));
-  } catch (e) { /* ignore */ }
-  console.log("✅ Idle preview killed");
+  }
+  console.log("✅ Idle preview killed — camera device free");
 
   const hasUrlOverlay = streamController.streamConfig.remoteOverlayEnabled &&
     streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
