@@ -523,7 +523,27 @@ sudo systemctl restart mediamtx
 grep webrtcAdditionalHosts /etc/mediamtx.yml
 ```
 
-The script runs automatically every time mediamtx starts, so it picks up new Tailscale IPs or hotspot interface changes without manual intervention.
+The script runs every time MediaMTX starts, so it picks up new Tailscale IPs automatically.
+
+**However**, MediaMTX starts at boot with `After=network.target` — before the WiFi hotspot interface exists. If the hotspot comes up several seconds later (which is normal), `192.168.50.1` won't be in the ICE candidates list until MediaMTX is restarted. A **NetworkManager dispatcher script** fixes this by re-running the update every time any interface comes up:
+
+```bash
+sudo tee /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts > /dev/null << 'EOF'
+#!/bin/bash
+# Re-run the MediaMTX ICE host update whenever any interface comes up,
+# so the hotspot IP is always included even if the hotspot started after MediaMTX.
+INTERFACE="$1"
+ACTION="$2"
+if [ "$ACTION" = "up" ]; then
+    sleep 2   # let the interface fully configure its IP
+    /usr/local/bin/mediamtx-update-hosts.sh
+fi
+EOF
+
+sudo chmod +x /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts
+```
+
+After this, every time the hotspot (or any other interface) comes up — including after a reboot — the dispatcher fires within ~2 seconds and MediaMTX automatically picks up the new IP. No manual `systemctl restart mediamtx` is ever needed.
 
 ### 2l. NDI (Network Device Interface) Support
 
@@ -968,6 +988,34 @@ sudo nmcli con down "DigitalPool-Hotspot" && sudo nmcli con up "DigitalPool-Hots
 | `pmf 1` | Protected Management Frames optional | Expected by iOS 15+ and Android 12+ |
 
 > **iOS Privacy Warning:** After rejoining, iOS may briefly show a "Privacy Warning" below the network name. This means the phone is using its real MAC address instead of a randomized one for this network. Fix it on the phone: **Settings → Wi-Fi → DigitalPool-A5D5 → enable Private Wi-Fi Address**. This is a phone-side setting and is not related to the AP configuration.
+
+### 7b.2. USB WiFi adapter driver — disable power-saving modes (rtw_8822bu)
+
+If the USB WiFi adapter uses the **Realtek RTL8822BU** chipset (driver module `rtw_8822bu`), the driver's built-in **Idle Power Save (IPS)** and **Leisure Power Save (LPS)** modes will cause periodic firmware crashes that silently take the hotspot offline. Symptoms in `dmesg`:
+
+```
+rtw_8822bu: error beacon valid
+rtw_8822bu: failed to download firmware
+rtw_8822bu: failed to leave ips state
+rtw_8822bu: failed to leave idle state
+```
+
+Disable both power-saving modes permanently with a modprobe option file:
+
+```bash
+echo "options rtw_8822bu ips=0 lps=0" | sudo tee /etc/modprobe.d/rtw_8822bu.conf
+```
+
+For the change to take effect the driver must be reloaded. The easiest method is to **physically unplug the USB adapter, wait 5 seconds, and plug it back in** (or reboot). From that point forward the option is applied automatically on every boot and every plug-in.
+
+**Verify — no firmware errors after replug:**
+
+```bash
+dmesg | grep rtw | tail -10
+# Healthy: interface comes up with NO "failed to leave ips state" lines
+```
+
+> **Identify your adapter's chipset:** `lsusb` shows the Realtek USB ID; `dmesg | grep -i rtw` names the exact driver module. The fix above targets `rtw_8822bu`. For other Realtek variants (`rtw88`, `rtw89`, `rtl8xxxu`, etc.) substitute the correct module name in `/etc/modprobe.d/`.
 
 ### 7c. Captive Portal (auto-open admin UI on connect)
 
@@ -1448,6 +1496,42 @@ gst-inspect-1.0 mpph264dec
 
 The pipeline automatically falls back to software decoding (`avdec_h264` / `avdec_h265`) if hardware decoders are unavailable, but CPU usage will be higher.
 
+### Hotspot disappears or WebRTC preview fails over hotspot
+
+If the hotspot appears to work but the WebRTC preview is blank when connected to it, or the hotspot randomly disappears after running for a few minutes, check for USB WiFi adapter firmware crashes:
+
+```bash
+dmesg | grep rtw | tail -20
+```
+
+Lines such as `failed to leave ips state`, `failed to download firmware`, or `error beacon valid` mean the `rtw_8822bu` driver's power-save mode is crashing the adapter. Fix it permanently:
+
+```bash
+# Create the modprobe option file (persists across reboots and plug-ins)
+echo "options rtw_8822bu ips=0 lps=0" | sudo tee /etc/modprobe.d/rtw_8822bu.conf
+
+# Verify
+cat /etc/modprobe.d/rtw_8822bu.conf
+# → options rtw_8822bu ips=0 lps=0
+
+# Unplug the USB adapter, wait 5 s, plug it back in (or reboot)
+# Then confirm no more errors:
+dmesg | grep rtw | tail -10
+```
+
+If the hotspot itself is healthy but the WebRTC preview fails only when connected via hotspot (works fine on LAN), the MediaMTX ICE candidate list is probably missing the hotspot IP `192.168.50.1`. This happens when MediaMTX started before the hotspot came up:
+
+```bash
+# Check — 192.168.50.1 must be listed:
+grep webrtcAdditionalHosts /etc/mediamtx.yml
+
+# Quick fix — force the ICE hosts to update now:
+sudo /usr/local/bin/mediamtx-update-hosts.sh
+
+# Permanent fix — install the NM dispatcher (see Section 2k.2):
+ls /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts
+```
+
 ### Follow live logs
 
 ```bash
@@ -1514,6 +1598,41 @@ sudo nmcli con modify "DigitalPool-Hotspot" \
 sudo nmcli con down "DigitalPool-Hotspot" && sudo nmcli con up "DigitalPool-Hotspot"
 ```
 
+#### USB WiFi adapter — disable power-saving modes (rtw_8822bu chipset)
+
+Required if the hotspot adapter uses the Realtek RTL8822BU chipset. Without this the driver periodically crashes and the hotspot disappears.
+
+```bash
+# Check if already applied:
+cat /etc/modprobe.d/rtw_8822bu.conf 2>/dev/null
+# If that prints nothing, create it:
+echo "options rtw_8822bu ips=0 lps=0" | sudo tee /etc/modprobe.d/rtw_8822bu.conf
+
+# Unplug and replug the USB adapter (or reboot) to apply
+```
+
+#### NetworkManager dispatcher — keep ICE hosts updated when hotspot comes up late
+
+Without this, the hotspot IP (`192.168.50.1`) won't be in the MediaMTX ICE candidate list if the hotspot started after MediaMTX (the normal boot order). WebRTC preview over the hotspot will fail until MediaMTX is restarted.
+
+```bash
+# Check if already present:
+ls /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts 2>/dev/null
+
+# If missing, create it:
+sudo tee /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts > /dev/null << 'EOF'
+#!/bin/bash
+INTERFACE="$1"
+ACTION="$2"
+if [ "$ACTION" = "up" ]; then
+    sleep 2
+    /usr/local/bin/mediamtx-update-hosts.sh
+fi
+EOF
+
+sudo chmod +x /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts
+```
+
 #### Captive portal sudoers + TLS cert (auto-open admin UI on hotspot connect)
 
 Required for the captive portal iptables rules and Ethernet/timezone/reboot controls to work. See Section 7c for the full explanation.
@@ -1547,8 +1666,15 @@ sudo iptables -t nat -L PREROUTING -n -v | grep -E "3000|3443"
 # TLS cert for HTTPS captive portal must exist
 sudo ls /etc/ssl/digitalpool/cert.pem
 
-# MediaMTX ICE hosts injected
+# MediaMTX ICE hosts injected — must include hotspot IP 192.168.50.1
 grep webrtcAdditionalHosts /etc/mediamtx.yml
+
+# NM dispatcher for ICE host updates must be present and executable
+ls -l /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts
+
+# WiFi adapter power-save disabled (rtw_8822bu only — skip if different chipset)
+cat /etc/modprobe.d/rtw_8822bu.conf
+# → options rtw_8822bu ips=0 lps=0
 
 # Hotspot is up
 nmcli con show --active | grep -i hotspot
