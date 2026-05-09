@@ -1455,13 +1455,19 @@ async function switchToWebRTCPreview(streamPath, onConnected, _attempt = 0) {
     setTimeout(() => { pc.removeEventListener("icegatheringstatechange", onStateChange); resolve(); }, 5000);
   });
 
-  // Route WHEP signaling through the Express proxy at /api/whep/<path>.
-  // This works regardless of how the browser reached the server — direct LAN,
-  // WiFi hotspot, Tailscale, or through the Headscale reverse proxy — because
-  // the request uses the same origin/connection the browser already has open.
-  // The Express proxy (server.js /api/whep/*) forwards to MediaMTX on localhost.
-  const whepUrl = `/api/whep/${streamPath}`;
-  console.log(`📡 WHEP URL: ${whepUrl}`);
+  // Ask the server which local IP this HTTP connection arrived on.
+  // The server returns the interface address (e.g. 192.168.50.1, 100.64.x.x)
+  // so the WHEP URL targets the exact MediaMTX ICE candidate the browser can reach.
+  let whepBase = `http://${window.location.hostname}:8889`; // safe fallback
+  try {
+    const baseRes = await fetch("/api/stream/whep-base");
+    if (baseRes.ok) {
+      const data = await baseRes.json();
+      if (data.whepBase) whepBase = data.whepBase;
+    }
+  } catch (_) { /* use fallback */ }
+  const whepUrl = `${whepBase}/${streamPath}/whep`;
+  console.log(`📡 WHEP URL: ${whepUrl} (local socket: ${whepBase})`);
   let whepRes;
   try {
     whepRes = await fetch(whepUrl, {
