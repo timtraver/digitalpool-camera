@@ -1455,17 +1455,12 @@ async function switchToWebRTCPreview(streamPath, onConnected, _attempt = 0) {
     setTimeout(() => { pc.removeEventListener("icegatheringstatechange", onStateChange); resolve(); }, 5000);
   });
 
-  // Ask the server which interface this HTTP connection arrived on and use
-  // that IP for the WHEP URL.  This guarantees the IP matches one of MediaMTX's
-  // ICE candidates (it's the live local interface), so WebRTC works regardless
-  // of whether the browser connected via LAN, hotspot, or Tailscale.
-  // MediaMTX returns Access-Control-Allow-Origin: * so CORS is not an issue.
-  let whepBase = `http://${window.location.hostname}:8889`; // safe fallback
-  try {
-    const baseRes = await fetch("/api/stream/whep-base");
-    if (baseRes.ok) ({ whepBase } = await baseRes.json());
-  } catch (_) { /* use fallback */ }
-  const whepUrl = `${whepBase}/${streamPath}/whep`;
+  // Route WHEP signaling through the Express proxy at /api/whep/<path>.
+  // This works regardless of how the browser reached the server — direct LAN,
+  // WiFi hotspot, Tailscale, or through the Headscale reverse proxy — because
+  // the request uses the same origin/connection the browser already has open.
+  // The Express proxy (server.js /api/whep/*) forwards to MediaMTX on localhost.
+  const whepUrl = `/api/whep/${streamPath}`;
   console.log(`📡 WHEP URL: ${whepUrl}`);
   let whepRes;
   try {
