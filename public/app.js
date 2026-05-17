@@ -1074,7 +1074,11 @@ socket.on("refreshIdlePreview", () => {
   if (!isCurrentlyStreaming) {
     console.log("🔄 Refreshing idle preview for overlay changes...");
     const previewStatus = document.getElementById("overlayPreviewStatus");
-    if (previewStatus) previewStatus.style.display = "block";
+    if (previewStatus) {
+      // Normalise text in case saveFlipConfig changed it to "Applying flip…"
+      previewStatus.textContent = "🔄 Updating preview…";
+      previewStatus.style.display = "block";
+    }
     // Small delay to let the old GStreamer process fully die before reconnecting
     setTimeout(() => {
       switchToWebRTCPreview("preview", () => {
@@ -2916,19 +2920,56 @@ async function loadStreamConfig() {
   }
 }
 
-// Save flip orientation to server and immediately restart idle preview.
+// Save flip orientation to server.
+// • Not streaming → shows "🔄 Applying flip…" banner; server restarts idle preview
+//   and emits refreshIdlePreview, which hides the banner once the first frame arrives.
+// • Streaming → shows existing "Restarting Stream…" UI via restartStream socket event.
 async function saveFlipConfig() {
   const flipHorizontal = flipHorizontalCheckbox ? flipHorizontalCheckbox.checked : false;
   const flipVertical   = flipVerticalCheckbox   ? flipVerticalCheckbox.checked   : false;
+
+  // Show progress feedback immediately — before the network round-trip.
+  const previewStatus = document.getElementById("overlayPreviewStatus");
+  if (!isCurrentlyStreaming && previewStatus) {
+    previewStatus.textContent = "🔄 Applying flip…";
+    previewStatus.style.display = "block";
+  }
+
   try {
-    await fetch("/api/stream/config", {
+    const resp = await fetch("/api/stream/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ flipHorizontal, flipVertical }),
     });
+    const result = await resp.json();
     console.log(`🔄 Flip config saved — H=${flipHorizontal} V=${flipVertical}`);
+
+    if (result.restartStreamNeeded) {
+      // Stream is live — use the atomic restartStream path so the existing
+      // "Restarting…" status UI and preview switching are handled consistently.
+      const [resW, resH] = streamResolution.value.split("x").map(Number);
+      const config = {
+        protocol:     streamProtocol.value,
+        destination:  streamDestination.value,
+        bitrate:      parseInt(streamBitrate.value),
+        audioEnabled: audioEnabledCheckbox ? audioEnabledCheckbox.checked : true,
+        audioSource:  audioSourceTypeSelect ? audioSourceTypeSelect.value : "video",
+        audioDevice:  audioDeviceSelect ? audioDeviceSelect.value : "",
+        width:        resW,
+        height:       resH,
+        framerate:    parseInt(streamFramerate.value),
+        codec:        streamCodec.value,
+        flipHorizontal,
+        flipVertical,
+      };
+      socket.emit("restartStream", config);
+    }
+    // If not streaming: the server emits refreshIdlePreview which triggers
+    // switchToWebRTCPreview() → its onConnected callback resets the banner text
+    // and hides it once the first frame arrives.
   } catch (err) {
     console.error("❌ Failed to save flip config:", err);
+    if (previewStatus && !isCurrentlyStreaming) previewStatus.style.display = "none";
   }
 }
 

@@ -1817,16 +1817,24 @@ app.post("/api/stream/config", async (req, res) => {
   const flipChanged =
     (config.flipHorizontal !== undefined && config.flipHorizontal !== prevFlipH) ||
     (config.flipVertical   !== undefined && config.flipVertical   !== prevFlipV);
-  if (flipChanged && !streamController.isStreaming) {
-    console.log("🔄 Flip setting changed — restarting idle preview");
-    try {
-      await startPersistentIdlePreview();
-      io.emit("refreshIdlePreview");
-    } catch (err) {
-      console.error("⚠️  Failed to restart idle preview after flip change:", err.message);
+  if (flipChanged) {
+    if (streamController.isStreaming) {
+      // Live stream is running — tell the client to do an atomic restart so the
+      // existing "Restarting…" UI path handles progress feedback cleanly.
+      console.log("🔄 Flip setting changed while streaming — client will restart stream");
+    } else {
+      // Idle preview — restart GStreamer with the new orientation now.
+      console.log("🔄 Flip setting changed — restarting idle preview");
+      try {
+        await startPersistentIdlePreview();
+        io.emit("refreshIdlePreview");
+      } catch (err) {
+        console.error("⚠️  Failed to restart idle preview after flip change:", err.message);
+      }
     }
   }
-  res.json(result);
+  // Tell the client whether it needs to restart the active stream itself.
+  res.json({ ...result, restartStreamNeeded: flipChanged && streamController.isStreaming });
 });
 
 // Test GStreamer availability
