@@ -2338,15 +2338,16 @@ app.all("/api/whep/*path", requireAuth, express.raw({ type: "*/*" }), (req, res)
     method: req.method,
     headers: {
       "content-type": req.headers["content-type"] || "application/sdp",
-      // Forward the real client IP so MediaMTX's auth hook and logs see it.
-      "x-forwarded-for": clientIp,
     },
     timeout: 10000,
     agent: false,   // no keep-alive pooling — always a fresh TCP connection to MediaMTX
   };
   if (reqBody.length > 0) options.headers["content-length"] = reqBody.length;
 
+  let proxyDone = false; // set true once mediamtx responds — prevents spurious destroy
+
   const proxyReq = http.request(options, (upRes) => {
+    proxyDone = true;
     console.log(`✅ WHEP upstream response: HTTP ${upRes.statusCode} for ${upstreamPath}`);
     res.status(upRes.statusCode);
 
@@ -2367,8 +2368,21 @@ app.all("/api/whep/*path", requireAuth, express.raw({ type: "*/*" }), (req, res)
     console.error(`❌ WHEP proxy error (${upstreamPath}): ${err.message} [code=${err.code}] bodyLen=${reqBody.length}`);
     if (!res.headersSent) res.status(502).json({ error: "WHEP proxy failed" });
   });
-  proxyReq.on("timeout", () => { proxyReq.destroy(); if (!res.headersSent) res.status(504).end(); });
-  req.on("close", () => { try { proxyReq.destroy(); } catch (_) {} });
+  proxyReq.on("timeout", () => {
+    console.error(`⏱️  WHEP proxy timeout for ${upstreamPath}`);
+    proxyReq.destroy();
+    if (!res.headersSent) res.status(504).end();
+  });
+
+  // Only abort the upstream request if the browser disconnects BEFORE mediamtx
+  // has responded.  If mediamtx already replied (proxyDone=true) the pipe handles
+  // cleanup; calling destroy() again would log a spurious ECONNRESET.
+  req.on("close", () => {
+    if (!proxyDone) {
+      console.warn(`⚠️  WHEP proxy: browser closed connection early for ${upstreamPath} (mediamtx had not yet responded)`);
+      try { proxyReq.destroy(); } catch (_) {}
+    }
+  });
 
   if (reqBody.length > 0) proxyReq.write(reqBody);
   proxyReq.end();
