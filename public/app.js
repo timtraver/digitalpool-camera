@@ -1483,45 +1483,108 @@ async function switchToWebRTCPreview(streamPath, onConnected, _attempt = 0) {
   // (different host = proxy/Headscale scenario where direct access is blocked).
   const whepHost = whepBase ? new URL(whepBase).hostname : null;
   const useProxy = !whepHost || (whepHost !== window.location.hostname);
-  const whepUrl = useProxy
-    ? `/api/whep/${streamPath}`
-    : `${whepBase}/${streamPath}/whep`;
-  console.log(`📡 WHEP URL: ${whepUrl} (proxy: ${useProxy}, base: ${whepBase})`);
-  let whepRes;
-  try {
-    whepRes = await fetch(whepUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/sdp" },
-      body: pc.localDescription.sdp,
+  // ── WHEP signaling: Socket.IO relay (proxy path) or direct fetch ───────────
+  //
+  // When accessed via a reverse proxy (Headscale), the Express HTTP WHEP proxy
+  // (/api/whep/*) times out because Headscale closes idle HTTP connections before
+  // MediaMTX finishes SDP negotiation.  Relaying the offer over the already-open
+  // Socket.IO WebSocket avoids this — the WS connection stays alive through
+  // Headscale with no request timeout.
+  //
+  // Direct path (same-host LAN / hotspot / direct Tailscale): plain fetch to
+  // MediaMTX port 8889 — no proxy involved, no timeout concern.
+
+  let sdpAnswer;
+
+  if (useProxy) {
+    // ── Socket.IO relay ───────────────────────────────────────────────────────
+    console.log(`📡 WHEP signaling via Socket.IO relay (proxy path, stream="${streamPath}")`);
+
+    const whepResult = await new Promise((resolve) => {
+      // One-time listener — the server always emits exactly one "whep-answer"
+      // per "whep-offer" it receives, so this is safe even if another session
+      // is later initiated (it creates a fresh promise + listener).
+      socket.once("whep-answer", resolve);
+      socket.emit("whep-offer", { streamPath, sdp: pc.localDescription.sdp });
     });
-  } catch (err) {
-    console.error("❌ WHEP POST network error:", err);
-    if (_webrtcPc === pc) { pc.close(); _webrtcPc = null; }
-    return;
-  }
 
-  // 404/503 = publisher not yet pushing to MediaMTX — retry with back-off
-  if (whepRes.status === 404 || whepRes.status === 503) {
-    if (_webrtcPc === pc) { pc.close(); _webrtcPc = null; }
-    if (_attempt < 12) {
-      const delay = Math.min(1000 + _attempt * 500, 4000);
-      console.log(`⏳ WHEP "${streamPath}" not ready (HTTP ${whepRes.status}) — retry ${_attempt + 1}/12 in ${delay} ms`);
-      _webrtcRetryTimer = setTimeout(() => switchToWebRTCPreview(streamPath, onConnected, _attempt + 1), delay);
-    } else {
-      console.warn(`❌ WebRTC "${streamPath}" gave up after 12 attempts — falling back to snapshot`);
-      switchToSnapshotPreview();
+    if (whepResult.error) {
+      console.error(`❌ WHEP socket relay error: ${whepResult.error}`);
+      if (_webrtcPc === pc) { pc.close(); _webrtcPc = null; }
+      if (_attempt < 12) {
+        const delay = Math.min(1000 + _attempt * 500, 4000);
+        console.log(`⏳ WHEP "${streamPath}" relay failed — retry ${_attempt + 1}/12 in ${delay} ms`);
+        _webrtcRetryTimer = setTimeout(() => switchToWebRTCPreview(streamPath, onConnected, _attempt + 1), delay);
+      } else {
+        console.warn(`❌ WebRTC "${streamPath}" gave up after 12 attempts — falling back to snapshot`);
+        switchToSnapshotPreview();
+      }
+      return;
     }
-    return;
-  }
 
-  if (!whepRes.ok) {
-    console.error(`❌ WHEP "${streamPath}" unexpected HTTP ${whepRes.status}`);
-    if (_webrtcPc === pc) { pc.close(); _webrtcPc = null; }
-    return;
+    if (whepResult.status === 404 || whepResult.status === 503) {
+      if (_webrtcPc === pc) { pc.close(); _webrtcPc = null; }
+      if (_attempt < 12) {
+        const delay = Math.min(1000 + _attempt * 500, 4000);
+        console.log(`⏳ WHEP "${streamPath}" not ready (HTTP ${whepResult.status}) — retry ${_attempt + 1}/12 in ${delay} ms`);
+        _webrtcRetryTimer = setTimeout(() => switchToWebRTCPreview(streamPath, onConnected, _attempt + 1), delay);
+      } else {
+        console.warn(`❌ WebRTC "${streamPath}" gave up after 12 attempts — falling back to snapshot`);
+        switchToSnapshotPreview();
+      }
+      return;
+    }
+
+    if (!whepResult.status || whepResult.status < 200 || whepResult.status >= 300) {
+      console.error(`❌ WHEP "${streamPath}" unexpected HTTP ${whepResult.status}`);
+      if (_webrtcPc === pc) { pc.close(); _webrtcPc = null; }
+      return;
+    }
+
+    sdpAnswer = whepResult.sdp;
+
+  } else {
+    // ── Direct fetch — same host, MediaMTX port 8889 reachable ──────────────
+    const whepUrl = `${whepBase}/${streamPath}/whep`;
+    console.log(`📡 WHEP URL: ${whepUrl} (direct, base: ${whepBase})`);
+
+    let whepRes;
+    try {
+      whepRes = await fetch(whepUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/sdp" },
+        body: pc.localDescription.sdp,
+      });
+    } catch (err) {
+      console.error("❌ WHEP POST network error:", err);
+      if (_webrtcPc === pc) { pc.close(); _webrtcPc = null; }
+      return;
+    }
+
+    // 404/503 = publisher not yet pushing to MediaMTX — retry with back-off
+    if (whepRes.status === 404 || whepRes.status === 503) {
+      if (_webrtcPc === pc) { pc.close(); _webrtcPc = null; }
+      if (_attempt < 12) {
+        const delay = Math.min(1000 + _attempt * 500, 4000);
+        console.log(`⏳ WHEP "${streamPath}" not ready (HTTP ${whepRes.status}) — retry ${_attempt + 1}/12 in ${delay} ms`);
+        _webrtcRetryTimer = setTimeout(() => switchToWebRTCPreview(streamPath, onConnected, _attempt + 1), delay);
+      } else {
+        console.warn(`❌ WebRTC "${streamPath}" gave up after 12 attempts — falling back to snapshot`);
+        switchToSnapshotPreview();
+      }
+      return;
+    }
+
+    if (!whepRes.ok) {
+      console.error(`❌ WHEP "${streamPath}" unexpected HTTP ${whepRes.status}`);
+      if (_webrtcPc === pc) { pc.close(); _webrtcPc = null; }
+      return;
+    }
+
+    sdpAnswer = await whepRes.text();
   }
 
   // Apply the SDP answer returned by MediaMTX
-  const sdpAnswer = await whepRes.text();
   try {
     await pc.setRemoteDescription({ type: "answer", sdp: sdpAnswer });
     console.log(`✅ WebRTC "${streamPath}" negotiation complete — waiting for first frame`);

@@ -3111,6 +3111,71 @@ io.on("connection", (socket) => {
     });
   });
 
+  // ── WHEP signaling relay over Socket.IO ────────────────────────────────────
+  // When the browser reaches us through a reverse proxy (Headscale/Tailscale),
+  // the HTTP WHEP proxy (/api/whep/*) times out because the proxy layer closes
+  // idle HTTP connections before MediaMTX finishes SDP negotiation.
+  // Relaying over the existing Socket.IO WebSocket avoids this — the WS
+  // connection is already stable and long-lived through Headscale.
+  socket.on("whep-offer", async ({ streamPath, sdp: offerSdp }) => {
+    if (!streamPath || !offerSdp) {
+      socket.emit("whep-answer", { error: "missing streamPath or sdp" });
+      return;
+    }
+    console.log(`🔀 WHEP socket relay: ${socket.id} → /${streamPath}/whep`);
+
+    const bodyBuf = stripAudioFromSdp(Buffer.from(offerSdp, "utf8"));
+    if (bodyBuf.length < Buffer.byteLength(offerSdp, "utf8")) {
+      console.log(`🔇 WHEP socket: stripped audio (${Buffer.byteLength(offerSdp)} → ${bodyBuf.length} bytes)`);
+    }
+
+    const result = await new Promise((resolve) => {
+      const reqOptions = {
+        hostname: "127.0.0.1",
+        port: 8889,
+        path: `/${streamPath}/whep`,
+        method: "POST",
+        headers: {
+          "content-type": "application/sdp",
+          "content-length": bodyBuf.length,
+        },
+        timeout: 15000,
+        agent: false,
+      };
+      const relayReq = http.request(reqOptions, (upRes) => {
+        let raw = "";
+        upRes.setEncoding("utf8");
+        upRes.on("data", (chunk) => { raw += chunk; });
+        upRes.on("end", () => {
+          let location = upRes.headers["location"] || null;
+          if (location) {
+            // Rewrite http://127.0.0.1:8889/... → /api/whep/... so any
+            // follow-up PATCH/DELETE from the browser stay on the proxy path.
+            location = location.replace(/^https?:\/\/[^/]+/, "/api/whep");
+          }
+          resolve({ status: upRes.statusCode, sdp: raw, location });
+        });
+      });
+      relayReq.on("error", (err) => {
+        console.error(`❌ WHEP socket relay error: ${err.message}`);
+        resolve({ error: err.message });
+      });
+      relayReq.on("timeout", () => {
+        relayReq.destroy();
+        resolve({ error: "mediamtx timeout" });
+      });
+      relayReq.write(bodyBuf);
+      relayReq.end();
+    });
+
+    if (result.error) {
+      console.error(`❌ WHEP socket relay failed: ${result.error} (${socket.id})`);
+    } else {
+      console.log(`✅ WHEP socket relay: HTTP ${result.status} → ${socket.id}`);
+    }
+    socket.emit("whep-answer", result);
+  });
+
   // ============ STREAMING SOCKET EVENTS ============
 
   socket.on("startStream", async (config) => {
