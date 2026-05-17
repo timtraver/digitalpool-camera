@@ -278,10 +278,23 @@ def main():
     # When overlays are present we must convert to BGRA for compositing, then
     # back to NV12 for the hardware encoder. When there are no overlays, skip
     # both conversions — mppjpegdec already emits NV12 which mpph264enc accepts.
+    #
+    # Flip placement: videoflip does NOT reliably handle NV12 (the format emitted
+    # by mppjpegdec) on all Rockchip GStreamer builds — the pipeline enters
+    # PLAYING state but stalls and produces zero frames.  The safe solution is to
+    # apply the flip only after a colorspace conversion to a format that videoflip
+    # fully supports on this hardware:
+    #
+    #   • Overlay path  → flip on BGRA  (we're converting to BGRA anyway)
+    #   • No-overlay    → flip on I420  (minimal round-trip: NV12→I420→flip→NV12)
     if has_any_overlay:
         overlay_section = (
             f'{prescale}'
             f'! videoconvert ! video/x-raw,format=BGRA '
+            # Flip after BGRA conversion so videoflip always receives a format it
+            # fully supports (BGRA).  Overlays drawn after the flip are correct
+            # orientation because flip_str is empty when flip_method == 0.
+            f'{flip_str}'
             f'{png_overlay_element}'
             f'{text_overlay}'
             f'{timestamp_overlay}'
@@ -352,8 +365,9 @@ def main():
 
     # Thread architecture (each queue creates a new thread boundary):
     #   Thread 1: source (v4l2src or rtspsrc+decodebin) — capture/decode
-    #   Thread 2: queue → [if overlays: videoscale(if>1080p) → videoconvert(BGRA) → overlays → videoconvert(NV12)] → tee
-    #             (when no overlays: queue feeds tee directly in NV12 — no colorspace conversion)
+    #   Thread 2: queue → [if overlays: videoscale(if>1080p) → videoconvert(BGRA) → flip → overlays → videoconvert(NV12)] → tee
+    #             (when no overlays + flip: videoconvert(I420) → flip → videoconvert(NV12) → tee)
+    #             (when no overlays + no flip: queue feeds tee directly in NV12 — no conversion)
     #   Thread 3: queue → mpph264enc → h264parse → queue → mux → fdsink (encode+stream)
     #   Thread 4: queue → videorate → videoscale → jpegenc → tcpserversink (preview)
     #   Audio is handled by ffmpeg (ALSA capture) outside this pipeline.
@@ -364,8 +378,11 @@ def main():
         # acts as the thread boundary AND the dynamic-video injection point.
         + ('' if input_type == 'ndi' else
            '! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ')
-        # Flip video orientation before overlays so text is always right-side-up.
-        + f'{flip_str}'
+        # No-overlay + flip: insert a format-safe round-trip so videoflip never
+        # receives NV12 (unreliable on this hardware).  Overlay path skips this
+        # because flip_str is already embedded inside overlay_section (after BGRA).
+        + (f'! videoconvert ! video/x-raw,format=I420 {flip_str}! videoconvert ! video/x-raw,format=NV12 '
+           if flip_str and not has_any_overlay else '')
         + f'{overlay_section}'
         f'! tee name=t '
         # Encode branch (own thread)
