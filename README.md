@@ -465,23 +465,6 @@ sudo systemctl restart mediamtx
 
 The API listens on `127.0.0.1:9997` (localhost only — not exposed externally). The camera app polls `GET /v3/paths/get/live` once per second to read the encoded stream bitrate.
 
-**Enable the Express WHEP proxy trusted-proxy setting** (required for the Headscale remote-access WebRTC preview):
-
-When the admin UI is accessed via the Headscale reverse proxy (`cameras.digitalpool.com/camera/home-1`), the browser cannot make cross-origin or mixed-content requests directly to MediaMTX port 8889. The Express server proxies the WHEP signaling request to MediaMTX on localhost. Without `trustedProxies`, MediaMTX sees every proxied WHEP connection as coming from `127.0.0.1` and may handle it incorrectly. Adding this setting tells MediaMTX to trust the `X-Forwarded-For` header that Express sets, so MediaMTX sees the real client IP.
-
-Edit `/etc/mediamtx.yml` and add this near the top (it is a top-level key, not nested):
-
-```yaml
-trustedProxies: ["127.0.0.1"]
-```
-
-Then restart MediaMTX:
-
-```bash
-sudo systemctl restart mediamtx
-sudo systemctl status mediamtx   # must show active (running)
-```
-
 **Enable the MediaMTX authentication hook** (required for the IP ban feature to block clients before they connect):
 
 Edit `/etc/mediamtx.yml` and set these three lines (they already exist in the file — find and update them):
@@ -1724,10 +1707,6 @@ sudo ls /etc/ssl/digitalpool/cert.pem
 
 # MediaMTX ICE hosts injected — must include hotspot IP 192.168.50.1
 grep webrtcAdditionalHosts /etc/mediamtx.yml
-
-# trustedProxies must be set so the WHEP proxy forwards the real client IP
-grep trustedProxies /etc/mediamtx.yml
-# → trustedProxies: ["127.0.0.1"]
 
 # NM dispatcher for ICE host updates must be present and executable
 ls -l /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts

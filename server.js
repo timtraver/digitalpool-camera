@@ -2309,7 +2309,6 @@ app.get("/video/hls-live/*file", requireAuth, (req, res) => {
 //
 // X-Forwarded-For carries the real client IP so MediaMTX's auth hook and
 // connection logging see the actual viewer, not the proxy's localhost address.
-// Requires `trustedProxies: ["127.0.0.1"]` in /etc/mediamtx.yml.
 //
 // express.raw({ type: '*/*' }) MUST be used here instead of req.on("data").
 // The global express.json() middleware (and keep-alive connection reuse) can
@@ -2340,7 +2339,6 @@ app.all("/api/whep/*path", requireAuth, express.raw({ type: "*/*" }), (req, res)
     headers: {
       "content-type": req.headers["content-type"] || "application/sdp",
       // Forward the real client IP so MediaMTX's auth hook and logs see it.
-      // Requires trustedProxies: ["127.0.0.1"] in /etc/mediamtx.yml.
       "x-forwarded-for": clientIp,
     },
     timeout: 10000,
