@@ -2288,6 +2288,63 @@ app.get("/video/hls-live/*file", requireAuth, (req, res) => {
   req.on("close", () => proxyReq.destroy()); // client disconnected — stop proxying
 });
 
+// ── MediaMTX WHEP proxy helpers ──────────────────────────────────────────────
+
+/**
+ * Strip m=audio sections from an SDP buffer before forwarding to MediaMTX.
+ *
+ * The preview path carries H264 video only — no audio track.  When a browser
+ * (especially iOS Safari/WebKit) includes an m=audio section in its WHEP offer,
+ * MediaMTX cannot satisfy the audio requirement and immediately RST's the TCP
+ * connection without returning any HTTP response.  Stripping audio here makes
+ * every client (desktop Chrome, iOS Safari, Firefox) work uniformly.
+ *
+ * The function also removes stripped audio MIDs from the session-level
+ * a=group:BUNDLE line so the resulting SDP remains well-formed.
+ *
+ * @param {Buffer} buf  Raw SDP body buffer
+ * @returns {Buffer}    Buffer with audio sections removed (unchanged if none)
+ */
+function stripAudioFromSdp(buf) {
+  const sdp = buf.toString("utf8");
+
+  // Detect line ending style used in this SDP (RFC 4566 mandates CRLF but
+  // browsers often send bare LF).
+  const eol = sdp.includes("\r\n") ? "\r\n" : "\n";
+  const lines = sdp.split(/\r?\n/);
+
+  // First pass — collect MIDs of audio m-sections so we can scrub them from
+  // the session-level a=group:BUNDLE attribute.
+  const audioMids = [];
+  let inAudio = false;
+  for (const line of lines) {
+    if (line.startsWith("m=audio")) { inAudio = true;  continue; }
+    if (line.startsWith("m="))      { inAudio = false; }
+    if (inAudio && line.startsWith("a=mid:")) audioMids.push(line.slice(6).trim());
+  }
+
+  if (audioMids.length === 0) return buf; // nothing to strip
+
+  // Second pass — rebuild SDP without audio sections; patch BUNDLE group.
+  const out = [];
+  inAudio = false;
+  for (const line of lines) {
+    if (line.startsWith("m=audio")) { inAudio = true;  continue; }
+    if (line.startsWith("m="))      { inAudio = false; }
+    if (inAudio) continue;
+
+    if (line.startsWith("a=group:BUNDLE")) {
+      // Remove audio MIDs: "a=group:BUNDLE 0 1" → "a=group:BUNDLE 1"
+      const parts = line.split(" ");
+      out.push(parts.filter(p => !audioMids.includes(p)).join(" "));
+    } else {
+      out.push(line);
+    }
+  }
+
+  return Buffer.from(out.join(eol), "utf8");
+}
+
 // ── MediaMTX WHEP proxy (WebRTC preview) ─────────────────────────────────────
 // Proxies WebRTC-HTTP Egress Protocol (WHEP) requests to MediaMTX on port 8889.
 //
@@ -2329,12 +2386,18 @@ app.all("/api/whep/*path", requireAuth, express.raw({ type: "*/*" }), (req, res)
   // req.ip already respects any upstream X-Forwarded-For via Express trust proxy.
   const clientIp = req.ip || req.socket.remoteAddress || "unknown";
 
-  console.log(`🔀 WHEP proxy: ${req.method} ${upstreamPath} bodyLen=${reqBody.length} clientIp=${clientIp}`);
-  if (req.method === "POST" && reqBody.length > 0) {
-    const sdpText = reqBody.toString("utf8", 0, 500);
-    const hasAudio = /^m=audio/m.test(sdpText) || /\nm=audio/m.test(sdpText);
-    console.log(`📋 WHEP SDP: hasAudio=${hasAudio} preview="${sdpText.slice(0, 120).replace(/\r?\n/g, "↵")}"`);
+  // For WHEP POST offers, strip any m=audio sections before forwarding.
+  // iOS Safari/WebKit adds audio transceivers automatically even when only
+  // video is requested; MediaMTX ECONNRESET's offers that include audio on
+  // a video-only path (no logged error — it just closes the TCP connection).
+  const upstreamBody = (req.method === "POST" && reqBody.length > 0)
+    ? stripAudioFromSdp(reqBody)
+    : reqBody;
+  if (upstreamBody.length !== reqBody.length) {
+    console.log(`🔇 WHEP proxy: stripped audio from SDP (${reqBody.length} → ${upstreamBody.length} bytes)`);
   }
+
+  console.log(`🔀 WHEP proxy: ${req.method} ${upstreamPath} bodyLen=${upstreamBody.length} clientIp=${clientIp}`);
 
   const options = {
     hostname: "127.0.0.1",
@@ -2347,7 +2410,7 @@ app.all("/api/whep/*path", requireAuth, express.raw({ type: "*/*" }), (req, res)
     timeout: 10000,
     agent: false,   // no keep-alive pooling — always a fresh TCP connection to MediaMTX
   };
-  if (reqBody.length > 0) options.headers["content-length"] = reqBody.length;
+  if (upstreamBody.length > 0) options.headers["content-length"] = upstreamBody.length;
 
   let proxyDone = false; // set true once mediamtx responds — prevents spurious destroy
 
@@ -2389,7 +2452,7 @@ app.all("/api/whep/*path", requireAuth, express.raw({ type: "*/*" }), (req, res)
     }
   });
 
-  if (reqBody.length > 0) proxyReq.write(reqBody);
+  if (upstreamBody.length > 0) proxyReq.write(upstreamBody);
   proxyReq.end();
 });
 
