@@ -1021,8 +1021,11 @@ startStreamBtn.addEventListener("click", async () => {
       height: resH,
       framerate: parseInt(streamFramerate.value),
       codec: streamCodec.value,
-      flipHorizontal: flipHorizontalCheckbox ? flipHorizontalCheckbox.checked : false,
-      flipVertical:   flipVerticalCheckbox   ? flipVerticalCheckbox.checked   : false,
+      // flip settings are NOT included here — they are persisted independently
+      // via saveFlipConfig() → POST /api/stream/config, so the server always has
+      // the current value in streamConfig. Sending them here would cause a race
+      // condition on initial page load (checkbox not yet restored) that overwrites
+      // a saved flip=true with false.
     };
     console.log("Restarting stream with config:", config);
     socket.emit("restartStream", config);
@@ -1039,8 +1042,7 @@ startStreamBtn.addEventListener("click", async () => {
       height: resH,
       framerate: parseInt(streamFramerate.value),
       codec: streamCodec.value,
-      flipHorizontal: flipHorizontalCheckbox ? flipHorizontalCheckbox.checked : false,
-      flipVertical:   flipVerticalCheckbox   ? flipVerticalCheckbox.checked   : false,
+      // flip settings omitted — server uses its persisted streamConfig values
     };
 
 
@@ -2947,6 +2949,8 @@ async function saveFlipConfig() {
     if (result.restartStreamNeeded) {
       // Stream is live — use the atomic restartStream path so the existing
       // "Restarting…" status UI and preview switching are handled consistently.
+      // The POST above already saved the new flip values to streamConfig on the
+      // server, so we do NOT include flip here — the server uses its saved values.
       const [resW, resH] = streamResolution.value.split("x").map(Number);
       const config = {
         protocol:     streamProtocol.value,
@@ -2959,8 +2963,6 @@ async function saveFlipConfig() {
         height:       resH,
         framerate:    parseInt(streamFramerate.value),
         codec:        streamCodec.value,
-        flipHorizontal,
-        flipVertical,
       };
       socket.emit("restartStream", config);
     }
