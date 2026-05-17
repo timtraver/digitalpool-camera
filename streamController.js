@@ -103,6 +103,9 @@ class StreamController extends EventEmitter {
       skiaGraphicsEnabled: false, // Enable Skia graphics overlay
       skiaGraphicsPort: 8556, // Port where Skia graphics server is running
       skiaGraphicsAlpha: 1.0, // Opacity of graphics overlay (0.0-1.0)
+      // Video orientation (for upside-down or mirrored camera mounting)
+      flipHorizontal: false, // Mirror video left-to-right
+      flipVertical: false,   // Flip video upside-down
     };
 
     // Load config from file, merging with defaults to fill in any missing fields
@@ -1004,6 +1007,9 @@ class StreamController extends EventEmitter {
       this.inputSource.type || "usb",
       this.inputSource.rtspUrl || "",
       this.inputSource.ndiName || "",   // arg 24 — empty for USB and RTSP sources
+      // Video orientation (args 25-26)
+      (this.streamConfig.flipHorizontal || false).toString(),  // arg 25
+      (this.streamConfig.flipVertical   || false).toString(),  // arg 26
     ];
 
     return {

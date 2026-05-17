@@ -567,6 +567,10 @@ const audioDeviceRow         = document.getElementById("audioDeviceRow");
 const audioDeviceSelect      = document.getElementById("audioDeviceSelect");
 const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
 
+// Video orientation flip checkboxes
+const flipHorizontalCheckbox = document.getElementById("flipHorizontal");
+const flipVerticalCheckbox   = document.getElementById("flipVertical");
+
 // ── Camera Input section ──────────────────────────────────────────────────────
 (function initCameraInput() {
   const sourceTypeEl    = document.getElementById("cameraSourceType");
@@ -1017,6 +1021,8 @@ startStreamBtn.addEventListener("click", async () => {
       height: resH,
       framerate: parseInt(streamFramerate.value),
       codec: streamCodec.value,
+      flipHorizontal: flipHorizontalCheckbox ? flipHorizontalCheckbox.checked : false,
+      flipVertical:   flipVerticalCheckbox   ? flipVerticalCheckbox.checked   : false,
     };
     console.log("Restarting stream with config:", config);
     socket.emit("restartStream", config);
@@ -1033,6 +1039,8 @@ startStreamBtn.addEventListener("click", async () => {
       height: resH,
       framerate: parseInt(streamFramerate.value),
       codec: streamCodec.value,
+      flipHorizontal: flipHorizontalCheckbox ? flipHorizontalCheckbox.checked : false,
+      flipVertical:   flipVerticalCheckbox   ? flipVerticalCheckbox.checked   : false,
     };
 
 
@@ -2894,6 +2902,10 @@ async function loadStreamConfig() {
       // Show/hide destination field and connection info box based on protocol
       updateConnectionInfo(data.config.protocol || "rtsp", deviceLocalIP);
 
+      // Restore video orientation (flip) settings
+      if (flipHorizontalCheckbox) flipHorizontalCheckbox.checked = data.config.flipHorizontal || false;
+      if (flipVerticalCheckbox)   flipVerticalCheckbox.checked   = data.config.flipVertical   || false;
+
       // Apply fps constraints implied by current resolution, then refresh
       // capability info so unsupported resolutions get greyed out.
       applyResolutionConstraints();
@@ -2903,6 +2915,26 @@ async function loadStreamConfig() {
     console.error("❌ Error loading stream config:", error);
   }
 }
+
+// Save flip orientation to server and immediately restart idle preview.
+async function saveFlipConfig() {
+  const flipHorizontal = flipHorizontalCheckbox ? flipHorizontalCheckbox.checked : false;
+  const flipVertical   = flipVerticalCheckbox   ? flipVerticalCheckbox.checked   : false;
+  try {
+    await fetch("/api/stream/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ flipHorizontal, flipVertical }),
+    });
+    console.log(`🔄 Flip config saved — H=${flipHorizontal} V=${flipVertical}`);
+  } catch (err) {
+    console.error("❌ Failed to save flip config:", err);
+  }
+}
+
+// Wire flip checkbox change events
+if (flipHorizontalCheckbox) flipHorizontalCheckbox.addEventListener("change", saveFlipConfig);
+if (flipVerticalCheckbox)   flipVerticalCheckbox.addEventListener("change", saveFlipConfig);
 
 // Disable a custom-dropdown option (both the underlying <option> and its
 // rendered .custom-dropdown-option div). When the currently-selected value

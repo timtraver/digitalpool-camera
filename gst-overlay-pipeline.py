@@ -77,6 +77,21 @@ def main():
     input_rtsp_url = sys.argv[23] if len(sys.argv) > 23 else ""
     # NDI source name (arg 24, optional — only used when input_type == "ndi")
     input_ndi_name = sys.argv[24] if len(sys.argv) > 24 else ""
+    # Video orientation (args 25-26, optional — default to no flip)
+    flip_horizontal = sys.argv[25].lower() == "true" if len(sys.argv) > 25 else False
+    flip_vertical   = sys.argv[26].lower() == "true" if len(sys.argv) > 26 else False
+
+    # GStreamer videoflip method:
+    #   0 = identity (none), 2 = rotate-180, 4 = horizontal-flip, 5 = vertical-flip
+    if flip_horizontal and flip_vertical:
+        flip_method = 2   # 180° rotation is equivalent to H+V flip
+    elif flip_horizontal:
+        flip_method = 4
+    elif flip_vertical:
+        flip_method = 5
+    else:
+        flip_method = 0
+    flip_str = f'! videoflip method={flip_method} ' if flip_method != 0 else ''
 
     bitrate_kbps = bitrate // 1000
 
@@ -349,6 +364,8 @@ def main():
         # acts as the thread boundary AND the dynamic-video injection point.
         + ('' if input_type == 'ndi' else
            '! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ')
+        # Flip video orientation before overlays so text is always right-side-up.
+        + f'{flip_str}'
         + f'{overlay_section}'
         f'! tee name=t '
         # Encode branch (own thread)

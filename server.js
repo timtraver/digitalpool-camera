@@ -1807,9 +1807,25 @@ app.post("/api/stream/stop", async (req, res) => {
 });
 
 // Update stream configuration
-app.post("/api/stream/config", (req, res) => {
+app.post("/api/stream/config", async (req, res) => {
   const config = req.body;
+  // Capture flip state before update to detect changes
+  const prevFlipH = streamController.streamConfig.flipHorizontal;
+  const prevFlipV = streamController.streamConfig.flipVertical;
   const result = streamController.updateConfig(config);
+  // Restart idle preview immediately when flip orientation changes
+  const flipChanged =
+    (config.flipHorizontal !== undefined && config.flipHorizontal !== prevFlipH) ||
+    (config.flipVertical   !== undefined && config.flipVertical   !== prevFlipV);
+  if (flipChanged && !streamController.isStreaming) {
+    console.log("🔄 Flip setting changed — restarting idle preview");
+    try {
+      await startPersistentIdlePreview();
+      io.emit("refreshIdlePreview");
+    } catch (err) {
+      console.error("⚠️  Failed to restart idle preview after flip change:", err.message);
+    }
+  }
   res.json(result);
 });
 
@@ -2676,6 +2692,19 @@ function buildIdlePreviewGstArgs() {
       "videoconvert",
       "!",
     ];
+  }
+
+  // Insert videoflip element when camera is mounted in a non-standard orientation.
+  // videoflip runs before overlays so text is always right-side-up regardless of flip.
+  // GStreamer flip methods: 0=none, 2=rotate-180 (H+V), 4=horizontal-flip, 5=vertical-flip
+  const flipH = config.flipHorizontal || false;
+  const flipV = config.flipVertical   || false;
+  let flipMethod = 0;
+  if (flipH && flipV) flipMethod = 2;
+  else if (flipH)     flipMethod = 4;
+  else if (flipV)     flipMethod = 5;
+  if (flipMethod !== 0) {
+    gstArgs.push("videoflip", `method=${flipMethod}`, "!");
   }
 
   // Check if the remote overlay PNG exists and should be shown
