@@ -1,6 +1,6 @@
 # Digital Pool Camera Control
 
-A Node.js web service for the **Orange Pi 5 (RK3588)** that turns a USB PTZ camera into a professional live-streaming camera for pool/billiards match production. It streams H.264 video with hardware acceleration via the Rockchip MPP encoder, supports SRT, RTMP, and RTSP output, composites transparent PNG overlays (scoreboards, logos, timestamps) directly into the GStreamer pipeline, and hosts a WiFi access-point hotspot so the control interface is always reachable from a tablet or phone without any external network.
+A Node.js web service for **Rockchip RK3588-family SBCs** (Orange Pi 5, Radxa Rock 5C, and similar boards) that turns a USB PTZ camera into a professional live-streaming camera for pool/billiards match production. It streams H.264 video with hardware acceleration via the Rockchip MPP encoder, supports SRT, RTMP, and RTSP output, composites transparent PNG overlays (scoreboards, logos, timestamps) directly into the GStreamer pipeline, and hosts a WiFi access-point hotspot so the control interface is always reachable from a tablet or phone without any external network.
 
 ---
 
@@ -19,13 +19,16 @@ A Node.js web service for the **Orange Pi 5 (RK3588)** that turns a USB PTZ came
 | 📶 **WiFi AP hotspot** | Always-on access point (`DigitalPool-Camera`) via NetworkManager |
 | 🌐 **Proxy / GraphQL** | Proxies `digitalpool.com` API so the overlay page can run on-device |
 | 🔄 **Auto-start** | Systemd service (`digitalpool-camera.service`) starts on boot |
-| 📲 **NDI input** | Receive NDI / NDI HX / HX2 / HX3 network video sources — auto-detects compressed vs raw, hardware-decodes on RK3588 |
+| 📲 **NDI input** | Receive NDI / NDI HX / HX2 / HX3 network video sources — auto-detects compressed vs raw, hardware-decodes via Rockchip MPP |
 
 ---
 
 ## Hardware Requirements
 
-- **SBC**: Orange Pi 5 (RK3588 SoC) — tested with 8 GB RAM
+- **SBC**: Any Rockchip RK3588-family board running Joshua-Riek Ubuntu 24.04:
+  - **Orange Pi 5** (RK3588) — tested with 8 GB RAM
+  - **Radxa Rock 5C** (RK3588S2) — tested with Joshua-Riek Ubuntu 24.04 Noble
+  - Other RK3588/RK3588S/RK3588S2 boards supported by the [Joshua-Riek ubuntu-rockchip](https://github.com/Joshua-Riek/ubuntu-rockchip) project should also work
 - **Camera**: USB PTZ camera with V4L2/UVC support (tested: OBSBOT Tiny 2 Lite)
 - **USB WiFi adapter**: Any Linux-supported adapter capable of AP+STA concurrent mode (for hotspot)
 - **Storage**: ≥32 GB microSD card or eMMC
@@ -37,15 +40,18 @@ A Node.js web service for the **Orange Pi 5 (RK3588)** that turns a USB PTZ came
 
 Use the pre-built Ubuntu 24.04 (Noble) image from the [Joshua-Riek ubuntu-rockchip](https://github.com/Joshua-Riek/ubuntu-rockchip) project.
 
-> **Note:** Although the project also publishes 22.04 images, the actively maintained and recommended release for Orange Pi 5 is **Ubuntu 24.04 Noble**. The Rockchip-specific packages (MPP encoder, GStreamer plugin, firmware) in the PPAs target Noble.
+> **Note:** Although the project also publishes 22.04 images, the actively maintained and recommended release is **Ubuntu 24.04 Noble**. The Rockchip-specific packages (MPP encoder, GStreamer plugin, firmware) in the PPAs target Noble.
 
 ### 1a. Download the image
 
-Go to the [Releases page](https://github.com/Joshua-Riek/ubuntu-rockchip/releases) and download the latest **Ubuntu 24.04** server or desktop image for **Orange Pi 5**. Example filename:
+Go to the [Releases page](https://github.com/Joshua-Riek/ubuntu-rockchip/releases) and download the latest **Ubuntu 24.04** server or desktop image for your board. Example filenames:
 
 ```
-ubuntu-24.04.x-preinstalled-server-arm64-orangepi-5.img.xz
+ubuntu-24.04.x-preinstalled-server-arm64-orangepi-5.img.xz    # Orange Pi 5
+ubuntu-24.04.x-preinstalled-server-arm64-rock-5c.img.xz        # Radxa Rock 5C
 ```
+
+> Alternatively, the Rock 5C images are mirrored at [joshua-riek.github.io/ubuntu-rockchip-download/boards/rock-5c.html](https://joshua-riek.github.io/ubuntu-rockchip-download/boards/rock-5c.html).
 
 ### 1b. Flash to microSD / eMMC
 
@@ -234,7 +240,7 @@ Run `diskcheck` any time to see root volume free space and journal size together
 
 ### 1h. Add swap space
 
-The Orange Pi 5 has 4 GB of RAM and **no swap by default**. The camera service, GStreamer pipeline, and ffmpeg together can peak at 2–3 GB under load. Without swap, the OOM killer will silently terminate processes and make the device appear unresponsive. A 2 GB swap file gives the OS room to page out cold memory rather than killing services.
+These boards have **no swap by default**. The camera service, GStreamer pipeline, and ffmpeg together can peak at 2–3 GB under load. Without swap, the OOM killer will silently terminate processes and make the device appear unresponsive. A 2 GB swap file gives the OS room to page out cold memory rather than killing services.
 
 ```bash
 sudo fallocate -l 2G /swapfile
@@ -300,9 +306,11 @@ sudo apt install -y \
 
 ### 2c. Rockchip MPP hardware encoder / decoder
 
-The MPP (Media Process Platform) plugins provide `mpph264enc` / `mpph265enc` (hardware encoders) and `mppjpegdec` (JPEG hardware decoder). These packages come from Joshua-Riek's Launchpad PPAs, **not** the standard Ubuntu repositories, so the PPAs must be added first.
+The MPP (Media Process Platform) plugin (`gstreamer1.0-rockchip1`) provides:
+- **Encoders:** `mpph264enc`, `mpph265enc`, `mppjpegenc`, `mppvp8enc`
+- **Decoders:** `mppvideodec` (one generic element handles H.264, H.265, JPEG, VP8, VP9), `mppjpegdec`
 
-> **Note:** The GStreamer Rockchip plugin package is named **`gstreamer1.0-rockchip1`** (with a trailing `1`) — not `gstreamer1.0-rockchip`. Also note that `librockchip-mpp1` is typically pre-installed by the Joshua-Riek image but is listed here for completeness.
+> **Note:** There are no separate `mpph264dec` or `mpph265dec` elements. The single `mppvideodec` element handles all supported codec formats. `librockchip-mpp1` is typically pre-installed by the Joshua-Riek image but is listed here for completeness.
 
 ```bash
 # software-properties-common provides add-apt-repository
@@ -327,16 +335,15 @@ sudo apt install -y \
   librockchip-vpu0
 ```
 
-> **Verify the encoders and decoders are available:**
+> **Verify the encoders and decoder are available:**
 > ```bash
 > gst-inspect-1.0 mpph264enc    # H.264 hardware encoder
 > gst-inspect-1.0 mpph265enc    # H.265 hardware encoder
-> gst-inspect-1.0 mpph264dec    # H.264 hardware decoder (NDI HX / HX2)
-> gst-inspect-1.0 mpph265dec    # H.265 hardware decoder (NDI HX3)
+> gst-inspect-1.0 mppvideodec   # generic hardware decoder (H.264/H.265/VP8/JPEG)
 > gst-inspect-1.0 mppjpegdec    # JPEG hardware decoder
 > ```
 >
-> All five elements must be present for the full feature set. If any are missing, reinstall `gstreamer1.0-rockchip1` and clear the plugin registry:
+> All four elements must be present. If any are missing, reinstall and clear the plugin registry:
 > ```bash
 > sudo apt install --reinstall gstreamer1.0-rockchip1
 > rm -f ~/.cache/gstreamer-1.0/registry.aarch64.bin
@@ -566,7 +573,7 @@ MediaMTX **hot-reloads** its config file whenever it changes, so the updated `we
 
 ### 2l. NDI (Network Device Interface) Support
 
-NDI lets the Orange Pi 5 receive a network video feed from any NDI sender on the same LAN — OBS, NewTek TriCaster, Mac Scan Converter, vMix, etc. — and re-stream it through the normal hardware-encode pipeline. Both standard NDI (uncompressed `video/x-raw`) and the compressed variants **NDI HX / HX2** (H.264) and **NDI HX3** (H.265) are supported; the pipeline auto-detects the format at runtime.
+NDI lets the device receive a network video feed from any NDI sender on the same LAN — OBS, NewTek TriCaster, Mac Scan Converter, vMix, etc. — and re-stream it through the normal hardware-encode pipeline. Both standard NDI (uncompressed `video/x-raw`) and the compressed variants **NDI HX / HX2** (H.264) and **NDI HX3** (H.265) are supported; the pipeline auto-detects the format at runtime.
 
 Two components are required: the **NDI SDK runtime library** (`libndi.so.6`) and the **GStreamer NDI plugin** (Teltek `gst-plugin-ndi`, providing `ndisrc` and `ndisrcdemux`).
 
@@ -604,7 +611,7 @@ sudo ldconfig
 
 #### Step 2 — Install the GStreamer NDI plugin (Teltek gst-plugin-ndi)
 
-The GStreamer NDI plugin is written in Rust and provides the `ndisrc` and `ndisrcdemux` elements used by this app. Build it from source on the Orange Pi:
+The GStreamer NDI plugin is written in Rust and provides the `ndisrc` and `ndisrcdemux` elements used by this app. Build it from source on the device:
 
 ```bash
 # Install Rust toolchain (if not already present):
@@ -651,9 +658,8 @@ python3 /home/ubuntu/digitalpool-camera/ndi-discover.py 3000
 gst-inspect-1.0 ndisrc
 gst-inspect-1.0 ndisrcdemux
 
-# 3. For NDI HX/HX3 — hardware decoders must be present:
-gst-inspect-1.0 mpph264dec   # H.264 hardware decoder (NDI HX / HX2)
-gst-inspect-1.0 mpph265dec   # H.265 hardware decoder (NDI HX3)
+# 3. For NDI HX/HX3 — generic hardware decoder must be present:
+gst-inspect-1.0 mppvideodec  # handles H.264, H.265, VP8, JPEG (no separate mpph264dec/mpph265dec)
 # If missing: sudo apt install --reinstall gstreamer1.0-rockchip1
 ```
 
@@ -671,7 +677,7 @@ sudo ufw allow 5961/udp    # NDI video/audio stream data
 sudo ufw reload
 ```
 
-> **Same-subnet rule:** NDI discovery relies on mDNS multicast (`224.0.0.251`). The Orange Pi and the NDI sender **must be on the same Layer-2 network segment** — NDI does not cross routers unless a dedicated NDI routing/bridging solution is in use.
+> **Same-subnet rule:** NDI discovery relies on mDNS multicast (`224.0.0.251`). The device and the NDI sender **must be on the same Layer-2 network segment** — NDI does not cross routers unless a dedicated NDI routing/bridging solution is in use.
 
 #### Using NDI as the video source
 
@@ -868,7 +874,7 @@ systemctl list-timers network-watchdog.timer
 
 ### Layer 3 — Hardware watchdog (last resort if the kernel itself freezes)
 
-The RK3588 SoC has a hardware watchdog at `/dev/watchdog0`. If systemd stops petting it (because the kernel has completely locked up), the hardware forces a board reset after 60 seconds — even a kernel panic can't prevent this.
+The RK3588/RK3588S2 SoC has a hardware watchdog at `/dev/watchdog0`. If systemd stops petting it (because the kernel has completely locked up), the hardware forces a board reset after 60 seconds — even a kernel panic can't prevent this.
 
 > **Note:** The service file deliberately omits `WatchdogSec`. With `Type=simple`, systemd uses `WatchdogSec / 2` as the effective kill threshold, and keepalives sent from Node.js child processes are rejected when `NotifyAccess=main` is set. This combination caused the service to be killed and restarted every ~60 seconds even when it was running perfectly. The hardware watchdog above provides equivalent last-resort protection without this complication.
 
@@ -978,7 +984,7 @@ You should see:
 
 After connecting your phone or tablet to the hotspot, open `http://192.168.50.1:3000` to access the full control interface.
 
-> The AP runs concurrently alongside any regular WiFi client connection (AP+STA mode), so the Orange Pi 5 can be connected to your venue network and still serve the hotspot at the same time.
+> The AP runs concurrently alongside any regular WiFi client connection (AP+STA mode), so the device can be connected to your venue network and still serve the hotspot at the same time.
 
 ### 7b.1. Improve hotspot security and discoverability (one-time)
 
@@ -1367,8 +1373,7 @@ sudo systemctl restart digitalpool-camera   # picks up the new group immediately
 ```bash
 gst-inspect-1.0 mpph264enc
 gst-inspect-1.0 mpph265enc
-gst-inspect-1.0 mpph264dec   # required for NDI HX / HX2
-gst-inspect-1.0 mpph265dec   # required for NDI HX3
+gst-inspect-1.0 mppvideodec  # generic decoder — handles H.264/H.265/VP8/JPEG (no mpph264dec/mpph265dec)
 # If any are missing:
 sudo apt install --reinstall gstreamer1.0-rockchip1
 rm -f ~/.cache/gstreamer-1.0/registry.aarch64.bin
@@ -1482,7 +1487,7 @@ These are the most common pipeline-level failures and what each means:
 | `NOT_NEGOTIATED (-4)` | Caps mismatch on first buffer | Already fixed — framerate constraint removed from dynamic chain |
 | `🎥 NDI video media type: video/x-h264` | NDI HX/HX2 source — hardware decode inserted | Normal — no action needed |
 | `🎥 NDI video media type: video/x-h265` | NDI HX3 source — hardware decode inserted | Normal — no action needed |
-| `❌ NDI video link FAILED` | Element creation failed (plugin missing?) | Verify `mpph264dec` / `mpph265dec` — see hardware encoder check above |
+| `❌ NDI video link FAILED` | Element creation failed (plugin missing?) | Verify `mppvideodec` is present — see hardware encoder/decoder check above |
 
 ```bash
 # Watch the NDI pipeline startup sequence live:
@@ -1504,13 +1509,13 @@ Pipeline state: paused → playing
 ### NDI HX3 — hardware decoder not found
 
 ```bash
-gst-inspect-1.0 mpph264dec
-gst-inspect-1.0 mpph265dec
-# If either is missing:
+gst-inspect-1.0 mppvideodec
+# Note: there is no mpph264dec or mpph265dec — mppvideodec is the one generic hardware decoder.
+# If missing:
 sudo apt install --reinstall gstreamer1.0-rockchip1
 # Then clear the plugin registry and retry:
 rm -f ~/.cache/gstreamer-1.0/registry.aarch64.bin
-gst-inspect-1.0 mpph264dec
+gst-inspect-1.0 mppvideodec
 ```
 
 The pipeline automatically falls back to software decoding (`avdec_h264` / `avdec_h265`) if hardware decoders are unavailable, but CPU usage will be higher.

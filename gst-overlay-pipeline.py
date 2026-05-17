@@ -724,16 +724,20 @@ def main():
                     decode_el = None
                     if is_h264:
                         parse_el  = Gst.ElementFactory.make("h264parse",  None)
-                        # Try Rockchip MPP hardware decoder; fall back to software.
-                        decode_el = (Gst.ElementFactory.make("mpph264dec", None)
+                        # The Rockchip GStreamer plugin exposes a single generic
+                        # hardware decoder named "mppvideodec" (handles H.264,
+                        # H.265, JPEG, VP8, VP9).  Format-specific names like
+                        # "mpph264dec" do NOT exist — always try mppvideodec first
+                        # and fall back to the libav software decoder.
+                        decode_el = (Gst.ElementFactory.make("mppvideodec", None)
                                      or Gst.ElementFactory.make("avdec_h264", None))
-                        hw = "mpph264dec" if decode_el and decode_el.get_factory().get_name() == "mpph264dec" else "avdec_h264"
+                        hw = decode_el.get_factory().get_name() if decode_el else "none"
                         print(f"🎥 NDI HX/HX2 (H.264) — decoder: {hw}", file=sys.stderr)
                     elif is_h265:
                         parse_el  = Gst.ElementFactory.make("h265parse",  None)
-                        decode_el = (Gst.ElementFactory.make("mpph265dec", None)
+                        decode_el = (Gst.ElementFactory.make("mppvideodec", None)
                                      or Gst.ElementFactory.make("avdec_h265", None))
-                        hw = "mpph265dec" if decode_el and decode_el.get_factory().get_name() == "mpph265dec" else "avdec_h265"
+                        hw = decode_el.get_factory().get_name() if decode_el else "none"
                         print(f"🎥 NDI HX3 (H.265) — decoder: {hw}", file=sys.stderr)
 
                     vconv  = Gst.ElementFactory.make("videoconvert", None)
