@@ -1119,6 +1119,18 @@ class StreamController extends EventEmitter {
       ];
     }
 
+    // Insert videoflip before overlays so text stays right-side-up.
+    // Methods: 0=none, 2=rotate-180 (H+V), 4=horizontal-flip, 5=vertical-flip
+    const flipH = this.streamConfig.flipHorizontal || false;
+    const flipV = this.streamConfig.flipVertical   || false;
+    let flipMethod = 0;
+    if (flipH && flipV) flipMethod = 2;
+    else if (flipH)     flipMethod = 4;
+    else if (flipV)     flipMethod = 5;
+    if (flipMethod !== 0) {
+      pipeline.push("videoflip", `method=${flipMethod}`, "!");
+    }
+
     // Add overlays if any individual overlay is enabled
     const hasAnyOverlay = this.streamConfig.overlayEnabled || this.streamConfig.showTimestamp;
     if (hasAnyOverlay) {
