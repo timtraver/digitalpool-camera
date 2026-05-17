@@ -1455,19 +1455,38 @@ async function switchToWebRTCPreview(streamPath, onConnected, _attempt = 0) {
     setTimeout(() => { pc.removeEventListener("icegatheringstatechange", onStateChange); resolve(); }, 5000);
   });
 
-  // Ask the server which local IP this HTTP connection arrived on.
-  // The server returns the interface address (e.g. 192.168.50.1, 100.64.x.x)
-  // so the WHEP URL targets the exact MediaMTX ICE candidate the browser can reach.
-  let whepBase = `http://${window.location.hostname}:8889`; // safe fallback
+  // Determine the best WHEP URL for this access scenario:
+  //
+  // • LAN / hotspot / direct Tailscale:
+  //     whep-base returns the device IP matching this connection (e.g. 192.168.1.81 or
+  //     192.168.50.1 or 100.64.x.x). That host matches window.location.hostname, so the
+  //     browser can reach MediaMTX port 8889 directly — no CORS or mixed-content issues.
+  //
+  // • Headscale reverse proxy (cameras.digitalpool.com/camera/home-1):
+  //     whep-base returns the Tailscale IP (100.64.x.x) but the page origin is
+  //     cameras.digitalpool.com. The browser cannot make a cross-origin or HTTP→HTTPS
+  //     mixed-content request to that IP, so we route through the Express WHEP proxy
+  //     (/api/whep/<path>) which forwards to MediaMTX on localhost.
+  //     The actual media UDP still flows directly over Tailscale via the ICE candidates
+  //     advertised in the SDP answer — only the signaling goes through the proxy.
+
+  let whepBase = null; // null → fall back to proxy
   try {
     const baseRes = await fetch("/api/stream/whep-base");
     if (baseRes.ok) {
       const data = await baseRes.json();
       if (data.whepBase) whepBase = data.whepBase;
     }
-  } catch (_) { /* use fallback */ }
-  const whepUrl = `${whepBase}/${streamPath}/whep`;
-  console.log(`📡 WHEP URL: ${whepUrl} (local socket: ${whepBase})`);
+  } catch (_) { /* network error — proxy fallback */ }
+
+  // Use the Express proxy if the whepBase host differs from the page host
+  // (different host = proxy/Headscale scenario where direct access is blocked).
+  const whepHost = whepBase ? new URL(whepBase).hostname : null;
+  const useProxy = !whepHost || (whepHost !== window.location.hostname);
+  const whepUrl = useProxy
+    ? `/api/whep/${streamPath}`
+    : `${whepBase}/${streamPath}/whep`;
+  console.log(`📡 WHEP URL: ${whepUrl} (proxy: ${useProxy}, base: ${whepBase})`);
   let whepRes;
   try {
     whepRes = await fetch(whepUrl, {

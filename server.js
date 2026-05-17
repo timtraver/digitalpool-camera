@@ -2290,15 +2290,27 @@ app.get("/video/hls-live/*file", requireAuth, (req, res) => {
 
 // ── MediaMTX WHEP proxy (WebRTC preview) ─────────────────────────────────────
 // Proxies WebRTC-HTTP Egress Protocol (WHEP) requests to MediaMTX on port 8889.
-// The browser cannot reach port 8889 directly (different port, no auth), so we
-// relay here behind the authenticated Express session.
 //
-// POST /api/whep/preview  →  POST http://127.0.0.1:8889/preview/whep   (start session)
+// Used when the browser cannot reach MediaMTX port 8889 directly — specifically
+// when the admin UI is accessed via the Headscale reverse proxy
+// (e.g. cameras.digitalpool.com/camera/home-1). In that case the page is served
+// from an HTTPS origin different from the device IP, so direct cross-origin /
+// mixed-content requests to 100.64.x.x:8889 are blocked by the browser.
+// The proxy routes signaling through the same authenticated Express connection
+// the browser already has open. The actual media UDP still flows directly over
+// Tailscale using the ICE candidates advertised in the SDP answer.
+//
+// POST /api/whep/preview  →  POST http://127.0.0.1:8889/preview/whep
 // PATCH/DELETE /api/whep/preview/<sessionId>  →  PATCH/DELETE http://127.0.0.1:8889/preview/whep/<sessionId>
 //
 // The Location header from MediaMTX is rewritten from the internal address
 // (http://127.0.0.1:8889/…) to a path rooted at /api/whep so the browser's
 // follow-up PATCH/DELETE requests stay on port 3000.
+//
+// X-Forwarded-For carries the real client IP so MediaMTX's auth hook and
+// connection logging see the actual viewer, not the proxy's localhost address.
+// Requires `trustedProxies: ["127.0.0.1"]` in /etc/mediamtx.yml.
+//
 // express.raw({ type: '*/*' }) MUST be used here instead of req.on("data").
 // The global express.json() middleware (and keep-alive connection reuse) can
 // leave the readable stream in a state where req.on("data") never fires, so
@@ -2314,14 +2326,23 @@ app.all("/api/whep/*path", requireAuth, express.raw({ type: "*/*" }), (req, res)
     ? `/${subpath}/whep`
     : `/${subpath}`;
 
-  console.log(`🔀 WHEP proxy: ${req.method} ${upstreamPath} bodyLen=${reqBody.length} ct=${req.headers["content-type"]}`);
+  // Real client IP — forwarded so MediaMTX sees the viewer, not localhost.
+  // req.ip already respects any upstream X-Forwarded-For via Express trust proxy.
+  const clientIp = req.ip || req.socket.remoteAddress || "unknown";
+
+  console.log(`🔀 WHEP proxy: ${req.method} ${upstreamPath} bodyLen=${reqBody.length} clientIp=${clientIp}`);
 
   const options = {
     hostname: "127.0.0.1",
     port: 8889,
     path: upstreamPath,
     method: req.method,
-    headers: { "content-type": req.headers["content-type"] || "application/sdp" },
+    headers: {
+      "content-type": req.headers["content-type"] || "application/sdp",
+      // Forward the real client IP so MediaMTX's auth hook and logs see it.
+      // Requires trustedProxies: ["127.0.0.1"] in /etc/mediamtx.yml.
+      "x-forwarded-for": clientIp,
+    },
     timeout: 10000,
     agent: false,   // no keep-alive pooling — always a fresh TCP connection to MediaMTX
   };
