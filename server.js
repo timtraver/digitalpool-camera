@@ -2330,6 +2330,11 @@ app.all("/api/whep/*path", requireAuth, express.raw({ type: "*/*" }), (req, res)
   const clientIp = req.ip || req.socket.remoteAddress || "unknown";
 
   console.log(`🔀 WHEP proxy: ${req.method} ${upstreamPath} bodyLen=${reqBody.length} clientIp=${clientIp}`);
+  if (req.method === "POST" && reqBody.length > 0) {
+    const sdpText = reqBody.toString("utf8", 0, 500);
+    const hasAudio = /^m=audio/m.test(sdpText) || /\nm=audio/m.test(sdpText);
+    console.log(`📋 WHEP SDP: hasAudio=${hasAudio} preview="${sdpText.slice(0, 120).replace(/\r?\n/g, "↵")}"`);
+  }
 
   const options = {
     hostname: "127.0.0.1",
