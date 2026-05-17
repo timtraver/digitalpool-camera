@@ -545,6 +545,25 @@ sudo chmod +x /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts
 
 After this, every time the hotspot (or any other interface) comes up — including after a reboot — the dispatcher fires within ~2 seconds and MediaMTX automatically picks up the new IP. No manual `systemctl restart mediamtx` is ever needed.
 
+**Tailscale caveat:** Tailscale creates a `tailscale0` TUN interface directly in the kernel — it is **not** managed by NetworkManager, so the dispatcher above will not fire when Tailscale connects. A **periodic systemd timer** closes this gap by re-running the update script every 60 seconds regardless of how any interface came up:
+
+```bash
+# Install the timer units (files are included in the repo)
+sudo cp ~/digitalpool-camera/mediamtx-update-hosts.service \
+        ~/digitalpool-camera/mediamtx-update-hosts.timer \
+        /etc/systemd/system/
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now mediamtx-update-hosts.timer
+
+# Verify the timer is scheduled
+systemctl list-timers mediamtx-update-hosts.timer
+```
+
+MediaMTX **hot-reloads** its config file whenever it changes, so the updated `webrtcAdditionalHosts` list takes effect immediately — no MediaMTX restart needed. With this timer in place, any interface (Tailscale, hotspot, a new ethernet link) will be reflected in the ICE candidate list within 60 seconds of coming up, automatically and permanently.
+
+**Why you can't preset a CIDR range (e.g. all `100.x.x.x`):** `webrtcAdditionalHosts` takes a list of specific IP addresses — not subnets. ICE candidates must be actual reachable addresses the device currently holds. The periodic timer achieves the same result: any IP the device acquires (Tailscale, hotspot, LAN) is picked up automatically within one timer cycle.
+
 ### 2l. NDI (Network Device Interface) Support
 
 NDI lets the Orange Pi 5 receive a network video feed from any NDI sender on the same LAN — OBS, NewTek TriCaster, Mac Scan Converter, vMix, etc. — and re-stream it through the normal hardware-encode pipeline. Both standard NDI (uncompressed `video/x-raw`) and the compressed variants **NDI HX / HX2** (H.264) and **NDI HX3** (H.265) are supported; the pipeline auto-detects the format at runtime.
@@ -1633,6 +1652,26 @@ EOF
 sudo chmod +x /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts
 ```
 
+#### Periodic ICE host refresh timer — catch Tailscale and other non-NM interfaces
+
+Tailscale is not managed by NetworkManager, so the dispatcher above won't fire when Tailscale connects. This timer re-runs the update script every 60 seconds so any interface (Tailscale, hotspot, LAN) is always reflected in the ICE candidate list within one cycle.
+
+```bash
+# Check if already present:
+systemctl list-timers mediamtx-update-hosts.timer 2>/dev/null
+
+# If missing, install and enable it:
+sudo cp ~/digitalpool-camera/mediamtx-update-hosts.service \
+        ~/digitalpool-camera/mediamtx-update-hosts.timer \
+        /etc/systemd/system/
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now mediamtx-update-hosts.timer
+
+# Verify
+systemctl list-timers mediamtx-update-hosts.timer
+```
+
 #### Captive portal sudoers + TLS cert (auto-open admin UI on hotspot connect)
 
 Required for the captive portal iptables rules and Ethernet/timezone/reboot controls to work. See Section 7c for the full explanation.
@@ -1671,6 +1710,9 @@ grep webrtcAdditionalHosts /etc/mediamtx.yml
 
 # NM dispatcher for ICE host updates must be present and executable
 ls -l /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts
+
+# Periodic ICE host refresh timer must be active (catches Tailscale and other non-NM interfaces)
+systemctl list-timers mediamtx-update-hosts.timer
 
 # WiFi adapter power-save disabled (rtw_8822bu only — skip if different chipset)
 cat /etc/modprobe.d/rtw_8822bu.conf

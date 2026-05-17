@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodically refresh MediaMTX WebRTC ICE host list
+# Ensures late-connecting interfaces (Tailscale, hotspot) are always included
+# as ICE candidates without requiring a MediaMTX restart.
+
+[Timer]
+# First run 30 s after boot — catches interfaces that come up after MediaMTX starts
+OnBootSec=30
+# Then re-run every 60 s — picks up Tailscale reconnects, IP changes, etc.
+OnUnitActiveSec=60
+
+[Install]
+WantedBy=timers.target

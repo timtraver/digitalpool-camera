@@ -1,0 +1,10 @@
+[Unit]
+Description=Update MediaMTX WebRTC ICE host list
+# Runs both on the periodic timer and when triggered directly.
+# MediaMTX watches /etc/mediamtx.yml and hot-reloads on change,
+# so no mediamtx restart is needed after the script updates the file.
+After=mediamtx.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mediamtx-update-hosts.sh
