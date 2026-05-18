@@ -98,7 +98,7 @@ class StreamController extends EventEmitter {
       // Audio settings
       audioEnabled: true,      // Include audio in stream
       audioSource: "video",    // "video" = use embedded source audio; "external" = ALSA device
-      audioDevice: "hw:3,0",   // ALSA device used when audioSource === "external"
+      audioDevice: "plughw:2,0", // ALSA device used when audioSource === "external"
       // Skia graphics overlay
       skiaGraphicsEnabled: false, // Enable Skia graphics overlay
       skiaGraphicsPort: 8556, // Port where Skia graphics server is running
@@ -410,7 +410,7 @@ class StreamController extends EventEmitter {
         const protocol = this.streamConfig.protocol;
         console.log(`📡 Hybrid mode — ffmpeg muxing ALSA audio + GStreamer video → ${protocol.toUpperCase()}`);
 
-        const audioDevice = this.streamConfig.audioDevice || "hw:3,0";
+        const audioDevice = this.streamConfig.audioDevice || "plughw:2,0";
 
         // ── Part 1: Audio input args (built now) ────────────────────────────
         // -use_wallclock_as_timestamps 1 replaces ALSA's USB-clock-derived PTS
@@ -969,12 +969,12 @@ class StreamController extends EventEmitter {
     //   audioSource === "video" + USB input   → ALSA device (camera mic).
     const audioDevice = this.streamConfig.audioEnabled
       ? (this.streamConfig.audioSource === "external"
-          ? (this.streamConfig.audioDevice || "hw:3,0")
+          ? (this.streamConfig.audioDevice || "plughw:2,0")
           : (this.inputSource.type === "rtsp"
               ? "rtsp"
               : this.inputSource.type === "ndi"
                 ? "ndi"
-                : (this.streamConfig.audioDevice || "hw:3,0")))
+                : (this.streamConfig.audioDevice || "plughw:2,0")))
       : "";
 
     // H.265 is incompatible with RTMP (FLV container only supports H.264)
