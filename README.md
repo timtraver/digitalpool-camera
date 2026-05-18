@@ -290,6 +290,20 @@ sudo apt install -y \
   gir1.2-gstreamer-1.0 gir1.2-glib-2.0
 ```
 
+### 2a.2. Add `ubuntu` to the `video` and `audio` groups
+
+The service runs as the `ubuntu` user and needs direct access to both the camera device (`/dev/video*`) and the ALSA audio devices (`/dev/snd/*`). These device nodes are owned by the `video` and `audio` groups respectively — without membership the camera is invisible to GStreamer and all ALSA card enumeration silently fails (even `arecord -l` returns "no soundcards found").
+
+```bash
+sudo usermod -aG video ubuntu
+sudo usermod -aG audio ubuntu
+
+# Verify both groups appear:
+groups ubuntu
+```
+
+> **This takes effect for new login sessions and for systemd services started after the change.** If you are currently SSH'd in as `ubuntu`, either log out and back in or run `newgrp audio` (and `newgrp video` in separate shells) to activate the groups in the current shell without a full logout.
+
 ### 2b. GStreamer 1.0 — full plugin stack
 
 ```bash
@@ -1291,7 +1305,7 @@ Key stream settings (configured via the UI, saved to `stream-config.json`):
 | Resolution | `1920×1080` | Width × Height |
 | Framerate | `30` fps | Target encode framerate |
 | Bitrate | `5 Mbps` | H.264/H.265 target bitrate |
-| Audio device | `hw:3,0` | ALSA device for microphone |
+| Audio device | `plughw:2,0` | ALSA device for microphone — use `plughw:` (not `hw:`) so the plug layer handles sample-rate conversion automatically. Run `arecord -l` to find the card number; set it to `plughw:<card>,0`. |
 | Audio enabled | `true` | Mux audio into stream |
 
 **Input source settings** (persisted to `camera-source.json`):
@@ -1527,15 +1541,19 @@ Ensure the Python script (`gst-overlay-pipeline.py`) is being used rather than t
 
 ### OBS connects to RTSP but "no stream is available on path 'live'"
 
-MediaMTX is running but nothing is pushing video to it. The most common cause is the `ubuntu` user lacking permission to open the camera mic (`hw:3,0`), which causes the ffmpeg audio process to crash before it ever reaches MediaMTX.
+MediaMTX is running but nothing is pushing video to it. The most common cause is the `ubuntu` user lacking permission to open the ALSA audio device, which causes the ffmpeg audio process to crash before it ever reaches MediaMTX.
 
 ```bash
-# Confirm the audio card is present (should list the camera mic)
+# Confirm the audio card is present (should list capture devices)
 cat /proc/asound/cards
 
-# If arecord -l shows nothing for the ubuntu user, the group is missing:
+# If arecord -l shows nothing for the ubuntu user, the audio group is missing:
 sudo usermod -aG audio ubuntu
 sudo systemctl restart digitalpool-camera
+
+# Also confirm the audio device in Admin Settings uses plughw: (not hw:)
+# Run arecord -l to find the card number, then set the device to plughw:<card>,0
+arecord -l
 
 # Confirm the RTMP push is now active (should show a connection to port 1935)
 sudo ss -tnp | grep 1935
