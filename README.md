@@ -593,22 +593,19 @@ gst-inspect-1.0 ndisrcdemux
 
 > **Tip:** If you do not have the NDI SDK headers, the plugin repository also publishes pre-built binaries in its Releases section for some architectures. Check https://github.com/teltek/gst-plugin-ndi/releases.
 
-#### Step 3 — Verify the complete NDI stack
+#### Step 3 — Verify GStreamer NDI elements
 
 ```bash
-# 1. NDI library loads:
-python3 /home/ubuntu/digitalpool-camera/ndi-discover.py 3000
-# Should print a JSON array — empty [] if no NDI sources are on the network,
-# or a list like: [{"name": "MY-MAC (Scan Converter)", "url": "192.168.1.5:5960"}]
-
-# 2. GStreamer elements present:
+# GStreamer elements present:
 gst-inspect-1.0 ndisrc
 gst-inspect-1.0 ndisrcdemux
 
-# 3. For NDI HX/HX3 — generic hardware decoder must be present:
+# For NDI HX/HX3 — generic hardware decoder must be present:
 gst-inspect-1.0 mppvideodec  # handles H.264, H.265, VP8, JPEG (no separate mpph264dec/mpph265dec)
 # If missing: sudo apt install --reinstall gstreamer1.0-rockchip1
 ```
+
+> **Note:** The NDI library discovery test (`ndi-discover.py`) requires the `digitalpool-camera` repo to be cloned first. That check is in **Section 4c** below.
 
 #### NDI firewall rules
 
@@ -765,6 +762,21 @@ systemctl list-timers mediamtx-update-hosts.timer
 MediaMTX **hot-reloads** its config file whenever it changes, so the updated `webrtcAdditionalHosts` list takes effect immediately — no MediaMTX restart needed. With this timer in place, any interface (Tailscale, hotspot, a new ethernet link) will be reflected in the ICE candidate list within 60 seconds of coming up, automatically and permanently.
 
 **Why you can't preset a CIDR range (e.g. all `100.x.x.x`):** `webrtcAdditionalHosts` takes a list of specific IP addresses — not subnets. ICE candidates must be actual reachable addresses the device currently holds. The periodic timer achieves the same result: any IP the device acquires (Tailscale, hotspot, LAN) is picked up automatically within one timer cycle.
+
+### 4c. Verify NDI library (if NDI is used)
+
+Now that the repo is cloned, confirm the NDI runtime library loads correctly:
+
+```bash
+# Run the discovery script (3 s timeout):
+python3 /home/ubuntu/digitalpool-camera/ndi-discover.py 3000
+# Expected output:
+#   []                          — library loaded fine; no NDI sources on the network yet
+#   [{"name": "...", ...}]      — library loaded and NDI senders are visible
+#
+# If you see {"error": "Cannot load NDI library"} check that libndi.so.6 is in
+# /usr/local/lib and that sudo ldconfig was run (see section 2l, Step 1).
+```
 
 ---
 
