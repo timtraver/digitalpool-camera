@@ -1523,13 +1523,10 @@ sudo sysctl -w kernel.unprivileged_userns_clone=1
 echo 'kernel.unprivileged_userns_clone=1' | sudo tee /etc/sysctl.d/99-chrome-sandbox.conf
 ```
 
-**Version compatibility:** The system Chromium is version 114. You **must** use `puppeteer-core@20.9.0` — newer versions use a DevTools Protocol revision that Chromium 114 does not support, causing Chromium to crash silently during page navigation with a misleading "Timed out after waiting 30000ms" error.
+**Version compatibility:** The system Chromium is version 114. `puppeteer-core` is pinned to `20.9.0` in `package.json` and installed automatically by `npm install`. Do not upgrade it — newer versions use a DevTools Protocol revision that Chromium 114 does not support, causing Chromium to crash silently with a misleading "Timed out after waiting 30000ms" error.
 
 ```bash
-# Correct install:
-npm install puppeteer-core@20.9.0
-
-# Verify:
+# Verify the correct version is installed:
 npm list puppeteer-core
 # Should print: puppeteer-core@20.9.0
 ```
