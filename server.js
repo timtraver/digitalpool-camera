@@ -1553,7 +1553,10 @@ app.get("/api/audio/devices", requireAuth, async (req, res) => {
       const m = re.exec(line.trim());
       if (!m) continue;
       const [, card, cardName, device, devName] = m;
-      const hw = `hw:${card},${device}`;
+      // Use plughw: instead of hw: so the ALSA plug layer handles rate/format
+      // conversion automatically.  This is essential for USB mics (e.g. OBSBOT
+      // Tiny SE) that only support 32000 Hz natively while ffmpeg requests 48000 Hz.
+      const hw = `plughw:${card},${device}`;
       const label = devName ? `${cardName} — ${devName} (${hw})` : `${cardName} (${hw})`;
       devices.push({ device: hw, name: label });
     }
