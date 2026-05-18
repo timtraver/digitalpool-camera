@@ -632,6 +632,85 @@ sudo ufw reload
 
 ---
 
+### 2m. Tailscale (Remote Access)
+
+Tailscale is required for the **Remote Access** toggle in Admin Settings. The app calls `sudo tailscale up` / `sudo tailscale down` / `sudo tailscale set` on behalf of the `ubuntu` user, so both the binary and the sudo permissions must be in place before enabling it.
+
+This project uses a self-hosted **Headscale** server (`https://remote.digitalpool.com`) instead of the Tailscale cloud — the same Tailscale client is used, just pointed at a different login server.
+
+#### Install Tailscale
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+```
+
+This installs the `tailscale` binary and enables the `tailscaled` daemon as a systemd service. Verify:
+
+```bash
+tailscale version
+sudo systemctl status tailscaled   # must show "active (running)"
+```
+
+> **Do not run `tailscale up` manually.** The Admin Settings UI handles authentication and registration. Running it manually first can leave stale state that confuses the force re-register flow.
+
+#### Grant sudo permissions
+
+The app runs several tailscale commands with `sudo` as the `ubuntu` user. Add them to the existing sudoers file (created in Section 7c — if you haven't done Section 7 yet, come back and append these lines then):
+
+```bash
+sudo tee -a /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
+# Tailscale — remote access control via the Admin Settings UI
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tailscale up *
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tailscale down
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tailscale set *
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop tailscaled
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl start tailscaled
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/rm -rf /var/lib/tailscale/
+EOF
+
+sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
+```
+
+> **If the sudoers file does not exist yet** (Section 7c not done), create it now with just the tailscale entries and append the rest later:
+> ```bash
+> sudo tee /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
+> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tailscale up *
+> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tailscale down
+> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tailscale set *
+> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop tailscaled
+> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl start tailscaled
+> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/rm -rf /var/lib/tailscale/
+> EOF
+> sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
+> ```
+
+#### Configure Headscale credentials in `.env`
+
+Add the three Headscale variables to `/home/ubuntu/digitalpool-camera/.env`:
+
+```bash
+# Headscale server URL (your self-hosted control plane)
+HEADSCALE_URL=https://remote.digitalpool.com
+
+# Pre-auth key — generate in the Headscale UI or CLI:
+#   headscale preauthkeys create --user <user> --reusable --expiration 9999d
+HEADSCALE_AUTHKEY=hskey-auth-your-key-here
+
+# Admin API key — allows the app to rename / delete nodes in Headscale:
+#   headscale apikeys create --expiration 9999d
+HEADSCALE_API_KEY=your-api-key-here
+```
+
+After editing `.env`, restart the service to pick up the new values:
+
+```bash
+sudo systemctl restart digitalpool-camera
+```
+
+Remote access can then be toggled on/off from **Admin Settings → Remote Access** in the web UI.
+
+---
+
 ## 3. Install Node.js via nvm
 
 The systemd service file runs Node.js installed through **nvm** (Node Version Manager) as the `ubuntu` user.
