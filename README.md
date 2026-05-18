@@ -1039,6 +1039,8 @@ sudo nmcli con down "DigitalPool-Hotspot" && sudo nmcli con up "DigitalPool-Hots
 
 ### 7b.2. USB WiFi adapter driver — disable power-saving modes (rtw_8822bu)
 
+> **Rock 5C users:** The Rock 5C's built-in WiFi uses the **AIC8800D80** chip (driver: `aic8800_fdrv`), not the Realtek RTL8822BU. This section does **not** apply to the built-in chip — skip it if you are using the Rock 5C's onboard WiFi for the hotspot. The AIC8800D80 is managed by NetworkManager and does not suffer the same driver-level IPS/LPS firmware crash described below.
+
 If the USB WiFi adapter uses the **Realtek RTL8822BU** chipset (driver module `rtw_8822bu`), the driver's built-in **Idle Power Save (IPS)** and **Leisure Power Save (LPS)** modes will cause periodic firmware crashes that silently take the hotspot offline. Symptoms in `dmesg`:
 
 ```
