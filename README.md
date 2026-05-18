@@ -507,70 +507,6 @@ For every incoming viewer connection (RTSP, SRT, RTMP, WebRTC) MediaMTX calls `P
 
 > **Note:** Without the auth hook the ban feature still works, but banned clients can connect briefly before the auto-kick on the next 2-second poll removes them. The auth hook eliminates that window entirely.
 
-### 2k.2. MediaMTX — WebRTC ICE host update script
-
-The admin preview uses WebRTC (WHEP protocol). For WebRTC to work from every network interface — LAN, Tailscale (`100.x.x.x`), and the WiFi hotspot — MediaMTX must include each interface's IP address in its SDP ICE candidates. The `mediamtx-update-hosts.sh` script (included in the repo) detects all current non-loopback IPv4 addresses at startup and injects them into `webrtcAdditionalHosts` in `/etc/mediamtx.yml`.
-
-```bash
-# Install the script
-sudo cp ~/digitalpool-camera/mediamtx-update-hosts.sh /usr/local/bin/
-sudo chmod +x /usr/local/bin/mediamtx-update-hosts.sh
-
-# Hook it into the mediamtx systemd service as a pre-start step
-sudo mkdir -p /etc/systemd/system/mediamtx.service.d
-sudo tee /etc/systemd/system/mediamtx.service.d/update-hosts.conf << 'EOF'
-[Service]
-ExecStartPre=/usr/local/bin/mediamtx-update-hosts.sh
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl restart mediamtx
-
-# Verify — should list all local IPs including Tailscale and hotspot
-grep webrtcAdditionalHosts /etc/mediamtx.yml
-```
-
-The script runs every time MediaMTX starts, so it picks up new Tailscale IPs automatically.
-
-**However**, MediaMTX starts at boot with `After=network.target` — before the WiFi hotspot interface exists. If the hotspot comes up several seconds later (which is normal), `192.168.50.1` won't be in the ICE candidates list until MediaMTX is restarted. A **NetworkManager dispatcher script** fixes this by re-running the update every time any interface comes up:
-
-```bash
-sudo tee /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts > /dev/null << 'EOF'
-#!/bin/bash
-# Re-run the MediaMTX ICE host update whenever any interface comes up,
-# so the hotspot IP is always included even if the hotspot started after MediaMTX.
-INTERFACE="$1"
-ACTION="$2"
-if [ "$ACTION" = "up" ]; then
-    sleep 2   # let the interface fully configure its IP
-    /usr/local/bin/mediamtx-update-hosts.sh
-fi
-EOF
-
-sudo chmod +x /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts
-```
-
-After this, every time the hotspot (or any other interface) comes up — including after a reboot — the dispatcher fires within ~2 seconds and MediaMTX automatically picks up the new IP. No manual `systemctl restart mediamtx` is ever needed.
-
-**Tailscale caveat:** Tailscale creates a `tailscale0` TUN interface directly in the kernel — it is **not** managed by NetworkManager, so the dispatcher above will not fire when Tailscale connects. A **periodic systemd timer** closes this gap by re-running the update script every 60 seconds regardless of how any interface came up:
-
-```bash
-# Install the timer units (files are included in the repo)
-sudo cp ~/digitalpool-camera/mediamtx-update-hosts.service \
-        ~/digitalpool-camera/mediamtx-update-hosts.timer \
-        /etc/systemd/system/
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now mediamtx-update-hosts.timer
-
-# Verify the timer is scheduled
-systemctl list-timers mediamtx-update-hosts.timer
-```
-
-MediaMTX **hot-reloads** its config file whenever it changes, so the updated `webrtcAdditionalHosts` list takes effect immediately — no MediaMTX restart needed. With this timer in place, any interface (Tailscale, hotspot, a new ethernet link) will be reflected in the ICE candidate list within 60 seconds of coming up, automatically and permanently.
-
-**Why you can't preset a CIDR range (e.g. all `100.x.x.x`):** `webrtcAdditionalHosts` takes a list of specific IP addresses — not subnets. ICE candidates must be actual reachable addresses the device currently holds. The periodic timer achieves the same result: any IP the device acquires (Tailscale, hotspot, LAN) is picked up automatically within one timer cycle.
-
 ### 2l. NDI (Network Device Interface) Support
 
 NDI lets the device receive a network video feed from any NDI sender on the same LAN — OBS, NewTek TriCaster, Mac Scan Converter, vMix, etc. — and re-stream it through the normal hardware-encode pipeline. Both standard NDI (uncompressed `video/x-raw`) and the compressed variants **NDI HX / HX2** (H.264) and **NDI HX3** (H.265) are supported; the pipeline auto-detects the format at runtime.
@@ -754,6 +690,70 @@ EOF
 Adjust `CAMERA_DEVICE` if your camera appears on a different node (check with `v4l2-ctl --list-devices`).
 
 > **Note:** Values set in `.env` take effect when `server.js` reads them at startup via `dotenv`. The `Environment=` lines in the service file are the authoritative defaults; `.env` overrides them for the Node.js process only (child processes like GStreamer are not affected by `.env`).
+
+### 4b. MediaMTX — WebRTC ICE host update script
+
+The admin preview uses WebRTC (WHEP protocol). For WebRTC to work from every network interface — LAN, Tailscale (`100.x.x.x`), and the WiFi hotspot — MediaMTX must include each interface's IP address in its SDP ICE candidates. The `mediamtx-update-hosts.sh` script (included in the repo) detects all current non-loopback IPv4 addresses at startup and injects them into `webrtcAdditionalHosts` in `/etc/mediamtx.yml`.
+
+```bash
+# Install the script
+sudo cp ~/digitalpool-camera/mediamtx-update-hosts.sh /usr/local/bin/
+sudo chmod +x /usr/local/bin/mediamtx-update-hosts.sh
+
+# Hook it into the mediamtx systemd service as a pre-start step
+sudo mkdir -p /etc/systemd/system/mediamtx.service.d
+sudo tee /etc/systemd/system/mediamtx.service.d/update-hosts.conf << 'EOF'
+[Service]
+ExecStartPre=/usr/local/bin/mediamtx-update-hosts.sh
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl restart mediamtx
+
+# Verify — should list all local IPs including Tailscale and hotspot
+grep webrtcAdditionalHosts /etc/mediamtx.yml
+```
+
+The script runs every time MediaMTX starts, so it picks up new Tailscale IPs automatically.
+
+**However**, MediaMTX starts at boot with `After=network.target` — before the WiFi hotspot interface exists. If the hotspot comes up several seconds later (which is normal), `192.168.50.1` won't be in the ICE candidates list until MediaMTX is restarted. A **NetworkManager dispatcher script** fixes this by re-running the update every time any interface comes up:
+
+```bash
+sudo tee /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts > /dev/null << 'EOF'
+#!/bin/bash
+# Re-run the MediaMTX ICE host update whenever any interface comes up,
+# so the hotspot IP is always included even if the hotspot started after MediaMTX.
+INTERFACE="$1"
+ACTION="$2"
+if [ "$ACTION" = "up" ]; then
+    sleep 2   # let the interface fully configure its IP
+    /usr/local/bin/mediamtx-update-hosts.sh
+fi
+EOF
+
+sudo chmod +x /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts
+```
+
+After this, every time the hotspot (or any other interface) comes up — including after a reboot — the dispatcher fires within ~2 seconds and MediaMTX automatically picks up the new IP. No manual `systemctl restart mediamtx` is ever needed.
+
+**Tailscale caveat:** Tailscale creates a `tailscale0` TUN interface directly in the kernel — it is **not** managed by NetworkManager, so the dispatcher above will not fire when Tailscale connects. A **periodic systemd timer** closes this gap by re-running the update script every 60 seconds regardless of how any interface came up:
+
+```bash
+# Install the timer units (files are included in the repo)
+sudo cp ~/digitalpool-camera/mediamtx-update-hosts.service \
+        ~/digitalpool-camera/mediamtx-update-hosts.timer \
+        /etc/systemd/system/
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now mediamtx-update-hosts.timer
+
+# Verify the timer is scheduled
+systemctl list-timers mediamtx-update-hosts.timer
+```
+
+MediaMTX **hot-reloads** its config file whenever it changes, so the updated `webrtcAdditionalHosts` list takes effect immediately — no MediaMTX restart needed. With this timer in place, any interface (Tailscale, hotspot, a new ethernet link) will be reflected in the ICE candidate list within 60 seconds of coming up, automatically and permanently.
+
+**Why you can't preset a CIDR range (e.g. all `100.x.x.x`):** `webrtcAdditionalHosts` takes a list of specific IP addresses — not subnets. ICE candidates must be actual reachable addresses the device currently holds. The periodic timer achieves the same result: any IP the device acquires (Tailscale, hotspot, LAN) is picked up automatically within one timer cycle.
 
 ---
 
