@@ -529,21 +529,27 @@ Extract / run the installer, then copy the shared library to `/usr/local/lib`:
 sudo cp ./NDI\ SDK\ for\ Linux/lib/aarch64-linux-gnu/libndi.so.6 /usr/local/lib/
 sudo chmod 755 /usr/local/lib/libndi.so.6
 
+# Create the unversioned symlink required by the linker (-lndi at build time):
+sudo ln -sf /usr/local/lib/libndi.so.6 /usr/local/lib/libndi.so
+
 # Refresh the dynamic linker cache so other programs can find it:
 sudo ldconfig
 
 # Verify:
 ldconfig -p | grep libndi
-# Should print:  libndi.so.6 (libc6,AArch64) => /usr/local/lib/libndi.so.6
+# Should print both:
+#   libndi.so.6 (libc6,AArch64) => /usr/local/lib/libndi.so.6
+#   libndi.so   (libc6,AArch64) => /usr/local/lib/libndi.so
 ```
 
-> **Version note:** The app and `ndi-discover.py` hard-code the path `/usr/local/lib/libndi.so.6`. If you install a different major version (e.g. `.so.5` or `.so.7`), either create a symlink or update that path.
+> **Why two files?** `libndi.so.6` is the runtime library (loaded at runtime by `ldconfig`). `libndi.so` is the unversioned symlink the linker needs at *build* time (`-lndi`). Without it the `cargo build` step will fail with `cannot find -lndi`.
 
-```bash
-# Symlink example for a different major version:
-sudo ln -sf /usr/local/lib/libndi.so.X /usr/local/lib/libndi.so.6
-sudo ldconfig
-```
+> **Version note:** The app and `ndi-discover.py` hard-code the path `/usr/local/lib/libndi.so.6`. If you install a different major version (e.g. `.so.5` or `.so.7`), create a symlink to normalise it:
+> ```bash
+> sudo ln -sf /usr/local/lib/libndi.so.X /usr/local/lib/libndi.so.6
+> sudo ln -sf /usr/local/lib/libndi.so.6 /usr/local/lib/libndi.so
+> sudo ldconfig
+> ```
 
 #### Step 2 — Install the GStreamer NDI plugin (Teltek gst-plugin-ndi)
 
@@ -554,11 +560,16 @@ The GStreamer NDI plugin is written in Rust and provides the `ndisrc` and `ndisr
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
 
-# Install GStreamer development headers (needed for linking):
+# Install GStreamer development headers and librga (needed for linking):
+# librga-dev is available from the jjriek/rockchip-multimedia PPA added in step 2c.
+# Without it, the Rockchip-patched gstreamer-video-1.0.pc pulls in librga as a
+# dependency and cargo will fail with "Package 'librga' not found".
 sudo apt install -y \
   libgstreamer1.0-dev \
   libgstreamer-plugins-base1.0-dev \
-  libgstreamer-plugins-bad1.0-dev
+  libgstreamer-plugins-bad1.0-dev \
+  librga2 \
+  librga-dev
 
 # Clone and build the Teltek plugin:
 git clone https://github.com/teltek/gst-plugin-ndi.git
