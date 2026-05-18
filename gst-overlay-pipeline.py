@@ -393,7 +393,7 @@ def main():
         # SRT latency=500ms absorbs the short bursts; average bitrate stays near bps target.
         + (
             # H.265 (HEVC) — Rockchip MPP hardware encoder, SRT / RTSP only
-            f'! mpph265enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr profile=main '
+            f'! mpph265enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr '
             f'! video/x-h265,stream-format=byte-stream '
             f'! h265parse config-interval=-1 '
             if codec == "h265" else

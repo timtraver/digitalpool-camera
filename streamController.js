@@ -1282,7 +1282,6 @@ class StreamController extends EventEmitter {
         "rc-mode=vbr",
         "gop=5",                // Keyframe every ~167ms at 30fps, ~83ms at 60fps
         "header-mode=each-idr", // VPS/SPS/PPS prepended to every IDR in the bitstream
-        "profile=main",         // H.265 Main profile
         "!",
         "video/x-h265,stream-format=byte-stream",
         "!",
