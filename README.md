@@ -771,10 +771,9 @@ cd digitalpool-camera
 
 # Install npm dependencies
 npm install
-
-# Required for remote URL overlay support (must match Chromium 114 — do NOT use latest)
-npm install puppeteer-core@20.9.0
 ```
+
+> `puppeteer-core@20.9.0` is listed in `package.json` and is installed automatically by `npm install`. It **must** stay pinned at `20.9.0` — newer versions use a DevTools Protocol revision that the system Chromium 114 does not support, causing Chromium to crash silently during page navigation.
 
 ### 4a. Create the environment file
 
