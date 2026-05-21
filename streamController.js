@@ -190,6 +190,37 @@ class StreamController extends EventEmitter {
   }
 
   /**
+   * Probe ALSA for capture devices and return the first valid plughw string,
+   * or null if none are found.  Used to auto-correct a bad audioDevice setting.
+   */
+  async _detectAlsaCaptureDevice() {
+    return new Promise((resolve) => {
+      const proc = spawn("aplay", ["-l"], { stdio: ["ignore", "pipe", "pipe"] });
+      let out = "";
+      proc.stdout.on("data", (d) => { out += d.toString(); });
+      proc.on("close", () => {
+        // "aplay -l" lists playback cards; we need capture → use "arecord -l"
+        resolve(null); // placeholder; real logic below uses arecord
+      });
+      proc.on("error", () => resolve(null));
+    }).then(() => new Promise((resolve) => {
+      const proc = spawn("arecord", ["-l"], { stdio: ["ignore", "pipe", "pipe"] });
+      let out = "";
+      proc.stdout.on("data", (d) => { out += d.toString(); });
+      proc.on("close", () => {
+        // Example line: "card 2: Device [USB PnP Sound Device], device 0: ..."
+        const m = out.match(/card\s+(\d+):.*device\s+(\d+):/i);
+        if (m) {
+          resolve(`plughw:${m[1]},${m[2]}`);
+        } else {
+          resolve(null);
+        }
+      });
+      proc.on("error", () => resolve(null));
+    }));
+  }
+
+  /**
    * Start streaming with current configuration
    */
   async startStream(config = {}) {
@@ -416,7 +447,33 @@ class StreamController extends EventEmitter {
         const protocol = this.streamConfig.protocol;
         console.log(`📡 Hybrid mode — ffmpeg muxing ALSA audio + GStreamer video → ${protocol.toUpperCase()}`);
 
-        const audioDevice = this.streamConfig.audioDevice || "plughw:2,0";
+        let audioDevice = this.streamConfig.audioDevice || "plughw:2,0";
+
+        // Verify the configured ALSA device exists; auto-detect a fallback if not.
+        // arecord -l will fail fast if the device string is bogus, so we do a
+        // quick existence check via arecord --duration=0 before spawning the
+        // full ffmpeg pipeline.
+        await new Promise((resolve) => {
+          const check = spawn("arecord", ["-D", audioDevice, "--duration=0"], {
+            stdio: ["ignore", "ignore", "pipe"],
+          });
+          let checkErr = "";
+          check.stderr.on("data", (d) => { checkErr += d.toString(); });
+          check.on("close", async (chkCode) => {
+            if (chkCode !== 0 && (checkErr.includes("No such file") || checkErr.includes("cannot open") || checkErr.includes("Invalid"))) {
+              console.warn(`⚠️  Audio device "${audioDevice}" not found — scanning for a valid capture device…`);
+              const detected = await this._detectAlsaCaptureDevice();
+              if (detected) {
+                console.log(`🎤 Auto-detected ALSA capture device: ${detected}`);
+                audioDevice = detected;
+              } else {
+                console.warn("⚠️  No ALSA capture device found — audio will be absent from this stream");
+              }
+            }
+            resolve();
+          });
+          check.on("error", () => resolve()); // arecord not installed — skip
+        });
 
         // ── Part 1: Audio input args (built now) ────────────────────────────
         // -use_wallclock_as_timestamps 1 replaces ALSA's USB-clock-derived PTS
@@ -555,8 +612,16 @@ class StreamController extends EventEmitter {
           this.ffmpegProcess.stdin.write(firstChunk);
           gstStdout.pipe(this.ffmpegProcess.stdin);
 
+          // Accumulate ffmpeg stderr so the close handler can surface a
+          // human-readable reason when ffmpeg exits before the stream starts.
+          let ffmpegStderrBuf = "";
           this.ffmpegProcess.stderr.on("data", (data) => {
             const msg = data.toString();
+            ffmpegStderrBuf += msg;
+            // Keep only the last 4 KB — enough to catch startup errors.
+            if (ffmpegStderrBuf.length > 4096) {
+              ffmpegStderrBuf = ffmpegStderrBuf.slice(-4096);
+            }
             console.log(`ffmpeg: ${msg}`);
             this.emit("log", msg);
           });
@@ -568,6 +633,34 @@ class StreamController extends EventEmitter {
           this.ffmpegProcess.on("close", (code) => {
             console.log(`ffmpeg exited with code ${code}`);
             this.ffmpegProcess = null;
+
+            if (code !== 0 && code !== null) {
+              // Build a human-readable reason from the buffered stderr.
+              let reason = `ffmpeg exited with code ${code}`;
+              if (ffmpegStderrBuf.includes("cannot open audio device") ||
+                  ffmpegStderrBuf.includes("No such file or directory") ||
+                  ffmpegStderrBuf.includes("Error opening input")) {
+                const devMatch = ffmpegStderrBuf.match(/cannot open audio device (\S+)/);
+                const badDev = devMatch ? devMatch[1] : (this.streamConfig.audioDevice || "plughw:2,0");
+                reason =
+                  `❌ Audio device "${badDev}" not found.\n` +
+                  `Go to Stream Settings → Audio and either:\n` +
+                  `  • Disable audio, or\n` +
+                  `  • Enter the correct ALSA device (run "aplay -l" on the device to list cards)`;
+              }
+
+              console.error(`❌ ffmpeg failed: ${reason}`);
+              this.emit("error", reason);
+
+              // If the stream never became live, kill GStreamer too so the
+              // camera is released and the UI gets a clean 'stopped' event.
+              if (!this.isStreaming) {
+                if (this.gstProcess) {
+                  try { this.gstProcess.kill("SIGINT"); } catch (_) {}
+                  // gstProcess close handler will emit 'stopped'.
+                }
+              }
+            }
           });
 
           // In hybrid mode (ffmpeg muxer), the stream is only truly live once
