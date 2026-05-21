@@ -924,7 +924,31 @@ function updateConnectionInfo(protocol, ip) {
       streamDestination.value = "rtmp://a.rtmp.youtube.com/live2/";
     }
     if (youtubeKeyRow)  youtubeKeyRow.style.display  = "";
-    if (youtubeKeyHint) youtubeKeyHint.style.display = "";
+    if (youtubeKeyHint) {
+      youtubeKeyHint.style.display = "";
+      youtubeKeyHint.innerHTML =
+        `Get your stream key from <a href="https://studio.youtube.com" target="_blank" rel="noopener" `
+        + `style="color:rgba(255,100,100,0.6);text-decoration:underline;">YouTube Studio</a>`
+        + ` → Go Live → Stream settings.`;
+    }
+  } else if (protocol === "facebook") {
+    // Facebook Live — same split URL + Key UI as YouTube
+    connectionInfoBox.style.display = "none";
+    destinationRow.style.display = "";
+    if (destinationLabel) destinationLabel.textContent = "Stream URL:";
+    if (streamDestination) streamDestination.placeholder = "rtmps://live-api-s.facebook.com:443/rtmp/";
+    // Pre-fill URL only if blank or not already a Facebook ingest URL
+    if (streamDestination && !streamDestination.value.includes("live-api-s.facebook.com")) {
+      streamDestination.value = "rtmps://live-api-s.facebook.com:443/rtmp/";
+    }
+    if (youtubeKeyRow)  youtubeKeyRow.style.display  = "";
+    if (youtubeKeyHint) {
+      youtubeKeyHint.style.display = "";
+      youtubeKeyHint.innerHTML =
+        `Get your stream key from <a href="https://www.facebook.com/live/producer" target="_blank" rel="noopener" `
+        + `style="color:rgba(100,149,255,0.8);text-decoration:underline;">Facebook Live Producer</a>`
+        + ` → Go Live → Use Stream Key.`;
+    }
   } else {
     // Generic RTMP push — single destination field, no key row
     connectionInfoBox.style.display = "none";
@@ -974,6 +998,13 @@ function buildYoutubeDestination() {
   return key ? `${url}/${key}` : url;
 }
 
+// Build the combined Facebook RTMP destination (Stream URL + "/" + Stream Key).
+function buildFacebookDestination() {
+  const url = streamDestination ? streamDestination.value.trim().replace(/\/+$/, "") : "";
+  const key = youtubeStreamKeyInput ? youtubeStreamKeyInput.value.trim() : "";
+  return key ? `${url}/${key}` : url;
+}
+
 // Initialize connection info box on page load with the default protocol selection
 updateConnectionInfo(streamProtocol.value, deviceLocalIP);
 
@@ -1017,9 +1048,9 @@ streamProtocol.addEventListener("change", () => {
   const protocol = streamProtocol.value;
   updateConnectionInfo(protocol, deviceLocalIP);
 
-  // H.265 is incompatible with RTMP and YouTube (FLV container only supports H.264)
+  // H.265 is incompatible with RTMP, YouTube, and Facebook (FLV container only supports H.264)
   const h265Option = streamCodec.querySelector('option[value="h265"]');
-  if (protocol === "rtmp" || protocol === "youtube") {
+  if (protocol === "rtmp" || protocol === "youtube" || protocol === "facebook") {
     h265Option.disabled = true;
     if (streamCodec.value === "h265") {
       streamCodec.value = "h264";
@@ -1055,13 +1086,17 @@ startStreamBtn.addEventListener("click", async () => {
   // Parse "1920x1080" → { width: 1920, height: 1080 }
   const [resW, resH] = (streamResolution.value || "1920x1080").split("x").map((n) => parseInt(n, 10));
 
-  // 'youtube' is a UI alias — the server only understands 'rtmp'.
-  // In YouTube mode the full RTMP destination is built by joining the Stream URL
+  // 'youtube' and 'facebook' are UI aliases — the server only understands 'rtmp'.
+  // In both modes the full RTMP destination is built by joining the Stream URL
   // field and the Stream Key field; for all other modes use the destination as-is.
-  const effectiveProtocol   = streamProtocol.value === "youtube" ? "rtmp" : streamProtocol.value;
-  const effectiveDestination = streamProtocol.value === "youtube"
-    ? buildYoutubeDestination()
-    : streamDestination.value;
+  const effectiveProtocol =
+    (streamProtocol.value === "youtube" || streamProtocol.value === "facebook")
+      ? "rtmp"
+      : streamProtocol.value;
+  const effectiveDestination =
+    streamProtocol.value === "youtube"   ? buildYoutubeDestination()  :
+    streamProtocol.value === "facebook"  ? buildFacebookDestination() :
+    streamDestination.value;
 
   if (isRestart) {
     console.log("Restarting stream...");
@@ -1341,6 +1376,25 @@ createCustomDropdown(timestampBackground);
     + ` 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`;
   ytOpt.dataset.html =
     `<span style="display:inline-flex;align-items:center;gap:5px;">${svg}YouTube Live</span>`;
+})();
+
+(function () {
+  const fbOpt = streamProtocol && streamProtocol.querySelector('option[value="facebook"]');
+  if (!fbOpt) return;
+  // Facebook "f" logo — blue circle with white f
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" `
+    + `style="width:1.1em;height:1.1em;flex-shrink:0;vertical-align:middle;">`
+    + `<path fill="#1877F2" d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073`
+    + `C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047v-2.66`
+    + `c0-3.025 1.791-4.697 4.533-4.697 1.312 0 2.686.236 2.686.236v2.953`
+    + `h-1.514c-1.491 0-1.956.93-1.956 1.884v2.284h3.328l-.532 3.49`
+    + `h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/>`
+    + `<path fill="#fff" d="M16.671 15.563l.532-3.49h-3.328v-2.284`
+    + `c0-.955.465-1.884 1.956-1.884h1.514V4.952s-1.374-.236-2.686-.236`
+    + `c-2.742 0-4.533 1.672-4.533 4.697v2.66H7.078v3.49h3.047V24`
+    + `a12.13 12.13 0 003.75 0v-8.437h2.796z"/></svg>`;
+  fbOpt.dataset.html =
+    `<span style="display:inline-flex;align-items:center;gap:5px;">${svg}Facebook Live</span>`;
 })();
 
 // Stream control dropdowns
@@ -2903,14 +2957,22 @@ async function loadStreamConfig() {
       console.log("📡 Loaded stream config:", data.config);
 
       // Update UI with saved settings.
-      // Detect YouTube mode: the server normalises 'youtube' → 'rtmp' in startStream,
-      // so after the first stream the saved protocol is 'rtmp'. We re-detect YouTube
-      // by checking whether the destination is a YouTube RTMP ingest URL.
+      // Detect YouTube/Facebook mode: the server normalises both → 'rtmp' in startStream,
+      // so after the first stream the saved protocol is 'rtmp'. Re-detect by URL.
       const savedProtocol    = data.config.protocol || "rtsp";
       const savedDestination = data.config.destination || "";
-      const isYoutubeMode    = savedProtocol === "youtube" ||
+      const isYoutubeMode  = savedProtocol === "youtube" ||
         (savedProtocol === "rtmp" && savedDestination.includes("rtmp.youtube.com"));
-      streamProtocol.value = isYoutubeMode ? "youtube" : savedProtocol;
+      const isFacebookMode = savedProtocol === "facebook" ||
+        (savedProtocol === "rtmp" && savedDestination.includes("live-api-s.facebook.com"));
+
+      if (isYoutubeMode) {
+        streamProtocol.value = "youtube";
+      } else if (isFacebookMode) {
+        streamProtocol.value = "facebook";
+      } else {
+        streamProtocol.value = savedProtocol;
+      }
 
       if (isYoutubeMode && savedDestination) {
         // Split combined URL back into Stream URL + Stream Key fields.
@@ -2918,9 +2980,17 @@ async function loadStreamConfig() {
         const live2idx = savedDestination.indexOf("live2/");
         if (live2idx !== -1) {
           streamDestination.value = savedDestination.slice(0, live2idx + 6); // "…/live2/"
-          if (youtubeStreamKeyInput) {
-            youtubeStreamKeyInput.value = savedDestination.slice(live2idx + 6);
-          }
+          if (youtubeStreamKeyInput) youtubeStreamKeyInput.value = savedDestination.slice(live2idx + 6);
+        } else {
+          streamDestination.value = savedDestination;
+        }
+      } else if (isFacebookMode && savedDestination) {
+        // Split combined URL back into Stream URL + Stream Key fields.
+        // The key follows "/rtmp/" in the Facebook ingest URL.
+        const rtmpIdx = savedDestination.indexOf("/rtmp/");
+        if (rtmpIdx !== -1) {
+          streamDestination.value = savedDestination.slice(0, rtmpIdx + 6); // "…/rtmp/"
+          if (youtubeStreamKeyInput) youtubeStreamKeyInput.value = savedDestination.slice(rtmpIdx + 6);
         } else {
           streamDestination.value = savedDestination;
         }
@@ -2949,9 +3019,9 @@ async function loadStreamConfig() {
       }
       updateAudioDeviceRowVisibility();
 
-      // Enforce H.265 restriction on RTMP and YouTube (FLV container only supports H.264)
+      // Enforce H.265 restriction on RTMP, YouTube, and Facebook (FLV container only supports H.264)
       const h265Option = streamCodec.querySelector('option[value="h265"]');
-      if (isYoutubeMode || savedProtocol === "rtmp") {
+      if (isYoutubeMode || isFacebookMode || savedProtocol === "rtmp") {
         h265Option.disabled = true;
         if (streamCodec.value === "h265") streamCodec.value = "h264";
       } else {

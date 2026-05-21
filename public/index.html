@@ -484,6 +484,7 @@
                 <option value="srt">SRT Server</option>
                 <option value="rtmp">RTMP Push</option>
                 <option value="youtube">YouTube Live</option>
+                <option value="facebook">Facebook Live</option>
               </select>
             </div>
 
@@ -537,12 +538,8 @@
               />
               <button id="toggleYoutubeKey" class="btn-icon-small" title="Show / hide stream key" style="margin-left:4px;">👁</button>
             </div>
-            <div id="youtubeKeyHint" style="display:none; font-size:10px; color:rgba(255,255,255,0.38); margin-top:3px; line-height:1.5;">
-              Get your stream key from
-              <a href="https://studio.youtube.com" target="_blank" rel="noopener"
-                 style="color:rgba(255,100,100,0.6); text-decoration:underline;">YouTube Studio</a>
-              → Go Live → Stream settings.
-            </div>
+            <!-- Hint text populated dynamically by updateConnectionInfo() for YouTube / Facebook -->
+            <div id="youtubeKeyHint" style="display:none; font-size:10px; color:rgba(255,255,255,0.38); margin-top:3px; line-height:1.5;"></div>
 
             <div class="control-item">
               <label>Resolution:</label>
