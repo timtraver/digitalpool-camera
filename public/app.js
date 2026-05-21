@@ -26,6 +26,7 @@ function createCustomDropdown(selectElement) {
   const options = Array.from(selectElement.options).map((opt) => ({
     value: opt.value,
     text: opt.text,
+    html: opt.dataset.html || null, // optional rich HTML label (e.g. SVG logo)
     selected: opt.selected,
   }));
 
@@ -37,7 +38,9 @@ function createCustomDropdown(selectElement) {
 
   const selected = document.createElement("div");
   selected.className = "custom-dropdown-selected";
-  selected.textContent = selectedOption.text;
+  // Use innerHTML when a rich label is supplied, otherwise plain text
+  if (selectedOption.html) { selected.innerHTML = selectedOption.html; }
+  else { selected.textContent = selectedOption.text; }
   selected.dataset.value = selectedOption.value;
 
   const optionsContainer = document.createElement("div");
@@ -49,12 +52,14 @@ function createCustomDropdown(selectElement) {
     if (opt.value === selectedOption.value) {
       optionDiv.classList.add("selected");
     }
-    optionDiv.textContent = opt.text;
+    if (opt.html) { optionDiv.innerHTML = opt.html; }
+    else { optionDiv.textContent = opt.text; }
     optionDiv.dataset.value = opt.value;
 
     optionDiv.addEventListener("click", () => {
       // Update selected display
-      selected.textContent = opt.text;
+      if (opt.html) { selected.innerHTML = opt.html; }
+      else { selected.textContent = opt.text; }
       selected.dataset.value = opt.value;
 
       // Update selected class
@@ -139,7 +144,8 @@ function updateCustomDropdownDisplay(selectElement) {
   if (customDropdown) {
     const selectedOption = selectElement.options[selectElement.selectedIndex];
     if (selectedOption) {
-      customDropdown.textContent = selectedOption.text;
+      if (selectedOption.dataset.html) { customDropdown.innerHTML = selectedOption.dataset.html; }
+      else { customDropdown.textContent = selectedOption.text; }
       customDropdown.dataset.value = selectedOption.value;
 
       // Update selected class in options
@@ -1323,6 +1329,23 @@ createCustomDropdown(titleColor);
 createCustomDropdown(titleBackground);
 createCustomDropdown(timestampColor);
 createCustomDropdown(timestampBackground);
+
+// Inject YouTube logo into the protocol dropdown option before the custom
+// dropdown is built. Using JS avoids messy HTML-encoding in the attribute.
+(function () {
+  const ytOpt = streamProtocol && streamProtocol.querySelector('option[value="youtube"]');
+  if (!ytOpt) return;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" `
+    + `width="15" height="11" style="flex-shrink:0;vertical-align:middle;">`
+    + `<path fill="#FF0000" d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136`
+    + `C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0`
+    + ` .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122`
+    + ` 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0`
+    + ` 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545`
+    + ` 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`;
+  ytOpt.dataset.html =
+    `<span style="display:inline-flex;align-items:center;gap:5px;">${svg}YouTube Live</span>`;
+})();
 
 // Stream control dropdowns
 createCustomDropdown(streamProtocol);
