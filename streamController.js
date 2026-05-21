@@ -200,6 +200,10 @@ class StreamController extends EventEmitter {
     // Merge config
     this.streamConfig = { ...this.streamConfig, ...config };
 
+    // 'youtube' is a UI-only alias — normalize to 'rtmp' so every pipeline
+    // branch (protocol checks, ffmpeg hybrid, getStatus) works correctly.
+    if (this.streamConfig.protocol === "youtube") this.streamConfig.protocol = "rtmp";
+
     // For RTMP, destination is optional (defaults to local MediaMTX)
     // For SRT server mode, destination is not needed (device acts as server)
 

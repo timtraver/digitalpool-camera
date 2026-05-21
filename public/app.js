@@ -871,11 +871,9 @@ const connectionInfoExtra = document.getElementById("connectionInfoExtra");
 const destinationRow = document.getElementById("destinationRow");
 const copyConnectionUrlBtn = document.getElementById("copyConnectionUrl");
 
-// YouTube Live quick-setup elements
-const youtubeSection        = document.getElementById("youtubeSection");
-const youtubeStreamKeyInput = document.getElementById("youtubeStreamKey");
-const toggleYoutubeKeyBtn   = document.getElementById("toggleYoutubeKey");
-const applyYoutubeSettingsBtn = document.getElementById("applyYoutubeSettings");
+// YouTube mode UI helpers
+const youtubeHint     = document.getElementById("youtubeHint");
+const destinationLabel = document.getElementById("destinationLabel");
 
 // Track streaming state
 let isCurrentlyStreaming = false;
@@ -888,6 +886,7 @@ function updateConnectionInfo(protocol, ip) {
   if (protocol === "rtsp") {
     connectionInfoBox.style.display = "block";
     destinationRow.style.display = "none";
+    if (youtubeHint) youtubeHint.style.display = "none";
     connectionUrlEl.textContent = `rtsp://${resolvedIP}:8554/live`;
     connectionInfoExtra.innerHTML =
       `<span style="color:rgba(255,255,255,0.45);font-size:10px">` +
@@ -897,20 +896,31 @@ function updateConnectionInfo(protocol, ip) {
   } else if (protocol === "srt") {
     connectionInfoBox.style.display = "block";
     destinationRow.style.display = "none";
+    if (youtubeHint) youtubeHint.style.display = "none";
     connectionUrlEl.textContent = `srt://${resolvedIP}:8891`;
     connectionInfoExtra.innerHTML =
       `<span style="color:rgba(255,255,255,0.45);font-size:10px">` +
       `Listener mode — clients connect directly to this device` +
       `</span>`;
-  } else {
-    // RTMP push — show destination field + YouTube section, hide connection info box
+  } else if (protocol === "youtube") {
+    // YouTube Live — show destination pre-filled with the YouTube RTMP ingest base URL
     connectionInfoBox.style.display = "none";
     destinationRow.style.display = "";
-    if (youtubeSection) youtubeSection.style.display = "";
-    return; // early return so we don't hide YouTube below
+    if (destinationLabel) destinationLabel.textContent = "Stream URL:";
+    if (youtubeHint) youtubeHint.style.display = "";
+    // Pre-fill only if the field is blank or not already pointing at YouTube
+    if (streamDestination && !streamDestination.value.startsWith("rtmp://a.rtmp.youtube.com")) {
+      streamDestination.value = "rtmp://a.rtmp.youtube.com/live2/";
+    }
+    if (streamDestination) streamDestination.placeholder = "rtmp://a.rtmp.youtube.com/live2/<your-key>";
+  } else {
+    // Generic RTMP push — show destination field, hide connection info box
+    connectionInfoBox.style.display = "none";
+    destinationRow.style.display = "";
+    if (destinationLabel) destinationLabel.textContent = "Destination:";
+    if (youtubeHint) youtubeHint.style.display = "none";
+    if (streamDestination) streamDestination.placeholder = "rtmp://server/live/stream";
   }
-  // Non-RTMP: hide YouTube section
-  if (youtubeSection) youtubeSection.style.display = "none";
 }
 
 // Copy connection URL to clipboard
@@ -933,58 +943,6 @@ if (copyConnectionUrlBtn) {
     });
   });
 }
-
-// ── YouTube Live quick-setup ──────────────────────────────────────────────────
-
-// Toggle stream key visibility (password ↔ text)
-if (toggleYoutubeKeyBtn && youtubeStreamKeyInput) {
-  toggleYoutubeKeyBtn.addEventListener("click", () => {
-    const isHidden = youtubeStreamKeyInput.type === "password";
-    youtubeStreamKeyInput.type = isHidden ? "text" : "password";
-    toggleYoutubeKeyBtn.textContent = isHidden ? "🔒" : "👁";
-  });
-}
-
-// Apply YouTube Live settings: fill destination URL and lock in recommended encoder params
-if (applyYoutubeSettingsBtn) {
-  applyYoutubeSettingsBtn.addEventListener("click", () => {
-    const key = youtubeStreamKeyInput ? youtubeStreamKeyInput.value.trim() : "";
-    if (!key) {
-      alert("Please enter your YouTube stream key first.\n\nGet it from YouTube Studio → Go Live → Stream settings.");
-      return;
-    }
-
-    // Build the YouTube RTMP ingest URL
-    streamDestination.value = `rtmp://a.rtmp.youtube.com/live2/${key}`;
-
-    // YouTube requires H.264; make sure it's selected and not H.265
-    streamCodec.value = "h264";
-    updateCustomDropdownDisplay(streamCodec);
-
-    // 4 Mbps is the closest option to YouTube's recommended 4–4.5 Mbps
-    streamBitrate.value = "4000000";
-    updateCustomDropdownDisplay(streamBitrate);
-
-    // Make sure codec dropdown enforces H.264 (disable H.265 option)
-    const h265Opt = streamCodec.querySelector('option[value="h265"]');
-    if (h265Opt) h265Opt.disabled = true;
-
-    // Persist the stream key to the server so it survives a page reload
-    fetch("/api/stream/config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ youtubeStreamKey: key }),
-    }).catch(() => {});
-
-    // Brief confirmation feedback on the button
-    applyYoutubeSettingsBtn.textContent = "✅ YouTube Settings Applied!";
-    setTimeout(() => {
-      applyYoutubeSettingsBtn.textContent = "▶ Apply YouTube Live Settings";
-    }, 2500);
-  });
-}
-
-// ── End YouTube Live quick-setup ─────────────────────────────────────────────
 
 // Initialize connection info box on page load with the default protocol selection
 updateConnectionInfo(streamProtocol.value, deviceLocalIP);
@@ -1029,9 +987,9 @@ streamProtocol.addEventListener("change", () => {
   const protocol = streamProtocol.value;
   updateConnectionInfo(protocol, deviceLocalIP);
 
-  // H.265 is incompatible with RTMP (FLV container only supports H.264)
+  // H.265 is incompatible with RTMP and YouTube (FLV container only supports H.264)
   const h265Option = streamCodec.querySelector('option[value="h265"]');
-  if (protocol === "rtmp") {
+  if (protocol === "rtmp" || protocol === "youtube") {
     h265Option.disabled = true;
     if (streamCodec.value === "h265") {
       streamCodec.value = "h264";
@@ -1041,6 +999,11 @@ streamProtocol.addEventListener("change", () => {
         codecDropdown.textContent = "H.264 (all protocols)";
         codecDropdown.dataset.value = "h264";
       }
+    }
+    // For YouTube, also nudge bitrate to 4 Mbps (YouTube's recommended setting)
+    if (protocol === "youtube") {
+      streamBitrate.value = "4000000";
+      updateCustomDropdownDisplay(streamBitrate);
     }
   } else {
     h265Option.disabled = false;
@@ -1067,13 +1030,17 @@ startStreamBtn.addEventListener("click", async () => {
   // Parse "1920x1080" → { width: 1920, height: 1080 }
   const [resW, resH] = (streamResolution.value || "1920x1080").split("x").map((n) => parseInt(n, 10));
 
+  // 'youtube' is a UI alias — the server only understands 'rtmp'.
+  // The destination field already contains the full YouTube RTMP URL.
+  const effectiveProtocol = streamProtocol.value === "youtube" ? "rtmp" : streamProtocol.value;
+
   if (isRestart) {
     console.log("Restarting stream...");
     // Let the server handle the full stop→start cycle atomically.
     // The browser stays on "Restarting…" the whole time; no intermediate
     // MJPEG preview is opened, so there's no double-stream issue.
     const config = {
-      protocol: streamProtocol.value,
+      protocol: effectiveProtocol,
       destination: streamDestination.value,
       bitrate: parseInt(streamBitrate.value),
       audioEnabled: audioEnabledCheckbox.checked,
@@ -1094,7 +1061,7 @@ startStreamBtn.addEventListener("click", async () => {
   } else {
     // Normal start
     const config = {
-      protocol: streamProtocol.value,
+      protocol: effectiveProtocol,
       destination: streamDestination.value,
       bitrate: parseInt(streamBitrate.value),
       audioEnabled: audioEnabledCheckbox.checked,
@@ -1106,9 +1073,6 @@ startStreamBtn.addEventListener("click", async () => {
       codec: streamCodec.value,
       // flip settings omitted — server uses its persisted streamConfig values
     };
-
-
-
     console.log("Starting stream with config:", config);
     socket.emit("startStream", config);
   }
@@ -2891,9 +2855,16 @@ async function loadStreamConfig() {
     if (data.success && data.config) {
       console.log("📡 Loaded stream config:", data.config);
 
-      // Update UI with saved settings
-      streamProtocol.value = data.config.protocol || "rtsp";
-      streamDestination.value = data.config.destination || "";
+      // Update UI with saved settings.
+      // Detect YouTube mode: the server normalises 'youtube' → 'rtmp' in startStream,
+      // so after the first stream the saved protocol is 'rtmp'. We re-detect YouTube
+      // by checking whether the destination is a YouTube RTMP ingest URL.
+      const savedProtocol    = data.config.protocol || "rtsp";
+      const savedDestination = data.config.destination || "";
+      const isYoutubeMode    = savedProtocol === "youtube" ||
+        (savedProtocol === "rtmp" && savedDestination.startsWith("rtmp://a.rtmp.youtube.com"));
+      streamProtocol.value   = isYoutubeMode ? "youtube" : savedProtocol;
+      streamDestination.value = savedDestination;
       streamBitrate.value = data.config.bitrate || 5000000;
       streamFramerate.value = data.config.framerate || 30;
       streamCodec.value = data.config.codec || "h264";
@@ -2916,9 +2887,9 @@ async function loadStreamConfig() {
       }
       updateAudioDeviceRowVisibility();
 
-      // Enforce H.265 restriction on RTMP after restoring saved codec
+      // Enforce H.265 restriction on RTMP and YouTube (FLV container only supports H.264)
       const h265Option = streamCodec.querySelector('option[value="h265"]');
-      if ((data.config.protocol || "rtsp") === "rtmp") {
+      if (isYoutubeMode || savedProtocol === "rtmp") {
         h265Option.disabled = true;
         if (streamCodec.value === "h265") streamCodec.value = "h264";
       } else {
@@ -2967,13 +2938,8 @@ async function loadStreamConfig() {
 
       updateCustomDropdownDisplay(streamResolution);
 
-      // Show/hide destination field, YouTube section, and connection info box based on protocol
-      updateConnectionInfo(data.config.protocol || "rtsp", deviceLocalIP);
-
-      // Restore saved YouTube stream key (UI only — never shown in plain text by default)
-      if (data.config.youtubeStreamKey && youtubeStreamKeyInput) {
-        youtubeStreamKeyInput.value = data.config.youtubeStreamKey;
-      }
+      // Show/hide destination field and connection info box based on UI protocol selection
+      updateConnectionInfo(streamProtocol.value, deviceLocalIP);
 
       // Restore video orientation (flip) settings
       if (flipHorizontalCheckbox) flipHorizontalCheckbox.checked = data.config.flipHorizontal || false;
