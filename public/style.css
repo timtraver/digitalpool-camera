@@ -1121,6 +1121,17 @@ header h1 {
   color: white;
 }
 
+/* Output Mode dropdown — larger font so the YouTube logo is clearly visible */
+#outputModeRow .custom-dropdown-selected {
+  font-size: 13px !important;
+  min-height: 32px;
+  padding: 6px 8px;
+}
+#outputModeRow .custom-dropdown-option {
+  font-size: 13px !important;
+  padding: 8px 10px;
+}
+
 .overlay-controls input[type="text"],
 .overlay-controls input[type="number"],
 .overlay-controls select {

@@ -1335,8 +1335,9 @@ createCustomDropdown(timestampBackground);
 (function () {
   const ytOpt = streamProtocol && streamProtocol.querySelector('option[value="youtube"]');
   if (!ytOpt) return;
+  // em-based dimensions so the logo scales with whatever font-size CSS sets
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" `
-    + `width="15" height="11" style="flex-shrink:0;vertical-align:middle;">`
+    + `style="width:1.6em;height:1.1em;flex-shrink:0;vertical-align:middle;">`
     + `<path fill="#FF0000" d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136`
     + `C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0`
     + ` .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122`
