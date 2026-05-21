@@ -872,8 +872,11 @@ const destinationRow = document.getElementById("destinationRow");
 const copyConnectionUrlBtn = document.getElementById("copyConnectionUrl");
 
 // YouTube mode UI helpers
-const youtubeHint     = document.getElementById("youtubeHint");
-const destinationLabel = document.getElementById("destinationLabel");
+const youtubeKeyRow       = document.getElementById("youtubeKeyRow");
+const youtubeKeyHint      = document.getElementById("youtubeKeyHint");
+const youtubeStreamKeyInput = document.getElementById("youtubeStreamKey");
+const toggleYoutubeKeyBtn = document.getElementById("toggleYoutubeKey");
+const destinationLabel    = document.getElementById("destinationLabel");
 
 // Track streaming state
 let isCurrentlyStreaming = false;
@@ -886,7 +889,8 @@ function updateConnectionInfo(protocol, ip) {
   if (protocol === "rtsp") {
     connectionInfoBox.style.display = "block";
     destinationRow.style.display = "none";
-    if (youtubeHint) youtubeHint.style.display = "none";
+    if (youtubeKeyRow)  youtubeKeyRow.style.display  = "none";
+    if (youtubeKeyHint) youtubeKeyHint.style.display = "none";
     connectionUrlEl.textContent = `rtsp://${resolvedIP}:8554/live`;
     connectionInfoExtra.innerHTML =
       `<span style="color:rgba(255,255,255,0.45);font-size:10px">` +
@@ -896,30 +900,33 @@ function updateConnectionInfo(protocol, ip) {
   } else if (protocol === "srt") {
     connectionInfoBox.style.display = "block";
     destinationRow.style.display = "none";
-    if (youtubeHint) youtubeHint.style.display = "none";
+    if (youtubeKeyRow)  youtubeKeyRow.style.display  = "none";
+    if (youtubeKeyHint) youtubeKeyHint.style.display = "none";
     connectionUrlEl.textContent = `srt://${resolvedIP}:8891`;
     connectionInfoExtra.innerHTML =
       `<span style="color:rgba(255,255,255,0.45);font-size:10px">` +
       `Listener mode — clients connect directly to this device` +
       `</span>`;
   } else if (protocol === "youtube") {
-    // YouTube Live — show destination pre-filled with the YouTube RTMP ingest base URL
+    // YouTube Live — separate Stream URL + Stream Key fields, combined on stream start
     connectionInfoBox.style.display = "none";
     destinationRow.style.display = "";
     if (destinationLabel) destinationLabel.textContent = "Stream URL:";
-    if (youtubeHint) youtubeHint.style.display = "";
-    // Pre-fill only if the field is blank or not already pointing at YouTube
-    if (streamDestination && !streamDestination.value.startsWith("rtmp://a.rtmp.youtube.com")) {
+    if (streamDestination) streamDestination.placeholder = "rtmp://a.rtmp.youtube.com/live2/";
+    // Pre-fill URL only if blank or not already a YouTube ingest URL
+    if (streamDestination && !streamDestination.value.includes("rtmp.youtube.com")) {
       streamDestination.value = "rtmp://a.rtmp.youtube.com/live2/";
     }
-    if (streamDestination) streamDestination.placeholder = "rtmp://a.rtmp.youtube.com/live2/<your-key>";
+    if (youtubeKeyRow)  youtubeKeyRow.style.display  = "";
+    if (youtubeKeyHint) youtubeKeyHint.style.display = "";
   } else {
-    // Generic RTMP push — show destination field, hide connection info box
+    // Generic RTMP push — single destination field, no key row
     connectionInfoBox.style.display = "none";
     destinationRow.style.display = "";
     if (destinationLabel) destinationLabel.textContent = "Destination:";
-    if (youtubeHint) youtubeHint.style.display = "none";
     if (streamDestination) streamDestination.placeholder = "rtmp://server/live/stream";
+    if (youtubeKeyRow)  youtubeKeyRow.style.display  = "none";
+    if (youtubeKeyHint) youtubeKeyHint.style.display = "none";
   }
 }
 
@@ -942,6 +949,23 @@ if (copyConnectionUrlBtn) {
       setTimeout(() => { copyConnectionUrlBtn.textContent = "📋"; }, 1500);
     });
   });
+}
+
+// Toggle YouTube stream key visibility (password ↔ text)
+if (toggleYoutubeKeyBtn && youtubeStreamKeyInput) {
+  toggleYoutubeKeyBtn.addEventListener("click", () => {
+    const isHidden = youtubeStreamKeyInput.type === "password";
+    youtubeStreamKeyInput.type = isHidden ? "text" : "password";
+    toggleYoutubeKeyBtn.textContent = isHidden ? "🔒" : "👁";
+  });
+}
+
+// Build the combined YouTube RTMP destination from the two separate fields.
+// Strips any trailing slash from the URL then appends "/" + key.
+function buildYoutubeDestination() {
+  const url = streamDestination ? streamDestination.value.trim().replace(/\/+$/, "") : "";
+  const key = youtubeStreamKeyInput ? youtubeStreamKeyInput.value.trim() : "";
+  return key ? `${url}/${key}` : url;
 }
 
 // Initialize connection info box on page load with the default protocol selection
@@ -1031,8 +1055,12 @@ startStreamBtn.addEventListener("click", async () => {
   const [resW, resH] = (streamResolution.value || "1920x1080").split("x").map((n) => parseInt(n, 10));
 
   // 'youtube' is a UI alias — the server only understands 'rtmp'.
-  // The destination field already contains the full YouTube RTMP URL.
-  const effectiveProtocol = streamProtocol.value === "youtube" ? "rtmp" : streamProtocol.value;
+  // In YouTube mode the full RTMP destination is built by joining the Stream URL
+  // field and the Stream Key field; for all other modes use the destination as-is.
+  const effectiveProtocol   = streamProtocol.value === "youtube" ? "rtmp" : streamProtocol.value;
+  const effectiveDestination = streamProtocol.value === "youtube"
+    ? buildYoutubeDestination()
+    : streamDestination.value;
 
   if (isRestart) {
     console.log("Restarting stream...");
@@ -1041,7 +1069,7 @@ startStreamBtn.addEventListener("click", async () => {
     // MJPEG preview is opened, so there's no double-stream issue.
     const config = {
       protocol: effectiveProtocol,
-      destination: streamDestination.value,
+      destination: effectiveDestination,
       bitrate: parseInt(streamBitrate.value),
       audioEnabled: audioEnabledCheckbox.checked,
       audioSource: audioSourceTypeSelect ? audioSourceTypeSelect.value : "video",
@@ -1062,7 +1090,7 @@ startStreamBtn.addEventListener("click", async () => {
     // Normal start
     const config = {
       protocol: effectiveProtocol,
-      destination: streamDestination.value,
+      destination: effectiveDestination,
       bitrate: parseInt(streamBitrate.value),
       audioEnabled: audioEnabledCheckbox.checked,
       audioSource: audioSourceTypeSelect ? audioSourceTypeSelect.value : "video",
@@ -2862,9 +2890,24 @@ async function loadStreamConfig() {
       const savedProtocol    = data.config.protocol || "rtsp";
       const savedDestination = data.config.destination || "";
       const isYoutubeMode    = savedProtocol === "youtube" ||
-        (savedProtocol === "rtmp" && savedDestination.startsWith("rtmp://a.rtmp.youtube.com"));
-      streamProtocol.value   = isYoutubeMode ? "youtube" : savedProtocol;
-      streamDestination.value = savedDestination;
+        (savedProtocol === "rtmp" && savedDestination.includes("rtmp.youtube.com"));
+      streamProtocol.value = isYoutubeMode ? "youtube" : savedProtocol;
+
+      if (isYoutubeMode && savedDestination) {
+        // Split combined URL back into Stream URL + Stream Key fields.
+        // The key always follows "live2/" in the YouTube ingest URL.
+        const live2idx = savedDestination.indexOf("live2/");
+        if (live2idx !== -1) {
+          streamDestination.value = savedDestination.slice(0, live2idx + 6); // "…/live2/"
+          if (youtubeStreamKeyInput) {
+            youtubeStreamKeyInput.value = savedDestination.slice(live2idx + 6);
+          }
+        } else {
+          streamDestination.value = savedDestination;
+        }
+      } else {
+        streamDestination.value = savedDestination;
+      }
       streamBitrate.value = data.config.bitrate || 5000000;
       streamFramerate.value = data.config.framerate || 30;
       streamCodec.value = data.config.codec || "h264";
