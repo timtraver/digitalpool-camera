@@ -1039,13 +1039,8 @@ streamProtocol.addEventListener("change", () => {
     h265Option.disabled = false;
   }
 
-  // Also update protocol custom dropdown display
-  const protocolDropdown = streamProtocol.parentElement.querySelector(".custom-dropdown-selected");
-  if (protocolDropdown) {
-    const opt = streamProtocol.options[streamProtocol.selectedIndex];
-    protocolDropdown.textContent = opt.text;
-    protocolDropdown.dataset.value = opt.value;
-  }
+  // Update protocol custom dropdown display (uses innerHTML for data-html options like YouTube)
+  updateCustomDropdownDisplay(streamProtocol);
 });
 
 // Start/Restart stream
@@ -2963,16 +2958,8 @@ async function loadStreamConfig() {
         h265Option.disabled = false;
       }
 
-      // Update custom dropdowns
-      const protocolDropdown = streamProtocol.parentElement.querySelector(
-        ".custom-dropdown-selected",
-      );
-      if (protocolDropdown) {
-        const protocolOption =
-          streamProtocol.options[streamProtocol.selectedIndex];
-        protocolDropdown.textContent = protocolOption.text;
-        protocolDropdown.dataset.value = protocolOption.value;
-      }
+      // Update custom dropdowns (updateCustomDropdownDisplay handles data-html / SVG logos)
+      updateCustomDropdownDisplay(streamProtocol);
 
       const bitrateDropdown = streamBitrate.parentElement.querySelector(
         ".custom-dropdown-selected",
