@@ -514,6 +514,36 @@
               />
             </div>
 
+            <!-- YouTube Live quick-setup — shown only when RTMP Push is selected -->
+            <div id="youtubeSection" style="display:none; margin-top:4px;">
+              <div style="border:1px solid rgba(255,60,60,0.35); border-radius:6px; padding:10px; background:rgba(255,0,0,0.05);">
+                <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">
+                  <span style="font-size:15px; line-height:1;">▶</span>
+                  <span style="font-size:12px; font-weight:600; color:rgba(255,255,255,0.9); letter-spacing:0.02em;">YouTube Live</span>
+                </div>
+                <div class="control-item" style="margin-bottom:6px;">
+                  <label for="youtubeStreamKey" style="min-width:74px; font-size:11px; color:rgba(255,255,255,0.65);">Stream Key:</label>
+                  <input
+                    type="password"
+                    id="youtubeStreamKey"
+                    placeholder="xxxx-xxxx-xxxx-xxxx-xxxx"
+                    autocomplete="off"
+                    style="flex:1; padding:4px 6px; border:1px solid rgba(255,60,60,0.35); border-radius:4px; background:rgba(6,16,27,0.85); color:rgba(255,255,255,0.85); font-size:12px; font-family:monospace;"
+                  />
+                  <button id="toggleYoutubeKey" class="btn-icon-small" title="Show / hide stream key" style="margin-left:4px;">👁</button>
+                </div>
+                <button id="applyYoutubeSettings" class="btn-apply-small" style="width:100%; font-size:11px; padding:5px 8px;">
+                  ▶ Apply YouTube Live Settings
+                </button>
+                <p style="font-size:10px; color:rgba(255,255,255,0.38); margin:6px 0 0; line-height:1.5;">
+                  Get your key from
+                  <a href="https://studio.youtube.com" target="_blank" rel="noopener"
+                     style="color:rgba(255,100,100,0.65); text-decoration:underline;">YouTube Studio</a>
+                  → Go Live → Stream settings. Applies H.264 + 4.5 Mbps — YouTube's recommended settings.
+                </p>
+              </div>
+            </div>
+
             <div class="control-item">
               <label>Resolution:</label>
               <select id="streamResolution">

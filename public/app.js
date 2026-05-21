@@ -871,6 +871,12 @@ const connectionInfoExtra = document.getElementById("connectionInfoExtra");
 const destinationRow = document.getElementById("destinationRow");
 const copyConnectionUrlBtn = document.getElementById("copyConnectionUrl");
 
+// YouTube Live quick-setup elements
+const youtubeSection        = document.getElementById("youtubeSection");
+const youtubeStreamKeyInput = document.getElementById("youtubeStreamKey");
+const toggleYoutubeKeyBtn   = document.getElementById("toggleYoutubeKey");
+const applyYoutubeSettingsBtn = document.getElementById("applyYoutubeSettings");
+
 // Track streaming state
 let isCurrentlyStreaming = false;
 // Track device IP for connection info
@@ -897,10 +903,14 @@ function updateConnectionInfo(protocol, ip) {
       `Listener mode — clients connect directly to this device` +
       `</span>`;
   } else {
-    // RTMP push — show destination field, hide connection info box
+    // RTMP push — show destination field + YouTube section, hide connection info box
     connectionInfoBox.style.display = "none";
     destinationRow.style.display = "";
+    if (youtubeSection) youtubeSection.style.display = "";
+    return; // early return so we don't hide YouTube below
   }
+  // Non-RTMP: hide YouTube section
+  if (youtubeSection) youtubeSection.style.display = "none";
 }
 
 // Copy connection URL to clipboard
@@ -923,6 +933,58 @@ if (copyConnectionUrlBtn) {
     });
   });
 }
+
+// ── YouTube Live quick-setup ──────────────────────────────────────────────────
+
+// Toggle stream key visibility (password ↔ text)
+if (toggleYoutubeKeyBtn && youtubeStreamKeyInput) {
+  toggleYoutubeKeyBtn.addEventListener("click", () => {
+    const isHidden = youtubeStreamKeyInput.type === "password";
+    youtubeStreamKeyInput.type = isHidden ? "text" : "password";
+    toggleYoutubeKeyBtn.textContent = isHidden ? "🔒" : "👁";
+  });
+}
+
+// Apply YouTube Live settings: fill destination URL and lock in recommended encoder params
+if (applyYoutubeSettingsBtn) {
+  applyYoutubeSettingsBtn.addEventListener("click", () => {
+    const key = youtubeStreamKeyInput ? youtubeStreamKeyInput.value.trim() : "";
+    if (!key) {
+      alert("Please enter your YouTube stream key first.\n\nGet it from YouTube Studio → Go Live → Stream settings.");
+      return;
+    }
+
+    // Build the YouTube RTMP ingest URL
+    streamDestination.value = `rtmp://a.rtmp.youtube.com/live2/${key}`;
+
+    // YouTube requires H.264; make sure it's selected and not H.265
+    streamCodec.value = "h264";
+    updateCustomDropdownDisplay(streamCodec);
+
+    // 4 Mbps is the closest option to YouTube's recommended 4–4.5 Mbps
+    streamBitrate.value = "4000000";
+    updateCustomDropdownDisplay(streamBitrate);
+
+    // Make sure codec dropdown enforces H.264 (disable H.265 option)
+    const h265Opt = streamCodec.querySelector('option[value="h265"]');
+    if (h265Opt) h265Opt.disabled = true;
+
+    // Persist the stream key to the server so it survives a page reload
+    fetch("/api/stream/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ youtubeStreamKey: key }),
+    }).catch(() => {});
+
+    // Brief confirmation feedback on the button
+    applyYoutubeSettingsBtn.textContent = "✅ YouTube Settings Applied!";
+    setTimeout(() => {
+      applyYoutubeSettingsBtn.textContent = "▶ Apply YouTube Live Settings";
+    }, 2500);
+  });
+}
+
+// ── End YouTube Live quick-setup ─────────────────────────────────────────────
 
 // Initialize connection info box on page load with the default protocol selection
 updateConnectionInfo(streamProtocol.value, deviceLocalIP);
@@ -2905,8 +2967,13 @@ async function loadStreamConfig() {
 
       updateCustomDropdownDisplay(streamResolution);
 
-      // Show/hide destination field and connection info box based on protocol
+      // Show/hide destination field, YouTube section, and connection info box based on protocol
       updateConnectionInfo(data.config.protocol || "rtsp", deviceLocalIP);
+
+      // Restore saved YouTube stream key (UI only — never shown in plain text by default)
+      if (data.config.youtubeStreamKey && youtubeStreamKeyInput) {
+        youtubeStreamKeyInput.value = data.config.youtubeStreamKey;
+      }
 
       // Restore video orientation (flip) settings
       if (flipHorizontalCheckbox) flipHorizontalCheckbox.checked = data.config.flipHorizontal || false;
