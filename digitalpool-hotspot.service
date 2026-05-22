@@ -4,9 +4,12 @@ Documentation=https://github.com/your-org/digitalpool-camera
 # Start after NetworkManager is running so nmcli commands work.
 After=NetworkManager.service
 Wants=NetworkManager.service
-# Hotspot must be up before the camera app starts so the admin UI is
-# reachable via WiFi from the very first moment the app is running.
-Before=digitalpool-camera.service
+# Hotspot must be up before the camera app AND MediaMTX start so that:
+#  1. The admin UI is reachable via WiFi from the very first moment.
+#  2. mediamtx-update-hosts.sh (ExecStartPre of mediamtx) finds 192.168.50.1
+#     and includes it as a WebRTC ICE candidate — making the preview work
+#     over the hotspot even when ethernet is not connected.
+Before=digitalpool-camera.service mediamtx.service
 
 [Service]
 Type=oneshot
