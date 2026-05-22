@@ -122,15 +122,23 @@ mkdir -p "$DNSMASQ_DIR"
 printf "# Redirect all DNS queries to the AP for captive portal\naddress=/#/%s\n" "$AP_IP" \
     > "$DNSMASQ_CONF"
 echo "✅ Captive portal dnsmasq config written"
-systemctl reload NetworkManager 2>/dev/null || true
-sleep 1   # give NM a moment to reload dnsmasq config
+# Do NOT reload NetworkManager here — reloading NM right before bringing up
+# the AP causes NM to restart its internals (scanning, dnsmasq) which can
+# stall the AP activation for minutes.  The dnsmasq config is picked up
+# automatically when NM activates the shared AP connection.
 
 # ── Step 6: bring up the AP ──────────────────────────────────────────────────
+# Disconnect any existing connection on this interface first so NM isn't
+# fighting an existing client/scan state when we try to activate the AP.
+nmcli device disconnect "$IFACE" 2>/dev/null || true
+
 MAX_RETRIES=5
-RETRY_DELAY=5
+RETRY_DELAY=3
 for i in $(seq 1 "$MAX_RETRIES"); do
     echo "📡 Starting hotspot (attempt $i/$MAX_RETRIES)..."
-    if nmcli connection up "$PROFILE_NAME"; then
+    # --timeout 20: each attempt is bounded to 20 s so we don't wait forever
+    # if NM is busy; the retry loop handles transient failures.
+    if nmcli --timeout 20 connection up "$PROFILE_NAME"; then
         echo "✅ Hotspot up — SSID: $SSID  IP: $AP_IP"
         break
     fi
