@@ -136,9 +136,9 @@ MAX_RETRIES=5
 RETRY_DELAY=3
 for i in $(seq 1 "$MAX_RETRIES"); do
     echo "📡 Starting hotspot (attempt $i/$MAX_RETRIES)..."
-    # --timeout 20: each attempt is bounded to 20 s so we don't wait forever
+    # -w 20: each attempt is bounded to 20 s so we don't wait forever
     # if NM is busy; the retry loop handles transient failures.
-    if nmcli --timeout 20 connection up "$PROFILE_NAME"; then
+    if nmcli -w 20 connection up "$PROFILE_NAME"; then
         echo "✅ Hotspot up — SSID: $SSID  IP: $AP_IP"
         break
     fi
