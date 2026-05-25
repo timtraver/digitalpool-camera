@@ -1,0 +1,15 @@
+# 99-digitalpool-hotspot.rules
+# Trigger the DigitalPool hotspot the instant any WiFi interface appears.
+#
+# On cold boot, USB WiFi adapters can take minutes to enumerate.
+# Waiting for systemd service ordering means the hotspot doesn't start until
+# after all those delays have already passed.  This udev rule fires the moment
+# the kernel registers the interface, immediately starting the hotspot service
+# so there is zero additional delay on top of the hardware enumeration time.
+#
+# Install:
+#   sudo cp 99-digitalpool-hotspot.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+
+ACTION=="add", SUBSYSTEM=="net", ENV{DEVTYPE}=="wlan", \
+    RUN+="/usr/bin/systemctl start digitalpool-hotspot.service"
