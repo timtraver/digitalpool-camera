@@ -75,20 +75,31 @@ PASSWORD="$DEFAULT_PASSWORD"
 if nmcli connection show "$PROFILE_NAME" &>/dev/null; then
     BOUND=$(nmcli -t -f connection.interface-name connection show "$PROFILE_NAME" 2>/dev/null \
             | grep 'connection\.interface-name:' | cut -d: -f2 | tr -d '[:space:]' || true)
-    if [ -n "$BOUND" ] && [ "$BOUND" != "--" ] && [ "$BOUND" != "$IFACE" ]; then
+    CURRENT_SSID=$(nmcli -t -f 802-11-wireless.ssid connection show "$PROFILE_NAME" 2>/dev/null \
+            | cut -d: -f2- | tr -d '[:space:]' || true)
+
+    IFACE_MISMATCH=false
+    SSID_MISMATCH=false
+    [ -n "$BOUND" ] && [ "$BOUND" != "--" ] && [ "$BOUND" != "$IFACE" ] && IFACE_MISMATCH=true
+    [ -n "$CURRENT_SSID" ] && [ "$CURRENT_SSID" != "$DEFAULT_SSID" ] && SSID_MISMATCH=true
+
+    if [ "$IFACE_MISMATCH" = "true" ]; then
         echo "⚠️  Profile bound to '$BOUND', current interface '$IFACE' — recreating"
-        # Preserve existing credentials before deleting
-        OLD_SSID=$(nmcli -t -f 802-11-wireless.ssid connection show "$PROFILE_NAME" 2>/dev/null \
-                   | cut -d: -f2- | tr -d '[:space:]' || true)
+        NEED_CREATE=true
+    elif [ "$SSID_MISMATCH" = "true" ]; then
+        echo "⚠️  Profile SSID '$CURRENT_SSID' does not match expected '$DEFAULT_SSID' — recreating"
+        NEED_CREATE=true
+    else
+        echo "✅ Profile exists and matches interface and SSID — skipping create"
+    fi
+
+    if [ "$NEED_CREATE" = "true" ]; then
+        # Preserve the existing PSK so the password isn't reset on recreation
         OLD_PSK=$(nmcli --show-secrets -t -f 802-11-wireless-security.psk \
                   connection show "$PROFILE_NAME" 2>/dev/null \
                   | cut -d: -f2- | tr -d '[:space:]' || true)
-        SSID="${OLD_SSID:-$DEFAULT_SSID}"
         PASSWORD="${OLD_PSK:-$DEFAULT_PASSWORD}"
         nmcli connection delete "$PROFILE_NAME" 2>/dev/null || true
-        NEED_CREATE=true
-    else
-        echo "✅ Profile exists and matches interface — skipping create"
     fi
 else
     echo "📡 No profile found — will create"
