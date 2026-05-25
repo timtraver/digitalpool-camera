@@ -132,6 +132,8 @@ if [ "$NEED_CREATE" = "true" ]; then
         wifi.mode ap \
         wifi.band bg \
         wifi.channel "$AP_CHANNEL" \
+        wifi.powersave 2 \
+        wifi.mac-address-randomization never \
         wifi-sec.key-mgmt wpa-psk \
         wifi-sec.psk "$PASSWORD" \
         ipv4.method shared \
@@ -153,9 +155,10 @@ echo "✅ Captive portal dnsmasq config written"
 # automatically when NM activates the shared AP connection.
 
 # ── Step 6: bring up the AP ──────────────────────────────────────────────────
-# Disconnect any existing connection on this interface first so NM isn't
-# fighting an existing client/scan state when we try to activate the AP.
+# Disconnect any existing connection and block scanning on this interface
+# so NM doesn't perform a 2-minute background scan before activating the AP.
 nmcli device disconnect "$IFACE" 2>/dev/null || true
+nmcli device wifi rescan ifname "$IFACE" 2>/dev/null || true   # flush scan state
 
 MAX_RETRIES=5
 RETRY_DELAY=3
