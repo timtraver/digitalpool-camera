@@ -271,6 +271,47 @@ sudo systemctl status sleep.target suspend.target
 
 Both should show `masked`.
 
+### 1j. Eliminate boot delays — ethernet-optional setup
+
+By default Ubuntu waits up to **2 minutes** for ethernet to come online before starting most services. On an appliance that may run without a cable plugged in (field deployment, WiFi-only), this turns every boot into a 4-minute wait before the hotspot is even visible. Two one-time commands eliminate this entirely.
+
+**Mask the network-online blocker:**
+
+```bash
+sudo systemctl mask systemd-networkd-wait-online.service
+```
+
+This service waits for `systemd-networkd` to report that a "required" interface (normally ethernet) is fully configured. Masking it causes `network-online.target` to complete immediately — ethernet still comes up normally via NetworkManager, it just no longer holds up the entire boot sequence.
+
+> **Note:** `NetworkManager-wait-online.service` (a different service) should also be disabled. Check and disable it if it is enabled:
+> ```bash
+> systemctl is-enabled NetworkManager-wait-online.service
+> # If it prints "enabled", disable it:
+> sudo systemctl disable NetworkManager-wait-online.service
+> ```
+
+**Disable cloud-init:**
+
+```bash
+sudo touch /etc/cloud/cloud-init.disabled
+```
+
+Cloud-init is a provisioning tool designed to run on fresh cloud VM instances. On a pre-configured appliance it runs every boot for no benefit, and it depends on `network-online.target` — meaning it previously compounded the 2-minute ethernet wait. Touching this file tells cloud-init to exit immediately without doing anything, removing it from the boot critical chain entirely.
+
+**Verify the improvement:**
+
+After a reboot, check the boot time and critical chain:
+
+```bash
+systemd-analyze
+# Expected: total boot ≈ 19–20 s (was 2+ minutes)
+
+systemd-analyze critical-chain digitalpool-hotspot.service
+# NetworkManager should start at ~3–4 s, hotspot should complete at ~15 s
+```
+
+> **What is NOT affected:** Ethernet connectivity, Tailscale, NetworkManager, the WiFi hotspot — all continue to work exactly as before. These commands only remove unnecessary *waiting*, not any actual functionality.
+
 ---
 
 ## 2. Install System Dependencies
@@ -855,6 +896,33 @@ MediaMTX **hot-reloads** its config file whenever it changes, so the updated `we
 
 **Why you can't preset a CIDR range (e.g. all `100.x.x.x`):** `webrtcAdditionalHosts` takes a list of specific IP addresses — not subnets. ICE candidates must be actual reachable addresses the device currently holds. The periodic timer achieves the same result: any IP the device acquires (Tailscale, hotspot, LAN) is picked up automatically within one timer cycle.
 
+### 4b.3. MediaMTX network override — allow start without ethernet
+
+By default MediaMTX's systemd service depends on `network-online.target`, which requires a "connected" interface to be available before MediaMTX can start. Without an ethernet cable this target never fires, so MediaMTX never starts — and the WebRTC admin preview therefore fails even over the WiFi hotspot.
+
+The repo ships a systemd drop-in (`mediamtx-network-override.conf`) that removes this ethernet dependency and instead sequences MediaMTX after the WiFi hotspot service. This ensures:
+
+1. MediaMTX always starts (even ethernet-free field deployments).
+2. `mediamtx-update-hosts.sh` runs after `192.168.50.1` is already assigned, so the hotspot IP appears in WebRTC ICE candidates from the first boot.
+
+```bash
+sudo mkdir -p /etc/systemd/system/mediamtx.service.d
+sudo cp ~/digitalpool-camera/mediamtx-network-override.conf \
+        /etc/systemd/system/mediamtx.service.d/network-override.conf
+
+sudo systemctl daemon-reload
+sudo systemctl restart mediamtx
+```
+
+Verify MediaMTX starts correctly without ethernet:
+
+```bash
+sudo systemctl status mediamtx   # must show "active (running)"
+# Confirm the hotspot IP is in the ICE list:
+grep webrtcAdditionalHosts /etc/mediamtx.yml
+# Should include 192.168.50.1 if the hotspot was already up
+```
+
 ### 4c. Verify NDI library (if NDI is used)
 
 Now that the repo is cloned, confirm the NDI runtime library loads correctly:
@@ -944,7 +1012,7 @@ sudo systemctl status digitalpool-camera
 sudo journalctl -u digitalpool-camera -f
 ```
 
-> The service is declared `Requires=mediamtx.service` — MediaMTX must be running first (Step 2j).
+> The service is declared `Wants=mediamtx.service` — it will start MediaMTX as a soft dependency. If MediaMTX fails to start the camera service still comes up (allowing the admin UI to be reached over the hotspot). Install the MediaMTX network override (Section 4b.3) to ensure MediaMTX itself starts reliably without ethernet.
 
 ---
 
@@ -1159,6 +1227,34 @@ dmesg | grep rtw | tail -10
 
 > **Identify your adapter's chipset:** `lsusb` shows the Realtek USB ID; `dmesg | grep -i rtw` names the exact driver module. The fix above targets `rtw_8822bu`. For other Realtek variants (`rtw88`, `rtw89`, `rtl8xxxu`, etc.) substitute the correct module name in `/etc/modprobe.d/`.
 
+### 7b.3. Blacklist the competing out-of-tree driver (rtl88x2bu)
+
+Some Ubuntu images ship **two** kernel drivers for the RTL8822BU chipset: the in-kernel `rtw_8822bu` (recommended) and an older out-of-tree `rtl88x2bu`. When both load simultaneously they fight over the adapter, causing the hotspot to fail silently or the interface to rename unpredictably.
+
+Check if both are loading:
+
+```bash
+dmesg | grep -E "rtw_8822bu|rtl88x2bu"
+# If you see BOTH driver names, the conflict is present
+lsmod | grep -E "rtw_8822bu|rtl88x2bu"
+```
+
+If both appear, blacklist the out-of-tree driver:
+
+```bash
+echo "blacklist rtl88x2bu" | sudo tee /etc/modprobe.d/blacklist-rtl88x2bu.conf
+sudo update-initramfs -u   # bake the blacklist into the initrd
+```
+
+Reboot (or unplug/replug the adapter) and confirm only the in-kernel driver loads:
+
+```bash
+dmesg | grep -E "rtw_8822bu|rtl88x2bu"
+# Should show only rtw_8822bu
+lsmod | grep rtl88x2bu
+# Should return nothing
+```
+
 ### 7c. Captive Portal (auto-open admin UI on connect)
 
 When a device connects to the hotspot it has no internet, so iOS, Android, and Windows each fire HTTP and HTTPS "captive portal" probes to well-known URLs. The app uses a **two-phase approach** that both auto-opens the admin UI *and* keeps the phone stably connected:
@@ -1272,6 +1368,77 @@ sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
 ### Reverting to DHCP
 
 Select **DHCP (automatic)** and click **Save Ethernet Config**. The interface will re-request an address from your router within a few seconds.
+
+---
+
+## 7e. Dedicated Hotspot Service — Fast Startup Without Ethernet
+
+The WiFi hotspot is managed by a **dedicated systemd service** (`digitalpool-hotspot.service`) that runs independently of the Node.js camera app. This architecture means:
+
+- The hotspot comes up even if the camera app crashes or hasn't started yet.
+- MediaMTX and the camera service start **after** the hotspot so the hotspot IP (`192.168.50.1`) is already present when `mediamtx-update-hosts.sh` injects ICE candidates — making the WebRTC preview work over hotspot on every boot.
+- A **udev rule** fires the moment the USB WiFi adapter is detected by the kernel, eliminating any software-level delay on top of hardware enumeration time.
+
+### Install the hotspot script and service
+
+```bash
+sudo cp ~/digitalpool-camera/dp-hotspot.sh /usr/local/sbin/dp-hotspot.sh
+sudo chmod +x /usr/local/sbin/dp-hotspot.sh
+
+sudo cp ~/digitalpool-camera/digitalpool-hotspot.service /etc/systemd/system/
+
+sudo systemctl daemon-reload
+sudo systemctl enable digitalpool-hotspot.service
+sudo systemctl start digitalpool-hotspot.service
+```
+
+**Verify it started and the hotspot is broadcasting:**
+
+```bash
+sudo systemctl status digitalpool-hotspot.service
+sudo journalctl -u digitalpool-hotspot --no-pager -n 30
+```
+
+You should see lines like:
+```
+📡 WiFi interface: wlx8c86ddaa1f53 (found after 0s)
+📡 Device SSID suffix: 1F53  →  DigitalPool-1F53
+✅ Hotspot up — SSID: DigitalPool-1F53  IP: 192.168.50.1
+✅ Captive portal: port 80 → 3000 redirect active on wlx8c86ddaa1f53
+✅ SSH (port 22) allowed inbound on wlx8c86ddaa1f53
+```
+
+The SSID is automatically derived from the last 4 hex characters of the adapter's MAC address (e.g. `DigitalPool-1F53`). This ensures two cameras at the same venue never broadcast the same SSID.
+
+> **Self-healing profile:** If you clone an SD card to a device with a different WiFi adapter, the script detects the SSID or interface mismatch automatically and recreates the NM profile with the correct values — no manual intervention needed.
+
+### Install the udev rule for instant startup
+
+Without a udev rule, systemd service ordering introduces a software delay on top of the hardware enumeration time. The udev rule fires the hotspot service the instant the kernel registers the WiFi adapter — zero additional delay:
+
+```bash
+sudo cp ~/digitalpool-camera/99-digitalpool-hotspot.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+```
+
+**Verify the rule is active:**
+
+```bash
+ls /etc/udev/rules.d/99-digitalpool-hotspot.rules
+# Should exist — no output from udevadm means the rule loaded cleanly
+```
+
+On the next cold boot, the hotspot service will fire the moment the kernel detects the WiFi hardware. Combined with the boot optimizations in Section 1j, expect the hotspot to be visible within **~35–45 seconds** of power-on (dominated by USB adapter hardware enumeration, typically ~26 s on the Orange Pi 5).
+
+### Hotspot timing on cold boot
+
+| Phase | Duration | Notes |
+|---|---|---|
+| BIOS / U-Boot | ~5 s | SBC-specific, not tuneable |
+| Kernel | ~4 s | |
+| USB WiFi adapter enumeration | ~26 s | Hardware-dependent — typical for RTL8822BU |
+| Hotspot AP activation | ~8 s | `nmcli connection up` via NM |
+| **Total from power-on** | **~43 s** | Down from ~4 minutes before optimization |
 
 ---
 
@@ -1395,30 +1562,37 @@ rtmp://your-server/live/stream-key
 
 ```
 digitalpool-camera/
-├── server.js                  # Express + Socket.IO server; main orchestrator
-├── streamController.js        # GStreamer pipeline builder & stream lifecycle
-├── cameraController.js        # v4l2-ctl wrappers (PTZ, image controls)
-├── wifiManager.js             # NetworkManager AP hotspot management
-├── authManager.js             # Login / session / IP-ban management
-├── puppeteerOverlay.js        # Headless Chromium → transparent PNG overlay
-├── gst-overlay-pipeline.py    # Python GStreamer pipeline (overlay, NDI, RTSP)
-├── ndi-discover.py            # NDI source discovery via libndi.so.6 (ctypes)
-├── png-overlay-helper.sh      # Shell wrapper invoking the Python pipeline script
-├── digitalpool-camera.service # Systemd unit file
-├── network-watchdog.sh        # Network-health watchdog (reboots if offline 20 min)
-├── network-watchdog.service   # Systemd unit for watchdog
-├── network-watchdog.timer     # Systemd timer — runs every 10 minutes
-├── monitor-camera.sh          # Memory flight recorder (logs RSS every 5 min)
-├── monitor-camera.service     # Systemd unit for flight recorder
-├── monitor-camera.timer       # Systemd timer — runs every 5 minutes
+├── server.js                       # Express + Socket.IO server; main orchestrator
+├── streamController.js             # GStreamer pipeline builder & stream lifecycle
+├── cameraController.js             # v4l2-ctl wrappers (PTZ, image controls)
+├── wifiManager.js                  # NetworkManager AP hotspot management (Node.js side)
+├── authManager.js                  # Login / session / IP-ban management
+├── puppeteerOverlay.js             # Headless Chromium → transparent PNG overlay
+├── gst-overlay-pipeline.py         # Python GStreamer pipeline (overlay, NDI, RTSP)
+├── ndi-discover.py                 # NDI source discovery via libndi.so.6 (ctypes)
+├── png-overlay-helper.sh           # Shell wrapper invoking the Python pipeline script
+├── digitalpool-camera.service      # Systemd unit — camera app (Wants= hotspot + mediamtx)
+├── digitalpool-hotspot.service     # Systemd unit — dedicated WiFi hotspot service
+├── dp-hotspot.sh                   # Hotspot script: detects adapter, creates NM profile, brings up AP
+├── 99-digitalpool-hotspot.rules    # udev rule — starts hotspot service on WiFi adapter detect
+├── mediamtx-network-override.conf  # mediamtx.service drop-in — removes ethernet dependency
+├── mediamtx-update-hosts.sh        # Updates WebRTC ICE hosts in mediamtx.yml at startup
+├── mediamtx-update-hosts.service   # Systemd unit for ICE host update
+├── mediamtx-update-hosts.timer     # Systemd timer — re-runs update every 60 seconds
+├── network-watchdog.sh             # Network-health watchdog (reboots if offline 20 min)
+├── network-watchdog.service        # Systemd unit for watchdog
+├── network-watchdog.timer          # Systemd timer — runs every 10 minutes
+├── monitor-camera.sh               # Memory flight recorder (logs RSS every 5 min)
+├── monitor-camera.service          # Systemd unit for flight recorder
+├── monitor-camera.timer            # Systemd timer — runs every 5 minutes
 ├── package.json
-├── .env                       # Environment variables (create — see Step 4a)
-├── stream-config.json         # Auto-generated stream settings (persisted by UI)
+├── .env                            # Environment variables (create — see Step 4a)
+├── stream-config.json              # Auto-generated stream settings (persisted by UI)
 └── public/
-    ├── index.html             # Web control interface
-    ├── login.html             # Login page
-    ├── app.js                 # Client-side Socket.IO + UI logic
-    ├── overlay.html           # Local scoreboard HTML template
+    ├── index.html                  # Web control interface
+    ├── login.html                  # Login page
+    ├── app.js                      # Client-side Socket.IO + UI logic
+    ├── overlay.html                # Local scoreboard HTML template
     └── style.css
 ```
 
