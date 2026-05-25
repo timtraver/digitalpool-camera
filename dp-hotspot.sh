@@ -27,18 +27,31 @@ APP_PORT="${PORT:-3000}"
 DNSMASQ_DIR="/etc/NetworkManager/dnsmasq-shared.d"
 DNSMASQ_CONF="$DNSMASQ_DIR/captive-portal.conf"
 MAX_WAIT=60    # seconds to wait for interface to become ready
-INTERVAL=3
+INTERVAL=1
 
 # ── Step 1: find the WiFi interface ─────────────────────────────────────────
-IFACE=$(nmcli -t -f DEVICE,TYPE device 2>/dev/null | grep ':wifi' | head -1 | cut -d: -f1 || true)
+# On a cold boot the USB WiFi adapter can take 30-60 s to enumerate.
+# Retry every 3 s for up to 90 s before giving up.
+MAX_IFACE_WAIT=90
+IFACE_WAITED=0
+IFACE=""
+while [ "$IFACE_WAITED" -lt "$MAX_IFACE_WAIT" ]; do
+    IFACE=$(nmcli -t -f DEVICE,TYPE device 2>/dev/null | grep ':wifi' | head -1 | cut -d: -f1 || true)
+    if [ -z "$IFACE" ]; then
+        IFACE=$(ip link show 2>/dev/null | grep -Eo 'wl[^:]+' | head -1 || true)
+    fi
+    if [ -n "$IFACE" ]; then
+        break
+    fi
+    echo "⏳ No WiFi interface yet (${IFACE_WAITED}s elapsed) — waiting for USB adapter..."
+    sleep 1
+    IFACE_WAITED=$((IFACE_WAITED + 1))
+done
 if [ -z "$IFACE" ]; then
-    IFACE=$(ip link show 2>/dev/null | grep -Eo 'wl[^:]+' | head -1 || true)
-fi
-if [ -z "$IFACE" ]; then
-    echo "❌ No WiFi interface found — hotspot unavailable" >&2
+    echo "❌ No WiFi interface found after ${MAX_IFACE_WAIT}s — hotspot unavailable" >&2
     exit 1
 fi
-echo "📡 WiFi interface: $IFACE"
+echo "📡 WiFi interface: $IFACE (found after ${IFACE_WAITED}s)"
 
 # Derive a device-unique SSID from the last 4 hex chars of the adapter MAC
 # (upper-case, colons stripped).  Two cameras at the same venue won't clash.
@@ -113,7 +126,7 @@ if [ "$NEED_CREATE" = "true" ]; then
         type wifi \
         ifname "$IFACE" \
         con-name "$PROFILE_NAME" \
-        autoconnect no \
+        autoconnect yes \
         ssid "$SSID" \
         -- \
         wifi.mode ap \
@@ -123,7 +136,8 @@ if [ "$NEED_CREATE" = "true" ]; then
         wifi-sec.psk "$PASSWORD" \
         ipv4.method shared \
         ipv4.addresses "$AP_IP/$AP_SUBNET" \
-        ipv6.method ignore
+        ipv6.method ignore \
+        connection.autoconnect-priority 100
     echo "✅ Profile created"
 fi
 

@@ -27,10 +27,10 @@ ExecStop=/bin/bash -c '\
 # Run as root — required for nmcli profile creation and iptables.
 User=root
 
-# Increase timeout: USB WiFi dongles can take up to 60 s to enumerate
-# after boot.  dp-hotspot.sh waits internally, but systemd must not
-# kill it before it finishes.
-TimeoutStartSec=120
+# Increase timeout: USB WiFi dongles can take up to 90 s to enumerate
+# on a cold boot.  dp-hotspot.sh waits internally (up to 90 s for the
+# interface + up to 60 s for NM state), so give systemd enough headroom.
+TimeoutStartSec=210
 
 StandardOutput=journal
 StandardError=journal
