@@ -3076,9 +3076,11 @@ async function startPersistentIdlePreview(camIdx = 1) {
     return;
   }
 
+  // Declare the resolver variables BEFORE the Promise executors reference them
+  // to avoid the JavaScript Temporal Dead Zone (TDZ) error.
+  let _resolveQueue, _resolveQueue2;
   if (camIdx === 2) { _idlePreviewStarting2 = true; _idlePreviewStartQueue2 = new Promise((r) => { _resolveQueue2 = r; }); }
   else              { _idlePreviewStarting  = true; _idlePreviewStartQueue  = new Promise((r) => { _resolveQueue  = r; }); }
-  let _resolveQueue, _resolveQueue2;
 
   try {
     // Kill existing idle preview process for this camera

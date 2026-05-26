@@ -35,6 +35,8 @@ FLIP_HORIZONTAL=${25:-"false"}
 FLIP_VERTICAL=${26:-"false"}
 # Camera capture format (arg 27, optional — 'mjpeg' or 'yuyv', defaults to mjpeg)
 CAPTURE_FORMAT=${27:-"mjpeg"}
+# Preview RTMP URL for MediaMTX (arg 28, optional — defaults to camera 1 path)
+PREVIEW_RTMP_URL=${28:-"rtmp://localhost:1935/preview"}
 
 echo "🎨 Starting stream with dynamic PNG graphics overlay (Python GStreamer)..."
 echo "Camera: $CAMERA_DEVICE"
@@ -64,5 +66,6 @@ exec python3 "$SCRIPT_DIR/gst-overlay-pipeline.py" \
   "$TITLE_POSITION" "$TIMESTAMP_POSITION" "$AUDIO_DEVICE" \
   "$TS_FONT_SIZE" "$TS_COLOR" "$TS_BACKGROUND" "$CODEC" \
   "$INPUT_TYPE" "$INPUT_RTSP_URL" "$INPUT_NDI_NAME" \
-  "$FLIP_HORIZONTAL" "$FLIP_VERTICAL" "$CAPTURE_FORMAT"
+  "$FLIP_HORIZONTAL" "$FLIP_VERTICAL" "$CAPTURE_FORMAT" \
+  "$PREVIEW_RTMP_URL"
 
