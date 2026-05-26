@@ -1692,6 +1692,26 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     const dev = device || CAMERA_DEVICE;
     activeCameraSource = { type: "usb", device: dev, rtspUrl: "", ndiName: "" };
     camera.device = dev;
+
+    // Reset all stale state from the previous camera so nothing leaks into
+    // the new camera's session: tracked positions, discovered control ranges,
+    // and the PTZ command queue (reset to a resolved promise).
+    camera.currentPan = 0;
+    camera.currentTilt = 0;
+    camera.discoveredControls = null;
+    camera._ptzQueue = Promise.resolve();
+
+    // Re-discover controls and format for the new device.  These are fast
+    // v4l2-ctl queries (<1 s each) and run before idle-preview startup so
+    // the new camera's capabilities are ready the moment the UI receives
+    // the cameraConfig broadcast below.
+    await camera.discoverControls(dev);
+    cameraFormat = await camera.detectCaptureFormat(dev);
+    streamController.captureFormat = cameraFormat;
+    console.log(
+      `📹 New USB camera: format=${cameraFormat.toUpperCase()}, ` +
+      `controls=${Object.keys(camera.discoveredControls || {}).join(", ")}`
+    );
   } else if (type === "ndi") {
     activeCameraSource = { type: "ndi", device: CAMERA_DEVICE, rtspUrl: "", ndiName };
   } else {
@@ -1714,10 +1734,33 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     // ── Revert on failure ────────────────────────────────────────────────
     console.error(`⚠️ Camera source (${type}) did not respond in time — reverting`);
     activeCameraSource = { ...previousSource };
-    if (previousSource.type === "usb") camera.device = previousSource.device || CAMERA_DEVICE;
+    if (previousSource.type === "usb") {
+      const prevDev = previousSource.device || CAMERA_DEVICE;
+      camera.device = prevDev;
+      // Re-discover the previous camera — its discoveredControls were cleared
+      // when we attempted the switch.  Reset positions too since the new
+      // camera may have moved them.
+      camera.currentPan = 0;
+      camera.currentTilt = 0;
+      camera.discoveredControls = null;
+      camera._ptzQueue = Promise.resolve();
+      await camera.discoverControls(prevDev);
+      cameraFormat = await camera.detectCaptureFormat(prevDev);
+      streamController.captureFormat = cameraFormat;
+      console.log(`📹 Reverted USB camera: format=${cameraFormat.toUpperCase()}`);
+    }
     streamController.setInputSource(activeCameraSource);
     try { await startPersistentIdlePreview(); } catch (_) {}
     io.emit("refreshIdlePreview");
+
+    // Broadcast reverted camera capabilities to all clients.
+    {
+      const hwControls = camera.discoveredControls || camera.controls;
+      const ptzRanges = {};
+      if (hwControls.pan_absolute)  ptzRanges.pan_absolute  = { min: hwControls.pan_absolute.min,  max: hwControls.pan_absolute.max,  step: hwControls.pan_absolute.step  };
+      if (hwControls.tilt_absolute) ptzRanges.tilt_absolute = { min: hwControls.tilt_absolute.min, max: hwControls.tilt_absolute.max, step: hwControls.tilt_absolute.step };
+      io.emit("cameraConfig", { success: true, config: camera.config, supportedControls: Object.keys(hwControls), ptzRanges });
+    }
 
     // Restart the stream on the reverted source if it was running before.
     if (wasStreaming) {
@@ -1743,6 +1786,17 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
   // ── Step 4: Persist and notify clients ──────────────────────────────────
   saveCameraSource(activeCameraSource);
   io.emit("refreshIdlePreview");
+
+  // Broadcast updated camera capabilities (controls, PTZ ranges, format) so
+  // every connected browser immediately reflects the new camera without a
+  // page reload.  This mirrors what getCameraConfig emits on demand.
+  {
+    const hwControls = camera.discoveredControls || camera.controls;
+    const ptzRanges = {};
+    if (hwControls.pan_absolute)  ptzRanges.pan_absolute  = { min: hwControls.pan_absolute.min,  max: hwControls.pan_absolute.max,  step: hwControls.pan_absolute.step  };
+    if (hwControls.tilt_absolute) ptzRanges.tilt_absolute = { min: hwControls.tilt_absolute.min, max: hwControls.tilt_absolute.max, step: hwControls.tilt_absolute.step };
+    io.emit("cameraConfig", { success: true, config: camera.config, supportedControls: Object.keys(hwControls), ptzRanges });
+  }
 
   // ── Step 5: Restart the stream on the new source (if it was running) ────
   if (wasStreaming) {
