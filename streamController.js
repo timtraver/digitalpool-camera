@@ -692,13 +692,69 @@ class StreamController extends EventEmitter {
             this.ffmpegProcess = null;
 
             if (code !== 0 && code !== null) {
+              const isBusy = ffmpegStderrBuf.includes("Device or resource busy") ||
+                             ffmpegStderrBuf.includes("resource busy");
+              const isAudioErr = ffmpegStderrBuf.includes("cannot open audio device") ||
+                                 ffmpegStderrBuf.includes("No such file or directory") ||
+                                 ffmpegStderrBuf.includes("Error opening input");
+
+              // ── Auto-retry with silent audio when the ALSA device is busy ──
+              // The other camera is holding the only USB audio card. Unpipe
+              // GStreamer's stdout, respawn ffmpeg using lavfi anullsrc (silent
+              // generated audio) so the video stream still starts.
+              if (isBusy && isAudioErr && !this.isStreaming) {
+                console.warn(`⚠️  [Cam${this.streamId}] Audio device busy — auto-retrying with silent audio (anullsrc)…`);
+                gstStdout.unpipe();
+
+                const silentAudioArgs = [
+                  "-loglevel", "warning",
+                  "-f", "lavfi",
+                  "-i", "anullsrc=sample_rate=48000:channel_layout=stereo",
+                ];
+                const retryArgs = [...silentAudioArgs, ...ffmpegVideoArgs, ...ffmpegOutputArgs];
+                console.log("🔄 Retrying ffmpeg with silent audio:", retryArgs.join(" "));
+
+                this.ffmpegProcess = spawn("ffmpeg", retryArgs, { stdio: ["pipe", "pipe", "pipe"] });
+                gstStdout.pipe(this.ffmpegProcess.stdin);
+
+                let retryStderrBuf = "";
+                this.ffmpegProcess.stderr.on("data", (data) => {
+                  const msg = data.toString();
+                  retryStderrBuf += msg;
+                  if (retryStderrBuf.length > 4096) retryStderrBuf = retryStderrBuf.slice(-4096);
+                  console.log(`ffmpeg (silent retry): ${msg}`);
+                  this.emit("log", msg);
+                });
+                this.ffmpegProcess.stdin.on("error", (err) => {
+                  if (err.code !== "EPIPE") console.error(`ffmpeg retry stdin error: ${err.message}`);
+                });
+                this.ffmpegProcess.on("close", (retryCode) => {
+                  console.log(`ffmpeg (silent retry) exited with code ${retryCode}`);
+                  this.ffmpegProcess = null;
+                  if (retryCode !== 0 && retryCode !== null) {
+                    const msg = `ffmpeg retry failed (code ${retryCode}): ${retryStderrBuf.slice(-512)}`;
+                    console.error(`❌ ${msg}`);
+                    this.emit("error", msg);
+                    if (!this.isStreaming && this.gstProcess) {
+                      try { this.gstProcess.kill("SIGINT"); } catch (_) {}
+                    }
+                  }
+                });
+                setTimeout(() => {
+                  if (this.ffmpegProcess && !this.isStreaming) {
+                    console.log(`🟢 [Cam${this.streamId}] ffmpeg (silent audio) connected — emitting 'started'`);
+                    this.isStreaming = true;
+                    this.emit("started");
+                    this._startFpsMonitoring();
+                    this._startBitrateMonitoring();
+                  }
+                }, 2000);
+                return; // do NOT kill GStreamer or emit error
+              }
+
               // Build a human-readable reason from the buffered stderr.
               let reason = `ffmpeg exited with code ${code}`;
-              if (ffmpegStderrBuf.includes("cannot open audio device") ||
-                  ffmpegStderrBuf.includes("No such file or directory") ||
-                  ffmpegStderrBuf.includes("Error opening input")) {
-                const isBusy = ffmpegStderrBuf.includes("Device or resource busy") ||
-                               ffmpegStderrBuf.includes("resource busy");
+              if (isAudioErr) {
                 const devMatch = ffmpegStderrBuf.match(/cannot open audio device (\S+)/);
                 const badDev = devMatch ? devMatch[1] : (this.streamConfig.audioDevice || "plughw:2,0");
                 if (isBusy) {
