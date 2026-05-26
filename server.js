@@ -3168,7 +3168,14 @@ io.on("connection", (socket) => {
   });
 
   socket.on("getCameraConfig", () => {
-    socket.emit("cameraConfig", { success: true, config: camera.config });
+    // Include the list of controls this camera actually supports so the UI
+    // can dim controls that don't exist on the attached camera.
+    const hwControls = camera.discoveredControls || camera.controls;
+    socket.emit("cameraConfig", {
+      success: true,
+      config: camera.config,
+      supportedControls: Object.keys(hwControls),
+    });
   });
 
   socket.on("setStartupPosition", () => {

@@ -224,6 +224,12 @@ socket.on("cameraConfig", (data) => {
   if (data.success && data.config) {
     console.log("📸 Received camera configuration:", data.config);
     loadCameraConfigToUI(data.config);
+    // Dim controls that the attached camera doesn't support.
+    // supportedControls is included by the server since it knows which
+    // v4l2 controls discoveredControls found at startup.
+    if (data.supportedControls) {
+      applyControlAvailability(data.supportedControls);
+    }
   }
 });
 
@@ -551,6 +557,89 @@ function loadCameraConfigToUI(config) {
   }
 
   console.log("✅ Camera config loaded to UI");
+}
+
+/**
+ * Dim (and disable) any camera control rows whose v4l2 control is not
+ * supported by the currently-attached camera.  Also marks entire sections
+ * with a "(not supported)" badge when none of their controls are available.
+ *
+ * @param {string[]} supportedControls - Array of v4l2 control names reported
+ *   by the server from camera.discoveredControls.  When empty/missing the
+ *   function is a no-op so the UI stays fully functional.
+ */
+function applyControlAvailability(supportedControls) {
+  if (!supportedControls || supportedControls.length === 0) return;
+  const supported = new Set(supportedControls);
+
+  // Map each v4l2 control name to the HTML element id that represents it.
+  // PTZ directional buttons are handled separately below.
+  const CONTROL_MAP = {
+    brightness:                 "brightness",
+    contrast:                   "contrast",
+    saturation:                 "saturation",
+    hue:                        "hue",
+    sharpness:                  "sharpness",
+    gamma:                      "gamma",
+    auto_exposure:              "exposureAuto",
+    exposure_time_absolute:     "exposureAbsolute",
+    gain:                       "gain",
+    backlight_compensation:     "backlightCompensation",
+    white_balance_automatic:    "whiteBalanceAuto",
+    white_balance_temperature:  "whiteBalanceTemp",
+    focus_automatic_continuous: "focusAuto",
+    focus_absolute:             "focusAbsolute",
+    zoom_absolute:              "zoomLevel",
+  };
+
+  for (const [controlName, elementId] of Object.entries(CONTROL_MAP)) {
+    if (supported.has(controlName)) continue;        // control is available — leave it alone
+    const el = document.getElementById(elementId);
+    if (!el) continue;
+    const row = el.closest(".control-item");
+    if (!row) continue;
+    // Dim the entire row so the label, input, and value display all fade together.
+    row.style.opacity = "0.35";
+    row.style.pointerEvents = "none";
+    row.title = "Not supported by this camera";
+    el.disabled = true;
+  }
+
+  // Dim the directional pad and Set-Home button when pan/tilt aren't available.
+  const hasPan  = supported.has("pan_absolute");
+  const hasTilt = supported.has("tilt_absolute");
+  if (!hasPan && !hasTilt) {
+    const padContainer = document.querySelector(".directional-pad-container");
+    if (padContainer) {
+      padContainer.style.opacity = "0.35";
+      padContainer.style.pointerEvents = "none";
+      padContainer.title = "Pan/tilt not supported by this camera";
+    }
+    const homeBtn = document.getElementById("setStartupPosition");
+    if (homeBtn) { homeBtn.disabled = true; homeBtn.style.opacity = "0.35"; }
+  }
+
+  // After individual rows are dimmed, check each collapsible section.
+  // If every input/select inside a section is disabled, mark the whole section
+  // with a "(not supported)" badge on its summary so the user knows at a glance.
+  document.querySelectorAll("details.cam-subsection").forEach((section) => {
+    const inputs = Array.from(section.querySelectorAll("input, select"));
+    if (inputs.length === 0) return;
+    const allDisabled = inputs.every((inp) => inp.disabled);
+    if (!allDisabled) return;
+    const titleEl = section.querySelector(".cam-subsection-title");
+    if (!titleEl) return;
+    // Avoid adding a duplicate badge on re-runs.
+    if (titleEl.querySelector(".unsupported-badge")) return;
+    const badge = document.createElement("span");
+    badge.className = "unsupported-badge";
+    badge.style.cssText = "font-size:10px;opacity:0.55;margin-left:8px;font-style:italic;font-weight:normal;";
+    badge.textContent = "(not supported)";
+    titleEl.appendChild(badge);
+    section.style.opacity = "0.5";
+  });
+
+  console.log(`🎛️  Control availability applied — ${supportedControls.length} controls supported by this camera`);
 }
 
 // Reset all settings
