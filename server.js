@@ -3444,7 +3444,7 @@ io.on("connection", (socket) => {
 
   socket.on("getStreamStatus", (data) => {
     const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
-    socket.emit("streamStatus", getSC(camIdx).getStatus());
+    socket.emit("streamStatus", { ...getSC(camIdx).getStatus(), cameraIndex: camIdx });
   });
 
   socket.on("updateStreamConfig", (config) => {

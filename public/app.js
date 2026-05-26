@@ -193,6 +193,9 @@ function switchCamera(newIdx) {
   socket.emit("getStartupPosition",   { cameraIndex: activeCamIndex });
   socket.emit("getStreamStatus",      { cameraIndex: activeCamIndex });
 
+  // Refresh the connection info box for the correct camera's paths/ports
+  updateConnectionInfo(streamProtocol.value, deviceLocalIP);
+
   // Refresh the idle preview to the correct camera
   const videoStream = document.getElementById("videoStream");
   if (videoStream) {
@@ -1173,23 +1176,26 @@ let deviceLocalIP = null;
 // Helper: update the connection info box based on protocol and IP
 function updateConnectionInfo(protocol, ip) {
   const resolvedIP = ip || deviceLocalIP || "device-ip";
+  // Per-camera path and port — Camera 2 uses /live2, :8892; Camera 1 uses /live, :8891
+  const rtspSuffix = activeCamIndex === 2 ? "live2" : "live";
+  const srtPort    = activeCamIndex === 2 ? 8892 : 8891;
   if (protocol === "rtsp") {
     connectionInfoBox.style.display = "block";
     destinationRow.style.display = "none";
     if (youtubeKeyRow)  youtubeKeyRow.style.display  = "none";
     if (youtubeKeyHint) youtubeKeyHint.style.display = "none";
-    connectionUrlEl.textContent = `rtsp://${resolvedIP}:8554/live`;
+    connectionUrlEl.textContent = `rtsp://${resolvedIP}:8554/${rtspSuffix}`;
     connectionInfoExtra.innerHTML =
       `<span style="color:rgba(255,255,255,0.45);font-size:10px">` +
-      `Also: HLS → <code style="font-size:10px">http://${resolvedIP}:8888/live</code>` +
-      `&nbsp;&nbsp;SRT → <code style="font-size:10px">srt://${resolvedIP}:8890?streamid=read:live</code>` +
+      `Also: HLS → <code style="font-size:10px">http://${resolvedIP}:8888/${rtspSuffix}</code>` +
+      `&nbsp;&nbsp;SRT → <code style="font-size:10px">srt://${resolvedIP}:8890?streamid=read:${rtspSuffix}</code>` +
       `</span>`;
   } else if (protocol === "srt") {
     connectionInfoBox.style.display = "block";
     destinationRow.style.display = "none";
     if (youtubeKeyRow)  youtubeKeyRow.style.display  = "none";
     if (youtubeKeyHint) youtubeKeyHint.style.display = "none";
-    connectionUrlEl.textContent = `srt://${resolvedIP}:8891`;
+    connectionUrlEl.textContent = `srt://${resolvedIP}:${srtPort}`;
     connectionInfoExtra.innerHTML =
       `<span style="color:rgba(255,255,255,0.45);font-size:10px">` +
       `Listener mode — clients connect directly to this device` +

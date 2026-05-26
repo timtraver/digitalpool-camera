@@ -880,7 +880,7 @@ def main():
 
     # Attach the global CLOCK_REALTIME system clock to this pipeline.
     # The clock-type was already set to REALTIME at module load (above Gst.init).
-    pipeline.use_clock(_system_clock)
+    pipeline.set_clock(_system_clock)
     print(f"🕒 Pipeline clock attached (clock-type={_system_clock.get_property('clock-type')})", file=sys.stderr)
 
     overlay_element = pipeline.get_by_name("overlay")
