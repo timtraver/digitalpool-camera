@@ -576,6 +576,50 @@ def main():
         else:
             print("⚠️  RTSP audio: could not find 'dec' or 'mux' element — audio disabled", file=sys.stderr)
 
+    # ── RTSP audio-disabled guard ──────────────────────────────────────────────
+    # rtspsrc always creates BOTH a video and an audio RTP src pad for streams
+    # that carry audio (like /main/av).  The static "rtspsrc ! decodebin" link
+    # only connects the video RTP pad to decodebin's single sink; the audio RTP
+    # pad has no peer.  When rtspsrc pushes audio buffers on the unlinked pad,
+    # GStreamer returns GST_FLOW_NOT_LINKED which rtspsrc treats as a fatal error
+    # and tears down the entire pipeline.
+    #
+    # Fix: install a permanent DROP probe on every audio RTP src pad emitted by
+    # rtspsrc so those pushes return GST_FLOW_OK before GStreamer checks linkage.
+    # This is identical in spirit to the NDI audio guard above.
+    if input_type == "rtsp" and not use_rtsp_audio:
+        # gst-parse-launch names the first rtspsrc element "rtspsrc0".
+        rtsp_guard_el = pipeline.get_by_name("rtspsrc0")
+        if not rtsp_guard_el:
+            # Fallback: iterate all elements and find by factory name.
+            it = pipeline.iterate_elements()
+            while True:
+                res, el = it.next()
+                if res != Gst.IteratorResult.OK:
+                    break
+                if el.get_factory() and el.get_factory().get_name() == "rtspsrc":
+                    rtsp_guard_el = el
+                    break
+
+        if rtsp_guard_el:
+            def _on_rtsp_src_pad_guard(element, pad):
+                pad_caps = pad.get_current_caps() or pad.query_caps(None)
+                if not pad_caps or pad_caps.get_size() == 0:
+                    return
+                struct = pad_caps.get_structure(0)
+                # RTP audio pads have caps: application/x-rtp, media=(string)audio
+                if struct and struct.get_string("media") == "audio":
+                    pad.add_probe(
+                        Gst.PadProbeType.BUFFER,
+                        lambda p, info: Gst.PadProbeReturn.DROP,
+                    )
+                    print("🔇 RTSP audio RTP pad: DROP probe installed (audio not used)", file=sys.stderr)
+
+            rtsp_guard_el.connect("pad-added", _on_rtsp_src_pad_guard)
+            print("🔇 RTSP audio guard: pad-added handler installed on rtspsrc", file=sys.stderr)
+        else:
+            print("⚠️  RTSP audio guard: rtspsrc element not found in pipeline", file=sys.stderr)
+
     # ── NDI audio passthrough ──────────────────────────────────────────────────
     # The static pipeline string contains:
     #   audiotestsrc is-live=true volume=0 ! audiomixer name=ndi_amix ! avenc_aac ! … ! mux.audio
