@@ -3171,10 +3171,18 @@ io.on("connection", (socket) => {
     // Include the list of controls this camera actually supports so the UI
     // can dim controls that don't exist on the attached camera.
     const hwControls = camera.discoveredControls || camera.controls;
+
+    // Send the actual hardware min/max for pan and tilt so the client can
+    // compute percentage-based step sizes that scale with this camera's range.
+    const ptzRanges = {};
+    if (hwControls.pan_absolute)  ptzRanges.pan_absolute  = { min: hwControls.pan_absolute.min,  max: hwControls.pan_absolute.max };
+    if (hwControls.tilt_absolute) ptzRanges.tilt_absolute = { min: hwControls.tilt_absolute.min, max: hwControls.tilt_absolute.max };
+
     socket.emit("cameraConfig", {
       success: true,
       config: camera.config,
       supportedControls: Object.keys(hwControls),
+      ptzRanges,
     });
   });
 
