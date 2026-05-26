@@ -294,12 +294,13 @@ const tiltSmallSteps = () => 1;
 const panLargeSteps  = () => Math.max(1, Math.round(_panHwRange  * PTZ_LARGE_PCT / 100 / _panHwStep));
 const tiltLargeSteps = () => Math.max(1, Math.round(_tiltHwRange * PTZ_LARGE_PCT / 100 / _tiltHwStep));
 
-// ── Hold-to-repeat timing ─────────────────────────────────────────────────────
-// After PTZ_REPEAT_DELAY ms of holding, a command fires every PTZ_REPEAT_INTERVAL ms.
-// Tune to match how fast the camera's step motor can execute moves — sending
-// faster than the motor can process just queues commands up.
+// ── Hold-to-repeat + acceleration ────────────────────────────────────────────
+// After PTZ_REPEAT_DELAY ms, commands fire every PTZ_REPEAT_INTERVAL ms.
+// For inner-ring buttons the step count grows exponentially with each tick,
+// from 1 hardware step up to the outer-ring step count over PTZ_RAMP_TICKS ticks.
 const PTZ_REPEAT_DELAY    = 400; // ms before repeat kicks in
 const PTZ_REPEAT_INTERVAL = 200; // ms between repeat commands while held
+const PTZ_RAMP_TICKS      = 15;  // ticks to reach full outer-ring speed (~3 s)
 
 // Shared repeat-timer state — only one button active at a time.
 let _ptzDelayTimer  = null;
@@ -311,55 +312,89 @@ function _clearPTZTimers() {
 }
 
 /**
- * Wire a PTZ directional button with immediate-fire + hold-to-repeat.
- *   • A quick tap fires exactly once.
- *   • Holding fires once immediately, then repeats every PTZ_REPEAT_INTERVAL ms
- *     after an initial PTZ_REPEAT_DELAY ms pause.
+ * Compute an exponentially accelerated step count.
  *
- * @param {string}       id        Element id
- * @param {string}       evt       Socket event ('pan' or 'tilt')
- * @param {()=>number}   getSteps  Getter returning signed integer step count —
- *                                 evaluated at fire-time so it always reflects the
- *                                 current hardware range.
- * @param {string}       label     Log label
+ * Uses the curve  steps = round( maxSteps ^ (tick / PTZ_RAMP_TICKS) )
+ * which gives:
+ *   tick  0  →  1 step          (first press, maximum precision)
+ *   tick  N/2 →  √maxSteps      (halfway)
+ *   tick  N  →  maxSteps steps  (full outer-ring speed)
+ *
+ * @param {number} tick      How many fire() calls have happened so far (0-based)
+ * @param {number} maxSteps  The ceiling — same value as the outer-ring button
+ * @returns {number}         Positive step count (≥ 1)
  */
-function makePTZButton(id, evt, getSteps, label) {
+function ptzAccelSteps(tick, maxSteps) {
+  if (maxSteps <= 1 || tick === 0) return 1;
+  const factor = Math.min(1, tick / PTZ_RAMP_TICKS);
+  return Math.max(1, Math.round(Math.pow(maxSteps, factor)));
+}
+
+/**
+ * Wire a PTZ button with immediate-fire, hold-to-repeat, and optional
+ * exponential acceleration on hold.
+ *
+ * @param {string}         id          Element id
+ * @param {string}         evt         Socket event ('pan' or 'tilt')
+ * @param {()=>number}     getSteps    Getter for base step count (signed).
+ *                                     For inner ring this is always ±1.
+ * @param {string}         label       Log label
+ * @param {()=>number|null} getMaxSteps Optional getter for the acceleration ceiling
+ *                                     (the outer-ring step count for this axis).
+ *                                     Pass null / omit for outer ring (no ramp).
+ */
+function makePTZButton(id, evt, getSteps, label, getMaxSteps = null) {
   const el = document.getElementById(id);
   if (!el) return;
 
+  let _tick = 0;
+
+  function currentSteps() {
+    if (!getMaxSteps) return getSteps(); // outer ring: always constant
+    const sign = getSteps() < 0 ? -1 : 1;
+    return sign * ptzAccelSteps(_tick, getMaxSteps());
+  }
+
   function fire() {
-    const steps = getSteps();
-    console.log(`${label}: ${steps} hw step(s)`);
+    const steps = currentSteps();
+    console.log(`${label}: ${steps} step(s) [tick=${_tick}]`);
     socket.emit(evt, { steps });
+    _tick++;
   }
 
   function startRepeat() {
     _clearPTZTimers();
+    _tick = 0;
     fire(); // immediate first step on press
     _ptzDelayTimer = setTimeout(() => {
       _ptzRepeatTimer = setInterval(fire, PTZ_REPEAT_INTERVAL);
     }, PTZ_REPEAT_DELAY);
   }
 
+  function stopRepeat() {
+    _clearPTZTimers();
+    _tick = 0;
+  }
+
   // Mouse — preventDefault stops text-selection drag from leaving button stuck
   el.addEventListener("mousedown",   (e) => { e.preventDefault(); startRepeat(); });
-  el.addEventListener("mouseup",     _clearPTZTimers);
-  el.addEventListener("mouseleave",  _clearPTZTimers);
-  el.addEventListener("contextmenu", _clearPTZTimers);
+  el.addEventListener("mouseup",     stopRepeat);
+  el.addEventListener("mouseleave",  stopRepeat);
+  el.addEventListener("contextmenu", stopRepeat);
 
   // Touch (mobile / tablet)
   el.addEventListener("touchstart",  (e) => { e.preventDefault(); startRepeat(); }, { passive: false });
-  el.addEventListener("touchend",    _clearPTZTimers);
-  el.addEventListener("touchcancel", _clearPTZTimers);
+  el.addEventListener("touchend",    stopRepeat);
+  el.addEventListener("touchcancel", stopRepeat);
 }
 
-// Inner ring — 1 hardware step (the motor's physical minimum, full resolution)
-makePTZButton("panLeftSmall",  "pan",  () =>  panSmallSteps(),  "🔵 Pan Left");
-makePTZButton("panRightSmall", "pan",  () => -panSmallSteps(),  "🔵 Pan Right");
-makePTZButton("tiltUpSmall",   "tilt", () =>  tiltSmallSteps(), "🔵 Tilt Up");
-makePTZButton("tiltDownSmall", "tilt", () => -tiltSmallSteps(), "🔵 Tilt Down");
+// Inner ring — starts at 1 hw step, accelerates to outer-ring speed on hold
+makePTZButton("panLeftSmall",  "pan",  () =>  1,  "🔵 Pan Left",  () =>  panLargeSteps());
+makePTZButton("panRightSmall", "pan",  () => -1,  "🔵 Pan Right", () => -panLargeSteps());
+makePTZButton("tiltUpSmall",   "tilt", () =>  1,  "🔵 Tilt Up",   () =>  tiltLargeSteps());
+makePTZButton("tiltDownSmall", "tilt", () => -1,  "🔵 Tilt Down", () => -tiltLargeSteps());
 
-// Outer ring — PTZ_LARGE_PCT % of the full travel, in steps
+// Outer ring — constant PTZ_LARGE_PCT % of full travel (no acceleration)
 makePTZButton("panLeftLarge",  "pan",  () =>  panLargeSteps(),  "🔷 Pan Left (large)");
 makePTZButton("panRightLarge", "pan",  () => -panLargeSteps(),  "🔷 Pan Right (large)");
 makePTZButton("tiltUpLarge",   "tilt", () =>  tiltLargeSteps(), "🔷 Tilt Up (large)");
@@ -990,13 +1025,15 @@ const panInvertedCheckbox    = document.getElementById("panInverted");
   updateAudioDeviceRowVisibility();
 })();
 
-// Keyboard controls — hold Shift for large movements, otherwise small.
+// Keyboard controls — Arrow = 1 hw step (accelerating), Shift+Arrow = outer-ring speed.
 // The browser fires native keydown repeat at ~30–50 Hz which is far faster than
 // the camera motor can respond.  We suppress native repeat and drive our own
-// PTZ_REPEAT_DELAY / PTZ_REPEAT_INTERVAL loop instead (same timing as the buttons).
+// PTZ_REPEAT_DELAY / PTZ_REPEAT_INTERVAL loop with the same acceleration curve
+// as the inner-ring buttons.
 const _heldKeys = new Set();
 let _keyDelayTimer   = null;
 let _keyRepeatTimer  = null;
+let _keyTick         = 0;   // acceleration tick counter, reset on key release
 
 function _clearKeyTimers() {
   if (_keyDelayTimer)  { clearTimeout(_keyDelayTimer);   _keyDelayTimer  = null; }
@@ -1011,19 +1048,25 @@ document.addEventListener("keydown", (e) => {
   if (_heldKeys.has(e.key)) return;
   _heldKeys.add(e.key);
 
-  // Arrow = 1 hardware step (inner-ring equivalent, full resolution).
-  // Shift+Arrow = large step (outer-ring equivalent, fast sweep).
-  let evt, getSteps;
+  // Shift+Arrow: constant outer-ring speed (no ramp).
+  // Arrow alone: starts at 1 hw step, accelerates to outer-ring speed on hold.
+  const isLarge = e.shiftKey;
+  let evt, sign, getMax;
   switch (e.key) {
-    case "ArrowLeft":  evt = "pan";  getSteps = e.shiftKey ? () =>  panLargeSteps()  : () =>  panSmallSteps();  break;
-    case "ArrowRight": evt = "pan";  getSteps = e.shiftKey ? () => -panLargeSteps()  : () => -panSmallSteps();  break;
-    case "ArrowUp":    evt = "tilt"; getSteps = e.shiftKey ? () =>  tiltLargeSteps() : () =>  tiltSmallSteps(); break;
-    case "ArrowDown":  evt = "tilt"; getSteps = e.shiftKey ? () => -tiltLargeSteps() : () => -tiltSmallSteps(); break;
+    case "ArrowLeft":  evt = "pan";  sign = +1; getMax = panLargeSteps;  break;
+    case "ArrowRight": evt = "pan";  sign = -1; getMax = panLargeSteps;  break;
+    case "ArrowUp":    evt = "tilt"; sign = +1; getMax = tiltLargeSteps; break;
+    case "ArrowDown":  evt = "tilt"; sign = -1; getMax = tiltLargeSteps; break;
   }
 
-  function fire() { socket.emit(evt, { steps: getSteps() }); }
+  function fire() {
+    const steps = sign * (isLarge ? getMax() : ptzAccelSteps(_keyTick, getMax()));
+    socket.emit(evt, { steps });
+    _keyTick++;
+  }
 
   _clearKeyTimers();
+  _keyTick = 0;
   fire(); // immediate first step
   _keyDelayTimer = setTimeout(() => {
     _keyRepeatTimer = setInterval(fire, PTZ_REPEAT_INTERVAL);
@@ -1034,6 +1077,7 @@ document.addEventListener("keyup", (e) => {
   if (!_heldKeys.has(e.key)) return;
   _heldKeys.delete(e.key);
   _clearKeyTimers();
+  _keyTick = 0;
 });
 
 // ============ STREAMING CONTROLS ============
