@@ -1209,13 +1209,16 @@ class StreamController extends EventEmitter {
       ];
     } else if (this.captureFormat === 'yuyv') {
       // YUYV-only cameras (e.g. Minrray/Cypress): no MJPEG support.
-      // videoconvert handles YUYV → NV12; mppjpegdec is NOT used.
+      // Omit format=YUYV from caps — Rockchip's RGA-backed videoconvert doesn't
+      // list YUYV in its static sink pad template, causing a parse-time link
+      // failure when format=YUYV is explicitly constrained.  Without it,
+      // GStreamer negotiates YUYV at runtime and videoconvert outputs NV12.
       pipeline = [
         "v4l2src",
         `device=${this.cameraDevice}`,
         "do-timestamp=true",
         "!",
-        `video/x-raw,format=YUYV,width=${width},height=${height},framerate=${framerate}/1`,
+        `video/x-raw,width=${width},height=${height},framerate=${framerate}/1`,
         "!",
         "videoconvert",
         "!",

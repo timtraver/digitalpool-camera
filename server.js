@@ -2685,13 +2685,16 @@ function buildIdlePreviewGstArgs() {
     // ── USB source (default) ──
     const device = activeCameraSource.device || CAMERA_DEVICE;
     if (cameraFormat === 'yuyv') {
-      // YUYV-only camera: skip jpegparse/mppjpegdec, use videoconvert instead
+      // YUYV-only camera: omit format=YUYV from caps — Rockchip's RGA-backed
+      // videoconvert doesn't list YUYV in its static sink pad template, so an
+      // explicit format=YUYV constraint fails at parse time.  Without it,
+      // GStreamer negotiates the format at runtime and the link succeeds.
       gstArgs = [
         "v4l2src",
         `device=${device}`,
         "do-timestamp=true",
         "!",
-        `video/x-raw,format=YUYV,width=${config.width || 1920},height=${config.height || 1080},framerate=${config.framerate || 30}/1`,
+        `video/x-raw,width=${config.width || 1920},height=${config.height || 1080},framerate=${config.framerate || 30}/1`,
         "!",
         "videoconvert",
         "!",

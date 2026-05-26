@@ -358,10 +358,13 @@ def main():
         )
     elif capture_format == "yuyv":
         # YUYV-only cameras (e.g. Minrray/Cypress): no MJPEG, use videoconvert.
+        # Omit format=YUYV from caps — Rockchip's RGA-backed videoconvert doesn't
+        # list YUYV in its static sink pad template.  Without the explicit format
+        # constraint, GStreamer negotiates YUYV at runtime and converts to NV12.
         print(f"📹 Input source: USB v4l2src (YUYV) → {camera_device}", file=sys.stderr)
         source_str = (
             f'v4l2src device={camera_device} do-timestamp=true '
-            f'! video/x-raw,format=YUYV,width={width},height={height},framerate={framerate}/1 '
+            f'! video/x-raw,width={width},height={height},framerate={framerate}/1 '
             f'! videoconvert ! video/x-raw,format=NV12 '
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
         )
