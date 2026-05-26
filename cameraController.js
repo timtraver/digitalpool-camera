@@ -14,8 +14,14 @@ class CameraController {
     this.currentPan = 0;
     this.currentTilt = 0;
 
+    // Populated by discoverControls() after the camera is activated.
+    // Contains the real hardware min/max/default for every control the
+    // attached camera actually supports.  null until discovery runs.
+    this.discoveredControls = null;
+
     // Camera control definitions based on v4l2-ctl
-    // Control names match Orange Pi 5 (mainline kernel 6.11) with OBSBOT Tiny 2 Lite
+    // Control names match Orange Pi 5 (mainline kernel 6.11) with OBSBOT Tiny 2 Lite.
+    // Used as a fallback when discoveredControls is not yet available.
     this.controls = {
       brightness: { id: "0x00980900", min: 0, max: 100, step: 1, default: 50 },
       contrast: { id: "0x00980901", min: 0, max: 100, step: 1, default: 50 },
@@ -222,6 +228,75 @@ class CameraController {
   }
 
   /**
+   * Query the camera for all controls it actually supports and store their
+   * real hardware ranges in this.discoveredControls.  Called automatically
+   * by activateCamera() so that setControl() and applyConfig() can translate
+   * stored 0-100 UI values to the correct hardware range for any camera.
+   */
+  async discoverControls(device) {
+    const dev = device || this.device;
+    try {
+      const { stdout } = await execAsync(
+        `v4l2-ctl -d ${dev} --list-ctrls 2>/dev/null`,
+        { timeout: 5000 }
+      );
+      const discovered = {};
+      // Example line:
+      //   brightness 0x00980900 (int)    : min=0 max=14 step=1 default=7 value=7
+      const lineRe = /^\s+(\w+)\s+0x[0-9a-f]+\s+\((\w+)\)\s*:(.+)$/;
+      for (const line of stdout.split('\n')) {
+        const m = line.match(lineRe);
+        if (!m) continue;
+        const [, name, type, attrs] = m;
+        const num = (key) => {
+          const hit = attrs.match(new RegExp(`${key}=(-?\\d+)`));
+          return hit ? parseInt(hit[1], 10) : undefined;
+        };
+        if (type === 'int') {
+          discovered[name] = {
+            min: num('min') ?? 0, max: num('max') ?? 100,
+            step: num('step') ?? 1, default: num('default') ?? 0,
+          };
+        } else if (type === 'bool') {
+          discovered[name] = { type: 'bool', default: num('default') ?? 1 };
+        } else if (type === 'menu') {
+          discovered[name] = {
+            type: 'menu', min: num('min') ?? 0, max: num('max') ?? 0,
+            step: 1, default: num('default') ?? 0,
+          };
+        }
+      }
+      console.log(`📷 Camera controls discovered: ${Object.keys(discovered).join(', ')}`);
+      this.discoveredControls = discovered;
+      return discovered;
+    } catch (err) {
+      console.warn('⚠️  Could not discover camera controls:', err.message);
+      return null;
+    }
+  }
+
+  /**
+   * Translate a UI/config value to the camera's actual hardware range.
+   *
+   * "Percentage controls" (brightness, contrast, zoom, etc.) store a 0-100
+   * value in the config so the UI is camera-agnostic.  When applying, we
+   * scale that 0-100 value to [hwControl.min, hwControl.max].
+   *
+   * "Direct controls" (pan_absolute, tilt_absolute) store raw camera-unit
+   * values and are clamped to the hardware range without rescaling.
+   */
+  translateValue(controlName, configValue, hwControl) {
+    if (!hwControl || hwControl.type === 'bool') return configValue;
+    const { min = 0, max = 100 } = hwControl;
+    if (CameraController.PERCENTAGE_CONTROLS.has(controlName)) {
+      const fraction = Math.max(0, Math.min(100, configValue)) / 100;
+      return Math.round(min + fraction * (max - min));
+    }
+    // Direct value — clamp to hardware range
+    return Math.max(min, Math.min(max, configValue));
+  }
+
+  /**
    * Activate camera by opening the device
    */
   async activateCamera() {
@@ -231,6 +306,10 @@ class CameraController {
       const command = `sudo v4l2-ctl -d ${this.device} --list-formats-ext`;
       await execAsync(command);
       console.log("✅ Camera device activated");
+
+      // Discover the real hardware controls this camera supports so that
+      // setControl() and applyConfig() can scale values correctly.
+      await this.discoverControls(this.device);
 
       // Give camera a moment to fully initialize
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -281,9 +360,12 @@ class CameraController {
       }
     }
 
+    // Use discovered hardware controls if available, fall back to static map.
+    const hwControls = this.discoveredControls || this.controls;
+
     // Apply auto-mode controls first (disable auto before setting manual values)
     for (const [controlName, value] of autoControls) {
-      if (this.controls[controlName]) {
+      if (hwControls[controlName]) {
         try {
           const result = await this.setControl(controlName, value, false);
           results.push({ control: controlName, ...result });
@@ -323,7 +405,7 @@ class CameraController {
       if (skipControls.has(controlName)) {
         continue; // Auto mode is on, skip this manual control
       }
-      if (this.controls[controlName]) {
+      if (hwControls[controlName]) {
         try {
           const result = await this.setControl(controlName, value, false);
           results.push({ control: controlName, ...result });
@@ -364,7 +446,7 @@ class CameraController {
     }
 
     for (const [controlName, value] of sortedPtzSettings) {
-      if (this.controls[controlName]) {
+      if (hwControls[controlName]) {
         try {
           // console.log(`  ⚙️  Setting ${controlName} = ${value}`);
           const result = await this.setControl(controlName, value, false);
@@ -443,23 +525,26 @@ class CameraController {
    */
   async setControl(controlName, value, saveToConfig = true) {
     try {
-      if (!this.controls[controlName]) {
-        throw new Error(`Unknown control: ${controlName}`);
+      // Prefer the real hardware control map (discovered at runtime) over the
+      // static OBSBot-based fallback.  If the control doesn't exist on the
+      // attached camera, return gracefully instead of throwing.
+      const hwControls = this.discoveredControls || this.controls;
+      const hwControl = hwControls[controlName];
+      if (!hwControl) {
+        return {
+          success: false,
+          control: controlName,
+          error: `Control '${controlName}' not available on this camera`,
+        };
       }
 
-      const control = this.controls[controlName];
+      // Translate the stored UI value (0-100 for percentage controls, raw for
+      // PTZ controls) to the camera's actual hardware range.
+      const hwValue = this.translateValue(controlName, value, hwControl);
 
-      // Validate value range
-      if (control.type !== "bool" && control.type !== "menu") {
-        if (value < control.min || value > control.max) {
-          throw new Error(
-            `Value ${value} out of range [${control.min}, ${control.max}] for ${controlName}`,
-          );
-        }
-      }
-
-      const command = `sudo v4l2-ctl -d ${this.device} --set-ctrl=${controlName}=${value}`;
-      console.log(`    🔧 Executing: ${command}`);
+      const command = `sudo v4l2-ctl -d ${this.device} --set-ctrl=${controlName}=${hwValue}`;
+      const note = hwValue !== value ? ` (scaled from ${value})` : '';
+      console.log(`    🔧 Executing: ${command}${note}`);
 
       const { stdout, stderr } = await execAsync(command);
 
@@ -467,7 +552,6 @@ class CameraController {
       // using a non-zero exit code (e.g. "unable to set", "VIDIOC_S_CTRL: busy").
       if (stderr && stderr.trim().length > 0) {
         console.log(`    ⚠️  stderr: ${stderr}`);
-        // Treat any non-empty stderr as an error
         throw new Error(stderr.trim());
       }
 
@@ -475,7 +559,8 @@ class CameraController {
         console.log(`    📤 stdout: ${stdout}`);
       }
 
-      // Save to config file
+      // Save the original UI value (not the translated hw value) to config
+      // so the slider position is preserved across reboots.
       if (saveToConfig) {
         this.config[controlName] = value;
         this.saveConfig();
@@ -484,7 +569,8 @@ class CameraController {
       return {
         success: true,
         control: controlName,
-        value: value,
+        value,
+        hwValue,
         message: stdout || "Control set successfully",
       };
     } catch (error) {
@@ -504,22 +590,23 @@ class CameraController {
    */
   async getControl(controlName) {
     try {
-      if (!this.controls[controlName]) {
-        throw new Error(`Unknown control: ${controlName}`);
+      const hwControls = this.discoveredControls || this.controls;
+      if (!hwControls[controlName]) {
+        throw new Error(`Control '${controlName}' not available on this camera`);
       }
 
       const command = `sudo v4l2-ctl -d ${this.device} --get-ctrl=${controlName}`;
       const { stdout, stderr } = await execAsync(command);
 
-      // Parse output like "brightness: 50"
+      // Parse output like "brightness: 7"
       const match = stdout.match(/:\s*(-?\d+)/);
-      const value = match ? parseInt(match[1]) : null;
+      const hwValue = match ? parseInt(match[1]) : null;
 
       return {
         success: true,
         control: controlName,
-        value: value,
-        info: this.controls[controlName],
+        value: hwValue,
+        info: hwControls[controlName],
       };
     } catch (error) {
       return {
@@ -715,5 +802,14 @@ class CameraController {
     return { success: true, message: "Camera reset to home position" };
   }
 }
+
+// Controls where the config/UI stores a 0-100 percentage value that must be
+// scaled to the camera's actual hardware range before applying via v4l2-ctl.
+// PTZ absolute controls (pan_absolute, tilt_absolute) are NOT in this set —
+// they store raw camera-unit values and are clamped to the hardware range.
+CameraController.PERCENTAGE_CONTROLS = new Set([
+  'brightness', 'contrast', 'saturation', 'hue', 'sharpness', 'gamma',
+  'zoom_absolute',
+]);
 
 module.exports = CameraController;
