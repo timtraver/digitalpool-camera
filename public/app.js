@@ -253,47 +253,73 @@ socket.on("cameraConfigReset", (data) => {
 const SMALL_MOVE = 1.0; // degrees for inner buttons (minimum step size)
 const LARGE_MOVE = 5.0; // degrees for outer buttons
 
-// Inner ring - Small movements
-document.getElementById("panLeftSmall").addEventListener("click", () => {
-  console.log("🔵 Pan Left (Small):", SMALL_MOVE);
-  socket.emit("pan", { degrees: SMALL_MOVE });
-});
+// Hold-to-repeat timing
+// After PTZ_REPEAT_DELAY ms of holding, a command fires every PTZ_REPEAT_INTERVAL ms.
+// Tune these to match how fast the camera's step motor can actually execute moves —
+// sending commands faster than the motor can process them just queues them up.
+const PTZ_REPEAT_DELAY    = 400; // ms before repeat kicks in (avoids accidental repeats on taps)
+const PTZ_REPEAT_INTERVAL = 200; // ms between repeat commands while held
 
-document.getElementById("panRightSmall").addEventListener("click", () => {
-  console.log("🔵 Pan Right (Small):", -SMALL_MOVE);
-  socket.emit("pan", { degrees: -SMALL_MOVE });
-});
+// Shared repeat-timer state (only one button is active at a time)
+let _ptzDelayTimer    = null;
+let _ptzRepeatTimer   = null;
 
-document.getElementById("tiltUpSmall").addEventListener("click", () => {
-  console.log("🔵 Tilt Up (Small):", SMALL_MOVE);
-  socket.emit("tilt", { degrees: SMALL_MOVE });
-});
+function _clearPTZTimers() {
+  if (_ptzDelayTimer)  { clearTimeout(_ptzDelayTimer);   _ptzDelayTimer  = null; }
+  if (_ptzRepeatTimer) { clearInterval(_ptzRepeatTimer); _ptzRepeatTimer = null; }
+}
 
-document.getElementById("tiltDownSmall").addEventListener("click", () => {
-  console.log("🔵 Tilt Down (Small):", -SMALL_MOVE);
-  socket.emit("tilt", { degrees: -SMALL_MOVE });
-});
+/**
+ * Wire a PTZ directional button with immediate-fire + hold-to-repeat behaviour.
+ *   • A quick tap fires exactly once (same as before).
+ *   • Holding the button fires once immediately, then repeats every
+ *     PTZ_REPEAT_INTERVAL ms after an initial PTZ_REPEAT_DELAY ms pause.
+ *
+ * @param {string} id      Element id
+ * @param {string} evt     Socket event name ('pan' or 'tilt')
+ * @param {number} degrees Signed degrees per step
+ * @param {string} label   Log label
+ */
+function makePTZButton(id, evt, degrees, label) {
+  const el = document.getElementById(id);
+  if (!el) return;
 
-// Outer ring - Large movements
-document.getElementById("panLeftLarge").addEventListener("click", () => {
-  console.log("🔷 Pan Left (Large):", LARGE_MOVE);
-  socket.emit("pan", { degrees: LARGE_MOVE });
-});
+  function fire() {
+    console.log(`${label}:`, degrees);
+    socket.emit(evt, { degrees });
+  }
 
-document.getElementById("panRightLarge").addEventListener("click", () => {
-  console.log("🔷 Pan Right (Large):", -LARGE_MOVE);
-  socket.emit("pan", { degrees: -LARGE_MOVE });
-});
+  function startRepeat() {
+    _clearPTZTimers();
+    fire(); // immediate first step
+    _ptzDelayTimer = setTimeout(() => {
+      _ptzRepeatTimer = setInterval(fire, PTZ_REPEAT_INTERVAL);
+    }, PTZ_REPEAT_DELAY);
+  }
 
-document.getElementById("tiltUpLarge").addEventListener("click", () => {
-  console.log("🔷 Tilt Up (Large):", LARGE_MOVE);
-  socket.emit("tilt", { degrees: LARGE_MOVE });
-});
+  // Mouse — prevent default so dragging off the button doesn't leave it stuck
+  el.addEventListener("mousedown",  (e) => { e.preventDefault(); startRepeat(); });
+  el.addEventListener("mouseup",    _clearPTZTimers);
+  el.addEventListener("mouseleave", _clearPTZTimers);
+  el.addEventListener("contextmenu", _clearPTZTimers);
 
-document.getElementById("tiltDownLarge").addEventListener("click", () => {
-  console.log("🔷 Tilt Down (Large):", -LARGE_MOVE);
-  socket.emit("tilt", { degrees: -LARGE_MOVE });
-});
+  // Touch (mobile / tablet)
+  el.addEventListener("touchstart",  (e) => { e.preventDefault(); startRepeat(); }, { passive: false });
+  el.addEventListener("touchend",    _clearPTZTimers);
+  el.addEventListener("touchcancel", _clearPTZTimers);
+}
+
+// Inner ring — small movements
+makePTZButton("panLeftSmall",  "pan",  SMALL_MOVE,  "🔵 Pan Left (Small)");
+makePTZButton("panRightSmall", "pan", -SMALL_MOVE,  "🔵 Pan Right (Small)");
+makePTZButton("tiltUpSmall",   "tilt", SMALL_MOVE,  "🔵 Tilt Up (Small)");
+makePTZButton("tiltDownSmall", "tilt", -SMALL_MOVE, "🔵 Tilt Down (Small)");
+
+// Outer ring — large movements
+makePTZButton("panLeftLarge",  "pan",  LARGE_MOVE,  "🔷 Pan Left (Large)");
+makePTZButton("panRightLarge", "pan", -LARGE_MOVE,  "🔷 Pan Right (Large)");
+makePTZButton("tiltUpLarge",   "tilt", LARGE_MOVE,  "🔷 Tilt Up (Large)");
+makePTZButton("tiltDownLarge", "tilt", -LARGE_MOVE, "🔷 Tilt Down (Large)");
 
 // Center reset button
 document.getElementById("resetPos").addEventListener("click", () => {
@@ -920,28 +946,49 @@ const panInvertedCheckbox    = document.getElementById("panInverted");
   updateAudioDeviceRowVisibility();
 })();
 
-// Keyboard controls
-// Hold Shift for large movements, otherwise small movements
+// Keyboard controls — hold Shift for large movements, otherwise small.
+// The browser fires native keydown repeat at ~30–50 Hz which is far faster than
+// the camera motor can respond.  We suppress native repeat and drive our own
+// PTZ_REPEAT_DELAY / PTZ_REPEAT_INTERVAL loop instead (same timing as the buttons).
+const _heldKeys = new Set();
+let _keyDelayTimer   = null;
+let _keyRepeatTimer  = null;
+
+function _clearKeyTimers() {
+  if (_keyDelayTimer)  { clearTimeout(_keyDelayTimer);   _keyDelayTimer  = null; }
+  if (_keyRepeatTimer) { clearInterval(_keyRepeatTimer); _keyRepeatTimer = null; }
+}
+
 document.addEventListener("keydown", (e) => {
+  if (!["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(e.key)) return;
+  e.preventDefault();
+
+  // Ignore browser-generated key-repeat events — we handle our own.
+  if (_heldKeys.has(e.key)) return;
+  _heldKeys.add(e.key);
+
   const speed = e.shiftKey ? LARGE_MOVE : SMALL_MOVE;
+  let evt, degrees;
   switch (e.key) {
-    case "ArrowLeft":
-      e.preventDefault();
-      socket.emit("pan", { degrees: speed });
-      break;
-    case "ArrowRight":
-      e.preventDefault();
-      socket.emit("pan", { degrees: -speed });
-      break;
-    case "ArrowUp":
-      e.preventDefault();
-      socket.emit("tilt", { degrees: speed });
-      break;
-    case "ArrowDown":
-      e.preventDefault();
-      socket.emit("tilt", { degrees: -speed });
-      break;
+    case "ArrowLeft":  evt = "pan";  degrees =  speed; break;
+    case "ArrowRight": evt = "pan";  degrees = -speed; break;
+    case "ArrowUp":    evt = "tilt"; degrees =  speed; break;
+    case "ArrowDown":  evt = "tilt"; degrees = -speed; break;
   }
+
+  function fire() { socket.emit(evt, { degrees }); }
+
+  _clearKeyTimers();
+  fire(); // immediate first step
+  _keyDelayTimer = setTimeout(() => {
+    _keyRepeatTimer = setInterval(fire, PTZ_REPEAT_INTERVAL);
+  }, PTZ_REPEAT_DELAY);
+});
+
+document.addEventListener("keyup", (e) => {
+  if (!_heldKeys.has(e.key)) return;
+  _heldKeys.delete(e.key);
+  _clearKeyTimers();
 });
 
 // ============ STREAMING CONTROLS ============
