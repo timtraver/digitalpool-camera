@@ -14,6 +14,11 @@ class CameraController {
     this.currentPan = 0;
     this.currentTilt = 0;
 
+    // Serialization queue for PTZ commands — chaining every pan/tilt call
+    // onto this promise prevents concurrent v4l2-ctl processes from racing
+    // and reading stale currentPan/currentTilt values out of order.
+    this._ptzQueue = Promise.resolve();
+
     // Populated by discoverControls() after the camera is activated.
     // Contains the real hardware min/max/default for every control the
     // attached camera actually supports.  null until discovery runs.
@@ -671,6 +676,14 @@ class CameraController {
    *                         gone; working in raw steps is camera-agnostic.
    */
   async pan(steps) {
+    // Enqueue — waits for any in-flight pan/tilt to finish before executing.
+    const result = await (this._ptzQueue = this._ptzQueue.then(() =>
+      this._panImmediate(steps),
+    ));
+    return result;
+  }
+
+  async _panImmediate(steps) {
     const hwControls = this.discoveredControls || this.controls;
     const panCtrl = hwControls.pan_absolute || this.controls.pan_absolute;
     const hwStep = panCtrl.step || 3600; // hardware units per minimum step
@@ -694,6 +707,14 @@ class CameraController {
    * @param {number} steps - Integer steps to move (positive = up, negative = down).
    */
   async tilt(steps) {
+    // Enqueue — waits for any in-flight pan/tilt to finish before executing.
+    const result = await (this._ptzQueue = this._ptzQueue.then(() =>
+      this._tiltImmediate(steps),
+    ));
+    return result;
+  }
+
+  async _tiltImmediate(steps) {
     const hwControls = this.discoveredControls || this.controls;
     const tiltCtrl = hwControls.tilt_absolute || this.controls.tilt_absolute;
     const hwStep = tiltCtrl.step || 3600;

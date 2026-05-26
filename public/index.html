@@ -607,6 +607,15 @@
               <button id="refreshAudioDevices" class="btn-icon-small" title="Refresh audio device list">🔄</button>
             </div>
 
+            <!-- A/V Sync offset — hidden when audio is disabled -->
+            <div class="control-item" id="audioOffsetRow" style="display:none">
+              <label for="audioOffset" title="Negative = advance audio (fix audio lag). Positive = delay audio (fix audio lead).">A/V Offset (ms):</label>
+              <input type="number" id="audioOffset" value="0" min="-2000" max="2000" step="10"
+                     style="width:70px; flex:none"
+                     title="Negative = advance audio (fix audio lag). Positive = delay audio (fix audio lead)." />
+              <span style="font-size:10px; color:rgba(255,255,255,0.45); margin-left:4px">− leads, + lags</span>
+            </div>
+
             <div style="display: flex; gap: 8px; margin-top: 12px">
               <button
                 id="startStream"

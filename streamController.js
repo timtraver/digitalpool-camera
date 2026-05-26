@@ -103,6 +103,7 @@ class StreamController extends EventEmitter {
       audioEnabled: true,      // Include audio in stream
       audioSource: "video",    // "video" = use embedded source audio; "external" = ALSA device
       audioDevice: "plughw:2,0", // ALSA device used when audioSource === "external"
+      audioOffset: 0,          // A/V sync offset in ms: negative = advance audio (fix audio lag), positive = delay audio
       // Skia graphics overlay
       skiaGraphicsEnabled: false, // Enable Skia graphics overlay
       skiaGraphicsPort: 8556, // Port where Skia graphics server is running
@@ -489,9 +490,18 @@ class StreamController extends EventEmitter {
         // -use_wallclock_as_timestamps 1 replaces ALSA's USB-clock-derived PTS
         // with av_gettime() (system wall clock), so audio never drifts relative
         // to real time regardless of how long the session runs.
+        //
+        // -itsoffset: A/V sync correction for cameras whose MJPEG/encode pipeline
+        // adds more video latency than the ALSA capture path.
+        //   Negative offset → advance audio timestamps (audio was lagging video).
+        //   Positive offset → delay audio timestamps  (audio was leading video).
+        // Both streams use wall-clock timestamps so this offset is applied ONCE
+        // at start and does not accumulate over time.
+        const audioOffsetSec = (this.streamConfig.audioOffset || 0) / 1000;
         const ffmpegAudioArgs = [
           "-loglevel", "warning",
           "-use_wallclock_as_timestamps", "1",
+          ...(audioOffsetSec !== 0 ? ["-itsoffset", String(audioOffsetSec)] : []),
           "-f", "alsa",
           "-ar", "48000",
           "-ac", "2",

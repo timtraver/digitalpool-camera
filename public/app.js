@@ -768,6 +768,8 @@ const audioSourceTypeSelect  = document.getElementById("audioSourceType");
 const audioDeviceRow         = document.getElementById("audioDeviceRow");
 const audioDeviceSelect      = document.getElementById("audioDeviceSelect");
 const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
+const audioOffsetRow         = document.getElementById("audioOffsetRow");
+const audioOffsetInput       = document.getElementById("audioOffset");
 
 // Video orientation flip checkboxes
 const flipHorizontalCheckbox = document.getElementById("flipHorizontal");
@@ -1338,6 +1340,7 @@ startStreamBtn.addEventListener("click", async () => {
       audioEnabled: audioEnabledCheckbox.checked,
       audioSource: audioSourceTypeSelect ? audioSourceTypeSelect.value : "video",
       audioDevice: audioDeviceSelect ? audioDeviceSelect.value : "",
+      audioOffset: audioOffsetInput ? parseInt(audioOffsetInput.value, 10) || 0 : 0,
       width: resW,
       height: resH,
       framerate: parseInt(streamFramerate.value),
@@ -1359,6 +1362,7 @@ startStreamBtn.addEventListener("click", async () => {
       audioEnabled: audioEnabledCheckbox.checked,
       audioSource: audioSourceTypeSelect ? audioSourceTypeSelect.value : "video",
       audioDevice: audioDeviceSelect ? audioDeviceSelect.value : "",
+      audioOffset: audioOffsetInput ? parseInt(audioOffsetInput.value, 10) || 0 : 0,
       width: resW,
       height: resH,
       framerate: parseInt(streamFramerate.value),
@@ -3145,6 +3149,11 @@ function updateAudioDeviceRowVisibility() {
   if (audioDeviceRow) {
     audioDeviceRow.style.display = showDevicePicker ? "" : "none";
   }
+
+  // A/V offset row is visible whenever audio is enabled (applies to all sources).
+  if (audioOffsetRow) {
+    audioOffsetRow.style.display = audioEnabled ? "" : "none";
+  }
 }
 
 async function loadAudioDevices() {
@@ -3245,6 +3254,12 @@ async function loadStreamConfig() {
       if (data.config.audioDevice && audioDeviceSelect) {
         audioDeviceSelect.dataset.savedDevice = data.config.audioDevice;
       }
+
+      // Restore A/V sync offset (default 0).
+      if (audioOffsetInput) {
+        audioOffsetInput.value = data.config.audioOffset ?? 0;
+      }
+
       updateAudioDeviceRowVisibility();
 
       // Enforce H.265 restriction on RTMP, YouTube, and Facebook (FLV container only supports H.264)
@@ -3346,6 +3361,7 @@ async function saveFlipConfig() {
         audioEnabled: audioEnabledCheckbox ? audioEnabledCheckbox.checked : true,
         audioSource:  audioSourceTypeSelect ? audioSourceTypeSelect.value : "video",
         audioDevice:  audioDeviceSelect ? audioDeviceSelect.value : "",
+        audioOffset:  audioOffsetInput ? parseInt(audioOffsetInput.value, 10) || 0 : 0,
         width:        resW,
         height:       resH,
         framerate:    parseInt(streamFramerate.value),
