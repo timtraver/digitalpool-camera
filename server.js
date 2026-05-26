@@ -3574,8 +3574,8 @@ server.listen(PORT, async () => {
     }
   }
 
-  // Detect camera capture format FIRST so that streamController.initialize()
-  // (which may auto-start the stream) already has the correct format.
+  // Step 1 — Detect format so the idle preview (and any auto-start stream)
+  // use the right pipeline from the very first frame.
   console.log("\n🚀 Activating camera and detecting capture format...");
   try {
     await camera.activateCamera();
@@ -3588,20 +3588,31 @@ server.listen(PORT, async () => {
     streamController.captureFormat = cameraFormat;
   }
 
-  // Initialize stream controller (auto-start if configured) — format is now set
-  try {
-    await streamController.initialize();
-  } catch (error) {
-    console.error("❌ Error initializing stream controller:", error.message);
-  }
-
-  // Start idle preview — camera is already activated above
-  console.log("📹 Starting persistent idle preview...");
+  // Step 2 — Start the idle preview BEFORE initialize() so the camera has
+  // time to fully initialize its v4l2 driver state.  Some USB cameras
+  // (e.g. Minrray) return EBUSY from VIDIOC_S_FMT for a few seconds after
+  // first power-on.  Running the idle preview for ~3 s warms the camera up
+  // so that when autoStart kills the preview and opens a stream, the driver
+  // is ready and VIDIOC_S_FMT succeeds on the first attempt.
+  console.log("📹 Starting idle preview for camera warm-up...");
   try {
     await startPersistentIdlePreview();
     console.log("✅ Idle preview started — camera is active");
   } catch (error) {
     console.error("❌ Error starting idle preview:", error.message);
+  }
+
+  // Step 3 — Wait for the idle preview to be stable before autoStart fires.
+  // 3 s is enough for the camera firmware to settle into streaming mode.
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+
+  // Step 4 — Initialize stream controller (auto-start if configured).
+  // At this point the camera has been streaming for ~3 s so VIDIOC_S_FMT
+  // will succeed immediately after _killCameraProcesses() releases the device.
+  try {
+    await streamController.initialize();
+  } catch (error) {
+    console.error("❌ Error initializing stream controller:", error.message);
   }
 
   // Boot is complete — allow /video/stream to auto-start idle preview if needed
