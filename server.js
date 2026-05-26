@@ -2706,8 +2706,9 @@ function buildIdlePreviewGstArgs() {
         "!",
         "video/x-raw,framerate=15/1",
         "!",
-        "videoconvert",
-        "!",
+        // No trailing videoconvert here — the shared tail starts with
+        // videoconvert→NV12, so adding one here creates a redundant double-
+        // conversion that wastes CPU and can degrade quality.
       ];
     } else {
       // MJPEG camera (default): hardware JPEG decode via mppjpegdec
@@ -2865,7 +2866,7 @@ function buildIdlePreviewGstArgs() {
     "!",
     "video/x-raw,format=NV12",
     "!",
-    "mpph264enc", "bps=500000", "header-mode=each-idr", "gop=15",
+    "mpph264enc", "bps=2000000", "header-mode=each-idr", "gop=15",
     "!",
     "h264parse", "config-interval=-1",
     "!",
