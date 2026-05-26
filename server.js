@@ -2720,7 +2720,7 @@ function buildIdlePreviewGstArgs() {
         `device=${device}`,
         "do-timestamp=true",
         "!",
-        `image/jpeg,width=${config.width || 1920},height=${config.height || 1080},framerate=${config.framerate || 30}/1`,
+        `image/jpeg,width=${config.width || 1920},height=${config.height || 1080}`,
         "!",
         "jpegparse",
         "!",

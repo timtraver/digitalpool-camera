@@ -372,7 +372,7 @@ def main():
         print(f"📹 Input source: USB v4l2src (MJPEG) → {camera_device}", file=sys.stderr)
         source_str = (
             f'v4l2src device={camera_device} do-timestamp=true '
-            f'! image/jpeg,width={width},height={height},framerate={framerate}/1 '
+            f'! image/jpeg,width={width},height={height} '
             f'! jpegparse ! mppjpegdec '
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
         )
