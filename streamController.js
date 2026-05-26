@@ -263,10 +263,14 @@ class StreamController extends EventEmitter {
       console.log("Checking for processes using camera device...");
       await this._killCameraProcesses();
 
-      // Kill any process using port 8555 (preview TCP server)
-      console.log("🔍 Checking for processes using port 8555...");
-      await this._killPortProcess(8555);
-      console.log("✅ Port 8555 cleanup complete");
+      // Kill any process using port 8555 (legacy TCP preview server — Camera 1 only).
+      // Camera 2 does not use port 8555 so skipping this prevents interfering with
+      // an unrelated process that happens to be on that port.
+      if (this.streamId === 1) {
+        console.log("🔍 [Cam1] Checking for processes using port 8555...");
+        await this._killPortProcess(8555);
+        console.log("✅ [Cam1] Port 8555 cleanup complete");
+      }
 
       // Create HLS directory for preview stream
       const fs = require("fs");
@@ -575,13 +579,13 @@ class StreamController extends EventEmitter {
           // can grow and become another source of creeping latency.
           ...(protocol === "rtmp" || protocol === "rtsp" ? ["-flush_packets", "1"] : []),
           ...(protocol === "srt"
-            ? ["-f", "mpegts", "srt://0.0.0.0:8891?mode=listener&latency=200000"]
+            ? ["-f", "mpegts", `srt://0.0.0.0:${this.srtDefaultPort}?mode=listener&latency=200000`]
             : protocol === "rtsp"
-            ? ["-f", "flv", "rtmp://localhost:1935/live"]
+            ? ["-f", "flv", `rtmp://localhost:1935${this.rtspPath}`]
             : ["-f", "flv", (
                 this.streamConfig.destination && this.streamConfig.destination.trim() !== ""
                   ? this.streamConfig.destination.trim()
-                  : "rtmp://localhost:1935/stream"
+                  : `rtmp://localhost:1935${this.rtspPath}`
               )]),
         ];
 
@@ -834,11 +838,13 @@ class StreamController extends EventEmitter {
       console.log(`🔪 Killing all processes using ${this.cameraDevice}...`);
       await execPromise(`sudo fuser -k ${this.cameraDevice} 2>/dev/null || true`);
 
-      // Fallback: also kill any gst-launch / ffmpeg / python3 (overlay script)
-      // processes that may not have the device open yet but are starting up.
+      // Fallback: also kill any gst-launch / python3 (overlay script) processes
+      // that reference THIS camera device but may not have it open yet (still starting).
+      // IMPORTANT: grep for the specific device path so we never kill processes
+      // belonging to a different camera controller instance.
       try {
         await execPromise(
-          `ps aux | grep -E '(gst-launch|gst-overlay-pipeline|png-overlay-helper)' | grep -v grep | awk '{print $2}' | xargs -r sudo kill -9 2>/dev/null || true`
+          `ps aux | grep -E '(gst-launch|gst-overlay-pipeline|png-overlay-helper)' | grep '${this.cameraDevice}' | grep -v grep | awk '{print $2}' | xargs -r sudo kill -9 2>/dev/null || true`
         );
       } catch (_) { /* ignore */ }
 

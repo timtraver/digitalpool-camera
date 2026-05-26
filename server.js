@@ -105,8 +105,9 @@ const streamController2 = new StreamController(CAMERA_DEVICE_2, { streamId: 2 })
 // ── Shared boot / restart flags ───────────────────────────────────────────────
 // Flag to prevent /video/stream from spawning idle preview during boot
 let bootComplete = false;
-// Flag to suppress intermediate "stopped" events during an atomic restart
-let isRestartInProgress = false;
+// Per-camera flag to suppress intermediate "stopped" events during an atomic restart.
+// Keyed by camera index (1 or 2) so each camera is independent.
+const isRestartInProgress = { 1: false, 2: false };
 
 // ── Per-camera controller helpers ─────────────────────────────────────────────
 /** Return the CameraController for index 1 or 2. */
@@ -167,13 +168,13 @@ streamController.on("preparing", () => {
 });
 
 streamController.on("started", () => {
-  isRestartInProgress = false;
+  isRestartInProgress[1] = false;
   const status = streamController.getStatus();
   io.emit("streamStatus", { ...status, status: "started", cameraIndex: 1 });
 });
 
 streamController.on("stopped", (code) => {
-  if (isRestartInProgress) return;
+  if (isRestartInProgress[1]) return;
   const status = streamController.getStatus();
   io.emit("streamStatus", { ...status, status: "stopped", code, cameraIndex: 1 });
   io.emit("streamDrift",  { ppm: null, cameraIndex: 1 });
@@ -206,11 +207,13 @@ streamController2.on("preparing", () => {
 });
 
 streamController2.on("started", () => {
+  isRestartInProgress[2] = false;
   const status = streamController2.getStatus();
   io.emit("streamStatus", { ...status, status: "started", cameraIndex: 2 });
 });
 
 streamController2.on("stopped", (code) => {
+  if (isRestartInProgress[2]) return;
   const status = streamController2.getStatus();
   io.emit("streamStatus", { ...status, status: "stopped", code, cameraIndex: 2 });
   io.emit("streamDrift",  { ppm: null, cameraIndex: 2 });
@@ -1743,8 +1746,8 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
   // isRestartInProgress suppresses the automatic idle-preview restart that the
   // "stopped" event handler would otherwise trigger — we handle that ourselves.
   if (wasStreaming) {
-    isRestartInProgress = true;
-    io.emit("streamStatus", { ...sc.getStatus(), status: "stopping" });
+    isRestartInProgress[camIdx] = true;
+    io.emit("streamStatus", { ...sc.getStatus(), status: "stopping", cameraIndex: camIdx });
     console.log(`📷 [Cam${camIdx}] Camera source switch: stopping active stream…`);
     await sc.stopStream();
     // Allow extra time for the old device/RTSP/NDI session to fully release.
@@ -1826,10 +1829,10 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
 
     // Restart the stream on the reverted source if it was running before.
     if (wasStreaming) {
-      isRestartInProgress = false;
-      io.emit("streamStatus", { ...sc.getStatus(), status: "starting" });
+      isRestartInProgress[camIdx] = false;
+      io.emit("streamStatus", { ...sc.getStatus(), status: "starting", cameraIndex: camIdx });
       const revertRestart = await sc.startStream(savedStreamConfig);
-      io.emit("streamStatus", sc.getStatus());
+      io.emit("streamStatus", { ...sc.getStatus(), cameraIndex: camIdx });
       if (!revertRestart.success) {
         console.error(`⚠️ [Cam${camIdx}] Failed to restart stream after source revert:`, revertRestart.error);
       }
@@ -1862,11 +1865,11 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
 
   // ── Step 5: Restart the stream on the new source (if it was running) ────
   if (wasStreaming) {
-    isRestartInProgress = false;
+    isRestartInProgress[camIdx] = false;
     console.log(`📷 [Cam${camIdx}] Camera source switch: restarting stream on new source…`);
-    io.emit("streamStatus", { ...sc.getStatus(), status: "starting" });
+    io.emit("streamStatus", { ...sc.getStatus(), status: "starting", cameraIndex: camIdx });
     const restartResult = await sc.startStream(savedStreamConfig);
-    io.emit("streamStatus", sc.getStatus());
+    io.emit("streamStatus", { ...sc.getStatus(), cameraIndex: camIdx });
     if (!restartResult.success) {
       console.error(`⚠️ [Cam${camIdx}] Failed to restart stream after source change:`, restartResult.error);
       return res.json({
@@ -3127,7 +3130,7 @@ async function startPersistentIdlePreview(camIdx = 1) {
       }
 
       const startingNow = camIdx === 2 ? _idlePreviewStarting2 : _idlePreviewStarting;
-      if (!sc.isStreaming && !startingNow && !isRestartInProgress && bootComplete) {
+      if (!sc.isStreaming && !startingNow && !isRestartInProgress[camIdx] && bootComplete) {
         console.log(`📹 [Cam${camIdx}] Idle preview died — scheduling auto-restart...`);
         startPersistentIdlePreview(camIdx)
           .then(() => { io.emit("refreshIdlePreview", { cameraIndex: camIdx }); })
@@ -3398,7 +3401,7 @@ io.on("connection", (socket) => {
   socket.on("startStream", async (config) => {
     const camIdx = parseInt(config?.cameraIndex) === 2 ? 2 : 1;
     const sc = getSC(camIdx);
-    io.emit("streamStatus", { ...sc.getStatus(), status: "starting" });
+    io.emit("streamStatus", { ...sc.getStatus(), status: "starting", cameraIndex: camIdx });
     const result = await sc.startStream(config);
     socket.emit("streamResult", result);
   });
@@ -3406,7 +3409,7 @@ io.on("connection", (socket) => {
   socket.on("stopStream", async (data) => {
     const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
     const sc = getSC(camIdx);
-    io.emit("streamStatus", { ...sc.getStatus(), status: "stopping" });
+    io.emit("streamStatus", { ...sc.getStatus(), status: "stopping", cameraIndex: camIdx });
     const result = await sc.stopStream();
     socket.emit("streamResult", result);
   });
@@ -3416,22 +3419,22 @@ io.on("connection", (socket) => {
     const camIdx = parseInt(config?.cameraIndex) === 2 ? 2 : 1;
     const sc = getSC(camIdx);
     console.log(`🔄 [Cam${camIdx}] Restarting stream...`);
-    isRestartInProgress = true;
+    isRestartInProgress[camIdx] = true;
     try {
-      io.emit("streamStatus", { ...sc.getStatus(), status: "restarting" });
+      io.emit("streamStatus", { ...sc.getStatus(), status: "restarting", cameraIndex: camIdx });
 
       if (sc.isStreaming) {
-        io.emit("streamStatus", { ...sc.getStatus(), status: "stopping" });
+        io.emit("streamStatus", { ...sc.getStatus(), status: "stopping", cameraIndex: camIdx });
         await sc.stopStream();
       }
 
-      isRestartInProgress = false;
-      io.emit("streamStatus", { ...sc.getStatus(), status: "starting" });
+      isRestartInProgress[camIdx] = false;
+      io.emit("streamStatus", { ...sc.getStatus(), status: "starting", cameraIndex: camIdx });
       const result = await sc.startStream(config);
       socket.emit("streamResult", result);
     } catch (err) {
       console.error(`⚠️  [Cam${camIdx}] restartStream error:`, err.message);
-      isRestartInProgress = false;
+      isRestartInProgress[camIdx] = false;
       socket.emit("streamResult", { success: false, error: err.message });
       startPersistentIdlePreview(camIdx)
         .then(() => io.emit("refreshIdlePreview", { cameraIndex: camIdx }))
@@ -3884,7 +3887,7 @@ async function _killIdlePreviewForCamera(camIdx) {
 // This ensures the PNG file exists when gdkpixbufoverlay tries to load it
 streamController.on("preparing", async () => {
   try {
-    isRestartInProgress = true;
+    isRestartInProgress[1] = true;
     await _killIdlePreviewForCamera(1);
 
     const hasUrlOverlay = streamController.streamConfig.remoteOverlayEnabled &&
@@ -3967,7 +3970,7 @@ async function _handleStreamStopped(camIdx) {
 // When stream stops, restart the persistent idle preview and manage Puppeteer refresh
 streamController.on("stopped", async () => {
   try {
-    if (isRestartInProgress) {
+    if (isRestartInProgress[1]) {
       console.log("🔄 [Cam1] Restart in progress — skipping idle preview restart");
       return;
     }
@@ -3981,6 +3984,10 @@ streamController.on("stopped", async () => {
 // Camera 2 "stopped" handler
 streamController2.on("stopped", async () => {
   try {
+    if (isRestartInProgress[2]) {
+      console.log("🔄 [Cam2] Restart in progress — skipping idle preview restart");
+      return;
+    }
     await _handleStreamStopped(2);
   } catch (err) {
     console.error("⚠️  Error in stream 'stopped' handler [Cam2] — service continuing:", err.message);
