@@ -3567,23 +3567,30 @@ server.listen(PORT, async () => {
     }
   }
 
-  // Initialize stream controller (auto-start if configured)
+  // Detect camera capture format FIRST so that streamController.initialize()
+  // (which may auto-start the stream) already has the correct format.
+  console.log("\n🚀 Activating camera and detecting capture format...");
+  try {
+    await camera.activateCamera();
+    cameraFormat = await camera.detectCaptureFormat(CAMERA_DEVICE);
+    streamController.captureFormat = cameraFormat;
+    console.log(`📹 Camera capture format detected: ${cameraFormat.toUpperCase()}`);
+  } catch (error) {
+    console.error("❌ Error detecting camera format:", error.message);
+    cameraFormat = "mjpeg"; // safe fallback
+    streamController.captureFormat = cameraFormat;
+  }
+
+  // Initialize stream controller (auto-start if configured) — format is now set
   try {
     await streamController.initialize();
   } catch (error) {
     console.error("❌ Error initializing stream controller:", error.message);
   }
 
-  // Start idle preview IMMEDIATELY — GStreamer's v4l2src does VIDIOC_STREAMON
-  // which warms up the camera. No separate ffmpeg warmup needed.
-  // The first few frames may be garbage but jpegparse will skip them gracefully.
-  console.log("\n🚀 Starting idle preview as first boot action...");
+  // Start idle preview — camera is already activated above
+  console.log("📹 Starting persistent idle preview...");
   try {
-    await camera.activateCamera();
-    cameraFormat = await camera.detectCaptureFormat(CAMERA_DEVICE);
-    streamController.captureFormat = cameraFormat;
-    console.log(`📹 Camera capture format detected: ${cameraFormat.toUpperCase()}`);
-    console.log("📹 Starting persistent idle preview...");
     await startPersistentIdlePreview();
     console.log("✅ Idle preview started — camera is active");
   } catch (error) {
