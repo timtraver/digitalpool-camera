@@ -352,8 +352,13 @@ def main():
             f'rtspsrc location={input_rtsp_url} latency=200 protocols=tcp '
             f'! decodebin {dec_name}'
             f'{dec_ref}! videoconvert '
-            f'! videoscale '
-            f'! video/x-raw,width={width},height={height} '
+            # Do NOT force width×height here: the RTSP camera delivers at its own
+            # native resolution (e.g. 1920×1080).  Forcing a scale to the configured
+            # stream resolution (e.g. 3840×2160) only to downscale again in the
+            # overlay compositor wastes CPU/GPU and adds 10+ seconds of startup
+            # latency that causes MediaMTX to drop the RTMP connection before the
+            # first frame arrives.  The overlay/encode pipeline already contains a
+            # videoscale to the correct output resolution.
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
         )
     elif capture_format == "yuyv":

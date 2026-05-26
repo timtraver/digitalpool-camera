@@ -2723,11 +2723,13 @@ function buildIdlePreviewGstArgs() {
   } else if (activeCameraSource.type === "rtsp" && activeCameraSource.rtspUrl) {
     console.log(`📡 Building RTSP idle preview pipeline for ${activeCameraSource.rtspUrl}`);
     gstArgs = [
-      "rtspsrc", `location=${activeCameraSource.rtspUrl}`, "latency=200", "protocols=tcp",
-      "caps=application/x-rtp,media=video",
-      "!", "decodebin",
-      // videoconvert immediately after decodebin: decodebin produces dynamic caps
-      // (NV12, I420, BGR, etc.) — videoconvert normalises to a fixed raw format.
+      // uridecodebin handles RTSP multi-stream (video+audio) gracefully:
+      // the caps filter limits output pads to decoded video only, so no
+      // dangling audio pad causes a NOT_LINKED fatal error.
+      "uridecodebin", `uri=${activeCameraSource.rtspUrl}`, "latency=200",
+      "caps=video/x-raw",
+      // videoconvert normalises the decoded caps (NV12, I420, BGR, etc.) to a
+      // fixed raw format before videoscale and videorate.
       "!", "videoconvert",
       "!", "videoscale",
       "!", "video/x-raw,width=1280,height=720",
