@@ -1532,6 +1532,8 @@ function getActiveSource(idx) { return idx === 2 ? activeCameraSource2 : activeC
 
 // List available V4L2 video capture devices
 app.get("/api/camera/devices", requireAuth, (req, res) => {
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  const current = getActiveSource(camIdx);
   try {
     const { execSync } = require("child_process");
     const raw = execSync("v4l2-ctl --list-devices 2>/dev/null || true").toString();
@@ -1551,9 +1553,9 @@ app.get("/api/camera/devices", requireAuth, (req, res) => {
         currentName = line.replace(/:$/, "").trim();
       }
     }
-    res.json({ success: true, devices, current: activeCameraSource });
+    res.json({ success: true, devices, current });
   } catch (e) {
-    res.json({ success: false, error: e.message, devices: [], current: activeCameraSource });
+    res.json({ success: false, error: e.message, devices: [], current });
   }
 });
 

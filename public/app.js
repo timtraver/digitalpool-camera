@@ -193,6 +193,10 @@ function switchCamera(newIdx) {
   socket.emit("getStartupPosition",   { cameraIndex: activeCamIndex });
   socket.emit("getStreamStatus",      { cameraIndex: activeCamIndex });
 
+  // Reload camera input panel (source type, USB device, RTSP URL, NDI name)
+  // for the new camera — reloadCameraInput is assigned by initCameraInput IIFE.
+  if (reloadCameraInput) reloadCameraInput();
+
   // Reload stream settings (protocol, bitrate, resolution, audio, flip, etc.)
   // from the server for the new camera. loadStreamConfig() reads activeCamIndex
   // so it must be called after the assignment above.
@@ -837,6 +841,10 @@ const flipHorizontalCheckbox = document.getElementById("flipHorizontal");
 const flipVerticalCheckbox   = document.getElementById("flipVertical");
 const panInvertedCheckbox    = document.getElementById("panInverted");
 
+// Exposed by the initCameraInput IIFE so switchCamera() can re-load device
+// list and current source for the newly-selected camera.
+let reloadCameraInput = null;
+
 // ── Camera Input section ──────────────────────────────────────────────────────
 (function initCameraInput() {
   const sourceTypeEl    = document.getElementById("cameraSourceType");
@@ -875,7 +883,7 @@ const panInvertedCheckbox    = document.getElementById("panInverted");
   async function loadDevices() {
     if (deviceSelect) deviceSelect.innerHTML = "<option>Scanning…</option>";
     try {
-      const r = await fetch("/api/camera/devices");
+      const r = await fetch(`/api/camera/devices?cam=${activeCamIndex}`);
       const data = await r.json();
       if (!deviceSelect) return;
       deviceSelect.innerHTML = "";
@@ -1083,6 +1091,9 @@ const panInvertedCheckbox    = document.getElementById("panInverted");
       }
     });
   }
+
+  // Expose loadDevices so switchCamera() can reload for the new camera.
+  reloadCameraInput = loadDevices;
 
   // Load video device list on page ready.
   // Audio devices are loaded on demand (refresh button) to avoid blocking startup.
