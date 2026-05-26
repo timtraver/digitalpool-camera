@@ -479,6 +479,8 @@ class StreamController extends EventEmitter {
         // arecord -l will fail fast if the device string is bogus, so we do a
         // quick existence check via arecord --duration=0 before spawning the
         // full ffmpeg pipeline.
+        // audioDevice === null signals "use silent fallback" (anullsrc).
+        let audioDeviceBusy = false;
         await new Promise((resolve) => {
           const check = spawn("arecord", ["-D", audioDevice, "--duration=0"], {
             stdio: ["ignore", "ignore", "pipe"],
@@ -486,14 +488,25 @@ class StreamController extends EventEmitter {
           let checkErr = "";
           check.stderr.on("data", (d) => { checkErr += d.toString(); });
           check.on("close", async (chkCode) => {
-            if (chkCode !== 0 && (checkErr.includes("No such file") || checkErr.includes("cannot open") || checkErr.includes("Invalid"))) {
-              console.warn(`⚠️  Audio device "${audioDevice}" not found — scanning for a valid capture device…`);
-              const detected = await this._detectAlsaCaptureDevice();
-              if (detected) {
-                console.log(`🎤 Auto-detected ALSA capture device: ${detected}`);
-                audioDevice = detected;
-              } else {
-                console.warn("⚠️  No ALSA capture device found — audio will be absent from this stream");
+            if (chkCode !== 0) {
+              const isBusy    = checkErr.includes("Device or resource busy") || checkErr.includes("resource busy");
+              const isMissing = checkErr.includes("No such file") || checkErr.includes("cannot open") || checkErr.includes("Invalid");
+              if (isBusy) {
+                // Device exists but is held by another process (e.g., the other camera).
+                // Fall back to a silent audio track so the stream still starts.
+                console.warn(`⚠️  [Cam${this.streamId}] Audio device "${audioDevice}" is busy — ` +
+                  `using silent audio fallback. To fix, go to Stream Settings → Audio ` +
+                  `and disable audio or select a different device.`);
+                audioDeviceBusy = true;
+              } else if (isMissing) {
+                console.warn(`⚠️  Audio device "${audioDevice}" not found — scanning for a valid capture device…`);
+                const detected = await this._detectAlsaCaptureDevice();
+                if (detected) {
+                  console.log(`🎤 Auto-detected ALSA capture device: ${detected}`);
+                  audioDevice = detected;
+                } else {
+                  console.warn("⚠️  No ALSA capture device found — audio will be absent from this stream");
+                }
               }
             }
             resolve();
@@ -512,17 +525,26 @@ class StreamController extends EventEmitter {
         //   Positive offset → delay audio timestamps  (audio was leading video).
         // Both streams use wall-clock timestamps so this offset is applied ONCE
         // at start and does not accumulate over time.
+        //
+        // When the audio device is busy (held by the other camera), use lavfi
+        // anullsrc to generate a silent audio track so the stream still starts.
         const audioOffsetSec = (this.streamConfig.audioOffset || 0) / 1000;
-        const ffmpegAudioArgs = [
-          "-loglevel", "warning",
-          "-use_wallclock_as_timestamps", "1",
-          ...(audioOffsetSec !== 0 ? ["-itsoffset", String(audioOffsetSec)] : []),
-          "-f", "alsa",
-          "-ar", "48000",
-          "-ac", "2",
-          "-thread_queue_size", "4096",
-          "-i", audioDevice,
-        ];
+        const ffmpegAudioArgs = audioDeviceBusy
+          ? [
+            "-loglevel", "warning",
+            "-f", "lavfi",
+            "-i", "anullsrc=sample_rate=48000:channel_layout=stereo",
+          ]
+          : [
+            "-loglevel", "warning",
+            "-use_wallclock_as_timestamps", "1",
+            ...(audioOffsetSec !== 0 ? ["-itsoffset", String(audioOffsetSec)] : []),
+            "-f", "alsa",
+            "-ar", "48000",
+            "-ac", "2",
+            "-thread_queue_size", "4096",
+            "-i", audioDevice,
+          ];
 
         // ── Part 2: Output args (built now) ─────────────────────────────────
         const ffmpegOutputArgs = [
@@ -675,13 +697,23 @@ class StreamController extends EventEmitter {
               if (ffmpegStderrBuf.includes("cannot open audio device") ||
                   ffmpegStderrBuf.includes("No such file or directory") ||
                   ffmpegStderrBuf.includes("Error opening input")) {
+                const isBusy = ffmpegStderrBuf.includes("Device or resource busy") ||
+                               ffmpegStderrBuf.includes("resource busy");
                 const devMatch = ffmpegStderrBuf.match(/cannot open audio device (\S+)/);
                 const badDev = devMatch ? devMatch[1] : (this.streamConfig.audioDevice || "plughw:2,0");
-                reason =
-                  `❌ Audio device "${badDev}" not found.\n` +
-                  `Go to Stream Settings → Audio and either:\n` +
-                  `  • Disable audio, or\n` +
-                  `  • Enter the correct ALSA device (run "aplay -l" on the device to list cards)`;
+                if (isBusy) {
+                  reason =
+                    `❌ Audio device "${badDev}" is in use by another stream.\n` +
+                    `Go to Stream Settings → Audio and either:\n` +
+                    `  • Disable audio for this camera, or\n` +
+                    `  • Connect a second USB audio device and select it here`;
+                } else {
+                  reason =
+                    `❌ Audio device "${badDev}" not found.\n` +
+                    `Go to Stream Settings → Audio and either:\n` +
+                    `  • Disable audio, or\n` +
+                    `  • Enter the correct ALSA device (run "aplay -l" on the device to list cards)`;
+                }
               }
 
               console.error(`❌ ffmpeg failed: ${reason}`);
