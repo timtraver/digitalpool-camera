@@ -193,7 +193,14 @@ function switchCamera(newIdx) {
   socket.emit("getStartupPosition",   { cameraIndex: activeCamIndex });
   socket.emit("getStreamStatus",      { cameraIndex: activeCamIndex });
 
+  // Reload stream settings (protocol, bitrate, resolution, audio, flip, etc.)
+  // from the server for the new camera. loadStreamConfig() reads activeCamIndex
+  // so it must be called after the assignment above.
+  loadStreamConfig();
+
   // Refresh the connection info box for the correct camera's paths/ports
+  // (loadStreamConfig also calls this after the fetch, but update immediately
+  // so the URL box doesn't lag behind while the request is in-flight)
   updateConnectionInfo(streamProtocol.value, deviceLocalIP);
 
   // Refresh the idle preview to the correct camera
