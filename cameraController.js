@@ -664,18 +664,21 @@ class CameraController {
   }
 
   /**
-   * Pan the camera (relative movement)
-   * @param {number} degrees - Degrees to pan (positive = right, negative = left)
+   * Pan the camera by a number of minimum hardware steps.
+   * @param {number} steps - Integer steps to move (positive = right, negative = left).
+   *                         1 step = hwCtrl.step hardware units — the smallest move
+   *                         the motor supports.  The old degrees×3600 conversion is
+   *                         gone; working in raw steps is camera-agnostic.
    */
-  async pan(degrees) {
-    // Use tracked position — camera doesn't report pan reliably.
-    // Use discovered hardware range if available, fall back to static OBSBot range.
+  async pan(steps) {
     const hwControls = this.discoveredControls || this.controls;
     const panCtrl = hwControls.pan_absolute || this.controls.pan_absolute;
-    const newValue = this.currentPan + degrees * 3600;
+    const hwStep = panCtrl.step || 3600; // hardware units per minimum step
+    const delta = steps * hwStep;
+    const newValue = this.currentPan + delta;
     const clampedValue = Math.max(panCtrl.min, Math.min(panCtrl.max, newValue));
     console.log(
-      `🔄 Pan: current=${this.currentPan}, degrees=${degrees}, new=${newValue}, clamped=${clampedValue}`,
+      `🔄 Pan: current=${this.currentPan}, steps=${steps}, hwStep=${hwStep}, delta=${delta}, clamped=${clampedValue}`,
     );
 
     const result = await this.setControl("pan_absolute", clampedValue);
@@ -687,18 +690,18 @@ class CameraController {
   }
 
   /**
-   * Tilt the camera (relative movement)
-   * @param {number} degrees - Degrees to tilt (positive = up, negative = down)
+   * Tilt the camera by a number of minimum hardware steps.
+   * @param {number} steps - Integer steps to move (positive = up, negative = down).
    */
-  async tilt(degrees) {
-    // Use tracked position — camera doesn't report tilt reliably.
-    // Use discovered hardware range if available, fall back to static OBSBot range.
+  async tilt(steps) {
     const hwControls = this.discoveredControls || this.controls;
     const tiltCtrl = hwControls.tilt_absolute || this.controls.tilt_absolute;
-    const newValue = this.currentTilt + degrees * 3600;
+    const hwStep = tiltCtrl.step || 3600;
+    const delta = steps * hwStep;
+    const newValue = this.currentTilt + delta;
     const clampedValue = Math.max(tiltCtrl.min, Math.min(tiltCtrl.max, newValue));
     console.log(
-      `🔄 Tilt: current=${this.currentTilt}, degrees=${degrees}, new=${newValue}, clamped=${clampedValue}`,
+      `🔄 Tilt: current=${this.currentTilt}, steps=${steps}, hwStep=${hwStep}, delta=${delta}, clamped=${clampedValue}`,
     );
 
     const result = await this.setControl("tilt_absolute", clampedValue);

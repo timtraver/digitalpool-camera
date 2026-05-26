@@ -230,23 +230,24 @@ socket.on("cameraConfig", (data) => {
       applyControlAvailability(data.supportedControls);
     }
 
-    // Update PTZ step sizes to match this camera's actual hardware range.
-    // ptzRanges contains { pan_absolute: {min, max}, tilt_absolute: {min, max} }
-    // from the server's discoveredControls.  3600 hardware units = 1 degree.
+    // Update PTZ hardware state for percentage/step calculations.
+    // ptzRanges: { pan_absolute: {min, max, step}, tilt_absolute: {min, max, step} }
+    // All values are raw hardware units — no degree conversion needed.
     if (data.ptzRanges) {
       if (data.ptzRanges.pan_absolute) {
-        const { min, max } = data.ptzRanges.pan_absolute;
-        _panRangeDeg = (max - min) / 3600;
+        const { min, max, step } = data.ptzRanges.pan_absolute;
+        _panHwStep  = step || 3600;
+        _panHwRange = max - min;
       }
       if (data.ptzRanges.tilt_absolute) {
-        const { min, max } = data.ptzRanges.tilt_absolute;
-        _tiltRangeDeg = (max - min) / 3600;
+        const { min, max, step } = data.ptzRanges.tilt_absolute;
+        _tiltHwStep  = step || 3600;
+        _tiltHwRange = max - min;
       }
       console.log(
-        `📐 PTZ ranges updated: pan=${_panRangeDeg.toFixed(1)}° total, ` +
-        `tilt=${_tiltRangeDeg.toFixed(1)}° total | ` +
-        `small step: pan=${panStep(PTZ_SMALL_PCT).toFixed(2)}°, tilt=${tiltStep(PTZ_SMALL_PCT).toFixed(2)}° | ` +
-        `large step: pan=${panStep(PTZ_LARGE_PCT).toFixed(2)}°, tilt=${tiltStep(PTZ_LARGE_PCT).toFixed(2)}°`
+        `📐 PTZ hw state updated — ` +
+        `pan: range=${_panHwRange} units, step=${_panHwStep} units, large=${panLargeSteps()} steps | ` +
+        `tilt: range=${_tiltHwRange} units, step=${_tiltHwStep} units, large=${tiltLargeSteps()} steps`
       );
     }
   }
@@ -268,29 +269,30 @@ socket.on("cameraConfigReset", (data) => {
 
 // ── Pan/Tilt/Zoom Controls ────────────────────────────────────────────────────
 //
-// Step sizes are computed as a PERCENTAGE of the camera's full hardware range
-// rather than a fixed degree value.  This ensures the buttons feel equally
-// responsive on any camera regardless of its actual physical range.
+// All movement is expressed in RAW HARDWARE STEPS — the integer multiple of the
+// camera's minimum step unit — so nothing is lost to degree conversion rounding.
 //
-//   PTZ_SMALL_PCT  →  inner ring buttons / un-shifted keyboard arrows
-//   PTZ_LARGE_PCT  →  outer ring buttons / Shift+arrow keys
+//   Inner ring / Arrow key      → 1 step  (the motor's physical minimum)
+//   Outer ring / Shift+Arrow    → PTZ_LARGE_PCT % of the full travel, in steps
 //
-// The actual degree values are resolved at the moment each command fires, so
-// they automatically pick up the latest range whenever ptzRanges arrives from
-// the server after a getCameraConfig call.
-const PTZ_SMALL_PCT = 1; // % of full pan/tilt range per small step
-const PTZ_LARGE_PCT = 5; // % of full pan/tilt range per large step
+// The server's pan(steps) and tilt(steps) methods multiply by hwCtrl.step to
+// get the actual hardware unit delta, then clamp to [min, max].
+const PTZ_LARGE_PCT = 5; // % of full travel per outer-ring / Shift+arrow press
 
-// Live hardware ranges in degrees — updated from ptzRanges in the cameraConfig
-// socket event.  Defaults are based on the OBSBot Tiny 2 Lite hardware limits
-// (pan ±468 000 units = 260°, tilt ±324 000 units = 180°, 3600 units/°).
-let _panRangeDeg  = 260;
-let _tiltRangeDeg = 180;
+// Live hardware state — updated from ptzRanges in the cameraConfig socket event.
+// Defaults are for the OBSBot Tiny 2 Lite: step=3600 units, range ±468000/±324000.
+let _panHwStep   = 3600;   // minimum hardware units per pan step
+let _tiltHwStep  = 3600;   // minimum hardware units per tilt step
+let _panHwRange  = 936000; // total pan travel in hardware units (max − min)
+let _tiltHwRange = 648000; // total tilt travel in hardware units (max − min)
 
-/** Degrees per step for a given percentage of the pan range (always positive). */
-const panStep  = (pct) => _panRangeDeg  * pct / 100;
-/** Degrees per step for a given percentage of the tilt range (always positive). */
-const tiltStep = (pct) => _tiltRangeDeg * pct / 100;
+/** Steps for the inner ring (always 1 — the hardware minimum). */
+const panSmallSteps  = () => 1;
+const tiltSmallSteps = () => 1;
+
+/** Steps for the outer ring (PTZ_LARGE_PCT of full travel, minimum 1). */
+const panLargeSteps  = () => Math.max(1, Math.round(_panHwRange  * PTZ_LARGE_PCT / 100 / _panHwStep));
+const tiltLargeSteps = () => Math.max(1, Math.round(_tiltHwRange * PTZ_LARGE_PCT / 100 / _tiltHwStep));
 
 // ── Hold-to-repeat timing ─────────────────────────────────────────────────────
 // After PTZ_REPEAT_DELAY ms of holding, a command fires every PTZ_REPEAT_INTERVAL ms.
@@ -314,21 +316,21 @@ function _clearPTZTimers() {
  *   • Holding fires once immediately, then repeats every PTZ_REPEAT_INTERVAL ms
  *     after an initial PTZ_REPEAT_DELAY ms pause.
  *
- * @param {string}          id         Element id
- * @param {string}          evt        Socket event ('pan' or 'tilt')
- * @param {()=>number}      getDegrees Getter returning signed degrees per step —
- *                                     called at fire-time so it always reflects the
- *                                     current hardware range.
- * @param {string}          label      Log label
+ * @param {string}       id        Element id
+ * @param {string}       evt       Socket event ('pan' or 'tilt')
+ * @param {()=>number}   getSteps  Getter returning signed integer step count —
+ *                                 evaluated at fire-time so it always reflects the
+ *                                 current hardware range.
+ * @param {string}       label     Log label
  */
-function makePTZButton(id, evt, getDegrees, label) {
+function makePTZButton(id, evt, getSteps, label) {
   const el = document.getElementById(id);
   if (!el) return;
 
   function fire() {
-    const degrees = getDegrees();
-    console.log(`${label}: ${degrees.toFixed(2)}°`);
-    socket.emit(evt, { degrees });
+    const steps = getSteps();
+    console.log(`${label}: ${steps} hw step(s)`);
+    socket.emit(evt, { steps });
   }
 
   function startRepeat() {
@@ -351,17 +353,17 @@ function makePTZButton(id, evt, getDegrees, label) {
   el.addEventListener("touchcancel", _clearPTZTimers);
 }
 
-// Inner ring — small step (PTZ_SMALL_PCT % of hardware range)
-makePTZButton("panLeftSmall",  "pan",  () =>  panStep(PTZ_SMALL_PCT),  "🔵 Pan Left (Small)");
-makePTZButton("panRightSmall", "pan",  () => -panStep(PTZ_SMALL_PCT),  "🔵 Pan Right (Small)");
-makePTZButton("tiltUpSmall",   "tilt", () =>  tiltStep(PTZ_SMALL_PCT), "🔵 Tilt Up (Small)");
-makePTZButton("tiltDownSmall", "tilt", () => -tiltStep(PTZ_SMALL_PCT), "🔵 Tilt Down (Small)");
+// Inner ring — 1 hardware step (the motor's physical minimum, full resolution)
+makePTZButton("panLeftSmall",  "pan",  () =>  panSmallSteps(),  "🔵 Pan Left");
+makePTZButton("panRightSmall", "pan",  () => -panSmallSteps(),  "🔵 Pan Right");
+makePTZButton("tiltUpSmall",   "tilt", () =>  tiltSmallSteps(), "🔵 Tilt Up");
+makePTZButton("tiltDownSmall", "tilt", () => -tiltSmallSteps(), "🔵 Tilt Down");
 
-// Outer ring — large step (PTZ_LARGE_PCT % of hardware range)
-makePTZButton("panLeftLarge",  "pan",  () =>  panStep(PTZ_LARGE_PCT),  "🔷 Pan Left (Large)");
-makePTZButton("panRightLarge", "pan",  () => -panStep(PTZ_LARGE_PCT),  "🔷 Pan Right (Large)");
-makePTZButton("tiltUpLarge",   "tilt", () =>  tiltStep(PTZ_LARGE_PCT), "🔷 Tilt Up (Large)");
-makePTZButton("tiltDownLarge", "tilt", () => -tiltStep(PTZ_LARGE_PCT), "🔷 Tilt Down (Large)");
+// Outer ring — PTZ_LARGE_PCT % of the full travel, in steps
+makePTZButton("panLeftLarge",  "pan",  () =>  panLargeSteps(),  "🔷 Pan Left (large)");
+makePTZButton("panRightLarge", "pan",  () => -panLargeSteps(),  "🔷 Pan Right (large)");
+makePTZButton("tiltUpLarge",   "tilt", () =>  tiltLargeSteps(), "🔷 Tilt Up (large)");
+makePTZButton("tiltDownLarge", "tilt", () => -tiltLargeSteps(), "🔷 Tilt Down (large)");
 
 // Center reset button
 document.getElementById("resetPos").addEventListener("click", () => {
@@ -1009,18 +1011,17 @@ document.addEventListener("keydown", (e) => {
   if (_heldKeys.has(e.key)) return;
   _heldKeys.add(e.key);
 
-  // Use the same percentage-based step sizes as the buttons.
-  // Shift = large step (outer-ring equivalent), no Shift = small step (inner-ring).
-  const pct = e.shiftKey ? PTZ_LARGE_PCT : PTZ_SMALL_PCT;
-  let evt, getDegrees;
+  // Arrow = 1 hardware step (inner-ring equivalent, full resolution).
+  // Shift+Arrow = large step (outer-ring equivalent, fast sweep).
+  let evt, getSteps;
   switch (e.key) {
-    case "ArrowLeft":  evt = "pan";  getDegrees = () =>  panStep(pct);  break;
-    case "ArrowRight": evt = "pan";  getDegrees = () => -panStep(pct);  break;
-    case "ArrowUp":    evt = "tilt"; getDegrees = () =>  tiltStep(pct); break;
-    case "ArrowDown":  evt = "tilt"; getDegrees = () => -tiltStep(pct); break;
+    case "ArrowLeft":  evt = "pan";  getSteps = e.shiftKey ? () =>  panLargeSteps()  : () =>  panSmallSteps();  break;
+    case "ArrowRight": evt = "pan";  getSteps = e.shiftKey ? () => -panLargeSteps()  : () => -panSmallSteps();  break;
+    case "ArrowUp":    evt = "tilt"; getSteps = e.shiftKey ? () =>  tiltLargeSteps() : () =>  tiltSmallSteps(); break;
+    case "ArrowDown":  evt = "tilt"; getSteps = e.shiftKey ? () => -tiltLargeSteps() : () => -tiltSmallSteps(); break;
   }
 
-  function fire() { socket.emit(evt, { degrees: getDegrees() }); }
+  function fire() { socket.emit(evt, { steps: getSteps() }); }
 
   _clearKeyTimers();
   fire(); // immediate first step

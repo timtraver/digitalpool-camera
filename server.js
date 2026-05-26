@@ -3139,20 +3139,20 @@ io.on("connection", (socket) => {
   });
 
   socket.on("pan", async (data) => {
-    const { degrees } = data;
+    const { steps } = data;
     // Respect panInverted flag — some cameras (e.g. Minrray) have the pan
     // motor wired opposite to the OBSBot convention used by the UI buttons.
     const panInverted = streamController.streamConfig?.panInverted || false;
-    const effectiveDegrees = panInverted ? -degrees : degrees;
-    console.log(`📡 Client ${socket.id} sent pan: ${degrees} degrees${panInverted ? ' (inverted → ' + effectiveDegrees + ')' : ''}`);
-    const result = await camera.pan(effectiveDegrees);
+    const effectiveSteps = panInverted ? -steps : steps;
+    console.log(`📡 Client ${socket.id} sent pan: ${steps} steps${panInverted ? ' (inverted → ' + effectiveSteps + ')' : ''}`);
+    const result = await camera.pan(effectiveSteps);
     socket.emit("controlResult", result);
   });
 
   socket.on("tilt", async (data) => {
-    const { degrees } = data;
-    console.log(`📡 Client ${socket.id} sent tilt: ${degrees} degrees`);
-    const result = await camera.tilt(degrees);
+    const { steps } = data;
+    console.log(`📡 Client ${socket.id} sent tilt: ${steps} steps`);
+    const result = await camera.tilt(steps);
     socket.emit("controlResult", result);
   });
 
