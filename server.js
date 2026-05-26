@@ -2724,6 +2724,7 @@ function buildIdlePreviewGstArgs() {
     console.log(`📡 Building RTSP idle preview pipeline for ${activeCameraSource.rtspUrl}`);
     gstArgs = [
       "rtspsrc", `location=${activeCameraSource.rtspUrl}`, "latency=200", "protocols=tcp",
+      "caps=application/x-rtp,media=video",
       "!", "decodebin",
       // videoconvert immediately after decodebin: decodebin produces dynamic caps
       // (NV12, I420, BGR, etc.) — videoconvert normalises to a fixed raw format.
