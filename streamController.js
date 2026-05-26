@@ -271,12 +271,11 @@ class StreamController extends EventEmitter {
         console.log("🧹 Cleaned old HLS segments");
       }
 
-      // Wait for the device and port to be released.
-      // gst-launch (idle preview) receives SIGTERM above but the kernel v4l2
-      // device file descriptor isn't guaranteed to close within 1 s on Rockchip.
-      // 2 s is enough headroom to avoid "Device or resource busy" on first start.
+      // Short buffer after _killCameraProcesses() confirms the device is free.
+      // The poll loop inside _killCameraProcesses() already waits for the kernel
+      // to release the v4l2 device, so only a small grace period is needed here.
       console.log("⏳ Waiting for resources to be released...");
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 500));
 
       // Emit "preparing" event so graphics overlay can initialize before GStreamer starts
       // Wait for the event handlers to complete (they may be async)
@@ -789,7 +788,15 @@ class StreamController extends EventEmitter {
   }
 
   /**
-   * Kill any processes using the camera device
+   * Kill any processes holding the camera device open, then poll until the
+   * kernel confirms the device is free.
+   *
+   * Strategy:
+   *   1. `fuser -k` sends SIGKILL to every process that has the device open.
+   *      SIGKILL is immediate — no graceful-shutdown delay — which is what we
+   *      need to avoid the "S_FMT busy" error that SIGTERM causes on Rockchip.
+   *   2. Poll `fuser` every 300 ms (up to 3 s) to confirm the device is free
+   *      before returning.  This replaces the old fixed 2-second sleep.
    */
   async _killCameraProcesses() {
     const { exec } = require("child_process");
@@ -797,84 +804,47 @@ class StreamController extends EventEmitter {
     const execPromise = util.promisify(exec);
 
     try {
-      // Try multiple methods to find and kill processes using the camera
+      // SIGKILL every process that currently has the camera device open.
+      // fuser -k sends SIGKILL by default; || true suppresses exit-code 1
+      // when no processes are found.
+      console.log(`🔪 Killing all processes using ${this.cameraDevice}...`);
+      await execPromise(`sudo fuser -k ${this.cameraDevice} 2>/dev/null || true`);
 
-      // Method 1: Use fuser (most reliable for device files)
+      // Fallback: also kill any gst-launch / ffmpeg / python3 (overlay script)
+      // processes that may not have the device open yet but are starting up.
       try {
-        const { stdout: fuserOut } = await execPromise(
-          `sudo fuser ${this.cameraDevice} 2>&1 || true`,
+        await execPromise(
+          `ps aux | grep -E '(gst-launch|gst-overlay-pipeline|png-overlay-helper)' | grep -v grep | awk '{print $2}' | xargs -r sudo kill -9 2>/dev/null || true`
         );
-        if (fuserOut.trim()) {
-          console.log("fuser output:", fuserOut);
-          // Extract PIDs (fuser outputs like "/dev/video0: 1234 5678")
-          const match = fuserOut.match(/:\s*(.+)/);
-          if (match) {
-            const pids = match[1].trim().split(/\s+/);
-            for (const pid of pids) {
-              if (pid && !isNaN(pid) && parseInt(pid) !== process.pid) {
-                console.log(`Killing process ${pid} (found by fuser)...`);
-                try {
-                  await execPromise(`sudo kill -TERM ${pid}`);
-                } catch (err) {
-                  console.log(`Could not kill process ${pid}:`, err.message);
-                }
-              }
-            }
+      } catch (_) { /* ignore */ }
+
+      // Poll until fuser reports no PIDs using the device (max 3 s, 300 ms steps).
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        try {
+          const { stdout } = await execPromise(
+            `sudo fuser ${this.cameraDevice} 2>/dev/null || true`
+          );
+          // fuser prints nothing (or only the device name) when the device is free.
+          const pids = stdout.replace(this.cameraDevice, "").trim();
+          if (!pids || !/\d/.test(pids)) {
+            console.log("✅ Camera device is free");
+            return;
           }
+          console.log(`⏳ Waiting for camera device to be released (still held by: ${pids})`);
+        } catch (_) {
+          break; // fuser not available — fall through to fixed wait
         }
-      } catch (err) {
-        console.log("fuser not available or failed:", err.message);
       }
 
-      // Method 2: Kill all GStreamer and ffmpeg processes using the camera (fallback)
-      try {
-        const { stdout: psOut } = await execPromise(
-          `ps aux | grep -E '(ffmpeg|gst-launch|gst-launch-1.0)' | grep -v grep || true`,
-        );
-        if (psOut.trim()) {
-          console.log("Found media processes:", psOut);
-          const lines = psOut.trim().split("\n");
-          for (const line of lines) {
-            const parts = line.trim().split(/\s+/);
-            if (parts.length > 1) {
-              const pid = parts[1];
-              // Don't kill our own process
-              if (parseInt(pid) !== process.pid) {
-                console.log(`Killing media process ${pid}...`);
-                try {
-                  process.kill(parseInt(pid), "SIGTERM");
-                } catch (err) {
-                  console.log(`Could not kill process ${pid}:`, err.message);
-                }
-              }
-            }
-          }
-        }
-      } catch (err) {
-        console.log("Could not find media processes:", err.message);
-      }
-
-      // Verify the device is actually free now
+      // If we reach here the device is still busy; last-ditch SIGKILL + short wait.
+      console.log("⚠️  Camera still busy after 3 s — forcing release");
+      await execPromise(`sudo fuser -k ${this.cameraDevice} 2>/dev/null || true`);
       await new Promise((resolve) => setTimeout(resolve, 500));
-      try {
-        const { stdout: verifyOut } = await execPromise(
-          `sudo fuser ${this.cameraDevice} 2>&1 || true`,
-        );
-        const stillBusy = verifyOut.trim() && /\d/.test(verifyOut);
-        if (stillBusy) {
-          console.log(`⚠️  Camera still busy after cleanup: ${verifyOut.trim()}`);
-          // Force kill remaining processes
-          await execPromise(`sudo fuser -k ${this.cameraDevice} 2>/dev/null || true`);
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-          console.log("🔪 Force-killed remaining camera processes");
-        }
-      } catch (err) {
-        // ignore
-      }
-
-      console.log("Finished checking for camera processes");
+      console.log("✅ Camera resources cleaned up (forced)");
     } catch (error) {
-      console.log("Error checking for camera processes:", error.message);
+      console.log("Error cleaning up camera processes:", error.message);
     }
   }
 
