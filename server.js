@@ -2689,22 +2689,29 @@ function buildIdlePreviewGstArgs() {
       // videoconvert doesn't list YUYV in its static sink pad template, so an
       // explicit format=YUYV constraint fails at parse time.  Without it,
       // GStreamer negotiates the format at runtime and the link succeeds.
+      // Capture at native 720p directly from the camera — no videoscale needed.
+      // Many YUYV-only cameras (e.g. Minrray) have a true 720p sensor that is
+      // upscaled to 1080p inside the camera firmware.  Requesting 1920×1080 and
+      // then scaling back down in the pipeline causes double-scaling artifacts
+      // and blurring.  Capturing at 1280×720 gives the cleanest possible output
+      // from the sensor and matches the overlay/preview target resolution exactly.
       gstArgs = [
         "v4l2src",
         `device=${device}`,
         "do-timestamp=true",
         "!",
-        // Keep native resolution — no videoscale.  The tail encodes at full
-        // config resolution so the admin preview is sharp.
-        `video/x-raw,width=${config.width || 1920},height=${config.height || 1080},framerate=${config.framerate || 30}/1`,
+        "video/x-raw,width=1280,height=720,framerate=30/1",  // native 720p from sensor
         "!",
-        "videorate",
+        "videoconvert",        // YUYV → NV12
         "!",
-        `video/x-raw,framerate=15/1`,
+        "video/x-raw,format=NV12",
         "!",
-        // No trailing videoconvert here — the shared tail starts with
-        // videoconvert→NV12, so adding one here creates a redundant double-
-        // conversion that wastes CPU and can degrade quality.
+        "videorate",           // 30fps → 15fps
+        "!",
+        "video/x-raw,framerate=15/1",
+        "!",
+        // No trailing videoconvert — tail's videoconvert→NV12 is a no-op here
+        // since we're already NV12, which is what mpph264enc needs.
       ];
     } else {
       // MJPEG camera (default): hardware JPEG decode via mppjpegdec
@@ -2717,12 +2724,15 @@ function buildIdlePreviewGstArgs() {
         "!",
         "jpegparse",
         "!",
-        "mppjpegdec",
+        "mppjpegdec",          // Hardware JPEG decode → NV12 at full resolution
         "!",
-        // Keep native resolution — no videoscale.
-        "videorate",
+        "videoscale",          // NV12 1920×1080 → NV12 1280×720
         "!",
-        `video/x-raw,framerate=15/1`,
+        "video/x-raw,width=1280,height=720",
+        "!",
+        "videorate",           // 30fps → 15fps
+        "!",
+        "video/x-raw,framerate=15/1",
         "!",
         "videoconvert",
         "!",
@@ -2859,7 +2869,7 @@ function buildIdlePreviewGstArgs() {
     "!",
     "video/x-raw,format=NV12",
     "!",
-    "mpph264enc", "bps=4000000", "header-mode=each-idr", "gop=15",
+    "mpph264enc", "bps=2000000", "header-mode=each-idr", "gop=15",
     "!",
     "h264parse", "config-interval=-1",
     "!",
