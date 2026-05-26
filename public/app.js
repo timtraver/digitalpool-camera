@@ -352,7 +352,9 @@ function makePTZButton(id, evt, getSteps, label, getMaxSteps = null) {
   function currentSteps() {
     if (!getMaxSteps) return getSteps(); // outer ring: always constant
     const sign = getSteps() < 0 ? -1 : 1;
-    return sign * ptzAccelSteps(_tick, getMaxSteps());
+    // Math.abs — getMaxSteps() may be negative for right/down buttons;
+    // the sign is already applied above, so the ceiling must be positive.
+    return sign * ptzAccelSteps(_tick, Math.abs(getMaxSteps()));
   }
 
   function fire() {
