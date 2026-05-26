@@ -668,16 +668,12 @@ class CameraController {
    * @param {number} degrees - Degrees to pan (positive = right, negative = left)
    */
   async pan(degrees) {
-    // Use tracked position instead of querying camera (camera doesn't report reliably)
-    // Camera uses step of 3600 units. Based on range (-468000 to 468000),
-    // this represents 260 degrees total range (130 degrees each direction).
-    // So 3600 units per degree
+    // Use tracked position — camera doesn't report pan reliably.
+    // Use discovered hardware range if available, fall back to static OBSBot range.
+    const hwControls = this.discoveredControls || this.controls;
+    const panCtrl = hwControls.pan_absolute || this.controls.pan_absolute;
     const newValue = this.currentPan + degrees * 3600;
-    // Clamp to valid range
-    const clampedValue = Math.max(
-      this.controls.pan_absolute.min,
-      Math.min(this.controls.pan_absolute.max, newValue),
-    );
+    const clampedValue = Math.max(panCtrl.min, Math.min(panCtrl.max, newValue));
     console.log(
       `🔄 Pan: current=${this.currentPan}, degrees=${degrees}, new=${newValue}, clamped=${clampedValue}`,
     );
@@ -695,16 +691,12 @@ class CameraController {
    * @param {number} degrees - Degrees to tilt (positive = up, negative = down)
    */
   async tilt(degrees) {
-    // Use tracked position instead of querying camera (camera doesn't report reliably)
-    // Camera uses step of 3600 units. Based on range (-324000 to 324000),
-    // this represents 180 degrees total range (90 degrees each direction).
-    // So 3600 units per degree
+    // Use tracked position — camera doesn't report tilt reliably.
+    // Use discovered hardware range if available, fall back to static OBSBot range.
+    const hwControls = this.discoveredControls || this.controls;
+    const tiltCtrl = hwControls.tilt_absolute || this.controls.tilt_absolute;
     const newValue = this.currentTilt + degrees * 3600;
-    // Clamp to valid range
-    const clampedValue = Math.max(
-      this.controls.tilt_absolute.min,
-      Math.min(this.controls.tilt_absolute.max, newValue),
-    );
+    const clampedValue = Math.max(tiltCtrl.min, Math.min(tiltCtrl.max, newValue));
     console.log(
       `🔄 Tilt: current=${this.currentTilt}, degrees=${degrees}, new=${newValue}, clamped=${clampedValue}`,
     );

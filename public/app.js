@@ -576,6 +576,7 @@ const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
 // Video orientation flip checkboxes
 const flipHorizontalCheckbox = document.getElementById("flipHorizontal");
 const flipVerticalCheckbox   = document.getElementById("flipVertical");
+const panInvertedCheckbox    = document.getElementById("panInverted");
 
 // ── Camera Input section ──────────────────────────────────────────────────────
 (function initCameraInput() {
@@ -3068,6 +3069,7 @@ async function loadStreamConfig() {
       // Restore video orientation (flip) settings
       if (flipHorizontalCheckbox) flipHorizontalCheckbox.checked = data.config.flipHorizontal || false;
       if (flipVerticalCheckbox)   flipVerticalCheckbox.checked   = data.config.flipVertical   || false;
+      if (panInvertedCheckbox)    panInvertedCheckbox.checked    = data.config.panInverted    || false;
 
       // Apply fps constraints implied by current resolution, then refresh
       // capability info so unsupported resolutions get greyed out.
@@ -3086,6 +3088,7 @@ async function loadStreamConfig() {
 async function saveFlipConfig() {
   const flipHorizontal = flipHorizontalCheckbox ? flipHorizontalCheckbox.checked : false;
   const flipVertical   = flipVerticalCheckbox   ? flipVerticalCheckbox.checked   : false;
+  const panInverted    = panInvertedCheckbox    ? panInvertedCheckbox.checked    : false;
 
   // Show progress feedback immediately — before the network round-trip.
   const previewStatus = document.getElementById("overlayPreviewStatus");
@@ -3098,7 +3101,7 @@ async function saveFlipConfig() {
     const resp = await fetch("/api/stream/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ flipHorizontal, flipVertical }),
+      body: JSON.stringify({ flipHorizontal, flipVertical, panInverted }),
     });
     const result = await resp.json();
     console.log(`🔄 Flip config saved — H=${flipHorizontal} V=${flipVertical}`);
@@ -3132,9 +3135,10 @@ async function saveFlipConfig() {
   }
 }
 
-// Wire flip checkbox change events
+// Wire flip / pan-invert checkbox change events
 if (flipHorizontalCheckbox) flipHorizontalCheckbox.addEventListener("change", saveFlipConfig);
 if (flipVerticalCheckbox)   flipVerticalCheckbox.addEventListener("change", saveFlipConfig);
+if (panInvertedCheckbox)    panInvertedCheckbox.addEventListener("change", saveFlipConfig);
 
 // Disable a custom-dropdown option (both the underlying <option> and its
 // rendered .custom-dropdown-option div). When the currently-selected value

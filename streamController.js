@@ -110,6 +110,7 @@ class StreamController extends EventEmitter {
       // Video orientation (for upside-down or mirrored camera mounting)
       flipHorizontal: false, // Mirror video left-to-right
       flipVertical: false,   // Flip video upside-down
+      panInverted: false,    // Invert pan direction (some cameras have reversed motor polarity)
       // YouTube Live settings
       youtubeStreamKey: "", // YouTube stream key (stored locally, used to build RTMP destination)
     };
