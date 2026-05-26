@@ -272,12 +272,13 @@ socket.on("cameraConfigReset", (data) => {
 // All movement is expressed in RAW HARDWARE STEPS — the integer multiple of the
 // camera's minimum step unit — so nothing is lost to degree conversion rounding.
 //
-//   Inner ring / Arrow key      → 1 step  (the motor's physical minimum)
+//   Inner ring / Arrow key      → 1 step up to PTZ_ACCEL_PCT % of full travel
 //   Outer ring / Shift+Arrow    → PTZ_LARGE_PCT % of the full travel, in steps
 //
 // The server's pan(steps) and tilt(steps) methods multiply by hwCtrl.step to
 // get the actual hardware unit delta, then clamp to [min, max].
 const PTZ_LARGE_PCT = 5; // % of full travel per outer-ring / Shift+arrow press
+const PTZ_ACCEL_PCT = 1; // % of full travel — acceleration ceiling for inner-ring / Arrow key
 
 // Live hardware state — updated from ptzRanges in the cameraConfig socket event.
 // Defaults are for the OBSBot Tiny 2 Lite: step=3600 units, range ±468000/±324000.
@@ -293,6 +294,11 @@ const tiltSmallSteps = () => 1;
 /** Steps for the outer ring (PTZ_LARGE_PCT of full travel, minimum 1). */
 const panLargeSteps  = () => Math.max(1, Math.round(_panHwRange  * PTZ_LARGE_PCT / 100 / _panHwStep));
 const tiltLargeSteps = () => Math.max(1, Math.round(_tiltHwRange * PTZ_LARGE_PCT / 100 / _tiltHwStep));
+
+/** Acceleration ceiling for the inner ring / Arrow key (PTZ_ACCEL_PCT of full travel, minimum 1).
+ *  Inner-ring hold ramps from 1 hw step up to this cap — never reaching outer-ring speed. */
+const panAccelSteps  = () => Math.max(1, Math.round(_panHwRange  * PTZ_ACCEL_PCT / 100 / _panHwStep));
+const tiltAccelSteps = () => Math.max(1, Math.round(_tiltHwRange * PTZ_ACCEL_PCT / 100 / _tiltHwStep));
 
 // ── Hold-to-repeat + acceleration ────────────────────────────────────────────
 // After PTZ_REPEAT_DELAY ms, commands fire every PTZ_REPEAT_INTERVAL ms.
@@ -390,11 +396,11 @@ function makePTZButton(id, evt, getSteps, label, getMaxSteps = null) {
   el.addEventListener("touchcancel", stopRepeat);
 }
 
-// Inner ring — starts at 1 hw step, accelerates to outer-ring speed on hold
-makePTZButton("panLeftSmall",  "pan",  () =>  1,  "🔵 Pan Left",  () =>  panLargeSteps());
-makePTZButton("panRightSmall", "pan",  () => -1,  "🔵 Pan Right", () => -panLargeSteps());
-makePTZButton("tiltUpSmall",   "tilt", () =>  1,  "🔵 Tilt Up",   () =>  tiltLargeSteps());
-makePTZButton("tiltDownSmall", "tilt", () => -1,  "🔵 Tilt Down", () => -tiltLargeSteps());
+// Inner ring — starts at 1 hw step, accelerates to PTZ_ACCEL_PCT (1%) of full travel on hold
+makePTZButton("panLeftSmall",  "pan",  () =>  1,  "🔵 Pan Left",  () =>  panAccelSteps());
+makePTZButton("panRightSmall", "pan",  () => -1,  "🔵 Pan Right", () => -panAccelSteps());
+makePTZButton("tiltUpSmall",   "tilt", () =>  1,  "🔵 Tilt Up",   () =>  tiltAccelSteps());
+makePTZButton("tiltDownSmall", "tilt", () => -1,  "🔵 Tilt Down", () => -tiltAccelSteps());
 
 // Outer ring — constant PTZ_LARGE_PCT % of full travel (no acceleration)
 makePTZButton("panLeftLarge",  "pan",  () =>  panLargeSteps(),  "🔷 Pan Left (large)");
@@ -1057,10 +1063,10 @@ document.addEventListener("keydown", (e) => {
   const isLarge = e.shiftKey;
   let evt, sign, getMax;
   switch (e.key) {
-    case "ArrowLeft":  evt = "pan";  sign = +1; getMax = panLargeSteps;  break;
-    case "ArrowRight": evt = "pan";  sign = -1; getMax = panLargeSteps;  break;
-    case "ArrowUp":    evt = "tilt"; sign = +1; getMax = tiltLargeSteps; break;
-    case "ArrowDown":  evt = "tilt"; sign = -1; getMax = tiltLargeSteps; break;
+    case "ArrowLeft":  evt = "pan";  sign = +1; getMax = isLarge ? panLargeSteps  : panAccelSteps;  break;
+    case "ArrowRight": evt = "pan";  sign = -1; getMax = isLarge ? panLargeSteps  : panAccelSteps;  break;
+    case "ArrowUp":    evt = "tilt"; sign = +1; getMax = isLarge ? tiltLargeSteps : tiltAccelSteps; break;
+    case "ArrowDown":  evt = "tilt"; sign = -1; getMax = isLarge ? tiltLargeSteps : tiltAccelSteps; break;
   }
 
   function fire() {
