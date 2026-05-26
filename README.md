@@ -1468,11 +1468,12 @@ Key stream settings (configured via the UI, saved to `stream-config.json`):
 | Setting | Default | Description |
 |---|---|---|
 | Protocol | `rtsp` | `rtsp`, `srt`, or `rtmp` |
-| Resolution | `1920×1080` | Width × Height |
+| Resolution | `1920×1080` | Width × Height. **Match this to the camera's native output** — upscaling wastes CPU and adds 10+ s of startup latency that causes RTMP connections to drop before the first frame arrives. |
 | Framerate | `30` fps | Target encode framerate |
 | Bitrate | `5 Mbps` | H.264/H.265 target bitrate |
 | Audio device | `plughw:2,0` | ALSA device for microphone — use `plughw:` (not `hw:`) so the plug layer handles sample-rate conversion automatically. Run `arecord -l` to find the card number; set it to `plughw:<card>,0`. |
 | Audio enabled | `true` | Mux audio into stream |
+| A/V Offset | `0` ms | Fine-tune audio/video sync. **Negative** values advance the audio (fix audio lag); **positive** values delay it. Adjust in 50 ms steps — RTSP/USB camera pipelines typically add 80–150 ms of video latency, so values of `-80` to `-150` are common starting points. The value is saved and restored on page load. |
 
 **Input source settings** (persisted to `camera-source.json`):
 
@@ -1491,9 +1492,21 @@ Key stream settings (configured via the UI, saved to `stream-config.json`):
 
 ### Pan / Tilt / Zoom
 
-- **Directional pad** (or arrow keys): Pan / Tilt in 1° steps (hold Shift for 5°)
-- **Home button**: Reset to saved startup position
-- **Zoom slider**: Optical zoom 0–100
+Movement uses the camera's native **hardware step size** (read from `v4l2-ctl`) rather than a fixed degree value, giving the finest possible motor resolution for whatever camera is connected.
+
+| Control | Behaviour |
+|---|---|
+| **Inner ring tap** / **Arrow key tap** | 1 hardware step — maximum precision |
+| **Inner ring hold** / **Arrow key hold** | Accelerates from 1 step up to **1 % of total travel** over ~3 seconds |
+| **Outer ring** / **Shift+Arrow** | Constant **5 % of total travel** — fast sweep |
+| **🏠 Home button** | Return to saved startup position |
+| **Set Home** | Save current PTZ as the startup position |
+| **Invert Pan** | Reverses the pan direction (checkbox in the PTZ card) |
+| **Zoom slider** | Optical zoom 0–100 |
+
+> **Camera hot-swap:** Switching the USB input source resets all PTZ ranges, step sizes, and discovered controls to match the newly connected camera. The UI updates immediately via Socket.IO without a page reload.
+
+> **OBSBot note:** The OBSBot Tiny 2 Lite UVC firmware only accepts whole-degree movements (`step=3600`). One inner-ring tap moves exactly 1 degree — that is the hardware limit, not a software constraint.
 
 ### Image Quality
 
@@ -1737,6 +1750,28 @@ sudo usermod -aG audio ubuntu
 # Verify:
 groups ubuntu
 ```
+
+### RTSP source — stream fails immediately or "Could not write to resource"
+
+**Symptom:** The stream starts, reaches PLAYING, then dies after ~10 seconds with `❌ GStreamer error: Could not write to resource` from `gstrtmpsink`.
+
+**Cause:** The configured stream resolution is larger than what the RTSP camera actually delivers. The pipeline upscales (e.g. 1080p → 4K) to match the configured resolution, which takes >10 seconds to produce the first encoded frame. MediaMTX closes the RTMP connection before any data arrives.
+
+**Fix:** Set the stream resolution in the admin UI to match the camera's native output (typically **1920×1080** for IP cameras). Do not configure 4K when the RTSP source is 1080p.
+
+---
+
+**Symptom:** Idle preview dies with `streaming stopped, reason not-linked (-1)`.
+
+**Cause:** The RTSP camera sends both video and audio RTP streams. The idle preview pipeline using `uridecodebin` with `caps=video/x-raw` should handle this — if it still fails, confirm you are running the latest code (`git pull`).
+
+```bash
+# Check the idle preview is using uridecodebin (not rtspsrc ! decodebin):
+sudo journalctl -u digitalpool-camera -f | grep -E "idle|RTSP|not.linked"
+# Should show "Building RTSP idle preview pipeline" without "not-linked"
+```
+
+---
 
 ### NDI — no sources found / library not loading
 
