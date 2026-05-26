@@ -33,6 +33,8 @@ INPUT_NDI_NAME=${24:-""}
 # Video flip flags (args 25-26, optional — defaults to false)
 FLIP_HORIZONTAL=${25:-"false"}
 FLIP_VERTICAL=${26:-"false"}
+# Camera capture format (arg 27, optional — 'mjpeg' or 'yuyv', defaults to mjpeg)
+CAPTURE_FORMAT=${27:-"mjpeg"}
 
 echo "🎨 Starting stream with dynamic PNG graphics overlay (Python GStreamer)..."
 echo "Camera: $CAMERA_DEVICE"
@@ -48,6 +50,7 @@ echo "Codec: $CODEC"
 echo "Input Type: $INPUT_TYPE"
 echo "Input RTSP URL: $INPUT_RTSP_URL"
 echo "Flip Horizontal: $FLIP_HORIZONTAL, Flip Vertical: $FLIP_VERTICAL"
+echo "Capture Format: $CAPTURE_FORMAT"
 
 # Get the directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,5 +64,5 @@ exec python3 "$SCRIPT_DIR/gst-overlay-pipeline.py" \
   "$TITLE_POSITION" "$TIMESTAMP_POSITION" "$AUDIO_DEVICE" \
   "$TS_FONT_SIZE" "$TS_COLOR" "$TS_BACKGROUND" "$CODEC" \
   "$INPUT_TYPE" "$INPUT_RTSP_URL" "$INPUT_NDI_NAME" \
-  "$FLIP_HORIZONTAL" "$FLIP_VERTICAL"
+  "$FLIP_HORIZONTAL" "$FLIP_VERTICAL" "$CAPTURE_FORMAT"
 
