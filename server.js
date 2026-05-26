@@ -92,6 +92,9 @@ const camera = new CameraController(CAMERA_DEVICE);
 
 // Flag to track if camera is fully initialized
 let cameraInitialized = false;
+// Detected capture format: 'mjpeg' (OBSBOT etc.) or 'yuyv' (YUYV-only cameras like Minrray)
+// Set during boot by camera.detectCaptureFormat(); defaults to 'mjpeg' for backward compat.
+let cameraFormat = 'mjpeg';
 // Flag to prevent /video/stream from spawning idle preview during boot
 let bootComplete = false;
 // Flag to suppress intermediate "stopped" events during an atomic restart
@@ -2679,30 +2682,55 @@ function buildIdlePreviewGstArgs() {
       "!",
     ];
   } else {
-    // ── USB source (default): full MPP pipeline ──
+    // ── USB source (default) ──
     const device = activeCameraSource.device || CAMERA_DEVICE;
-    gstArgs = [
-      "v4l2src",
-      `device=${device}`,
-      "do-timestamp=true",
-      "!",
-      `image/jpeg,width=${config.width || 1920},height=${config.height || 1080},framerate=${config.framerate || 30}/1`,
-      "!",
-      "jpegparse",
-      "!",
-      "mppjpegdec",
-      "!",
-      "videoscale",
-      "!",
-      "video/x-raw,width=1280,height=720",
-      "!",
-      "videorate",
-      "!",
-      "video/x-raw,framerate=15/1",
-      "!",
-      "videoconvert",
-      "!",
-    ];
+    if (cameraFormat === 'yuyv') {
+      // YUYV-only camera: skip jpegparse/mppjpegdec, use videoconvert instead
+      gstArgs = [
+        "v4l2src",
+        `device=${device}`,
+        "do-timestamp=true",
+        "!",
+        `video/x-raw,format=YUYV,width=${config.width || 1920},height=${config.height || 1080},framerate=${config.framerate || 30}/1`,
+        "!",
+        "videoconvert",
+        "!",
+        "videoscale",
+        "!",
+        "video/x-raw,width=1280,height=720",
+        "!",
+        "videorate",
+        "!",
+        "video/x-raw,framerate=15/1",
+        "!",
+        "videoconvert",
+        "!",
+      ];
+    } else {
+      // MJPEG camera (default): hardware JPEG decode via mppjpegdec
+      gstArgs = [
+        "v4l2src",
+        `device=${device}`,
+        "do-timestamp=true",
+        "!",
+        `image/jpeg,width=${config.width || 1920},height=${config.height || 1080},framerate=${config.framerate || 30}/1`,
+        "!",
+        "jpegparse",
+        "!",
+        "mppjpegdec",
+        "!",
+        "videoscale",
+        "!",
+        "video/x-raw,width=1280,height=720",
+        "!",
+        "videorate",
+        "!",
+        "video/x-raw,framerate=15/1",
+        "!",
+        "videoconvert",
+        "!",
+      ];
+    }
   }
 
   // Insert videoflip element when camera is mounted in a non-standard orientation.
@@ -3541,6 +3569,9 @@ server.listen(PORT, async () => {
   console.log("\n🚀 Starting idle preview as first boot action...");
   try {
     await camera.activateCamera();
+    cameraFormat = await camera.detectCaptureFormat(CAMERA_DEVICE);
+    streamController.captureFormat = cameraFormat;
+    console.log(`📹 Camera capture format detected: ${cameraFormat.toUpperCase()}`);
     console.log("📹 Starting persistent idle preview...");
     await startPersistentIdlePreview();
     console.log("✅ Idle preview started — camera is active");

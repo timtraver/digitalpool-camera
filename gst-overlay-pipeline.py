@@ -80,6 +80,8 @@ def main():
     # Video orientation (args 25-26, optional — default to no flip)
     flip_horizontal = sys.argv[25].lower() == "true" if len(sys.argv) > 25 else False
     flip_vertical   = sys.argv[26].lower() == "true" if len(sys.argv) > 26 else False
+    # Camera capture format (arg 27) — 'mjpeg' (OBSBOT etc.) or 'yuyv' (YUYV-only cameras)
+    capture_format  = sys.argv[27] if len(sys.argv) > 27 else "mjpeg"
 
     # GStreamer videoflip method:
     #   0 = identity (none), 2 = rotate-180, 4 = horizontal-flip, 5 = vertical-flip
@@ -354,8 +356,17 @@ def main():
             f'! video/x-raw,width={width},height={height} '
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
         )
+    elif capture_format == "yuyv":
+        # YUYV-only cameras (e.g. Minrray/Cypress): no MJPEG, use videoconvert.
+        print(f"📹 Input source: USB v4l2src (YUYV) → {camera_device}", file=sys.stderr)
+        source_str = (
+            f'v4l2src device={camera_device} do-timestamp=true '
+            f'! video/x-raw,format=YUYV,width={width},height={height},framerate={framerate}/1 '
+            f'! videoconvert ! video/x-raw,format=NV12 '
+            f'! videorate ! video/x-raw,framerate={framerate}/1 '
+        )
     else:
-        print(f"📹 Input source: USB v4l2src → {camera_device}", file=sys.stderr)
+        print(f"📹 Input source: USB v4l2src (MJPEG) → {camera_device}", file=sys.stderr)
         source_str = (
             f'v4l2src device={camera_device} do-timestamp=true '
             f'! image/jpeg,width={width},height={height},framerate={framerate}/1 '

@@ -53,6 +53,10 @@ class StreamController extends EventEmitter {
     this.cameraDevice = cameraDevice;
     // Active input source — updated via setInputSource() when the user switches in the UI.
     this.inputSource = { type: "usb", device: cameraDevice, rtspUrl: "" };
+    // Detected at startup by cameraController.detectCaptureFormat().
+    // 'mjpeg' → image/jpeg ! jpegparse ! mppjpegdec (hardware decode, for OBSBOT etc.)
+    // 'yuyv'  → video/x-raw,format=YUYV ! videoconvert (software convert, YUYV-only cameras)
+    this.captureFormat = 'mjpeg';
     this.gstProcess = null;
     this.ffmpegProcess = null; // Separate ffmpeg process for SRT+audio hybrid
     this.isStreaming = false;
@@ -1112,6 +1116,8 @@ class StreamController extends EventEmitter {
       // Video orientation (args 25-26)
       (this.streamConfig.flipHorizontal || false).toString(),  // arg 25
       (this.streamConfig.flipVertical   || false).toString(),  // arg 26
+      // Camera capture format (arg 27) — 'mjpeg' or 'yuyv'
+      this.captureFormat || "mjpeg",                           // arg 27
     ];
 
     return {
@@ -1199,6 +1205,25 @@ class StreamController extends EventEmitter {
         "!", `video/x-raw,width=${width},height=${height}`,
         "!", "videorate",
         "!", `video/x-raw,framerate=${framerate}/1`,
+        "!",
+      ];
+    } else if (this.captureFormat === 'yuyv') {
+      // YUYV-only cameras (e.g. Minrray/Cypress): no MJPEG support.
+      // videoconvert handles YUYV → NV12; mppjpegdec is NOT used.
+      pipeline = [
+        "v4l2src",
+        `device=${this.cameraDevice}`,
+        "do-timestamp=true",
+        "!",
+        `video/x-raw,format=YUYV,width=${width},height=${height},framerate=${framerate}/1`,
+        "!",
+        "videoconvert",
+        "!",
+        "video/x-raw,format=NV12",
+        "!",
+        "videorate",
+        "!",
+        `video/x-raw,framerate=${framerate}/1`,
         "!",
       ];
     } else {

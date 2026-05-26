@@ -202,6 +202,26 @@ class CameraController {
   }
 
   /**
+   * Detect whether the camera's primary capture format is MJPEG or YUYV.
+   * Returns 'mjpeg' if the device supports MJPEG (uses hardware mppjpegdec path),
+   * or 'yuyv' if only raw formats are available (uses videoconvert software path).
+   * Defaults to 'mjpeg' on any error so existing MJPEG cameras keep working.
+   */
+  async detectCaptureFormat(device) {
+    const dev = device || this.device;
+    try {
+      const { stdout } = await execAsync(
+        `v4l2-ctl -d ${dev} --list-formats 2>/dev/null`,
+        { timeout: 3000 }
+      );
+      if (/MJPG|JPEG/i.test(stdout)) return 'mjpeg';
+      return 'yuyv';
+    } catch {
+      return 'mjpeg';
+    }
+  }
+
+  /**
    * Activate camera by opening the device
    */
   async activateCamera() {
