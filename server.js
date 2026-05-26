@@ -2726,7 +2726,7 @@ function buildIdlePreviewGstArgs() {
       // uridecodebin handles RTSP multi-stream (video+audio) gracefully:
       // the caps filter limits output pads to decoded video only, so no
       // dangling audio pad causes a NOT_LINKED fatal error.
-      "uridecodebin", `uri=${activeCameraSource.rtspUrl}`, "latency=200",
+      "uridecodebin", `uri=${activeCameraSource.rtspUrl}`,
       "caps=video/x-raw",
       // videoconvert normalises the decoded caps (NV12, I420, BGR, etc.) to a
       // fixed raw format before videoscale and videorate.
