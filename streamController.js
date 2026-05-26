@@ -271,9 +271,12 @@ class StreamController extends EventEmitter {
         console.log("🧹 Cleaned old HLS segments");
       }
 
-      // Wait a moment for the device and port to be released
+      // Wait for the device and port to be released.
+      // gst-launch (idle preview) receives SIGTERM above but the kernel v4l2
+      // device file descriptor isn't guaranteed to close within 1 s on Rockchip.
+      // 2 s is enough headroom to avoid "Device or resource busy" on first start.
       console.log("⏳ Waiting for resources to be released...");
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       // Emit "preparing" event so graphics overlay can initialize before GStreamer starts
       // Wait for the event handlers to complete (they may be async)
