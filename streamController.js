@@ -48,9 +48,19 @@ function extractMpegtsPts(buf) {
 }
 
 class StreamController extends EventEmitter {
-  constructor(cameraDevice = "/dev/video0") {
+  constructor(cameraDevice = "/dev/video0", options = {}) {
     super();
     this.cameraDevice = cameraDevice;
+    // Stream identity — 1 or 2.  Drives config file names, MediaMTX paths, and ports.
+    this.streamId = options.streamId || 1;
+
+    // Derived per-stream paths / ports based on streamId
+    // Camera 1: /live, /preview, SRT :8891
+    // Camera 2: /live2, /preview2, SRT :8892
+    this.rtspPath    = this.streamId === 2 ? "/live2"    : "/live";
+    this.previewPath = this.streamId === 2 ? "/preview2" : "/preview";
+    this.srtDefaultPort = this.streamId === 2 ? 8892 : 8891;
+
     // Active input source — updated via setInputSource() when the user switches in the UI.
     this.inputSource = { type: "usb", device: cameraDevice, rtspUrl: "" };
     // Detected at startup by cameraController.detectCaptureFormat().
@@ -62,7 +72,8 @@ class StreamController extends EventEmitter {
     this.isStreaming = false;
     this._fpsInterval = null;
     this._bitrateInterval = null;
-    this.configFile = path.join(__dirname, "stream-config.json");
+    // Separate config file per stream so each camera persists its own settings.
+    this.configFile = path.join(__dirname, this.streamId === 2 ? "stream-config-2.json" : "stream-config.json");
 
     // Default configuration
     const defaultConfig = {
@@ -776,15 +787,18 @@ class StreamController extends EventEmitter {
     const protocol = this.streamConfig.protocol;
     let connectionUrl = null;
     if (protocol === "rtsp") {
-      connectionUrl = `rtsp://${localIP}:8554/live`;
+      connectionUrl = `rtsp://${localIP}:8554${this.rtspPath}`;
     } else if (protocol === "srt") {
-      connectionUrl = `srt://${localIP}:8891`;
+      connectionUrl = `srt://${localIP}:${this.srtDefaultPort}`;
     }
     return {
       isStreaming: this.isStreaming,
       config: this.streamConfig,
       connectionUrl,
       localIP,
+      streamId:    this.streamId,
+      rtspPath:    this.rtspPath,
+      previewPath: this.previewPath,
     };
   }
 
@@ -1002,10 +1016,10 @@ class StreamController extends EventEmitter {
     // Build the full destination URL based on protocol
     let effectiveDestination = destination || "";
     if (protocol === "rtsp") {
-      effectiveDestination = "rtmp://localhost:1935/live";
+      effectiveDestination = `rtmp://localhost:1935${this.rtspPath}`;
     } else if (!effectiveDestination) {
       if (protocol === "srt") {
-        effectiveDestination = "srt://:8891";
+        effectiveDestination = `srt://:${this.srtDefaultPort}`;
       } else if (protocol === "rtmp") {
         effectiveDestination = "rtmp://localhost:1935/stream";
       }
@@ -1102,6 +1116,8 @@ class StreamController extends EventEmitter {
       (this.streamConfig.flipVertical   || false).toString(),  // arg 26
       // Camera capture format (arg 27) — 'mjpeg' or 'yuyv'
       this.captureFormat || "mjpeg",                           // arg 27
+      // Preview RTMP path for MediaMTX (arg 28) — /preview or /preview2
+      `rtmp://localhost:1935${this.previewPath}`,              // arg 28
     ];
 
     return {
@@ -1490,7 +1506,7 @@ class StreamController extends EventEmitter {
       // Port 8891 (8890 is used by MediaMTX)
 
       console.log(
-        `📡 SRT server mode - OBS should connect to: srt://${this._getLocalIP()}:8891`,
+        `📡 SRT server mode - OBS should connect to: srt://${this._getLocalIP()}:${this.srtDefaultPort}`,
       );
 
       pipeline.push(
@@ -1538,7 +1554,7 @@ class StreamController extends EventEmitter {
         // No audio — GStreamer handles SRT directly (known stable path)
         pipeline.push(
           "srtsink",
-          "uri=srt://:8891",
+          `uri=srt://:${this.srtDefaultPort}`,
           "wait-for-connection=false",
           "latency=500",
           "sync=false",
@@ -1550,14 +1566,14 @@ class StreamController extends EventEmitter {
       // RTMP mode: push to the configured destination (or local MediaMTX as fallback).
       const rtmpUrl =
         protocol === "rtsp"
-          ? "rtmp://localhost:1935/live"
+          ? `rtmp://localhost:1935${this.rtspPath}`
           : (destination && destination.trim() !== ""
               ? destination
               : "rtmp://localhost:1935/stream");
 
       if (protocol === "rtsp") {
-        console.log(`📡 RTSP server mode — MediaMTX serving: rtsp://${this._getLocalIP()}:8554/live`);
-        console.log(`   Also available as HLS: http://${this._getLocalIP()}:8888/live`);
+        console.log(`📡 RTSP server mode — MediaMTX serving: rtsp://${this._getLocalIP()}:8554${this.rtspPath}`);
+        console.log(`   Also available as HLS: http://${this._getLocalIP()}:8888${this.rtspPath}`);
       } else {
         console.log(`📡 RTMP destination: ${rtmpUrl}`);
       }
@@ -1669,7 +1685,7 @@ class StreamController extends EventEmitter {
       "streamable=true",
       "!",
       "rtmpsink",
-      "location=rtmp://localhost:1935/preview",
+      `location=rtmp://localhost:1935${this.previewPath}`,
       "sync=false",
       "async=false",  // must not participate in preroll — the preview branch must never block PLAYING
     );

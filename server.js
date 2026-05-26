@@ -33,7 +33,8 @@ const io = socketIO(server, {
 });
 
 const PORT = process.env.PORT || 3000;
-const CAMERA_DEVICE = process.env.CAMERA_DEVICE || "/dev/video0";
+const CAMERA_DEVICE   = process.env.CAMERA_DEVICE   || "/dev/video0";
+const CAMERA_DEVICE_2 = process.env.CAMERA_DEVICE_2 || "/dev/video2";
 const DEFAULT_AP_IP = process.env.AP_IP || "192.168.50.1";
 const HOTSPOT_SUBNET = process.env.HOTSPOT_SUBNET || "192.168.50.";
 
@@ -87,21 +88,31 @@ function requireAuth(req, res, next) {
   return res.redirect("/login");
 }
 
-// Initialize camera controller
-const camera = new CameraController(CAMERA_DEVICE);
-
-// Flag to track if camera is fully initialized
+// ── Camera 1 ─────────────────────────────────────────────────────────────────
+const camera = new CameraController(CAMERA_DEVICE, { controllerId: 1 });
 let cameraInitialized = false;
-// Detected capture format: 'mjpeg' (OBSBOT etc.) or 'yuyv' (YUYV-only cameras like Minrray)
-// Set during boot by camera.detectCaptureFormat(); defaults to 'mjpeg' for backward compat.
-let cameraFormat = 'mjpeg';
+let cameraFormat = 'mjpeg'; // 'mjpeg' (OBSBOT etc.) or 'yuyv' (YUYV-only cameras)
+const streamController = new StreamController(CAMERA_DEVICE, { streamId: 1 });
+
+// ── Camera 2 ─────────────────────────────────────────────────────────────────
+// Camera 2 is optional.  If CAMERA_DEVICE_2 is not connected the controller
+// still initialises but commands will fail gracefully until a device appears.
+const camera2 = new CameraController(CAMERA_DEVICE_2, { controllerId: 2 });
+let cameraInitialized2 = false;
+let cameraFormat2 = 'mjpeg';
+const streamController2 = new StreamController(CAMERA_DEVICE_2, { streamId: 2 });
+
+// ── Shared boot / restart flags ───────────────────────────────────────────────
 // Flag to prevent /video/stream from spawning idle preview during boot
 let bootComplete = false;
 // Flag to suppress intermediate "stopped" events during an atomic restart
 let isRestartInProgress = false;
 
-// Initialize stream controller
-const streamController = new StreamController(CAMERA_DEVICE);
+// ── Per-camera controller helpers ─────────────────────────────────────────────
+/** Return the CameraController for index 1 or 2. */
+function getCam(idx) { return idx === 2 ? camera2 : camera; }
+/** Return the StreamController for index 1 or 2. */
+function getSC(idx)  { return idx === 2 ? streamController2 : streamController; }
 
 // WiFi Manager — the hotspot is started by digitalpool-hotspot.service (systemd)
 // before this process launches.  Here we only start the interface monitor so
@@ -149,47 +160,80 @@ async function regenerateOverlay() {
   }
 }
 
-// Stream controller event handlers
+// ── Stream controller event handlers (Camera 1) ───────────────────────────────
 streamController.on("preparing", () => {
   const status = streamController.getStatus();
-  io.emit("streamStatus", { ...status, status: "preparing" });
+  io.emit("streamStatus", { ...status, status: "preparing", cameraIndex: 1 });
 });
 
 streamController.on("started", () => {
-  // Clear the preparing/restart flag so idle-preview auto-restart is re-enabled
-  // once the stream eventually stops (it was set in the "preparing" handler).
   isRestartInProgress = false;
   const status = streamController.getStatus();
-  io.emit("streamStatus", { ...status, status: "started" });
+  io.emit("streamStatus", { ...status, status: "started", cameraIndex: 1 });
 });
 
 streamController.on("stopped", (code) => {
-  // During an atomic restart don't tell clients the stream stopped —
-  // they will see "restarting" → "preparing" → "started" instead.
   if (isRestartInProgress) return;
   const status = streamController.getStatus();
-  io.emit("streamStatus", { ...status, status: "stopped", code });
-  io.emit("streamDrift",  { ppm: null }); // clear drift display
+  io.emit("streamStatus", { ...status, status: "stopped", code, cameraIndex: 1 });
+  io.emit("streamDrift",  { ppm: null, cameraIndex: 1 });
 });
 
 streamController.on("error", (error) => {
-  io.emit("streamError", { error });
+  io.emit("streamError", { error, cameraIndex: 1 });
 });
 
 streamController.on("log", (log) => {
-  console.log("Stream log:", log);
+  console.log("Stream log [Cam1]:", log);
 });
 
 streamController.on("fps", (fps) => {
-  io.emit("streamFps", { fps }); // fps is null when stream stops
+  io.emit("streamFps", { fps, cameraIndex: 1 });
 });
 
 streamController.on("bitrate", (mbps) => {
-  io.emit("streamBitrate", { mbps }); // mbps is null when stream stops
+  io.emit("streamBitrate", { mbps, cameraIndex: 1 });
 });
 
 streamController.on("drift", (ppm) => {
-  io.emit("streamDrift", { ppm });
+  io.emit("streamDrift", { ppm, cameraIndex: 1 });
+});
+
+// ── Stream controller event handlers (Camera 2) ───────────────────────────────
+streamController2.on("preparing", () => {
+  const status = streamController2.getStatus();
+  io.emit("streamStatus", { ...status, status: "preparing", cameraIndex: 2 });
+});
+
+streamController2.on("started", () => {
+  const status = streamController2.getStatus();
+  io.emit("streamStatus", { ...status, status: "started", cameraIndex: 2 });
+});
+
+streamController2.on("stopped", (code) => {
+  const status = streamController2.getStatus();
+  io.emit("streamStatus", { ...status, status: "stopped", code, cameraIndex: 2 });
+  io.emit("streamDrift",  { ppm: null, cameraIndex: 2 });
+});
+
+streamController2.on("error", (error) => {
+  io.emit("streamError", { error, cameraIndex: 2 });
+});
+
+streamController2.on("log", (log) => {
+  console.log("Stream log [Cam2]:", log);
+});
+
+streamController2.on("fps", (fps) => {
+  io.emit("streamFps", { fps, cameraIndex: 2 });
+});
+
+streamController2.on("bitrate", (mbps) => {
+  io.emit("streamBitrate", { mbps, cameraIndex: 2 });
+});
+
+streamController2.on("drift", (ppm) => {
+  io.emit("streamDrift", { ppm, cameraIndex: 2 });
 });
 
 // ── CPU load broadcasting ─────────────────────────────────────────────────────
@@ -1401,74 +1445,87 @@ app.post("/api/overlay-url", express.json(), async (req, res) => {
     // No local scoreboard rendering — remote overlay handles its own content
   }
 
-  // Also save to stream config so it persists
-  streamController.streamConfig.overlayUrl = url || "";
-  streamController.saveConfig();
+  // Also save to stream config so it persists (applies to camera 1 overlay URL)
+  const _scForOverlay = getSC(1);
+  _scForOverlay.streamConfig.overlayUrl = url || "";
+  _scForOverlay.saveConfig();
 
   res.json({ success: true, overlayUrl: url || "" });
 });
 
 // API endpoint to get all controls
 app.get("/api/controls", async (req, res) => {
-  const result = await camera.getAllControls();
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  const result = await getCam(camIdx).getAllControls();
   res.json(result);
 });
 
 // API endpoint to get specific control
 app.get("/api/control/:name", async (req, res) => {
-  const result = await camera.getControl(req.params.name);
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  const result = await getCam(camIdx).getControl(req.params.name);
   res.json(result);
 });
 
 // API endpoint to set control
 app.post("/api/control/:name", async (req, res) => {
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
   const { value } = req.body;
-  const result = await camera.setControl(req.params.name, value);
+  const result = await getCam(camIdx).setControl(req.params.name, value);
   res.json(result);
 });
 
 // API endpoint to get camera configuration
 app.get("/api/camera/config", (req, res) => {
-  res.json({ success: true, config: camera.config });
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  res.json({ success: true, config: getCam(camIdx).config });
 });
 
 // ── Camera source persistence ─────────────────────────────────────────────────
 // The active input source (USB device path or RTSP URL) survives restarts via
 // camera-source.json — same pattern as remote.json, ethernet-config.json, etc.
-const CAMERA_SOURCE_FILE = path.join(__dirname, "camera-source.json");
+const CAMERA_SOURCE_FILE   = path.join(__dirname, "camera-source.json");
+const CAMERA_SOURCE_FILE_2 = path.join(__dirname, "camera-source-2.json");
 
-function loadCameraSource() {
+function loadCameraSource(idx = 1) {
+  const file = idx === 2 ? CAMERA_SOURCE_FILE_2 : CAMERA_SOURCE_FILE;
   try {
-    if (fsSync.existsSync(CAMERA_SOURCE_FILE)) {
-      const saved = JSON.parse(fsSync.readFileSync(CAMERA_SOURCE_FILE, "utf8"));
+    if (fsSync.existsSync(file)) {
+      const saved = JSON.parse(fsSync.readFileSync(file, "utf8"));
       // Validate minimal shape before trusting it
       if (saved && (saved.type === "usb" || saved.type === "rtsp" || saved.type === "ndi")) {
         let detail = "";
         if (saved.type === "rtsp") detail = " → " + saved.rtspUrl;
         else if (saved.type === "ndi") detail = " → " + (saved.ndiName || "(no name)");
         else detail = " → " + saved.device;
-        console.log(`📷 Loaded camera source from file: ${saved.type}${detail}`);
+        console.log(`📷 Cam${idx}: Loaded camera source from file: ${saved.type}${detail}`);
         return saved;
       }
     }
   } catch (e) {
-    console.warn("⚠️  Could not load camera-source.json:", e.message);
+    console.warn(`⚠️  Could not load ${path.basename(file)}:`, e.message);
   }
   return null;
 }
 
-function saveCameraSource(source) {
+function saveCameraSource(source, idx = 1) {
+  const file = idx === 2 ? CAMERA_SOURCE_FILE_2 : CAMERA_SOURCE_FILE;
   try {
-    fsSync.writeFileSync(CAMERA_SOURCE_FILE, JSON.stringify(source, null, 2));
+    fsSync.writeFileSync(file, JSON.stringify(source, null, 2));
   } catch (e) {
-    console.error("❌ Could not save camera-source.json:", e.message);
+    console.error(`❌ Could not save ${path.basename(file)}:`, e.message);
   }
 }
 
-// Active camera source — updated at runtime via /api/camera/source.
+// Active camera sources — updated at runtime via /api/camera/source.
 // Initialised from disk so the chosen source survives restarts.
-const _savedSource = loadCameraSource();
-let activeCameraSource = _savedSource || { type: "usb", device: CAMERA_DEVICE, rtspUrl: "", ndiName: "" };
+const _savedSource  = loadCameraSource(1);
+const _savedSource2 = loadCameraSource(2);
+let activeCameraSource  = _savedSource  || { type: "usb", device: CAMERA_DEVICE,   rtspUrl: "", ndiName: "" };
+let activeCameraSource2 = _savedSource2 || { type: "usb", device: CAMERA_DEVICE_2, rtspUrl: "", ndiName: "" };
+
+/** Return the active source object for camera index 1 or 2. */
+function getActiveSource(idx) { return idx === 2 ? activeCameraSource2 : activeCameraSource; }
 
 // List available V4L2 video capture devices
 app.get("/api/camera/devices", requireAuth, (req, res) => {
@@ -1503,13 +1560,16 @@ app.get("/api/camera/devices", requireAuth, (req, res) => {
 // no V4L2 capability check applies, so all resolutions are reported as
 // available — the user can transcode to whatever the encoder will allow.
 app.get("/api/camera/capabilities", requireAuth, async (req, res) => {
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  const activeSource = getActiveSource(camIdx);
+  const defaultDevice = camIdx === 2 ? CAMERA_DEVICE_2 : CAMERA_DEVICE;
   // RTSP and NDI sources are network streams — no V4L2 capability check applies.
   // All resolutions are reported as available; the transcoder will handle whatever
   // the source delivers.
-  if (activeCameraSource.type !== "usb") {
+  if (activeSource.type !== "usb") {
     return res.json({
       success: true,
-      source: activeCameraSource.type,
+      source: activeSource.type,
       supports720p: true,
       supports1080p: true,
       supports4K: true,
@@ -1517,7 +1577,7 @@ app.get("/api/camera/capabilities", requireAuth, async (req, res) => {
       maxHeight: 0,
     });
   }
-  const dev = activeCameraSource.device || CAMERA_DEVICE;
+  const dev = activeSource.device || defaultDevice;
   try {
     const { stdout } = await execAsync(
       `sudo v4l2-ctl -d ${dev} --list-formats-ext 2>/dev/null || true`,
@@ -1657,6 +1717,10 @@ function waitForRtmpPublisher(pathName, timeoutMs = 8000) {
 // If a live stream is running, it is stopped first, the new source is validated
 // via the idle preview, and then the stream is restarted automatically.
 app.post("/api/camera/source", requireAuth, async (req, res) => {
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  const cam = getCam(camIdx);
+  const sc  = getSC(camIdx);
+  const defaultDevice = camIdx === 2 ? CAMERA_DEVICE_2 : CAMERA_DEVICE;
   const { type, device, rtspUrl, ndiName } = req.body;
 
   // ── Validate inputs before touching any state ────────────────────────────
@@ -1670,18 +1734,19 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     return res.status(400).json({ success: false, error: "Unknown source type" });
   }
 
-  const previousSource    = { ...activeCameraSource };
-  const wasStreaming      = streamController.isStreaming;
-  const savedStreamConfig = wasStreaming ? { ...streamController.streamConfig } : null;
+  const activeSource      = getActiveSource(camIdx);
+  const previousSource    = { ...activeSource };
+  const wasStreaming      = sc.isStreaming;
+  const savedStreamConfig = wasStreaming ? { ...sc.streamConfig } : null;
 
   // ── Step 1: Stop the live stream if running ──────────────────────────────
   // isRestartInProgress suppresses the automatic idle-preview restart that the
   // "stopped" event handler would otherwise trigger — we handle that ourselves.
   if (wasStreaming) {
     isRestartInProgress = true;
-    io.emit("streamStatus", { ...streamController.getStatus(), status: "stopping" });
-    console.log("📷 Camera source switch: stopping active stream…");
-    await streamController.stopStream();
+    io.emit("streamStatus", { ...sc.getStatus(), status: "stopping" });
+    console.log(`📷 [Cam${camIdx}] Camera source switch: stopping active stream…`);
+    await sc.stopStream();
     // Allow extra time for the old device/RTSP/NDI session to fully release.
     const stopDelay = (previousSource.type === "rtsp" || previousSource.type === "ndi") ? 2500 : 1000;
     await new Promise((r) => setTimeout(r, stopDelay));
@@ -1689,87 +1754,84 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
 
   // ── Step 2: Switch to the new source ────────────────────────────────────
   if (type === "usb") {
-    const dev = device || CAMERA_DEVICE;
-    activeCameraSource = { type: "usb", device: dev, rtspUrl: "", ndiName: "" };
-    camera.device = dev;
+    const dev = device || defaultDevice;
+    const newSource = { type: "usb", device: dev, rtspUrl: "", ndiName: "" };
+    if (camIdx === 2) activeCameraSource2 = newSource; else activeCameraSource = newSource;
+    cam.device = dev;
 
     // Reset all stale state from the previous camera so nothing leaks into
     // the new camera's session: tracked positions, discovered control ranges,
     // and the PTZ command queue (reset to a resolved promise).
-    camera.currentPan = 0;
-    camera.currentTilt = 0;
-    camera.discoveredControls = null;
-    camera._ptzQueue = Promise.resolve();
+    cam.currentPan = 0;
+    cam.currentTilt = 0;
+    cam.discoveredControls = null;
+    cam._ptzQueue = Promise.resolve();
 
-    // Re-discover controls and format for the new device.  These are fast
-    // v4l2-ctl queries (<1 s each) and run before idle-preview startup so
-    // the new camera's capabilities are ready the moment the UI receives
-    // the cameraConfig broadcast below.
-    await camera.discoverControls(dev);
-    cameraFormat = await camera.detectCaptureFormat(dev);
-    streamController.captureFormat = cameraFormat;
-    console.log(
-      `📹 New USB camera: format=${cameraFormat.toUpperCase()}, ` +
-      `controls=${Object.keys(camera.discoveredControls || {}).join(", ")}`
-    );
+    // Re-discover controls and format for the new device.
+    await cam.discoverControls(dev);
+    const fmt = await cam.detectCaptureFormat(dev);
+    if (camIdx === 2) cameraFormat2 = fmt; else cameraFormat = fmt;
+    sc.captureFormat = fmt;
+    console.log(`📹 [Cam${camIdx}] New USB camera: format=${fmt.toUpperCase()}, controls=${Object.keys(cam.discoveredControls || {}).join(", ")}`);
   } else if (type === "ndi") {
-    activeCameraSource = { type: "ndi", device: CAMERA_DEVICE, rtspUrl: "", ndiName };
+    const newSource = { type: "ndi", device: defaultDevice, rtspUrl: "", ndiName };
+    if (camIdx === 2) activeCameraSource2 = newSource; else activeCameraSource = newSource;
   } else {
-    activeCameraSource = { type: "rtsp", device: CAMERA_DEVICE, rtspUrl, ndiName: "" };
+    const newSource = { type: "rtsp", device: defaultDevice, rtspUrl, ndiName: "" };
+    if (camIdx === 2) activeCameraSource2 = newSource; else activeCameraSource = newSource;
   }
-  streamController.setInputSource(activeCameraSource);
+  sc.setInputSource(getActiveSource(camIdx));
 
   // ── Step 3: Bring up idle preview on the new source ─────────────────────
   try {
-    await startPersistentIdlePreview();
+    await startPersistentIdlePreview(camIdx);
   } catch (e) {
-    console.error("⚠️ Failed to start idle preview after source change:", e.message);
+    console.error(`⚠️ [Cam${camIdx}] Failed to start idle preview after source change:`, e.message);
   }
 
   // Give GStreamer time to negotiate: RTSP and NDI need up to 12 s; USB is fast.
+  const previewPath = sc.previewPath.replace(/^\//, ""); // strip leading /
   const timeoutMs = (type === "rtsp" || type === "ndi") ? 12000 : 5000;
-  const ready = await waitForRtmpPublisher("preview", timeoutMs);
+  const ready = await waitForRtmpPublisher(previewPath, timeoutMs);
 
   if (!ready) {
     // ── Revert on failure ────────────────────────────────────────────────
-    console.error(`⚠️ Camera source (${type}) did not respond in time — reverting`);
-    activeCameraSource = { ...previousSource };
+    console.error(`⚠️ [Cam${camIdx}] Camera source (${type}) did not respond in time — reverting`);
+    if (camIdx === 2) activeCameraSource2 = { ...previousSource }; else activeCameraSource = { ...previousSource };
     if (previousSource.type === "usb") {
-      const prevDev = previousSource.device || CAMERA_DEVICE;
-      camera.device = prevDev;
-      // Re-discover the previous camera — its discoveredControls were cleared
-      // when we attempted the switch.  Reset positions too since the new
-      // camera may have moved them.
-      camera.currentPan = 0;
-      camera.currentTilt = 0;
-      camera.discoveredControls = null;
-      camera._ptzQueue = Promise.resolve();
-      await camera.discoverControls(prevDev);
-      cameraFormat = await camera.detectCaptureFormat(prevDev);
-      streamController.captureFormat = cameraFormat;
-      console.log(`📹 Reverted USB camera: format=${cameraFormat.toUpperCase()}`);
+      const prevDev = previousSource.device || defaultDevice;
+      cam.device = prevDev;
+      cam.currentPan = 0;
+      cam.currentTilt = 0;
+      cam.discoveredControls = null;
+      cam._ptzQueue = Promise.resolve();
+      await cam.discoverControls(prevDev);
+      const fmt = await cam.detectCaptureFormat(prevDev);
+      if (camIdx === 2) cameraFormat2 = fmt; else cameraFormat = fmt;
+      sc.captureFormat = fmt;
+      console.log(`📹 [Cam${camIdx}] Reverted USB camera: format=${fmt.toUpperCase()}`);
     }
-    streamController.setInputSource(activeCameraSource);
-    try { await startPersistentIdlePreview(); } catch (_) {}
-    io.emit("refreshIdlePreview");
+    sc.setInputSource(getActiveSource(camIdx));
+    try { await startPersistentIdlePreview(camIdx); } catch (_) {}
+    io.emit("refreshIdlePreview", { cameraIndex: camIdx });
 
     // Broadcast reverted camera capabilities to all clients.
     {
-      const hwControls = camera.discoveredControls || camera.controls;
+      const hwControls = cam.discoveredControls || cam.controls;
       const ptzRanges = {};
       if (hwControls.pan_absolute)  ptzRanges.pan_absolute  = { min: hwControls.pan_absolute.min,  max: hwControls.pan_absolute.max,  step: hwControls.pan_absolute.step  };
       if (hwControls.tilt_absolute) ptzRanges.tilt_absolute = { min: hwControls.tilt_absolute.min, max: hwControls.tilt_absolute.max, step: hwControls.tilt_absolute.step };
-      io.emit("cameraConfig", { success: true, config: camera.config, supportedControls: Object.keys(hwControls), ptzRanges });
+      io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: Object.keys(hwControls), ptzRanges });
     }
 
     // Restart the stream on the reverted source if it was running before.
     if (wasStreaming) {
       isRestartInProgress = false;
-      io.emit("streamStatus", { ...streamController.getStatus(), status: "starting" });
-      const revertRestart = await streamController.startStream(savedStreamConfig);
-      io.emit("streamStatus", streamController.getStatus());
+      io.emit("streamStatus", { ...sc.getStatus(), status: "starting" });
+      const revertRestart = await sc.startStream(savedStreamConfig);
+      io.emit("streamStatus", sc.getStatus());
       if (!revertRestart.success) {
-        console.error("⚠️ Failed to restart stream after source revert:", revertRestart.error);
+        console.error(`⚠️ [Cam${camIdx}] Failed to restart stream after source revert:`, revertRestart.error);
       }
     }
 
@@ -1784,32 +1846,32 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
   }
 
   // ── Step 4: Persist and notify clients ──────────────────────────────────
-  saveCameraSource(activeCameraSource);
-  io.emit("refreshIdlePreview");
+  saveCameraSource(getActiveSource(camIdx), camIdx);
+  io.emit("refreshIdlePreview", { cameraIndex: camIdx });
 
   // Broadcast updated camera capabilities (controls, PTZ ranges, format) so
   // every connected browser immediately reflects the new camera without a
   // page reload.  This mirrors what getCameraConfig emits on demand.
   {
-    const hwControls = camera.discoveredControls || camera.controls;
+    const hwControls = cam.discoveredControls || cam.controls;
     const ptzRanges = {};
     if (hwControls.pan_absolute)  ptzRanges.pan_absolute  = { min: hwControls.pan_absolute.min,  max: hwControls.pan_absolute.max,  step: hwControls.pan_absolute.step  };
     if (hwControls.tilt_absolute) ptzRanges.tilt_absolute = { min: hwControls.tilt_absolute.min, max: hwControls.tilt_absolute.max, step: hwControls.tilt_absolute.step };
-    io.emit("cameraConfig", { success: true, config: camera.config, supportedControls: Object.keys(hwControls), ptzRanges });
+    io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: Object.keys(hwControls), ptzRanges });
   }
 
   // ── Step 5: Restart the stream on the new source (if it was running) ────
   if (wasStreaming) {
     isRestartInProgress = false;
-    console.log("📷 Camera source switch: restarting stream on new source…");
-    io.emit("streamStatus", { ...streamController.getStatus(), status: "starting" });
-    const restartResult = await streamController.startStream(savedStreamConfig);
-    io.emit("streamStatus", streamController.getStatus());
+    console.log(`📷 [Cam${camIdx}] Camera source switch: restarting stream on new source…`);
+    io.emit("streamStatus", { ...sc.getStatus(), status: "starting" });
+    const restartResult = await sc.startStream(savedStreamConfig);
+    io.emit("streamStatus", sc.getStatus());
     if (!restartResult.success) {
-      console.error("⚠️ Failed to restart stream after source change:", restartResult.error);
+      console.error(`⚠️ [Cam${camIdx}] Failed to restart stream after source change:`, restartResult.error);
       return res.json({
         success: true,
-        source: activeCameraSource,
+        source: getActiveSource(camIdx),
         wasStreaming,
         streamRestarted: false,
         streamError: restartResult.error,
@@ -1817,12 +1879,13 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     }
   }
 
-  res.json({ success: true, source: activeCameraSource, wasStreaming, streamRestarted: wasStreaming });
+  res.json({ success: true, source: getActiveSource(camIdx), wasStreaming, streamRestarted: wasStreaming });
 });
 
 // API endpoint to get stream configuration
 app.get("/api/stream/config", (req, res) => {
-  res.json({ success: true, config: streamController.streamConfig });
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  res.json({ success: true, config: getSC(camIdx).streamConfig });
 });
 
 // Returns the MediaMTX WHEP base URL the browser should use for WebRTC preview.
@@ -1842,59 +1905,63 @@ app.get("/api/stream/whep-base", requireAuth, (req, res) => {
 
 // API endpoint to reset camera to defaults
 app.post("/api/camera/reset", async (req, res) => {
-  const result = await camera.resetToDefaults();
-  res.json({ success: true, results: result, config: camera.config });
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  const cam = getCam(camIdx);
+  const result = await cam.resetToDefaults();
+  res.json({ success: true, results: result, config: cam.config });
 });
 
 // ============ STREAMING API ENDPOINTS ============
 
 // Get stream status
 app.get("/api/stream/status", (req, res) => {
-  res.json(streamController.getStatus());
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  res.json(getSC(camIdx).getStatus());
 });
 
 // Start stream
 app.post("/api/stream/start", async (req, res) => {
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
   const config = req.body;
-  const result = await streamController.startStream(config);
+  const result = await getSC(camIdx).startStream(config);
   res.json(result);
 });
 
 // Stop stream
 app.post("/api/stream/stop", async (req, res) => {
-  const result = await streamController.stopStream();
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  const result = await getSC(camIdx).stopStream();
   res.json(result);
 });
 
 // Update stream configuration
 app.post("/api/stream/config", async (req, res) => {
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  const sc = getSC(camIdx);
   const config = req.body;
   // Capture flip state before update to detect changes
-  const prevFlipH = streamController.streamConfig.flipHorizontal;
-  const prevFlipV = streamController.streamConfig.flipVertical;
-  const result = streamController.updateConfig(config);
+  const prevFlipH = sc.streamConfig.flipHorizontal;
+  const prevFlipV = sc.streamConfig.flipVertical;
+  const result = sc.updateConfig(config);
   // Restart idle preview immediately when flip orientation changes
   const flipChanged =
     (config.flipHorizontal !== undefined && config.flipHorizontal !== prevFlipH) ||
     (config.flipVertical   !== undefined && config.flipVertical   !== prevFlipV);
   if (flipChanged) {
-    if (streamController.isStreaming) {
-      // Live stream is running — tell the client to do an atomic restart so the
-      // existing "Restarting…" UI path handles progress feedback cleanly.
-      console.log("🔄 Flip setting changed while streaming — client will restart stream");
+    if (sc.isStreaming) {
+      console.log(`🔄 [Cam${camIdx}] Flip setting changed while streaming — client will restart stream`);
     } else {
-      // Idle preview — restart GStreamer with the new orientation now.
-      console.log("🔄 Flip setting changed — restarting idle preview");
+      console.log(`🔄 [Cam${camIdx}] Flip setting changed — restarting idle preview`);
       try {
-        await startPersistentIdlePreview();
-        io.emit("refreshIdlePreview");
+        await startPersistentIdlePreview(camIdx);
+        io.emit("refreshIdlePreview", { cameraIndex: camIdx });
       } catch (err) {
-        console.error("⚠️  Failed to restart idle preview after flip change:", err.message);
+        console.error(`⚠️  [Cam${camIdx}] Failed to restart idle preview after flip change:`, err.message);
       }
     }
   }
   // Tell the client whether it needs to restart the active stream itself.
-  res.json({ ...result, restartStreamNeeded: flipChanged && streamController.isStreaming });
+  res.json({ ...result, restartStreamNeeded: flipChanged && sc.isStreaming });
 });
 
 // Test GStreamer availability
@@ -2236,8 +2303,9 @@ app.post("/api/mediamtx/auth", express.json(), (req, res) => {
 
 // Update overlay configuration
 app.post("/api/stream/overlay", (req, res) => {
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
   const overlayConfig = req.body;
-  const result = streamController.updateOverlay(overlayConfig);
+  const result = getSC(camIdx).updateOverlay(overlayConfig);
 
   // Also update gameState with overlay configuration for node-graphics-stream.js
   if (overlayConfig.overlayFontSize !== undefined) {
@@ -2292,8 +2360,13 @@ app.get("/video/test", (req, res) => {
 // Because every request is independent there is no frame queue — the client
 // always gets the most recent frame regardless of network speed.
 app.get("/video/snapshot", requireAuth, (req, res) => {
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
   const net    = require("net");
-  const port   = streamController.isStreaming ? 8555 : IDLE_PREVIEW_PORT;
+  // Camera 2 uses port 8556 when streaming via SRT; camera 1 uses 8555.
+  // For idle preview, route to the per-camera preview port.
+  const port   = getSC(camIdx).isStreaming
+    ? (camIdx === 2 ? 8556 : 8555)
+    : (camIdx === 2 ? IDLE_PREVIEW_PORT_2 : IDLE_PREVIEW_PORT);
 
   let buffer    = Buffer.alloc(0);
   let responded = false;
@@ -2654,10 +2727,14 @@ app.get("/video/tcp-preview", (req, res) => {
   req.on("close", () => { client.destroy(); });
 });
 
-// Track active idle preview process (only one at a time)
-let currentIdlePreviewProcess = null;
-let idlePreviewRestartTimer = null;
-const IDLE_PREVIEW_PORT = 8553; // 8554 is reserved for MediaMTX RTSP
+// Track active idle preview processes — one per camera
+let currentIdlePreviewProcess  = null;  // Camera 1
+let currentIdlePreviewProcess2 = null;  // Camera 2
+let idlePreviewRestartTimer  = null;
+let idlePreviewRestartTimer2 = null;
+// 8554 is reserved for MediaMTX RTSP; 8553 & 8552 used for camera 1 & 2 idle preview
+const IDLE_PREVIEW_PORT   = 8553;
+const IDLE_PREVIEW_PORT_2 = 8552;
 
 // Helper: convert color name to GStreamer integer format
 const colorToInt = (colorName) => {
@@ -2676,12 +2753,15 @@ const colorToInt = (colorName) => {
 
 /**
  * Build GStreamer args for the idle preview pipeline.
- * Encodes at 15 fps H.264 and pushes to rtmp://localhost:1935/preview so MediaMTX
- * can serve it as WebRTC via WHEP at /api/whep/preview.
+ * Encodes at 15 fps H.264 and pushes to rtmp://localhost:1935/preview[2] so MediaMTX
+ * can serve it as WebRTC via WHEP at /api/whep/preview[2].
+ * @param {number} [camIdx=1] Camera index (1 or 2)
  * @returns {string[]} Complete gst-launch-1.0 args
  */
-function buildIdlePreviewGstArgs() {
-  const config = streamController.streamConfig;
+function buildIdlePreviewGstArgs(camIdx = 1) {
+  const sc = getSC(camIdx);
+  const config = sc.streamConfig;
+  const activeSource = getActiveSource(camIdx);
   const fs = require("fs");
 
   // ── Source-specific front-end of the pipeline ──
@@ -2689,11 +2769,11 @@ function buildIdlePreviewGstArgs() {
   // after this block so the shared overlay section works identically for all sources.
   let gstArgs;
 
-  if (activeCameraSource.type === "ndi" && activeCameraSource.ndiName) {
-    console.log(`📡 Building NDI idle preview pipeline for "${activeCameraSource.ndiName}"`);
+  if (activeSource.type === "ndi" && activeSource.ndiName) {
+    console.log(`📡 [Cam${camIdx}] Building NDI idle preview pipeline for "${activeSource.ndiName}"`);
     gstArgs = [
       "ndisrc",
-      `ndi-name="${activeCameraSource.ndiName}"`,
+      `ndi-name="${activeSource.ndiName}"`,
       "connect-timeout=5000",
       // do-timestamp=true: GStreamer base class stamps each frame with the
       // pipeline's own running time the moment it is pushed out of ndisrc.
@@ -2720,13 +2800,13 @@ function buildIdlePreviewGstArgs() {
       "videoconvert",
       "!",
     ];
-  } else if (activeCameraSource.type === "rtsp" && activeCameraSource.rtspUrl) {
-    console.log(`📡 Building RTSP idle preview pipeline for ${activeCameraSource.rtspUrl}`);
+  } else if (activeSource.type === "rtsp" && activeSource.rtspUrl) {
+    console.log(`📡 [Cam${camIdx}] Building RTSP idle preview pipeline for ${activeSource.rtspUrl}`);
     gstArgs = [
       // uridecodebin handles RTSP multi-stream (video+audio) gracefully:
       // the caps filter limits output pads to decoded video only, so no
       // dangling audio pad causes a NOT_LINKED fatal error.
-      "uridecodebin", `uri=${activeCameraSource.rtspUrl}`,
+      "uridecodebin", `uri=${activeSource.rtspUrl}`,
       "caps=video/x-raw",
       // videoconvert normalises the decoded caps (NV12, I420, BGR, etc.) to a
       // fixed raw format before videoscale and videorate.
@@ -2740,8 +2820,9 @@ function buildIdlePreviewGstArgs() {
     ];
   } else {
     // ── USB source (default) ──
-    const device = activeCameraSource.device || CAMERA_DEVICE;
-    if (cameraFormat === 'yuyv') {
+    const device = activeSource.device || (camIdx === 2 ? CAMERA_DEVICE_2 : CAMERA_DEVICE);
+    const fmt    = camIdx === 2 ? cameraFormat2 : cameraFormat;
+    if (fmt === 'yuyv') {
       // YUYV-only camera: omit format=YUYV from caps — Rockchip's RGA-backed
       // videoconvert doesn't list YUYV in its static sink pad template, so an
       // explicit format=YUYV constraint fails at parse time.  Without it,
@@ -2936,7 +3017,7 @@ function buildIdlePreviewGstArgs() {
     "!",
     "flvmux", "streamable=true",
     "!",
-    "rtmpsink", "location=rtmp://localhost:1935/preview", "sync=false", "async=false",
+    "rtmpsink", `location=rtmp://localhost:1935${getSC(camIdx).previewPath}`, "sync=false", "async=false",
   );
 
   return gstArgs;
@@ -2944,145 +3025,147 @@ function buildIdlePreviewGstArgs() {
 
 /**
  * Start (or restart) the persistent idle preview GStreamer process.
- * Encodes at 15 fps H.264 and pushes to rtmp://localhost:1935/preview so MediaMTX
- * can serve it as WebRTC (WHEP) at /api/whep/preview.
- * Protected by a mutex to prevent concurrent calls from racing.
+ * Encodes at 15 fps H.264 and pushes to rtmp://localhost:1935/preview[2] so MediaMTX
+ * can serve it as WebRTC (WHEP) at /api/whep/preview[2].
+ * Protected by per-camera mutexes to prevent concurrent calls from racing.
+ * @param {number} [camIdx=1] Camera index (1 or 2)
  */
-let _idlePreviewStarting = false;
-let _idlePreviewStartQueue = null; // Promise for callers to wait on
+// Per-camera mutex state
+let _idlePreviewStarting  = false; // Camera 1
+let _idlePreviewStarting2 = false; // Camera 2
+let _idlePreviewStartQueue  = null;
+let _idlePreviewStartQueue2 = null;
 
-// Backoff state for the idle preview auto-restart.
-// Prevents a rapid restart storm when GStreamer keeps failing immediately
-// (e.g. camera unavailable, RTSP source down).
-let _lastIdlePreviewSpawnTime = 0;  // wall-clock ms of the most recent spawn
-let _idlePreviewFailStreak    = 0;  // consecutive quick-exit count
+// Backoff state for idle preview auto-restart (per camera).
+let _lastIdlePreviewSpawnTime  = 0;  // Camera 1 last spawn ms
+let _lastIdlePreviewSpawnTime2 = 0;  // Camera 2 last spawn ms
+let _idlePreviewFailStreak     = 0;  // Camera 1 quick-exit count
+let _idlePreviewFailStreak2    = 0;  // Camera 2 quick-exit count
 // Cooldown schedule (ms) indexed by fail streak — capped at 60 s.
 const _IDLE_BACKOFF_MS = [0, 3000, 5000, 10000, 20000, 30000, 60000];
 
-async function startPersistentIdlePreview() {
-  // Don't start if streaming is active
-  if (streamController.isStreaming) {
-    console.log("⚠️  Not starting idle preview — stream is active");
+async function startPersistentIdlePreview(camIdx = 1) {
+  const sc = getSC(camIdx);
+  const activeSource = getActiveSource(camIdx);
+  const isStarting   = camIdx === 2 ? _idlePreviewStarting2 : _idlePreviewStarting;
+  const startQueue   = camIdx === 2 ? _idlePreviewStartQueue2 : _idlePreviewStartQueue;
+  const failStreak   = camIdx === 2 ? _idlePreviewFailStreak2 : _idlePreviewFailStreak;
+  const curProc      = camIdx === 2 ? currentIdlePreviewProcess2 : currentIdlePreviewProcess;
+
+  // Don't start if this camera's stream is active
+  if (sc.isStreaming) {
+    console.log(`⚠️  [Cam${camIdx}] Not starting idle preview — stream is active`);
     return;
   }
 
-  // If another call is already in progress, wait for it to finish
-  if (_idlePreviewStarting) {
-    console.log("⏳ Idle preview start already in progress — waiting...");
-    if (_idlePreviewStartQueue) {
-      await _idlePreviewStartQueue;
-    }
+  // If another call is already in progress for this camera, wait for it to finish
+  if (isStarting) {
+    console.log(`⏳ [Cam${camIdx}] Idle preview start already in progress — waiting...`);
+    if (startQueue) await startQueue;
     return;
   }
 
   // ── Backoff cooldown ─────────────────────────────────────────────────────
-  // If the process keeps dying within a few seconds of starting (camera
-  // unavailable, RTSP source down, etc.), enforce a growing wait so we don't
-  // spin the CPU with rapid GStreamer spawn→die cycles.
-  const backoffMs = _IDLE_BACKOFF_MS[Math.min(_idlePreviewFailStreak, _IDLE_BACKOFF_MS.length - 1)];
+  const backoffMs = _IDLE_BACKOFF_MS[Math.min(failStreak, _IDLE_BACKOFF_MS.length - 1)];
   if (backoffMs > 0) {
-    console.log(`⏳ Idle preview backoff (streak=${_idlePreviewFailStreak}) — waiting ${backoffMs}ms...`);
+    console.log(`⏳ [Cam${camIdx}] Idle preview backoff (streak=${failStreak}) — waiting ${backoffMs}ms...`);
     await new Promise((r) => setTimeout(r, backoffMs));
   }
-  // Re-check: if streaming started during the backoff wait, bail out.
-  if (streamController.isStreaming) {
-    console.log("⚠️  Not starting idle preview — stream started during backoff wait");
+  if (sc.isStreaming) {
+    console.log(`⚠️  [Cam${camIdx}] Not starting idle preview — stream started during backoff`);
     return;
   }
 
-  _idlePreviewStarting = true;
-  let resolveQueue;
-  _idlePreviewStartQueue = new Promise((r) => { resolveQueue = r; });
+  if (camIdx === 2) { _idlePreviewStarting2 = true; _idlePreviewStartQueue2 = new Promise((r) => { _resolveQueue2 = r; }); }
+  else              { _idlePreviewStarting  = true; _idlePreviewStartQueue  = new Promise((r) => { _resolveQueue  = r; }); }
+  let _resolveQueue, _resolveQueue2;
 
   try {
-    // Kill existing idle preview process
-    if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
-      console.log("🔄 Killing previous idle preview to restart with updated settings");
-      currentIdlePreviewProcess.kill("SIGTERM");
-      currentIdlePreviewProcess = null;
+    // Kill existing idle preview process for this camera
+    if (curProc && !curProc.killed) {
+      console.log(`🔄 [Cam${camIdx}] Killing previous idle preview`);
+      curProc.kill("SIGTERM");
+      if (camIdx === 2) currentIdlePreviewProcess2 = null;
+      else              currentIdlePreviewProcess  = null;
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
 
-    const gstArgs = buildIdlePreviewGstArgs();
-    console.log(`📹 Starting idle preview → rtmp://localhost:1935/preview (source: ${activeCameraSource.type})`);
+    const gstArgs = buildIdlePreviewGstArgs(camIdx);
+    const previewPath = sc.previewPath;
+    console.log(`📹 [Cam${camIdx}] Starting idle preview → rtmp://localhost:1935${previewPath} (source: ${activeSource.type})`);
 
     const gst = spawn("gst-launch-1.0", gstArgs);
-    currentIdlePreviewProcess = gst;
+    if (camIdx === 2) currentIdlePreviewProcess2 = gst;
+    else              currentIdlePreviewProcess  = gst;
     const spawnTime = Date.now();
-    _lastIdlePreviewSpawnTime = spawnTime;
+    if (camIdx === 2) _lastIdlePreviewSpawnTime2 = spawnTime;
+    else              _lastIdlePreviewSpawnTime  = spawnTime;
 
-    // stdout suppressed — GStreamer is extremely chatty with pipeline state transitions
     gst.stdout.on("data", () => {});
-
     gst.stderr.on("data", (data) => {
       const msg = data.toString().trim();
-      // Only log stderr lines that look like actual errors (suppress normal state lines)
       if (msg && /error|warning|failed|cannot|unable/i.test(msg)) {
-        console.error(`GStreamer idle: ${msg}`);
+        console.error(`GStreamer idle [Cam${camIdx}]: ${msg}`);
       }
     });
 
     gst.on("close", (code) => {
       const lifetime = Date.now() - spawnTime;
-      console.log(`GStreamer idle preview exited with code ${code} (ran ${lifetime}ms)`);
-      if (currentIdlePreviewProcess === gst) {
-        currentIdlePreviewProcess = null;
-      }
+      console.log(`GStreamer idle preview [Cam${camIdx}] exited with code ${code} (ran ${lifetime}ms)`);
+      if (camIdx === 2) { if (currentIdlePreviewProcess2 === gst) currentIdlePreviewProcess2 = null; }
+      else              { if (currentIdlePreviewProcess  === gst) currentIdlePreviewProcess  = null; }
 
-      // Track consecutive quick exits (< 8 s) to drive backoff on the next start.
       if (lifetime < 8000) {
-        _idlePreviewFailStreak = Math.min(_idlePreviewFailStreak + 1, _IDLE_BACKOFF_MS.length - 1);
-        console.log(`⚠️  Idle preview died quickly — fail streak: ${_idlePreviewFailStreak}`);
+        if (camIdx === 2) _idlePreviewFailStreak2 = Math.min(_idlePreviewFailStreak2 + 1, _IDLE_BACKOFF_MS.length - 1);
+        else              _idlePreviewFailStreak  = Math.min(_idlePreviewFailStreak  + 1, _IDLE_BACKOFF_MS.length - 1);
+        console.log(`⚠️  [Cam${camIdx}] Idle preview died quickly`);
       } else {
-        _idlePreviewFailStreak = 0; // ran long enough → reset backoff
+        if (camIdx === 2) _idlePreviewFailStreak2 = 0;
+        else              _idlePreviewFailStreak  = 0;
       }
 
-      // Auto-restart when NOT streaming and NOT in the middle of a planned restart.
-      // This recovers the preview if GStreamer crashes on its own (e.g. USB device
-      // momentarily disconnected) without requiring a client page-reload.
-      // isRestartInProgress guards against restarting during stream "preparing" — the
-      // idle preview is intentionally killed there and must not race back to grab the camera.
-      if (!streamController.isStreaming && !_idlePreviewStarting && !isRestartInProgress && bootComplete) {
-        console.log(`📹 Idle preview died — scheduling auto-restart...`);
-        startPersistentIdlePreview()
-          .then(() => { io.emit("refreshIdlePreview"); })
-          .catch((err) => { console.error("⚠️  Idle preview auto-restart failed:", err.message); });
+      const startingNow = camIdx === 2 ? _idlePreviewStarting2 : _idlePreviewStarting;
+      if (!sc.isStreaming && !startingNow && !isRestartInProgress && bootComplete) {
+        console.log(`📹 [Cam${camIdx}] Idle preview died — scheduling auto-restart...`);
+        startPersistentIdlePreview(camIdx)
+          .then(() => { io.emit("refreshIdlePreview", { cameraIndex: camIdx }); })
+          .catch((err) => { console.error(`⚠️  [Cam${camIdx}] Idle preview auto-restart failed:`, err.message); });
       }
     });
 
     gst.on("error", (err) => {
-      console.error("Failed to start GStreamer idle preview:", err);
-      if (currentIdlePreviewProcess === gst) {
-        currentIdlePreviewProcess = null;
-      }
+      console.error(`Failed to start GStreamer idle preview [Cam${camIdx}]:`, err);
+      if (camIdx === 2) { if (currentIdlePreviewProcess2 === gst) currentIdlePreviewProcess2 = null; }
+      else              { if (currentIdlePreviewProcess  === gst) currentIdlePreviewProcess  = null; }
     });
 
-    // Wait for the TCP server to start listening
     await new Promise((resolve) => setTimeout(resolve, 800));
   } finally {
-    _idlePreviewStarting = false;
-    if (resolveQueue) resolveQueue();
-    _idlePreviewStartQueue = null;
+    if (camIdx === 2) { _idlePreviewStarting2 = false; if (_resolveQueue2) _resolveQueue2(); _idlePreviewStartQueue2 = null; }
+    else              { _idlePreviewStarting  = false; if (_resolveQueue)  _resolveQueue();  _idlePreviewStartQueue  = null; }
   }
 }
 
 // Video stream endpoint using MJPEG — proxies the persistent idle preview TCP server
+// Supports ?cam=1 (default) or ?cam=2 for the second camera.
 app.get("/video/stream", async (req, res) => {
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  const sc = getSC(camIdx);
+  const activeSource = getActiveSource(camIdx);
+  const previewPort = camIdx === 2 ? IDLE_PREVIEW_PORT_2 : IDLE_PREVIEW_PORT;
+  const curProc     = camIdx === 2 ? currentIdlePreviewProcess2 : currentIdlePreviewProcess;
+
   // If streaming is active, don't try to access camera for idle preview
-  if (streamController.isStreaming) {
-    res.status(503).send("Stream active - use HLS preview");
+  if (sc.isStreaming) {
+    res.status(503).send("Stream active - use WebRTC preview");
     return;
   }
 
-  // If no idle preview process is running, start one (but not during boot — boot handles it).
-  // Both USB and RTSP sources are restarted here; the source was validated and saved by the
-  // user so it should be reachable.  If it isn't, GStreamer will exit and the client's
-  // onerror retry loop will keep trying every second — no infinite tight loop is possible.
   if (!bootComplete) {
-    console.log("⏳ Boot still in progress — waiting for idle preview to be started by boot sequence");
-  } else if (!currentIdlePreviewProcess || currentIdlePreviewProcess.killed) {
-    console.log(`📹 No idle preview running — starting persistent idle preview (source: ${activeCameraSource.type})...`);
-    await startPersistentIdlePreview();
+    console.log(`⏳ [Cam${camIdx}] Boot still in progress — waiting for idle preview`);
+  } else if (!curProc || curProc.killed) {
+    console.log(`📹 [Cam${camIdx}] No idle preview running — starting (source: ${activeSource.type})...`);
+    await startPersistentIdlePreview(camIdx);
   }
 
   res.writeHead(200, {
@@ -3092,66 +3175,32 @@ app.get("/video/stream", async (req, res) => {
     "Access-Control-Allow-Origin": "*",
   });
 
-  // Connect to the persistent idle preview TCP server
-  // During boot, allow more retries since the preview takes time to start
   const net = require("net");
   let retries = 0;
-  // Post-boot: allow up to 15 s for the TCP server to become ready.
-  // RTSP idle pipelines need up to 12 s to negotiate the session before
-  // tcpserversink starts accepting connections; USB typically takes <1 s.
   const maxRetries = bootComplete ? 15 : 30;
-
-  // Track the current active TCP client so req.on("close") can always destroy it.
-  // The listener is registered ONCE here — not inside the retry loop — to avoid
-  // the MaxListenersExceededWarning that occurs when a new listener is added on
-  // every recursive connectToPreview() call.
   let currentClient = null;
   let reqClosed = false;
 
   req.on("close", () => {
     reqClosed = true;
-    if (currentClient) {
-      currentClient.destroy();
-    }
+    if (currentClient) currentClient.destroy();
   });
 
   function connectToPreview() {
-    // If the HTTP client already disconnected, stop retrying.
     if (reqClosed) return;
-
-    const client = net.connect({ port: IDLE_PREVIEW_PORT, host: "localhost" });
+    const client = net.connect({ port: previewPort, host: "localhost" });
     currentClient = client;
 
-    let totalBytesReceived = 0;
-    let firstDataLogged = false;
-
     client.on("connect", () => { /* connected */ });
-
     client.on("data", (data) => {
-      totalBytesReceived += data.length;
-      try {
-        res.write(data);
-      } catch (err) {
-        console.error("Error writing preview frame:", err.message);
-        client.destroy();
-      }
+      try { res.write(data); } catch (err) { client.destroy(); }
     });
-
     client.on("error", (err) => {
-      if (reqClosed) return; // HTTP client already gone — stop silently
-      if (retries < maxRetries) {
-        retries++;
-        setTimeout(connectToPreview, 1000);
-      } else {
-        console.error(`❌ Could not connect to idle preview after ${maxRetries} attempts`);
-        try { res.end(); } catch (e) { /* already ended */ }
-      }
-    });
-
-    client.on("close", () => {
       if (reqClosed) return;
-      try { res.end(); } catch (e) { /* already ended */ }
+      if (retries < maxRetries) { retries++; setTimeout(connectToPreview, 1000); }
+      else { console.error(`❌ [Cam${camIdx}] Could not connect to idle preview after ${maxRetries} attempts`); try { res.end(); } catch (e) {} }
     });
+    client.on("close", () => { if (reqClosed) return; try { res.end(); } catch (e) {} });
   }
 
   connectToPreview();
@@ -3173,61 +3222,69 @@ io.on("connection", (socket) => {
   console.log(`Client connected: ${socket.id} (${who})`);
 
   // Handle camera control commands
+  // All camera socket events accept an optional `cameraIndex` (1 or 2) in the payload.
   socket.on("setControl", async (data) => {
+    const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
     const { control, value } = data;
-    console.log(
-      `📡 Client ${socket.id} sent setControl: ${control} = ${value}`,
-    );
+    console.log(`📡 Client ${socket.id} sent setControl [Cam${camIdx}]: ${control} = ${value}`);
 
     // Ignore commands if camera is still initializing
-    if (!cameraInitialized) {
-      console.log(`⚠️  Ignoring command - camera still initializing`);
+    const initialized = camIdx === 2 ? cameraInitialized2 : cameraInitialized;
+    if (!initialized) {
+      console.log(`⚠️  [Cam${camIdx}] Ignoring command - camera still initializing`);
       return;
     }
 
-    const result = await camera.setControl(control, value);
+    const result = await getCam(camIdx).setControl(control, value);
     socket.emit("controlResult", result);
   });
 
   socket.on("getControl", async (data) => {
+    const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
     const { control } = data;
-    const result = await camera.getControl(control);
+    const result = await getCam(camIdx).getControl(control);
     socket.emit("controlResult", result);
   });
 
   socket.on("pan", async (data) => {
+    const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
     const { steps } = data;
     // Respect panInverted flag — some cameras (e.g. Minrray) have the pan
     // motor wired opposite to the OBSBot convention used by the UI buttons.
-    const panInverted = streamController.streamConfig?.panInverted || false;
+    const panInverted = getSC(camIdx).streamConfig?.panInverted || false;
     const effectiveSteps = panInverted ? -steps : steps;
-    console.log(`📡 Client ${socket.id} sent pan: ${steps} steps${panInverted ? ' (inverted → ' + effectiveSteps + ')' : ''}`);
-    const result = await camera.pan(effectiveSteps);
+    console.log(`📡 Client ${socket.id} sent pan [Cam${camIdx}]: ${steps} steps${panInverted ? ' (inverted → ' + effectiveSteps + ')' : ''}`);
+    const result = await getCam(camIdx).pan(effectiveSteps);
     socket.emit("controlResult", result);
   });
 
   socket.on("tilt", async (data) => {
+    const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
     const { steps } = data;
-    console.log(`📡 Client ${socket.id} sent tilt: ${steps} steps`);
-    const result = await camera.tilt(steps);
+    console.log(`📡 Client ${socket.id} sent tilt [Cam${camIdx}]: ${steps} steps`);
+    const result = await getCam(camIdx).tilt(steps);
     socket.emit("controlResult", result);
   });
 
   socket.on("zoom", async (data) => {
+    const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
     const { level } = data;
-    const result = await camera.zoom(level);
+    const result = await getCam(camIdx).zoom(level);
     socket.emit("controlResult", result);
   });
 
-  socket.on("resetPosition", async () => {
-    const result = await camera.resetPosition();
+  socket.on("resetPosition", async (data) => {
+    const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
+    const result = await getCam(camIdx).resetPosition();
     socket.emit("controlResult", result);
   });
 
-  socket.on("getCameraConfig", () => {
+  socket.on("getCameraConfig", (data) => {
+    const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
+    const cam = getCam(camIdx);
     // Include the list of controls this camera actually supports so the UI
     // can dim controls that don't exist on the attached camera.
-    const hwControls = camera.discoveredControls || camera.controls;
+    const hwControls = cam.discoveredControls || cam.controls;
 
     // Send the actual hardware min/max/step for pan and tilt so the client can
     // compute step sizes that match this camera's range and minimum motor step.
@@ -3236,29 +3293,35 @@ io.on("connection", (socket) => {
     if (hwControls.tilt_absolute) ptzRanges.tilt_absolute = { min: hwControls.tilt_absolute.min, max: hwControls.tilt_absolute.max, step: hwControls.tilt_absolute.step };
 
     socket.emit("cameraConfig", {
+      cameraIndex: camIdx,
       success: true,
-      config: camera.config,
+      config: cam.config,
       supportedControls: Object.keys(hwControls),
       ptzRanges,
     });
   });
 
-  socket.on("setStartupPosition", () => {
-    const result = camera.saveStartupPosition();
+  socket.on("setStartupPosition", (data) => {
+    const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
+    const result = getCam(camIdx).saveStartupPosition();
     socket.emit("startupPositionSet", result);
   });
 
-  socket.on("getStartupPosition", () => {
-    const position = camera.loadStartupPosition();
+  socket.on("getStartupPosition", (data) => {
+    const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
+    const position = getCam(camIdx).loadStartupPosition();
     socket.emit("startupPosition", { position });
   });
 
-  socket.on("resetCameraSettings", async () => {
-    const results = await camera.resetToDefaults();
+  socket.on("resetCameraSettings", async (data) => {
+    const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
+    const cam = getCam(camIdx);
+    const results = await cam.resetToDefaults();
     socket.emit("cameraConfigReset", {
+      cameraIndex: camIdx,
       success: true,
       results: results,
-      config: camera.config,
+      config: cam.config,
     });
   });
 
@@ -3328,69 +3391,67 @@ io.on("connection", (socket) => {
   });
 
   // ============ STREAMING SOCKET EVENTS ============
+  // All streaming events accept an optional `cameraIndex` (1 or 2) in the payload.
 
   socket.on("startStream", async (config) => {
-    // Immediately broadcast "starting" to all clients
-    io.emit("streamStatus", { ...streamController.getStatus(), status: "starting" });
-    const result = await streamController.startStream(config);
+    const camIdx = parseInt(config?.cameraIndex) === 2 ? 2 : 1;
+    const sc = getSC(camIdx);
+    io.emit("streamStatus", { ...sc.getStatus(), status: "starting" });
+    const result = await sc.startStream(config);
     socket.emit("streamResult", result);
   });
 
-  socket.on("stopStream", async () => {
-    // Immediately broadcast "stopping" to all clients
-    io.emit("streamStatus", { ...streamController.getStatus(), status: "stopping" });
-    const result = await streamController.stopStream();
+  socket.on("stopStream", async (data) => {
+    const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
+    const sc = getSC(camIdx);
+    io.emit("streamStatus", { ...sc.getStatus(), status: "stopping" });
+    const result = await sc.stopStream();
     socket.emit("streamResult", result);
-    // No manual refresh prompt needed — the "stopped" event handler calls
-    // startPersistentIdlePreview() + waitForPort() and then broadcasts
-    // "refreshIdlePreview" to all clients, which auto-switches the preview.
   });
 
   // Atomic restart: stop → start without showing the idle preview in between.
-  // The "stopped" broadcast and idle-preview restart are suppressed while
-  // isRestartInProgress is true, so the browser stays on "Restarting…" the
-  // whole time and never opens a redundant MJPEG preview connection.
   socket.on("restartStream", async (config) => {
-    console.log("🔄 Restarting stream...");
+    const camIdx = parseInt(config?.cameraIndex) === 2 ? 2 : 1;
+    const sc = getSC(camIdx);
+    console.log(`🔄 [Cam${camIdx}] Restarting stream...`);
     isRestartInProgress = true;
     try {
-      io.emit("streamStatus", { ...streamController.getStatus(), status: "restarting" });
+      io.emit("streamStatus", { ...sc.getStatus(), status: "restarting" });
 
-      // Stop the running stream
-      if (streamController.isStreaming) {
-        io.emit("streamStatus", { ...streamController.getStatus(), status: "stopping" });
-        await streamController.stopStream();
+      if (sc.isStreaming) {
+        io.emit("streamStatus", { ...sc.getStatus(), status: "stopping" });
+        await sc.stopStream();
       }
 
-      // Start the new stream — clear the flag first so normal "started"/"stopped"
-      // events are broadcast correctly going forward.
       isRestartInProgress = false;
-      io.emit("streamStatus", { ...streamController.getStatus(), status: "starting" });
-      const result = await streamController.startStream(config);
+      io.emit("streamStatus", { ...sc.getStatus(), status: "starting" });
+      const result = await sc.startStream(config);
       socket.emit("streamResult", result);
     } catch (err) {
-      console.error("⚠️  restartStream error:", err.message);
-      isRestartInProgress = false; // always clear so idle preview can restart
+      console.error(`⚠️  [Cam${camIdx}] restartStream error:`, err.message);
+      isRestartInProgress = false;
       socket.emit("streamResult", { success: false, error: err.message });
-      // Trigger idle preview so clients aren't left with a blank screen
-      startPersistentIdlePreview()
-        .then(() => io.emit("refreshIdlePreview"))
+      startPersistentIdlePreview(camIdx)
+        .then(() => io.emit("refreshIdlePreview", { cameraIndex: camIdx }))
         .catch(() => {});
     }
   });
 
-  socket.on("getStreamStatus", () => {
-    const status = streamController.getStatus();
-    socket.emit("streamStatus", status);
+  socket.on("getStreamStatus", (data) => {
+    const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
+    socket.emit("streamStatus", getSC(camIdx).getStatus());
   });
 
   socket.on("updateStreamConfig", (config) => {
-    const result = streamController.updateConfig(config);
+    const camIdx = parseInt(config?.cameraIndex) === 2 ? 2 : 1;
+    const result = getSC(camIdx).updateConfig(config);
     socket.emit("streamResult", result);
   });
 
   socket.on("updateOverlay", async (overlayConfig) => {
-    const result = streamController.updateOverlay(overlayConfig);
+    const camIdx = parseInt(overlayConfig?.cameraIndex) === 2 ? 2 : 1;
+    const sc = getSC(camIdx);
+    const result = sc.updateOverlay(overlayConfig);
 
     // Also update gameState with overlay configuration for node-graphics-stream.js
     if (overlayConfig.overlayFontSize !== undefined) {
@@ -3407,7 +3468,6 @@ io.on("connection", (socket) => {
     const wantsRemote = overlayConfig.remoteOverlayEnabled &&
       overlayConfig.overlayUrl && overlayConfig.overlayUrl.trim();
     if (wantsRemote) {
-      // Create PuppeteerOverlay instance if it doesn't exist yet
       if (!puppeteerOverlay && PuppeteerOverlay) {
         puppeteerOverlay = new PuppeteerOverlay();
       }
@@ -3420,26 +3480,24 @@ io.on("connection", (socket) => {
         });
         puppeteerOverlay.startPeriodicRefresh();
 
-        // Wait for the first screenshot before restarting preview,
-        // so the overlay is visible immediately (no flash of camera-only feed)
-        if (!streamController.isStreaming) {
-          clearTimeout(idlePreviewRestartTimer);
+        if (!sc.isStreaming) {
+          const restartTimer = camIdx === 2 ? idlePreviewRestartTimer2 : idlePreviewRestartTimer;
+          clearTimeout(restartTimer);
           const restartForOverlay = async () => {
-            console.log("📸 Remote screenshot ready — restarting idle preview to show overlay");
-            await startPersistentIdlePreview();
-            io.emit("refreshIdlePreview");
+            console.log(`📸 [Cam${camIdx}] Remote screenshot ready — restarting idle preview to show overlay`);
+            await startPersistentIdlePreview(camIdx);
+            io.emit("refreshIdlePreview", { cameraIndex: camIdx });
           };
           const onUpdated = () => { clearTimeout(fallback); restartForOverlay(); };
           const fallback = setTimeout(() => {
             puppeteerOverlay.removeListener("updated", onUpdated);
-            console.log("⏱️ Timeout waiting for remote screenshot — restarting preview anyway");
+            console.log(`⏱️ [Cam${camIdx}] Timeout waiting for remote screenshot — restarting preview anyway`);
             restartForOverlay();
           }, 10000);
           puppeteerOverlay.once("updated", onUpdated);
         }
       }
     } else if (overlayConfig.remoteOverlayEnabled === false && puppeteerOverlay) {
-      // Remote overlay was explicitly turned off — fully shut down Puppeteer and delete all overlay files
       console.log("🛑 Remote overlay disabled — shutting down Puppeteer and removing overlay files...");
       await puppeteerOverlay.stop();
       puppeteerOverlay = null;
@@ -3452,16 +3510,22 @@ io.on("connection", (socket) => {
       fs.writeFileSync('/tmp/graphics-overlay-state.json', JSON.stringify(gameState, null, 2));
     } catch (err) { /* ignore */ }
 
-    // If NOT streaming and NOT waiting for a remote screenshot, restart the idle preview
-    // Debounce to avoid restarting on every keystroke
-    if (!streamController.isStreaming && !wantsRemote) {
-      clearTimeout(idlePreviewRestartTimer);
-      idlePreviewRestartTimer = setTimeout(async () => {
-        console.log(`📋 Debounce fired — restarting idle preview with updated overlay settings`);
-        await startPersistentIdlePreview();
-        console.log("📡 Emitting refreshIdlePreview to clients");
-        io.emit("refreshIdlePreview");
-      }, 800);
+    // Debounced idle preview restart when overlay changes (per camera)
+    if (!sc.isStreaming && !wantsRemote) {
+      if (camIdx === 2) {
+        clearTimeout(idlePreviewRestartTimer2);
+        idlePreviewRestartTimer2 = setTimeout(async () => {
+          await startPersistentIdlePreview(2);
+          io.emit("refreshIdlePreview", { cameraIndex: 2 });
+        }, 800);
+      } else {
+        clearTimeout(idlePreviewRestartTimer);
+        idlePreviewRestartTimer = setTimeout(async () => {
+          console.log(`📋 Debounce fired — restarting idle preview with updated overlay settings`);
+          await startPersistentIdlePreview(1);
+          io.emit("refreshIdlePreview", { cameraIndex: 1 });
+        }, 800);
+      }
     }
 
     socket.emit("overlayResult", result);
@@ -3661,7 +3725,7 @@ server.listen(PORT, async () => {
   // is ready and VIDIOC_S_FMT succeeds on the first attempt.
   console.log("📹 Starting idle preview for camera warm-up...");
   try {
-    await startPersistentIdlePreview();
+    await startPersistentIdlePreview(1);
     console.log("✅ Idle preview started — camera is active");
   } catch (error) {
     console.error("❌ Error starting idle preview:", error.message);
@@ -3743,8 +3807,8 @@ server.listen(PORT, async () => {
         });
         // Only restart if we're not currently streaming
         if (!streamController.isStreaming) {
-          await startPersistentIdlePreview();
-          io.emit("refreshIdlePreview");
+          await startPersistentIdlePreview(1);
+          io.emit("refreshIdlePreview", { cameraIndex: 1 });
         }
       } catch (err) {
         console.error("⚠️  Failed to start remote overlay on boot:", err.message);
@@ -3797,128 +3861,128 @@ app.use("/graphql", (req, res) => {
 // Graphics Overlay Integration
 // ============================================================================
 
+// Helper: kill idle preview for a given camera before streaming starts
+async function _killIdlePreviewForCamera(camIdx) {
+  const proc = camIdx === 2 ? currentIdlePreviewProcess2 : currentIdlePreviewProcess;
+  if (proc && !proc.killed) {
+    console.log(`🛑 [Cam${camIdx}] Killing idle preview before starting stream...`);
+    const dyingProcess = proc;
+    if (camIdx === 2) currentIdlePreviewProcess2 = null; else currentIdlePreviewProcess = null;
+    await new Promise((resolve) => {
+      dyingProcess.once("close", resolve);
+      dyingProcess.kill("SIGTERM");
+      setTimeout(() => { try { dyingProcess.kill("SIGKILL"); } catch (_) {} }, 2000);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  console.log(`✅ [Cam${camIdx}] Idle preview killed — camera device free`);
+}
+
 // Start Puppeteer overlay BEFORE GStreamer starts (during "preparing" phase)
 // This ensures the PNG file exists when gdkpixbufoverlay tries to load it
 streamController.on("preparing", async () => {
   try {
-  // Set the flag FIRST so the idle-preview auto-restart close handler cannot fire
-  // and race back to grab /dev/video0 before the streaming pipeline starts.
-  isRestartInProgress = true;
+    isRestartInProgress = true;
+    await _killIdlePreviewForCamera(1);
 
-  // Kill idle preview process and wait for actual exit (not a fixed timeout).
-  // A fixed sleep risks the streaming GStreamer starting before the V4L2 fd is
-  // released; waiting on "close" guarantees the kernel has freed the device.
-  if (currentIdlePreviewProcess && !currentIdlePreviewProcess.killed) {
-    console.log("🛑 Killing idle preview before starting stream...");
-    const dyingProcess = currentIdlePreviewProcess;
-    currentIdlePreviewProcess = null;
-    await new Promise((resolve) => {
-      dyingProcess.once("close", resolve);
-      dyingProcess.kill("SIGTERM");
-      // SIGKILL fallback if the process doesn't exit within 2 s
-      setTimeout(() => { try { dyingProcess.kill("SIGKILL"); } catch (_) {} }, 2000);
-    });
-    // Small buffer for the kernel to fully release the V4L2 file descriptor
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  console.log("✅ Idle preview killed — camera device free");
+    const hasUrlOverlay = streamController.streamConfig.remoteOverlayEnabled &&
+      streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
+    const needsGraphicsOverlay = streamController.streamConfig.skiaGraphicsEnabled || hasUrlOverlay;
 
-  const hasUrlOverlay = streamController.streamConfig.remoteOverlayEnabled &&
-    streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
-  const needsGraphicsOverlay = streamController.streamConfig.skiaGraphicsEnabled || hasUrlOverlay;
-
-  if (needsGraphicsOverlay) {
-    console.log(`🎨 Preparing overlay (HTML → PNG)...`);
-
-    // Ensure a valid PNG exists BEFORE any async work so GStreamer always has a file
-    // to load. Puppeteer initialization can take several seconds; the stream controller
-    // only waits 1.5 s after emitting "preparing" before spawning GStreamer. Creating a
-    // placeholder here (synchronous, < 50 ms) guarantees gdkpixbufoverlay won't fail
-    // with "No such file". Puppeteer will overwrite it with real content asynchronously.
-    const pngPath = "/tmp/graphics-overlay.png";
-    const pngMissing = !fsSync.existsSync(pngPath) || fsSync.statSync(pngPath).size < 100;
-    if (pngMissing) {
+    if (needsGraphicsOverlay) {
+      console.log(`🎨 [Cam1] Preparing overlay (HTML → PNG)...`);
+      const pngPath = "/tmp/graphics-overlay.png";
+      const pngMissing = !fsSync.existsSync(pngPath) || fsSync.statSync(pngPath).size < 100;
+      if (pngMissing) {
+        try {
+          const { execSync } = require("child_process");
+          execSync(`convert -size 1920x1080 xc:transparent "${pngPath}"`, { timeout: 5000 });
+          console.log("🖼️  Placeholder transparent PNG created — Puppeteer will update it shortly");
+        } catch (e) {
+          console.error("⚠️  Could not create placeholder PNG:", e.message);
+        }
+      }
       try {
-        const { execSync } = require("child_process");
-        execSync(`convert -size 1920x1080 xc:transparent "${pngPath}"`, { timeout: 5000 });
-        console.log("🖼️  Placeholder transparent PNG created — Puppeteer will update it shortly");
-      } catch (e) {
-        console.error("⚠️  Could not create placeholder PNG:", e.message);
+        if (!puppeteerOverlay) puppeteerOverlay = new PuppeteerOverlay();
+        if (!puppeteerOverlay.isRunning) await puppeteerOverlay.initialize(PORT);
+        const overlayUrl = streamController.streamConfig.overlayUrl;
+        if (overlayUrl && overlayUrl.trim()) {
+          const overlayZoom = streamController.streamConfig.overlayZoom || 100;
+          console.log(`🌍 [Cam1] Using remote overlay URL: ${overlayUrl} (zoom: ${overlayZoom}%)`);
+          puppeteerOverlay.setOverlayUrl(overlayUrl, { zoom: overlayZoom });
+          puppeteerOverlay.startPeriodicRefresh();
+        }
+        console.log("✅ [Cam1] Overlay PNG ready for GStreamer");
+      } catch (err) {
+        console.error("❌ [Cam1] Failed to prepare overlay:", err.message);
       }
     }
-
-    try {
-      // Initialize overlay renderer if not already running
-      if (!puppeteerOverlay) {
-        puppeteerOverlay = new PuppeteerOverlay();
-      }
-
-      if (!puppeteerOverlay.isRunning) {
-        await puppeteerOverlay.initialize(PORT);
-      }
-
-      // Remote overlay URL mode only — no local scoreboard rendering
-      const overlayUrl = streamController.streamConfig.overlayUrl;
-      if (overlayUrl && overlayUrl.trim()) {
-        const overlayZoom = streamController.streamConfig.overlayZoom || 100;
-        console.log(`🌍 Using remote overlay URL: ${overlayUrl} (zoom: ${overlayZoom}%)`);
-        puppeteerOverlay.setOverlayUrl(overlayUrl, { zoom: overlayZoom });
-        puppeteerOverlay.startPeriodicRefresh();
-      }
-      console.log("✅ Overlay PNG ready for GStreamer");
-    } catch (err) {
-      console.error("❌ Failed to prepare overlay:", err.message);
-    }
-  }
   } catch (err) {
-    console.error("⚠️  Error in stream 'preparing' handler — service continuing:", err.message);
+    console.error("⚠️  Error in stream 'preparing' handler [Cam1] — service continuing:", err.message);
   }
 });
+
+// Camera 2 "preparing" handler
+streamController2.on("preparing", async () => {
+  try {
+    await _killIdlePreviewForCamera(2);
+    // Camera 2 overlay: uses same streamController2 config (no Puppeteer for cam2 yet)
+    console.log(`✅ [Cam2] Ready for streaming`);
+  } catch (err) {
+    console.error("⚠️  Error in stream 'preparing' handler [Cam2] — service continuing:", err.message);
+  }
+});
+
+// Helper: restart idle preview after stream stops (shared by both cameras)
+async function _handleStreamStopped(camIdx) {
+  const sc = getSC(camIdx);
+  const activeSource = getActiveSource(camIdx);
+  const previewPathName = sc.previewPath.replace(/^\//, "");
+
+  const hasRemote = sc.streamConfig.remoteOverlayEnabled &&
+    sc.streamConfig.overlayUrl && sc.streamConfig.overlayUrl.trim();
+  if (camIdx === 1 && puppeteerOverlay && !hasRemote) {
+    puppeteerOverlay._stopPeriodicRefresh();
+    console.log(`ℹ️  [Cam${camIdx}] Stream stopped, no remote overlay — pausing refresh`);
+  } else if (camIdx === 1 && hasRemote) {
+    console.log(`ℹ️  [Cam${camIdx}] Stream stopped, remote overlay active — keeping refresh`);
+  }
+
+  console.log(`📹 [Cam${camIdx}] Stream stopped — restarting persistent idle preview...`);
+  const releaseDelay = (activeSource.type === "rtsp" || activeSource.type === "ndi") ? 2500 : 1000;
+  console.log(`⏳ [Cam${camIdx}] Waiting ${releaseDelay}ms for source to release (${activeSource.type})...`);
+  await new Promise((resolve) => setTimeout(resolve, releaseDelay));
+  await startPersistentIdlePreview(camIdx);
+
+  const idleTimeoutMs = (activeSource.type === "rtsp" || activeSource.type === "ndi") ? 12000 : 5000;
+  const idleReady = await waitForRtmpPublisher(previewPathName, idleTimeoutMs);
+  if (!idleReady) {
+    console.warn(`⚠️  [Cam${camIdx}] Idle preview RTMP publisher not ready after ${idleTimeoutMs / 1000}s — clients will retry`);
+  }
+  io.emit("refreshIdlePreview", { cameraIndex: camIdx });
+}
 
 // When stream stops, restart the persistent idle preview and manage Puppeteer refresh
 streamController.on("stopped", async () => {
   try {
-    // During an atomic restart, skip the idle preview restart — the restartStream
-    // handler will start a new stream immediately instead.
     if (isRestartInProgress) {
-      console.log("🔄 Restart in progress — skipping idle preview restart");
+      console.log("🔄 [Cam1] Restart in progress — skipping idle preview restart");
       return;
     }
-
-    const hasRemote = streamController.streamConfig.remoteOverlayEnabled &&
-      streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
-    if (puppeteerOverlay && !hasRemote) {
-      puppeteerOverlay._stopPeriodicRefresh();
-      console.log("ℹ️  Stream stopped, no remote overlay — pausing refresh");
-    } else if (hasRemote) {
-      console.log("ℹ️  Stream stopped, remote overlay active — keeping refresh for idle preview");
-    }
-
-    // Restart the persistent idle preview so clients see the camera feed again
-    console.log("📹 Stream stopped — restarting persistent idle preview...");
-    // For RTSP sources, give the camera/server extra time to fully close the previous
-    // session (TEARDOWN + session cleanup) before we open a new rtspsrc connection.
-    // USB v4l2src is always ready so a shorter delay is fine.
-    const releaseDelay = (activeCameraSource.type === "rtsp" || activeCameraSource.type === "ndi") ? 2500 : 1000;
-    console.log(`⏳ Waiting ${releaseDelay}ms for source to release (${activeCameraSource.type})...`);
-    await new Promise((resolve) => setTimeout(resolve, releaseDelay));
-    await startPersistentIdlePreview();
-
-    // For RTSP sources, the GStreamer pipeline needs time to negotiate the session
-    // before tcpserversink begins accepting connections.  Wait for the port to be
-    // ready (up to 12 s) before telling clients to reconnect — otherwise they hit
-    // the server before any frames are available and the preview stays blank.
-    const idleTimeoutMs = (activeCameraSource.type === "rtsp" || activeCameraSource.type === "ndi") ? 12000 : 5000;
-    const idleReady = await waitForRtmpPublisher("preview", idleTimeoutMs);
-    if (!idleReady) {
-      console.warn(`⚠️  Idle preview RTMP publisher not ready after ${idleTimeoutMs / 1000}s — clients will retry on their own`);
-    }
-    // Tell clients to reconnect to the idle preview
-    io.emit("refreshIdlePreview");
+    await _handleStreamStopped(1);
   } catch (err) {
-    console.error("⚠️  Error in stream 'stopped' handler — service continuing:", err.message);
-    // Best-effort: tell clients to reconnect so they can retry on their own
-    try { io.emit("refreshIdlePreview"); } catch (_) {}
+    console.error("⚠️  Error in stream 'stopped' handler [Cam1] — service continuing:", err.message);
+    try { io.emit("refreshIdlePreview", { cameraIndex: 1 }); } catch (_) {}
+  }
+});
+
+// Camera 2 "stopped" handler
+streamController2.on("stopped", async () => {
+  try {
+    await _handleStreamStopped(2);
+  } catch (err) {
+    console.error("⚠️  Error in stream 'stopped' handler [Cam2] — service continuing:", err.message);
+    try { io.emit("refreshIdlePreview", { cameraIndex: 2 }); } catch (_) {}
   }
 });
 

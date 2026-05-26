@@ -82,6 +82,8 @@ def main():
     flip_vertical   = sys.argv[26].lower() == "true" if len(sys.argv) > 26 else False
     # Camera capture format (arg 27) — 'mjpeg' (OBSBOT etc.) or 'yuyv' (YUYV-only cameras)
     capture_format  = sys.argv[27] if len(sys.argv) > 27 else "mjpeg"
+    # MediaMTX RTMP preview path (arg 28) — e.g. rtmp://localhost:1935/preview or /preview2
+    preview_rtmp_url = sys.argv[28] if len(sys.argv) > 28 else "rtmp://localhost:1935/preview"
 
     # GStreamer videoflip method:
     #   0 = identity (none), 2 = rotate-180, 4 = horizontal-flip, 5 = vertical-flip
@@ -498,7 +500,7 @@ def main():
         f'! video/x-h264,stream-format=avc,alignment=au '
         f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream '
         f'! flvmux streamable=true '
-        f'! rtmpsink location=rtmp://localhost:1935/preview sync=false async=false'
+        f'! rtmpsink location={preview_rtmp_url} sync=false async=false'
     )
 
     print(f"\nPipeline: {pipeline_str}\n", file=sys.stderr)

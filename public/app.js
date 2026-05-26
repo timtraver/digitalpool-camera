@@ -171,6 +171,48 @@ function updateCustomDropdownDisplay(selectElement) {
 const socket = io();
 console.log("🔌 Socket.IO initialized:", socket);
 
+// ── Active camera index ─────────────────────────────────────────────────────
+// 1 = Camera 1 (default), 2 = Camera 2.  All socket emits and API calls
+// include `cameraIndex: activeCamIndex` so the server routes to the right
+// controller instance.
+let activeCamIndex = 1;
+
+/** Switch the UI to the given camera index (1 or 2). */
+function switchCamera(newIdx) {
+  if (newIdx === activeCamIndex) return;
+  activeCamIndex = newIdx;
+  console.log(`📷 Switching to Camera ${activeCamIndex}`);
+
+  // Update tab bar active state
+  document.querySelectorAll(".camera-tab").forEach((tab) => {
+    tab.classList.toggle("active", parseInt(tab.dataset.cam) === activeCamIndex);
+  });
+
+  // Re-request configs for the newly-selected camera
+  socket.emit("getCameraConfig",      { cameraIndex: activeCamIndex });
+  socket.emit("getStartupPosition",   { cameraIndex: activeCamIndex });
+  socket.emit("getStreamStatus",      { cameraIndex: activeCamIndex });
+
+  // Refresh the idle preview to the correct camera
+  const videoStream = document.getElementById("videoStream");
+  if (videoStream) {
+    videoStream.src = `/video/stream?cam=${activeCamIndex}&t=${Date.now()}`;
+  }
+  // Switch WebRTC preview path if one is active
+  switchToWebRTCPreview(`preview${activeCamIndex === 2 ? "2" : ""}`);
+}
+
+// Wire up tab buttons
+document.querySelectorAll(".camera-tab").forEach((tab) => {
+  tab.addEventListener("click", () => switchCamera(parseInt(tab.dataset.cam)));
+});
+
+// Update live-stream dot in tab when stream status changes for that camera
+function updateCameraTabStatus(camIdx, isLive) {
+  const dot = document.getElementById(`camTabStatus${camIdx}`);
+  if (dot) dot.classList.toggle("live", isLive);
+}
+
 // Connection status
 const statusElement = document.getElementById("connectionStatus");
 
@@ -180,8 +222,8 @@ socket.on("connect", () => {
   console.log("Connected to server");
 
   // Request camera configuration on connect
-  socket.emit("getCameraConfig");
-  socket.emit("getStartupPosition");
+  socket.emit("getCameraConfig",    { cameraIndex: activeCamIndex });
+  socket.emit("getStartupPosition", { cameraIndex: activeCamIndex });
 });
 
 socket.on("disconnect", () => {
@@ -221,8 +263,10 @@ function showControlError(control, message) {
 
 // Handle camera configuration from server
 socket.on("cameraConfig", (data) => {
+  // Ignore updates for the non-active camera
+  if (data.cameraIndex && data.cameraIndex !== activeCamIndex) return;
   if (data.success && data.config) {
-    console.log("📸 Received camera configuration:", data.config);
+    console.log(`📸 [Cam${data.cameraIndex || 1}] Received camera configuration:`, data.config);
     loadCameraConfigToUI(data.config);
 
     // Dim controls that the attached camera doesn't support.
@@ -366,7 +410,7 @@ function makePTZButton(id, evt, getSteps, label, getMaxSteps = null) {
   function fire() {
     const steps = currentSteps();
     console.log(`${label}: ${steps} step(s) [tick=${_tick}]`);
-    socket.emit(evt, { steps });
+    socket.emit(evt, { steps, cameraIndex: activeCamIndex });
     _tick++;
   }
 
@@ -410,7 +454,7 @@ makePTZButton("tiltDownLarge", "tilt", () => -tiltLargeSteps(), "🔷 Tilt Down 
 
 // Center reset button
 document.getElementById("resetPos").addEventListener("click", () => {
-  socket.emit("resetPosition");
+  socket.emit("resetPosition", { cameraIndex: activeCamIndex });
 });
 
 // Zoom controls - range slider
@@ -424,7 +468,7 @@ if (zoomLevel) {
     currentZoom = value;
     if (zoomLevelValue) zoomLevelValue.textContent = value;
     console.log(`🔍 Zoom level changed to: ${value}`);
-    socket.emit("zoom", { level: value });
+    socket.emit("zoom", { level: value, cameraIndex: activeCamIndex });
   });
 }
 
@@ -434,7 +478,7 @@ const startupPosInfo = document.getElementById("startupPosInfo");
 
 if (setStartupBtn) {
   setStartupBtn.addEventListener("click", () => {
-    socket.emit("setStartupPosition");
+    socket.emit("setStartupPosition", { cameraIndex: activeCamIndex });
   });
 }
 
@@ -475,7 +519,7 @@ function createSliderControl(controlName, elementId, valueDisplayId) {
   slider.addEventListener("change", (e) => {
     const value = parseInt(e.target.value);
     console.log(`🎚️  Slider changed: ${controlName} = ${value}`);
-    socket.emit("setControl", { control: controlName, value: value });
+    socket.emit("setControl", { control: controlName, value: value, cameraIndex: activeCamIndex });
   });
 }
 
@@ -540,7 +584,7 @@ function updateExposureControlsState() {
 if (exposureAuto) {
   exposureAuto.addEventListener("change", (e) => {
     const value = parseInt(e.target.value);
-    socket.emit("setControl", { control: "auto_exposure", value: value });
+    socket.emit("setControl", { control: "auto_exposure", value: value, cameraIndex: activeCamIndex });
     updateExposureControlsState(); // Update control states
   });
 
@@ -568,6 +612,7 @@ if (whiteBalanceAuto) {
     socket.emit("setControl", {
       control: "white_balance_automatic",
       value: value,
+      cameraIndex: activeCamIndex,
     });
   });
 }
@@ -583,7 +628,7 @@ const focusAuto = document.getElementById("focusAuto");
 if (focusAuto) {
   focusAuto.addEventListener("change", (e) => {
     const value = e.target.checked ? 1 : 0;
-    socket.emit("setControl", { control: "focus_automatic_continuous", value: value });
+    socket.emit("setControl", { control: "focus_automatic_continuous", value: value, cameraIndex: activeCamIndex });
   });
 }
 
@@ -761,7 +806,7 @@ if (resetAllBtn) {
   resetAllBtn.addEventListener("click", async () => {
     if (confirm("Reset all camera settings to defaults?")) {
       // Send reset command to server
-      socket.emit("resetCameraSettings");
+      socket.emit("resetCameraSettings", { cameraIndex: activeCamIndex });
     }
   });
 }
@@ -1000,7 +1045,7 @@ const panInvertedCheckbox    = document.getElementById("panInverted");
         statusEl.textContent = "Applying…";
       }
       try {
-        const r = await fetch("/api/camera/source", {
+        const r = await fetch(`/api/camera/source?cam=${activeCamIndex}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -1071,7 +1116,7 @@ document.addEventListener("keydown", (e) => {
 
   function fire() {
     const steps = sign * (isLarge ? getMax() : ptzAccelSteps(_keyTick, getMax()));
-    socket.emit(evt, { steps });
+    socket.emit(evt, { steps, cameraIndex: activeCamIndex });
     _keyTick++;
   }
 
@@ -1358,7 +1403,7 @@ startStreamBtn.addEventListener("click", async () => {
       // a saved flip=true with false.
     };
     console.log("Restarting stream with config:", config);
-    socket.emit("restartStream", config);
+    socket.emit("restartStream", { ...config, cameraIndex: activeCamIndex });
   } else {
     // Normal start
     const config = {
@@ -1376,7 +1421,7 @@ startStreamBtn.addEventListener("click", async () => {
       // flip settings omitted — server uses its persisted streamConfig values
     };
     console.log("Starting stream with config:", config);
-    socket.emit("startStream", config);
+    socket.emit("startStream", { ...config, cameraIndex: activeCamIndex });
   }
 });
 
@@ -1385,7 +1430,7 @@ stopStreamBtn.addEventListener("click", () => {
   console.log("Stopping stream");
   startStreamBtn.disabled = true;
   stopStreamBtn.disabled = true;
-  socket.emit("stopStream");
+  socket.emit("stopStream", { cameraIndex: activeCamIndex });
 });
 
 // Stream result handler
@@ -1400,19 +1445,21 @@ socket.on("streamResult", (result) => {
 });
 
 // Idle preview refresh — server killed the preview, reconnect with updated settings
-socket.on("refreshIdlePreview", () => {
+socket.on("refreshIdlePreview", (data) => {
+  // Only act if this event is for the currently-active camera (or no cameraIndex = broadcast)
+  const evtCam = data?.cameraIndex || 1;
+  if (evtCam !== activeCamIndex) return;
+
   if (!isCurrentlyStreaming) {
-    console.log("🔄 Refreshing idle preview for overlay changes...");
+    console.log(`🔄 [Cam${evtCam}] Refreshing idle preview for overlay changes...`);
     const previewStatus = document.getElementById("overlayPreviewStatus");
     if (previewStatus) {
-      // Normalise text in case saveFlipConfig changed it to "Applying flip…"
       previewStatus.textContent = "🔄 Updating preview…";
       previewStatus.style.display = "block";
     }
-    // Small delay to let the old GStreamer process fully die before reconnecting
+    const previewPath = activeCamIndex === 2 ? "preview2" : "preview";
     setTimeout(() => {
-      switchToWebRTCPreview("preview", () => {
-        // Callback fires when the first WebRTC frame appears
+      switchToWebRTCPreview(previewPath, () => {
         if (previewStatus) previewStatus.style.display = "none";
       });
     }, 400);
@@ -1425,8 +1472,14 @@ socket.on("refreshIdlePreview", () => {
 
 // Stream status updates
 socket.on("streamStatus", (status) => {
-  console.log("Stream status:", status);
+  // Always update per-camera tab status dot
+  if (status.cameraIndex) {
+    updateCameraTabStatus(status.cameraIndex, status.isStreaming);
+  }
+  // Only update the main UI for the active camera
+  if (status.cameraIndex && status.cameraIndex !== activeCamIndex) return;
 
+  console.log(`Stream status [Cam${status.cameraIndex || 1}]:`, status);
   isCurrentlyStreaming = status.isStreaming;
 
   // Update preview source indicator
@@ -1512,7 +1565,9 @@ socket.on("streamStatus", (status) => {
     if (_webrtcRetryTimer)    { clearTimeout(_webrtcRetryTimer);    _webrtcRetryTimer    = null; }
     _tcpPreviewTimeout = setTimeout(() => {
       _tcpPreviewTimeout = null;
-      switchToWebRTCPreview("preview"); // always the preview tee branch — works for all protocols
+      // Use the active camera's preview tee branch
+      const _livePath = activeCamIndex === 2 ? "preview2" : "preview";
+      switchToWebRTCPreview(_livePath);
     }, 2000); // 2 s grace period for GStreamer + MediaMTX to start publishing
   } else {
     // Change Restart button back to Start button
@@ -1533,7 +1588,8 @@ socket.on("streamStatus", (status) => {
     if (_webrtcRetryTimer)    { clearTimeout(_webrtcRetryTimer);    _webrtcRetryTimer    = null; }
     _mjpegPreviewTimeout = setTimeout(() => {
       _mjpegPreviewTimeout = null;
-      switchToWebRTCPreview("preview"); // idle camera feed via WHEP
+      const _idlePath = activeCamIndex === 2 ? "preview2" : "preview";
+      switchToWebRTCPreview(_idlePath); // idle camera feed via WHEP
     }, 500);
   }
 });
@@ -1549,9 +1605,10 @@ socket.on("streamError", (data) => {
   }
 });
 
-// Get initial stream status on connect
+// Get initial stream status on connect (for both cameras)
 socket.on("connect", () => {
-  socket.emit("getStreamStatus");
+  socket.emit("getStreamStatus", { cameraIndex: 1 });
+  socket.emit("getStreamStatus", { cameraIndex: 2 });
 });
 
 // ============ OVERLAY CONTROLS ============
@@ -2888,7 +2945,7 @@ function applyOverlaySettings() {
   };
 
   console.log("Saving overlay config:", overlayConfig);
-  socket.emit("updateOverlay", overlayConfig);
+  socket.emit("updateOverlay", { ...overlayConfig, cameraIndex: activeCamIndex });
 
   // Show "needs restart" banner if currently streaming
   if (isCurrentlyStreaming) {
@@ -3060,8 +3117,9 @@ socket.on("overlayResult", (result) => {
   }
 });
 
-// Load overlay settings from stream status
+// Load overlay settings from stream status (only for active camera)
 socket.on("streamStatus", (status) => {
+  if (status.cameraIndex && status.cameraIndex !== activeCamIndex) return;
   if (status.config) {
     overlayEnabled.checked = status.config.overlayEnabled || false;
     overlayText.value = status.config.overlayText || "";
@@ -3194,7 +3252,7 @@ async function loadAudioDevices() {
 // Load stream configuration on page load
 async function loadStreamConfig() {
   try {
-    const response = await fetch("/api/stream/config");
+    const response = await fetch(`/api/stream/config?cam=${activeCamIndex}`);
     const data = await response.json();
     if (data.success && data.config) {
       console.log("📡 Loaded stream config:", data.config);
@@ -3346,7 +3404,7 @@ async function saveFlipConfig() {
   }
 
   try {
-    const resp = await fetch("/api/stream/config", {
+    const resp = await fetch(`/api/stream/config?cam=${activeCamIndex}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ flipHorizontal, flipVertical, panInverted }),
@@ -3373,7 +3431,7 @@ async function saveFlipConfig() {
         framerate:    parseInt(streamFramerate.value),
         codec:        streamCodec.value,
       };
-      socket.emit("restartStream", config);
+      socket.emit("restartStream", { ...config, cameraIndex: activeCamIndex });
     }
     // If not streaming: the server emits refreshIdlePreview which triggers
     // switchToWebRTCPreview() → its onConnected callback resets the banner text
@@ -3424,7 +3482,7 @@ function applyResolutionConstraints() {
 async function loadCameraCapabilities() {
   if (!streamResolution) return;
   try {
-    const r = await fetch("/api/camera/capabilities");
+    const r = await fetch(`/api/camera/capabilities?cam=${activeCamIndex}`);
     const d = await r.json();
     setStreamOptionDisabled(streamResolution, "1280x720",  !d.supports720p,  "1920x1080");
     setStreamOptionDisabled(streamResolution, "1920x1080", !d.supports1080p, "1280x720");
@@ -4340,9 +4398,9 @@ loadDeviceIp();
     if (lowBandwidthMode) {
       switchToSnapshotPreview();
     } else {
-      // Restore the WebRTC preview — always "preview" path (the tee branch
-      // pushes to rtmp://localhost:1935/preview regardless of streaming protocol)
-      switchToWebRTCPreview("preview");
+      // Restore the WebRTC preview for the active camera
+      const _restorePath = activeCamIndex === 2 ? "preview2" : "preview";
+      switchToWebRTCPreview(_restorePath);
     }
   });
 

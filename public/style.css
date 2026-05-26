@@ -1892,3 +1892,57 @@ footer {
   background: #f59e0b;
   color: #0d1117;
 }
+
+
+/* ── Camera Selector Tab Bar ─────────────────────────────────────────────── */
+.camera-tab-bar {
+  display: flex;
+  gap: 0;
+  background: rgba(6, 16, 27, 0.9);
+  border-bottom: 2px solid rgba(18, 199, 255, 0.2);
+  padding: 0 12px;
+}
+
+.camera-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 22px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.5);
+  background: transparent;
+  border: none;
+  border-bottom: 3px solid transparent;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+  margin-bottom: -2px; /* overlap the tab-bar border */
+}
+
+.camera-tab:hover {
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(18, 199, 255, 0.06);
+}
+
+.camera-tab.active {
+  color: #12c7ff;
+  border-bottom-color: #12c7ff;
+  background: rgba(18, 199, 255, 0.08);
+}
+
+/* Small streaming indicator dot inside the tab */
+.camera-tab-status {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: transparent;
+  transition: background 0.3s;
+}
+
+.camera-tab-status.live {
+  background: #22c55e;
+  box-shadow: 0 0 5px rgba(34, 197, 94, 0.8);
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}

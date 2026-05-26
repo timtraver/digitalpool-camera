@@ -5,10 +5,14 @@ const path = require("path");
 const execAsync = promisify(exec);
 
 class CameraController {
-  constructor(device = "/dev/video0") {
+  constructor(device = "/dev/video0", options = {}) {
     this.device = device;
-    this.configFile = path.join(__dirname, "camera-config.json");
-    this.startupConfigFile = path.join(__dirname, "camera-startup-config.json");
+    // Controller identity — 1 or 2.  Drives separate config file names so each
+    // camera persists its own brightness, PTZ home position, etc.
+    this.controllerId = options.controllerId || 1;
+    const suffix = this.controllerId === 2 ? "-2" : "";
+    this.configFile = path.join(__dirname, `camera-config${suffix}.json`);
+    this.startupConfigFile = path.join(__dirname, `camera-startup-config${suffix}.json`);
 
     // Track pan/tilt positions since camera doesn't report them reliably
     this.currentPan = 0;
