@@ -2896,8 +2896,9 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
     gstArgs.push("videoflip", `method=${flipMethod}`, "!");
   }
 
-  // Check if the remote overlay PNG exists and should be shown
-  const pngOverlayPath = "/tmp/graphics-overlay.png";
+  // Check if the remote overlay PNG exists and should be shown.
+  // Each camera uses its own PNG so overlays don't overwrite each other.
+  const pngOverlayPath = sc.pngOverlayPath;
   const hasRemoteOverlay = config.remoteOverlayEnabled && config.overlayUrl && config.overlayUrl.trim();
   let pngExists = false;
   if (hasRemoteOverlay) {
@@ -3480,7 +3481,7 @@ io.on("connection", (socket) => {
       }
       if (puppeteerOverlay) {
         if (!puppeteerOverlay.isRunning) {
-          await puppeteerOverlay.initialize(PORT);
+          await puppeteerOverlay.initialize(PORT, sc.pngOverlayPath);
         }
         puppeteerOverlay.setOverlayUrl(overlayConfig.overlayUrl, {
           zoom: overlayConfig.overlayZoom,
@@ -3793,7 +3794,7 @@ server.listen(PORT, async () => {
         if (!puppeteerOverlay) {
           puppeteerOverlay = new PuppeteerOverlay();
         }
-        await puppeteerOverlay.initialize(PORT);
+        await puppeteerOverlay.initialize(PORT, streamController.pngOverlayPath);
         const overlayZoom = streamController.streamConfig.overlayZoom || 100;
         puppeteerOverlay.setOverlayUrl(streamController.streamConfig.overlayUrl, { zoom: overlayZoom });
         puppeteerOverlay.startPeriodicRefresh();
@@ -3898,7 +3899,7 @@ streamController.on("preparing", async () => {
 
     if (needsGraphicsOverlay) {
       console.log(`🎨 [Cam1] Preparing overlay (HTML → PNG)...`);
-      const pngPath = "/tmp/graphics-overlay.png";
+      const pngPath = streamController.pngOverlayPath;
       const pngMissing = !fsSync.existsSync(pngPath) || fsSync.statSync(pngPath).size < 100;
       if (pngMissing) {
         try {
@@ -3911,7 +3912,7 @@ streamController.on("preparing", async () => {
       }
       try {
         if (!puppeteerOverlay) puppeteerOverlay = new PuppeteerOverlay();
-        if (!puppeteerOverlay.isRunning) await puppeteerOverlay.initialize(PORT);
+        if (!puppeteerOverlay.isRunning) await puppeteerOverlay.initialize(PORT, streamController.pngOverlayPath);
         const overlayUrl = streamController.streamConfig.overlayUrl;
         if (overlayUrl && overlayUrl.trim()) {
           const overlayZoom = streamController.streamConfig.overlayZoom || 100;

@@ -57,9 +57,13 @@ class StreamController extends EventEmitter {
     // Derived per-stream paths / ports based on streamId
     // Camera 1: /live, /preview, SRT :8891
     // Camera 2: /live2, /preview2, SRT :8892
-    this.rtspPath    = this.streamId === 2 ? "/live2"    : "/live";
-    this.previewPath = this.streamId === 2 ? "/preview2" : "/preview";
-    this.srtDefaultPort = this.streamId === 2 ? 8892 : 8891;
+    this.rtspPath       = this.streamId === 2 ? "/live2"    : "/live";
+    this.previewPath    = this.streamId === 2 ? "/preview2" : "/preview";
+    this.srtDefaultPort = this.streamId === 2 ? 8892       : 8891;
+    // Per-camera overlay PNG so both cameras can have independent graphics overlays.
+    this.pngOverlayPath = this.streamId === 2
+      ? "/tmp/graphics-overlay-2.png"
+      : "/tmp/graphics-overlay.png";
 
     // Active input source — updated via setInputSource() when the user switches in the UI.
     this.inputSource = { type: "usb", device: cameraDevice, rtspUrl: "" };
@@ -1120,7 +1124,8 @@ class StreamController extends EventEmitter {
     }
     // Only pass the real PNG path when graphics overlay is active.
     // An empty string tells gst-overlay-pipeline.py to skip gdkpixbufoverlay.
-    const pngPath = needsGraphicsOverlay ? "/tmp/graphics-overlay.png" : "";
+    // Each camera writes to its own file so overlays don't overwrite each other.
+    const pngPath = needsGraphicsOverlay ? this.pngOverlayPath : "";
 
     // Per-element formatting (fall back to legacy shared values)
     const titleFs = this.streamConfig.titleFontSize || this.streamConfig.overlayFontSize || 32;
