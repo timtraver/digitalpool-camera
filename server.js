@@ -125,8 +125,9 @@ wifiManager.startMonitor()
     : console.warn("⚠️  WiFi Manager: no wireless interface found — hotspot API limited"))
   .catch(err => console.error("❌ WiFi Manager monitor error:", err.message));
 
-// Initialize Puppeteer overlay (if available)
-let puppeteerOverlay = null;
+// Initialize Puppeteer overlay (if available) — one instance per camera
+let puppeteerOverlay = null;   // Camera 1
+let puppeteerOverlay2 = null;  // Camera 2
 // Game state for scoreboard (update this from your app)
 let gameState = {
   player1Name: "Player 1",
@@ -3473,20 +3474,24 @@ io.on("connection", (socket) => {
     }
 
     // Handle remote overlay enable/disable (create PuppeteerOverlay if needed)
+    // Use the per-camera Puppeteer instance so each camera has an independent renderer.
     const wantsRemote = overlayConfig.remoteOverlayEnabled &&
       overlayConfig.overlayUrl && overlayConfig.overlayUrl.trim();
+    let camPuppeteer = camIdx === 2 ? puppeteerOverlay2 : puppeteerOverlay;
     if (wantsRemote) {
-      if (!puppeteerOverlay && PuppeteerOverlay) {
-        puppeteerOverlay = new PuppeteerOverlay();
+      if (!camPuppeteer && PuppeteerOverlay) {
+        camPuppeteer = new PuppeteerOverlay();
+        if (camIdx === 2) puppeteerOverlay2 = camPuppeteer;
+        else puppeteerOverlay = camPuppeteer;
       }
-      if (puppeteerOverlay) {
-        if (!puppeteerOverlay.isRunning) {
-          await puppeteerOverlay.initialize(PORT, sc.pngOverlayPath);
+      if (camPuppeteer) {
+        if (!camPuppeteer.isRunning) {
+          await camPuppeteer.initialize(PORT, sc.pngOverlayPath);
         }
-        puppeteerOverlay.setOverlayUrl(overlayConfig.overlayUrl, {
+        camPuppeteer.setOverlayUrl(overlayConfig.overlayUrl, {
           zoom: overlayConfig.overlayZoom,
         });
-        puppeteerOverlay.startPeriodicRefresh();
+        camPuppeteer.startPeriodicRefresh();
 
         if (!sc.isStreaming) {
           const restartTimer = camIdx === 2 ? idlePreviewRestartTimer2 : idlePreviewRestartTimer;
@@ -3498,17 +3503,18 @@ io.on("connection", (socket) => {
           };
           const onUpdated = () => { clearTimeout(fallback); restartForOverlay(); };
           const fallback = setTimeout(() => {
-            puppeteerOverlay.removeListener("updated", onUpdated);
+            camPuppeteer.removeListener("updated", onUpdated);
             console.log(`⏱️ [Cam${camIdx}] Timeout waiting for remote screenshot — restarting preview anyway`);
             restartForOverlay();
           }, 10000);
-          puppeteerOverlay.once("updated", onUpdated);
+          camPuppeteer.once("updated", onUpdated);
         }
       }
-    } else if (overlayConfig.remoteOverlayEnabled === false && puppeteerOverlay) {
-      console.log("🛑 Remote overlay disabled — shutting down Puppeteer and removing overlay files...");
-      await puppeteerOverlay.stop();
-      puppeteerOverlay = null;
+    } else if (overlayConfig.remoteOverlayEnabled === false && camPuppeteer) {
+      console.log(`🛑 [Cam${camIdx}] Remote overlay disabled — shutting down Puppeteer...`);
+      await camPuppeteer.stop();
+      if (camIdx === 2) puppeteerOverlay2 = null;
+      else puppeteerOverlay = null;
     }
 
     // Broadcast state and write JSON (never render local scoreboard HTML)
@@ -3930,12 +3936,46 @@ streamController.on("preparing", async () => {
   }
 });
 
-// Camera 2 "preparing" handler
+// Camera 2 "preparing" handler — mirrors Camera 1's handler
 streamController2.on("preparing", async () => {
   try {
+    isRestartInProgress[2] = true;
     await _killIdlePreviewForCamera(2);
-    // Camera 2 overlay: uses same streamController2 config (no Puppeteer for cam2 yet)
-    console.log(`✅ [Cam2] Ready for streaming`);
+
+    const hasUrlOverlay = streamController2.streamConfig.remoteOverlayEnabled &&
+      streamController2.streamConfig.overlayUrl && streamController2.streamConfig.overlayUrl.trim();
+    const needsGraphicsOverlay = streamController2.streamConfig.skiaGraphicsEnabled || hasUrlOverlay;
+
+    if (needsGraphicsOverlay) {
+      console.log(`🎨 [Cam2] Preparing overlay (HTML → PNG)...`);
+      const pngPath = streamController2.pngOverlayPath;
+      const pngMissing = !fsSync.existsSync(pngPath) || fsSync.statSync(pngPath).size < 100;
+      if (pngMissing) {
+        try {
+          const { execSync } = require("child_process");
+          execSync(`convert -size 1920x1080 xc:transparent "${pngPath}"`, { timeout: 5000 });
+          console.log(`🖼️  [Cam2] Placeholder transparent PNG created at ${pngPath}`);
+        } catch (e) {
+          console.error("⚠️  [Cam2] Could not create placeholder PNG:", e.message);
+        }
+      }
+      try {
+        if (!puppeteerOverlay2) puppeteerOverlay2 = new PuppeteerOverlay();
+        if (!puppeteerOverlay2.isRunning) await puppeteerOverlay2.initialize(PORT, pngPath);
+        const overlayUrl = streamController2.streamConfig.overlayUrl;
+        if (overlayUrl && overlayUrl.trim()) {
+          const overlayZoom = streamController2.streamConfig.overlayZoom || 100;
+          console.log(`🌍 [Cam2] Using remote overlay URL: ${overlayUrl} (zoom: ${overlayZoom}%)`);
+          puppeteerOverlay2.setOverlayUrl(overlayUrl, { zoom: overlayZoom });
+          puppeteerOverlay2.startPeriodicRefresh();
+        }
+        console.log("✅ [Cam2] Overlay PNG ready for GStreamer");
+      } catch (err) {
+        console.error("❌ [Cam2] Failed to prepare overlay:", err.message);
+      }
+    } else {
+      console.log(`✅ [Cam2] Ready for streaming`);
+    }
   } catch (err) {
     console.error("⚠️  Error in stream 'preparing' handler [Cam2] — service continuing:", err.message);
   }
@@ -3949,10 +3989,11 @@ async function _handleStreamStopped(camIdx) {
 
   const hasRemote = sc.streamConfig.remoteOverlayEnabled &&
     sc.streamConfig.overlayUrl && sc.streamConfig.overlayUrl.trim();
-  if (camIdx === 1 && puppeteerOverlay && !hasRemote) {
-    puppeteerOverlay._stopPeriodicRefresh();
+  const camPuppeteer = camIdx === 2 ? puppeteerOverlay2 : puppeteerOverlay;
+  if (camPuppeteer && !hasRemote) {
+    camPuppeteer._stopPeriodicRefresh();
     console.log(`ℹ️  [Cam${camIdx}] Stream stopped, no remote overlay — pausing refresh`);
-  } else if (camIdx === 1 && hasRemote) {
+  } else if (camPuppeteer && hasRemote) {
     console.log(`ℹ️  [Cam${camIdx}] Stream stopped, remote overlay active — keeping refresh`);
   }
 
@@ -4016,19 +4057,20 @@ process.on("uncaughtException", (err) => {
   // Do NOT exit — the watchdog will restart if the service truly hangs.
 });
 
-// Graceful shutdown - close Puppeteer browser
+// Graceful shutdown - close Puppeteer browsers (one per camera)
+async function _shutdownPuppeteer() {
+  if (puppeteerOverlay)  await puppeteerOverlay.stop();
+  if (puppeteerOverlay2) await puppeteerOverlay2.stop();
+}
+
 process.on("SIGINT", async () => {
   console.log("\n🛑 Shutting down...");
-  if (puppeteerOverlay) {
-    await puppeteerOverlay.stop();
-  }
+  await _shutdownPuppeteer();
   process.exit(0);
 });
 
 process.on("SIGTERM", async () => {
   console.log("\n🛑 Shutting down...");
-  if (puppeteerOverlay) {
-    await puppeteerOverlay.stop();
-  }
+  await _shutdownPuppeteer();
   process.exit(0);
 });
