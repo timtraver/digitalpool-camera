@@ -368,25 +368,17 @@ def main():
         # Omit format=YUYV from caps — Rockchip's RGA-backed videoconvert doesn't
         # list YUYV in its static sink pad template.  Without the explicit format
         # constraint, GStreamer negotiates YUYV at runtime and converts to NV12.
-        #
-        # provide-clock=false: v4l2src defaults to provide-clock=true, which causes
-        # it to offer its USB-oscillator / kernel CLOCK_MONOTONIC clock to the
-        # pipeline.  GStreamer's auto-selection can pick that over our forced
-        # CLOCK_REALTIME, producing ~700+ ppm drift over long sessions.  Setting
-        # provide-clock=false ensures the pipeline clock stays CLOCK_REALTIME.
         print(f"📹 Input source: USB v4l2src (YUYV) → {camera_device}", file=sys.stderr)
         source_str = (
-            f'v4l2src device={camera_device} do-timestamp=true provide-clock=false '
+            f'v4l2src device={camera_device} do-timestamp=true '
             f'! video/x-raw,width={width},height={height},framerate={framerate}/1 '
             f'! videoconvert ! video/x-raw,format=NV12 '
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
         )
     else:
         print(f"📹 Input source: USB v4l2src (MJPEG) → {camera_device}", file=sys.stderr)
-        # provide-clock=false: prevents v4l2src from offering its USB-oscillator /
-        # kernel CLOCK_MONOTONIC clock to the pipeline (see YUYV comment above).
         source_str = (
-            f'v4l2src device={camera_device} do-timestamp=true provide-clock=false '
+            f'v4l2src device={camera_device} do-timestamp=true '
             f'! image/jpeg,width={width},height={height} '
             f'! jpegparse ! mppjpegdec '
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
@@ -514,6 +506,28 @@ def main():
     print(f"\nPipeline: {pipeline_str}\n", file=sys.stderr)
 
     pipeline = Gst.parse_launch(pipeline_str)
+
+    # ── Programmatically disable element clock provision ───────────────────
+    # v4l2src defaults to offering its USB-oscillator / kernel CLOCK_MONOTONIC
+    # clock to the pipeline (via the provide_clock() virtual function).  When
+    # GStreamer auto-selects the "best" clock, it can pick that instead of our
+    # forced CLOCK_REALTIME, producing ~700+ ppm drift over long sessions.
+    #
+    # The "provide-clock" pipeline-string property is not available on all
+    # GStreamer versions (hence not used in the parse string above).  Instead
+    # we try to set it programmatically here — silently skipping any element
+    # that doesn't support the property.  pipeline.use_clock() below is the
+    # primary defence; this is a belt-and-suspenders supplement.
+    _el_iter = pipeline.iterate_elements()
+    while True:
+        _res, _el = _el_iter.next()
+        if _res != Gst.IteratorResult.OK:
+            break
+        try:
+            _el.set_property("provide-clock", False)
+            print(f"🕒 Disabled clock provision on element: {_el.get_name()}", file=sys.stderr)
+        except Exception:
+            pass  # Element doesn't expose the property on this GStreamer version — skip
 
     # ── RTSP audio passthrough ─────────────────────────────────────────────
     # When the input is an RTSP source that carries audio, decodebin creates an
