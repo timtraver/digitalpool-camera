@@ -368,17 +368,25 @@ def main():
         # Omit format=YUYV from caps — Rockchip's RGA-backed videoconvert doesn't
         # list YUYV in its static sink pad template.  Without the explicit format
         # constraint, GStreamer negotiates YUYV at runtime and converts to NV12.
+        #
+        # provide-clock=false: v4l2src defaults to provide-clock=true, which causes
+        # it to offer its USB-oscillator / kernel CLOCK_MONOTONIC clock to the
+        # pipeline.  GStreamer's auto-selection can pick that over our forced
+        # CLOCK_REALTIME, producing ~700+ ppm drift over long sessions.  Setting
+        # provide-clock=false ensures the pipeline clock stays CLOCK_REALTIME.
         print(f"📹 Input source: USB v4l2src (YUYV) → {camera_device}", file=sys.stderr)
         source_str = (
-            f'v4l2src device={camera_device} do-timestamp=true '
+            f'v4l2src device={camera_device} do-timestamp=true provide-clock=false '
             f'! video/x-raw,width={width},height={height},framerate={framerate}/1 '
             f'! videoconvert ! video/x-raw,format=NV12 '
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
         )
     else:
         print(f"📹 Input source: USB v4l2src (MJPEG) → {camera_device}", file=sys.stderr)
+        # provide-clock=false: prevents v4l2src from offering its USB-oscillator /
+        # kernel CLOCK_MONOTONIC clock to the pipeline (see YUYV comment above).
         source_str = (
-            f'v4l2src device={camera_device} do-timestamp=true '
+            f'v4l2src device={camera_device} do-timestamp=true provide-clock=false '
             f'! image/jpeg,width={width},height={height} '
             f'! jpegparse ! mppjpegdec '
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
@@ -880,8 +888,22 @@ def main():
 
     # Attach the global CLOCK_REALTIME system clock to this pipeline.
     # The clock-type was already set to REALTIME at module load (above Gst.init).
+    #
+    # We call both set_clock() AND use_clock() for belt-and-suspenders robustness:
+    #   set_clock() — distributes the clock to all existing child elements.
+    #   use_clock() — sets GstPipeline's internal priv->use_clock = TRUE flag,
+    #                 which disables auto-selection when the pipeline enters PLAYING.
+    #                 Without this flag, GStreamer may override our clock with the
+    #                 "best" clock it finds from elements (e.g. v4l2src's
+    #                 USB-oscillator / CLOCK_MONOTONIC clock), causing ~700+ ppm drift.
     pipeline.set_clock(_system_clock)
-    print(f"🕒 Pipeline clock attached (clock-type={_system_clock.get_property('clock-type')})", file=sys.stderr)
+    try:
+        pipeline.use_clock(_system_clock)
+        print(f"🕒 Pipeline clock forced via set_clock+use_clock (clock-type={_system_clock.get_property('clock-type')})", file=sys.stderr)
+    except AttributeError:
+        # Older GStreamer Python bindings may not expose use_clock() — set_clock()
+        # and provide-clock=false on v4l2src are sufficient in that case.
+        print(f"🕒 Pipeline clock attached via set_clock() (clock-type={_system_clock.get_property('clock-type')}) [use_clock() unavailable]", file=sys.stderr)
 
     overlay_element = pipeline.get_by_name("overlay")
 
@@ -967,9 +989,36 @@ def main():
     overlay_msg = " (overlay auto-reloads on PNG change)" if overlay_element else ""
     print(f"✅ Pipeline started{overlay_msg} [CLOCK_REALTIME — no long-term A/V drift]", file=sys.stderr)
 
+    # ── Verify the pipeline is using our CLOCK_REALTIME clock after PLAYING ──
+    # GStreamer re-evaluates clock selection when transitioning to PLAYING.
+    # If any element snuck in a different clock, catch it here and re-force ours.
+    _actual_clock = pipeline.get_clock()
+    if _actual_clock is None:
+        print("⚠️  pipeline.get_clock() returned None — clock not yet distributed", file=sys.stderr)
+    elif _actual_clock != _system_clock:
+        _actual_type = _actual_clock.get_property("clock-type") if hasattr(_actual_clock, "get_property") else "unknown"
+        print(f"⚠️  Clock overridden by pipeline! Got clock-type={_actual_type} — forcing back to CLOCK_REALTIME", file=sys.stderr)
+        pipeline.set_clock(_system_clock)
+        try:
+            pipeline.use_clock(_system_clock)
+        except AttributeError:
+            pass
+    else:
+        print(f"✅ Clock verified post-PLAYING: pipeline is using our CLOCK_REALTIME system clock", file=sys.stderr)
+
     # ── Periodic drift monitor ────────────────────────────────────────────
-    # Every 60 s, log the pipeline's running_time vs wall-clock elapsed time.
-    # If the two diverge by more than ~10 ms/min, the clock fix isn't working.
+    # Every 60 s, logs two independent drift measurements:
+    #
+    #  1. query_position drift — pipeline running_time vs wall elapsed.
+    #     Should be ≈0 when the pipeline clock is CLOCK_REALTIME.
+    #     Non-zero (and growing) → the pipeline clock is NOT REALTIME; this was
+    #     the symptom when v4l2src provided its CLOCK_MONOTONIC clock (~719 ppm).
+    #
+    #  2. Clock vs wall — pipeline.get_clock().get_time() vs time.time()*1e9.
+    #     CLOCK_REALTIME returns epoch-based nanoseconds (~1.7 e18) so this
+    #     difference should be near-zero (within NTP accuracy, ±seconds).
+    #     CLOCK_MONOTONIC returns uptime-based nanoseconds (~days in ns), which
+    #     would show a huge negative value here — instant diagnosis.
     _start_wall = time.time()
 
     def _log_drift():
@@ -979,10 +1028,24 @@ def main():
             gst_elapsed = position / 1e9  # nanoseconds → seconds
             drift = gst_elapsed - wall_elapsed
             ppm = (drift / wall_elapsed * 1e6) if wall_elapsed > 0 else 0
+
+            # Secondary check: compare raw clock value to wall time.
+            # Near-zero → CLOCK_REALTIME (correct).  Huge negative → CLOCK_MONOTONIC.
+            clock_note = ""
+            active_clock = pipeline.get_clock()
+            if active_clock:
+                clock_ns = active_clock.get_time()
+                wall_ns  = int(time.time() * 1e9)
+                ck_delta_s = (clock_ns - wall_ns) / 1e9
+                if abs(ck_delta_s) < 120:
+                    clock_note = f"  [clock≈wall Δ{ck_delta_s:+.3f}s ✅]"
+                else:
+                    clock_note = f"  [clock≠wall Δ{ck_delta_s:+.0f}s ⚠️ MONOTONIC?]"
+
             print(
                 f"🕒 Drift check — GStreamer: {gst_elapsed:.3f}s  "
                 f"Wall: {wall_elapsed:.3f}s  "
-                f"Δ: {drift:+.3f}s  ({ppm:+.1f} ppm)",
+                f"Δ: {drift:+.3f}s  ({ppm:+.1f} ppm){clock_note}",
                 file=sys.stderr,
             )
         return True  # keep timer running
