@@ -1,4 +1,6 @@
-const { spawn } = require("child_process");
+const { spawn, exec } = require("child_process");
+const { promisify } = require("util");
+const execAsync = promisify(exec);
 const EventEmitter = require("events");
 const fs = require("fs");
 const path = require("path");
@@ -242,6 +244,59 @@ class StreamController extends EventEmitter {
   }
 
   /**
+   * Given a V4L2 video device path (e.g. /dev/video0), locate the ALSA capture
+   * device that shares the same USB bus port and return its plughw: string.
+   *
+   * Strategy: udevadm resolves each device to a sysfs path like
+   *   /devices/platform/fc880000.usb/usb3/3-1/3-1:1.0/video4linux/video0
+   * The USB device (port 3-1) is the ancestor two levels above the interface
+   * (3-1:1.0).  Any ALSA card whose sysfs path starts with that same USB device
+   * path belongs to the same physical USB device — i.e., this camera's mic.
+   *
+   * Returns null if udevadm is unavailable, the device path is unexpected, or
+   * no matching audio card is found.
+   */
+  async _detectAlsaForVideoDevice(videoDevice) {
+    try {
+      // Get the sysfs path for the V4L2 device
+      const { stdout: raw } = await execAsync(
+        `udevadm info --query=path --name=${videoDevice} 2>/dev/null`,
+        { timeout: 3000 }
+      );
+      const videoSysPath = raw.trim();
+
+      // Extract the USB device path (strip the interface suffix and below).
+      // e.g., /devices/.../usb3/3-1/3-1:1.0/video4linux/video0
+      //   USB device path → /devices/.../usb3/3-1
+      const m = videoSysPath.match(/^(.*\/usb\d+\/\d+-[\d.]+)\//);
+      if (!m) return null;
+      const usbDevPath = m[1];
+
+      // Scan /sys/class/sound/cardN entries for one on the same USB device
+      const { stdout: sndList } = await execAsync(
+        "ls /sys/class/sound/ 2>/dev/null", { timeout: 2000 }
+      );
+      const cardDirs = sndList.trim().split("\n").filter((d) => /^card\d+$/.test(d));
+
+      for (const cardDir of cardDirs) {
+        const cardNum = cardDir.replace("card", "");
+        try {
+          const { stdout: cardRaw } = await execAsync(
+            `udevadm info --query=path /sys/class/sound/${cardDir} 2>/dev/null`,
+            { timeout: 2000 }
+          );
+          if (cardRaw.trim().startsWith(usbDevPath)) {
+            return `plughw:${cardNum},0`;
+          }
+        } catch { /* card may not expose a udevadm path — skip */ }
+      }
+      return null;
+    } catch {
+      return null; // udevadm not installed or device not yet enumerated
+    }
+  }
+
+  /**
    * Start streaming with current configuration
    */
   async startStream(config = {}) {
@@ -304,6 +359,33 @@ class StreamController extends EventEmitter {
         // Give event handlers time to complete (PNG generation + file write)
         setTimeout(resolve, 1500);
       });
+
+      // Auto-detect the ALSA capture device for USB cameras when using the
+      // camera's built-in mic (audioSource !== "external").  This correlates
+      // the V4L2 video device to its onboard audio card via the shared USB bus
+      // path reported by udevadm.  The result is written to streamConfig so
+      // both _buildGStreamerPipeline() and the ffmpeg hybrid audio section
+      // below pick it up without needing separate detection calls.
+      // When detection fails (udevadm unavailable, unexpected sysfs layout),
+      // the previously configured audioDevice is used as a fallback.
+      if (
+        this.streamConfig.audioEnabled &&
+        this.streamConfig.audioSource !== "external" &&
+        this.inputSource.type === "usb"
+      ) {
+        const detected = await this._detectAlsaForVideoDevice(this.cameraDevice);
+        if (detected) {
+          console.log(
+            `🎤 [Cam${this.streamId}] Auto-matched audio: ${this.cameraDevice} → ${detected}`
+          );
+          this.streamConfig.audioDevice = detected;
+        } else {
+          console.log(
+            `🎤 [Cam${this.streamId}] USB audio auto-detect failed — ` +
+            `using: ${this.streamConfig.audioDevice || "plughw:2,0"}`
+          );
+        }
+      }
 
       const gstArgs = this._buildGStreamerPipeline();
 
