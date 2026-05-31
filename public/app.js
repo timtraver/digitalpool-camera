@@ -3250,7 +3250,7 @@ async function loadAudioDevices() {
   try {
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), 5000);
-    const r = await fetch("/api/audio/devices", { signal: ctrl.signal });
+    const r = await fetch(`/api/audio/devices?cam=${activeCamIndex}`, { signal: ctrl.signal });
     clearTimeout(tid);
     const data = await r.json();
     audioDeviceSelect.innerHTML = "";

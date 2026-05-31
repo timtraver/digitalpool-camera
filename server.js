@@ -1612,12 +1612,18 @@ app.get("/api/camera/capabilities", requireAuth, async (req, res) => {
 // Uses execAsync (non-blocking) with a hard 3 s timeout so a hung ALSA
 // subsystem never stalls the Node.js event loop.
 app.get("/api/audio/devices", requireAuth, async (req, res) => {
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
   try {
     // arecord -l output format:
-    //   card 3: Device [USB Audio Device], device 0: USB Audio [USB Audio]
+    //   card 3: SE [OBSBOT Tiny SE], device 0: USB Audio [USB Audio]
+    //
+    // The device-type field before the bracketed name can be multiple words
+    // (e.g. "USB Audio", "dailink-multicodecs ES8323 HiFi-0"), so we use
+    // [^\[]+ (anything up to the opening bracket) instead of \S+\s+ which
+    // only matches a single word.
     const { stdout } = await execAsync("arecord -l 2>/dev/null || true", { timeout: 3000 });
     const devices = [];
-    const re = /^card\s+(\d+):\s+\S+\s+\[([^\]]+)\],\s+device\s+(\d+):\s+\S+\s+\[([^\]]*)\]/;
+    const re = /^card\s+(\d+):\s+\S+\s+\[([^\]]+)\],\s+device\s+(\d+):\s+[^\[]*\[([^\]]*)\]/;
     for (const line of stdout.split("\n")) {
       const m = re.exec(line.trim());
       if (!m) continue;
@@ -1629,7 +1635,7 @@ app.get("/api/audio/devices", requireAuth, async (req, res) => {
       const label = devName ? `${cardName} — ${devName} (${hw})` : `${cardName} (${hw})`;
       devices.push({ device: hw, name: label });
     }
-    const current = streamController.streamConfig.audioDevice || "hw:3,0";
+    const current = getSC(camIdx).streamConfig.audioDevice || "";
     res.json({ success: true, devices, current });
   } catch (e) {
     res.json({ success: false, error: e.message, devices: [] });
