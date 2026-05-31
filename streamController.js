@@ -400,8 +400,12 @@ class StreamController extends EventEmitter {
 
         console.error(`GStreamer stderr: ${message}`);
 
-        // Parse drift check line and emit ppm value for the UI.
-        // Example: "🕒 Drift check — GStreamer: 59.800s  Wall: 60.056s  Δ: -0.256s  (-4265.3 ppm)"
+        // Parse drift check line and emit the primary (running-time) ppm to the UI.
+        // Format: "🕒 Drift check — Wall: 60.056s  rt=59.800s Δ-0.256s (-4265.3 ppm)  pos=... [clock≈wall ✅]"
+        // The regex grabs the first (N ppm) group, which is always the rt= running-time
+        // drift — the accurate clock-based measurement.  The secondary pos= group (which
+        // on audio pipelines reflects alsasrc USB-oscillator sample counting, not real
+        // drift) appears later in the line and is intentionally ignored here.
         const driftMatch = message.match(/\((-?[\d.]+)\s*ppm\)/);
         if (driftMatch) {
           this.emit("drift", parseFloat(driftMatch[1]));

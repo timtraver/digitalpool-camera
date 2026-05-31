@@ -1020,48 +1020,136 @@ def main():
     else:
         print(f"✅ Clock verified post-PLAYING: pipeline is using our CLOCK_REALTIME system clock", file=sys.stderr)
 
+    # ── USB cameras: force REALTIME timestamps on v4l2src buffers ────────────
+    # The Linux kernel V4L2 driver timestamps captured frames with the system's
+    # CLOCK_MONOTONIC (uptime clock), which on this hardware runs ~726 ppm faster
+    # than wall time.  GStreamer's do-timestamp=true on v4l2src is *supposed* to
+    # replace those kernel timestamps with the pipeline clock running-time, but on
+    # some GStreamer/kernel combinations it still propagates the MONOTONIC value.
+    #
+    # Consequences by capture path:
+    #   MJPEG → mppjpegdec: the Rockchip hardware decoder re-derives its output
+    #     PTS from the pipeline clock, so REALTIME-based cameras (e.g. Cam1) work
+    #     without this probe.  But cameras where mppjpegdec passes the MONOTONIC
+    #     input PTS through would still drift.
+    #   YUYV → videoconvert: purely a format conversion — timestamps are passed
+    #     through unchanged.  Without this probe those MONOTONIC values propagate
+    #     to every downstream element, including the preview branch (rtmpsink →
+    #     MediaMTX → WebRTC) and the query_position() drift monitor.
+    #
+    # The capture format is detected at runtime, so both cases must be covered
+    # regardless of which camera is plugged in.
+    #
+    # This probe fires on every frame from v4l2src and overwrites PTS/DTS with
+    # (clock.get_time() - base_time) — the true CLOCK_REALTIME running time.
+    # It is idempotent for cameras that already emit REALTIME PTS (no-op effect).
+    if input_type == "usb":
+        _usb_src_el = None
+        _usb_el_iter = pipeline.iterate_elements()
+        while True:
+            _ur, _uel = _usb_el_iter.next()
+            if _ur != Gst.IteratorResult.OK:
+                break
+            if _uel.get_factory() and _uel.get_factory().get_name() == "v4l2src":
+                _usb_src_el = _uel
+                break
+        if _usb_src_el:
+            _usb_src_pad = _usb_src_el.get_static_pad("src")
+            if _usb_src_pad:
+                def _usb_timestamp_probe(pad, info):
+                    _ac = pipeline.get_clock()
+                    _bt = pipeline.get_base_time()
+                    if _ac is None or _bt == 0:
+                        return Gst.PadProbeReturn.OK   # clock not yet distributed
+                    _now = _ac.get_time()
+                    if _now <= _bt:
+                        return Gst.PadProbeReturn.OK   # sanity guard
+                    _running_time = _now - _bt
+                    try:
+                        _buf = info.get_buffer().make_writable()
+                        _buf.pts = _running_time
+                        _buf.dts = _running_time
+                    except Exception:
+                        pass  # buffer not writable (very rare) — leave timestamps as-is
+                    return Gst.PadProbeReturn.OK
+                _usb_src_pad.add_probe(Gst.PadProbeType.BUFFER, _usb_timestamp_probe)
+                print(
+                    f"🕒 USB camera: REALTIME timestamp probe on {_usb_src_el.get_name()} src pad"
+                    f" (capture_format={capture_format})",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"⚠️  USB timestamp probe: could not get v4l2src src pad", file=sys.stderr)
+        else:
+            print(f"⚠️  USB timestamp probe: v4l2src not found in pipeline", file=sys.stderr)
+
     # ── Periodic drift monitor ────────────────────────────────────────────
-    # Every 60 s, logs two independent drift measurements:
+    # Every 60 s, logs THREE independent drift measurements:
     #
-    #  1. query_position drift — pipeline running_time vs wall elapsed.
-    #     Should be ≈0 when the pipeline clock is CLOCK_REALTIME.
-    #     Non-zero (and growing) → the pipeline clock is NOT REALTIME; this was
-    #     the symptom when v4l2src provided its CLOCK_MONOTONIC clock (~719 ppm).
+    #  1. Running-time drift (PRIMARY) — clock.get_time() - pipeline.get_base_time()
+    #     This reads the pipeline's TRUE running time directly from the clock,
+    #     bypassing query_position() entirely.  It is immune to the alsasrc
+    #     sample-counter artifact (see below).  Should be ≈0 when CLOCK_REALTIME.
     #
-    #  2. Clock vs wall — pipeline.get_clock().get_time() vs time.time()*1e9.
-    #     CLOCK_REALTIME returns epoch-based nanoseconds (~1.7 e18) so this
-    #     difference should be near-zero (within NTP accuracy, ±seconds).
-    #     CLOCK_MONOTONIC returns uptime-based nanoseconds (~days in ns), which
-    #     would show a huge negative value here — instant diagnosis.
+    #  2. query_position drift (SECONDARY / DIAGNOSTIC) — reports what GStreamer
+    #     considers the pipeline's "current position".  For video-only pipelines
+    #     this matches running-time.  For pipelines that contain alsasrc, GStreamer
+    #     routes the position query through the audio branch: alsasrc tracks its
+    #     position by counting captured samples from the USB audio oscillator.
+    #     That oscillator runs ~715 ppm fast, so query_position returns an inflated
+    #     value — but the actual audio PTS in the stream are still REALTIME-based
+    #     (assigned by do-timestamp=true from the pipeline clock), so the stream
+    #     is fine.  Non-zero here with zero running-time drift = monitoring artifact.
+    #
+    #  3. Clock vs wall — raw clock value vs time.time()*1e9.
+    #     CLOCK_REALTIME: delta ≈ 0 ✅.  CLOCK_MONOTONIC: huge negative ⚠️.
     _start_wall = time.time()
 
     def _log_drift():
+        wall_elapsed = time.time() - _start_wall
+        if wall_elapsed <= 0:
+            return True
+
+        active_clock = pipeline.get_clock()
+        clock_vs_wall = ""
+        rt_str        = ""
+
+        if active_clock:
+            clock_ns = active_clock.get_time()
+            wall_ns  = int(time.time() * 1e9)
+            ck_delta_s = (clock_ns - wall_ns) / 1e9
+
+            # ── Primary: running_time = clock_now - base_time ─────────────────
+            # Reads directly from the pipeline clock — unaffected by element
+            # position counters (e.g. alsasrc USB oscillator sample counting).
+            base_time = pipeline.get_base_time()
+            if base_time > 0 and clock_ns >= base_time:
+                rt_ns    = clock_ns - base_time
+                rt_s     = rt_ns / 1e9
+                rt_drift = rt_s - wall_elapsed
+                rt_ppm   = rt_drift / wall_elapsed * 1e6
+                rt_str   = f"rt={rt_s:.3f}s Δ{rt_drift:+.3f}s ({rt_ppm:+.1f} ppm)"
+
+            # ── Clock type sanity check ───────────────────────────────────────
+            if abs(ck_delta_s) < 120:
+                clock_vs_wall = f"[clock≈wall Δ{ck_delta_s:+.3f}s ✅]"
+            else:
+                clock_vs_wall = f"[clock≠wall Δ{ck_delta_s:+.0f}s ⚠️ MONOTONIC?]"
+
+        # ── Secondary: query_position (may reflect alsasrc USB oscillator) ─────
         _ok, position = pipeline.query_position(Gst.Format.TIME)
+        pos_str = ""
         if _ok and position >= 0:
-            wall_elapsed = time.time() - _start_wall
-            gst_elapsed = position / 1e9  # nanoseconds → seconds
-            drift = gst_elapsed - wall_elapsed
-            ppm = (drift / wall_elapsed * 1e6) if wall_elapsed > 0 else 0
+            gst_s    = position / 1e9
+            pos_drift = gst_s - wall_elapsed
+            pos_ppm  = pos_drift / wall_elapsed * 1e6
+            pos_str  = f"  pos={gst_s:.3f}s Δ{pos_drift:+.3f}s ({pos_ppm:+.1f} ppm)"
 
-            # Secondary check: compare raw clock value to wall time.
-            # Near-zero → CLOCK_REALTIME (correct).  Huge negative → CLOCK_MONOTONIC.
-            clock_note = ""
-            active_clock = pipeline.get_clock()
-            if active_clock:
-                clock_ns = active_clock.get_time()
-                wall_ns  = int(time.time() * 1e9)
-                ck_delta_s = (clock_ns - wall_ns) / 1e9
-                if abs(ck_delta_s) < 120:
-                    clock_note = f"  [clock≈wall Δ{ck_delta_s:+.3f}s ✅]"
-                else:
-                    clock_note = f"  [clock≠wall Δ{ck_delta_s:+.0f}s ⚠️ MONOTONIC?]"
-
-            print(
-                f"🕒 Drift check — GStreamer: {gst_elapsed:.3f}s  "
-                f"Wall: {wall_elapsed:.3f}s  "
-                f"Δ: {drift:+.3f}s  ({ppm:+.1f} ppm){clock_note}",
-                file=sys.stderr,
-            )
+        print(
+            f"🕒 Drift check — Wall: {wall_elapsed:.3f}s  "
+            f"{rt_str}{pos_str}  {clock_vs_wall}",
+            file=sys.stderr,
+        )
         return True  # keep timer running
 
     GLib.timeout_add_seconds(60, _log_drift)
