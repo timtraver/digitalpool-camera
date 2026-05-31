@@ -572,15 +572,27 @@ class StreamController extends EventEmitter {
         // audioDevice === null signals "use silent fallback" (anullsrc).
         let audioDeviceBusy = false;
         await new Promise((resolve) => {
+          // Use arecord to probe the device before committing to ffmpeg.
+          // -D <device> --duration=0 opens the device and exits immediately;
+          // a non-zero exit code indicates a problem.
           const check = spawn("arecord", ["-D", audioDevice, "--duration=0"], {
             stdio: ["ignore", "ignore", "pipe"],
           });
           let checkErr = "";
           check.stderr.on("data", (d) => { checkErr += d.toString(); });
           check.on("close", async (chkCode) => {
+            console.log(`🎤 [Cam${this.streamId}] arecord probe "${audioDevice}" → exit ${chkCode}${checkErr ? " stderr: " + checkErr.trim() : ""}`);
             if (chkCode !== 0) {
-              const isBusy    = checkErr.includes("Device or resource busy") || checkErr.includes("resource busy");
-              const isMissing = checkErr.includes("No such file") || checkErr.includes("cannot open") || checkErr.includes("Invalid");
+              const isBusy = checkErr.includes("Device or resource busy") ||
+                             checkErr.includes("resource busy");
+              // "No such file" or "Invalid" reliably mean the device path doesn't exist.
+              // "cannot open" alone is NOT treated as missing — some ALSA devices return
+              // it for format-mismatch reasons even when the device is present; letting
+              // ffmpeg's own ALSA open attempt handle that avoids misdirecting to the
+              // fallback (which would return the first audio card, usually the onboard
+              // Rockchip codec, not the camera mic).
+              const isMissing = checkErr.includes("No such file") ||
+                                checkErr.includes("Invalid card");
               if (isBusy) {
                 // Device exists but is held by another process (e.g., the other camera).
                 // Fall back to a silent audio track so the stream still starts.
@@ -589,14 +601,19 @@ class StreamController extends EventEmitter {
                   `and disable audio or select a different device.`);
                 audioDeviceBusy = true;
               } else if (isMissing) {
-                console.warn(`⚠️  Audio device "${audioDevice}" not found — scanning for a valid capture device…`);
+                console.warn(`⚠️  [Cam${this.streamId}] Audio device "${audioDevice}" not found — scanning for a valid capture device…`);
                 const detected = await this._detectAlsaCaptureDevice();
                 if (detected) {
-                  console.log(`🎤 Auto-detected ALSA capture device: ${detected}`);
+                  console.log(`🎤 [Cam${this.streamId}] Fallback ALSA capture device: ${detected}`);
                   audioDevice = detected;
                 } else {
-                  console.warn("⚠️  No ALSA capture device found — audio will be absent from this stream");
+                  console.warn(`⚠️  [Cam${this.streamId}] No ALSA capture device found — audio will be absent from this stream`);
                 }
+              } else {
+                // Unknown arecord error (e.g. format mismatch on --duration=0 probe).
+                // Let ffmpeg try the device anyway — it handles ALSA format negotiation
+                // more robustly than arecord's default params.
+                console.log(`🎤 [Cam${this.streamId}] arecord probe returned non-zero for unknown reason — proceeding with ffmpeg`);
               }
             }
             resolve();
@@ -630,7 +647,12 @@ class StreamController extends EventEmitter {
             "-use_wallclock_as_timestamps", "1",
             ...(audioOffsetSec !== 0 ? ["-itsoffset", String(audioOffsetSec)] : []),
             "-f", "alsa",
-            "-ar", "48000",
+            // Capture at the camera's native 32 kHz — do NOT ask the ALSA plug layer
+            // to resample to 48 kHz because plughw silently produces zeros when the
+            // USB device's actual hardware rate differs from the requested rate.
+            // ffmpeg's libswresample (via the aresample filter below) handles the
+            // 32000→48000 Hz upsample reliably and without silent failures.
+            "-ar", "32000",
             "-ac", "2",
             "-thread_queue_size", "4096",
             "-i", audioDevice,
@@ -676,10 +698,12 @@ class StreamController extends EventEmitter {
             : []),
           "-c:a", "aac",
           "-b:a", "128k",
-          // aresample=async=1000: safety net for any sub-frame startup jitter between
-          // the ALSA buffer boundary and the first video frame.  Both streams use
-          // av_gettime() (CLOCK_REALTIME) so no ongoing rate correction is needed.
-          "-af", "aresample=async=1000",
+          // aresample=48000:async=1000: resample from the ALSA capture rate (32 kHz)
+          // to 48 kHz for AAC encoding, with async compensation for any sub-frame
+          // startup jitter between the ALSA buffer boundary and the first video frame.
+          // Both streams use av_gettime() (CLOCK_REALTIME) so no ongoing rate drift
+          // correction is needed — the async window is just a startup safety net.
+          "-af", "aresample=48000:async=1000",
           // max_interleave_delta: both streams share the same wall-clock epoch, so
           // the interleave delta stays near zero. 1 s cap is a safety margin.
           // muxdelay=0 removes mux buffering.
