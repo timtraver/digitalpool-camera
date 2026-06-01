@@ -1947,26 +1947,25 @@ class StreamController extends EventEmitter {
     const configuredFps = this.streamConfig.framerate || 30;
     this.emit("fps", configuredFps);
 
-    const poll = async () => {
+    // Query v4l2 once — the negotiated FPS is fixed for the lifetime of the
+    // stream and only changes if the user swaps the input source and restarts.
+    // Polling repeatedly just floods journalctl with sudo/PAM session entries.
+    (async () => {
       try {
-        const { stdout, stderr } = await execAsync(
-          `sudo v4l2-ctl -d ${this.cameraDevice} --get-parm`
+        const { stdout } = await execAsync(
+          `v4l2-ctl -d ${this.cameraDevice} --get-parm`
         );
         // Example line: "  Frames per second: 30.000 (30/1)"
         const m = stdout.match(/Frames per second:\s+[\d.]+\s+\((\d+)\/(\d+)\)/);
         if (m) {
           const fps = Math.round(parseInt(m[1], 10) / parseInt(m[2], 10));
           this.emit("fps", fps);
-        } else {
-          // v4l2-ctl ran but didn't return framerate — fall back to config value
-          this.emit("fps", configuredFps);
         }
-      } catch (err) {
-        // Device busy or sudo failed — keep showing the configured value
-        this.emit("fps", configuredFps);
+        // If no match, the initial configuredFps emit above already covers the UI.
+      } catch (_) {
+        // Device busy or v4l2-ctl unavailable — configured value is already shown.
       }
-    };
-    this._fpsInterval = setInterval(poll, 5000);
+    })();
   }
 
   _stopFpsMonitoring() {
