@@ -572,15 +572,26 @@ class StreamController extends EventEmitter {
         // audioDevice === null signals "use silent fallback" (anullsrc).
         let audioDeviceBusy = false;
         await new Promise((resolve) => {
-          // Use arecord to probe the device before committing to ffmpeg.
-          // -D <device> --duration=0 opens the device and exits immediately;
-          // a non-zero exit code indicates a problem.
-          const check = spawn("arecord", ["-D", audioDevice, "--duration=0"], {
+          // Use arecord to probe whether the ALSA device is accessible.
+          // IMPORTANT: --duration=0 means "record indefinitely" in ALSA, NOT
+          // "record for 0 seconds". We use --nonblock so the open fails
+          // immediately (rather than blocking) if the device is busy, and
+          // kill the process after 2 s as a safety net in case arecord hangs
+          // (e.g. on some USB audio drivers that don't honour --nonblock).
+          const check = spawn("arecord", ["-D", audioDevice, "--nonblock", "--duration=2"], {
             stdio: ["ignore", "ignore", "pipe"],
           });
+
+          // Hard-kill the probe after 2.5 s regardless of what it's doing.
+          // This ensures the Promise always resolves even if the ALSA driver
+          // or arecord itself hangs during device open / close.
+          const probeTimeout = setTimeout(() => {
+            try { check.kill("SIGKILL"); } catch (_) {}
+          }, 2500);
           let checkErr = "";
           check.stderr.on("data", (d) => { checkErr += d.toString(); });
           check.on("close", async (chkCode) => {
+            clearTimeout(probeTimeout);
             console.log(`🎤 [Cam${this.streamId}] arecord probe "${audioDevice}" → exit ${chkCode}${checkErr ? " stderr: " + checkErr.trim() : ""}`);
             if (chkCode !== 0) {
               const isBusy = checkErr.includes("Device or resource busy") ||
