@@ -3794,6 +3794,70 @@ server.listen(PORT, async () => {
     cameraInitialized = true; // Allow commands even if init failed
   }
 
+  // ── Camera 2 boot sequence (async — does not block Camera 1) ───────────────
+  // Runs in the background after Camera 1 is live so the admin UI is
+  // immediately responsive even if Camera 2 is slow to enumerate.
+  (async () => {
+    try {
+      console.log("\n📹 [Cam2] Starting Camera 2 boot sequence...");
+
+      // Restore saved source for Camera 2.
+      if (_savedSource2) {
+        streamController2.setInputSource(activeCameraSource2);
+        if (activeCameraSource2.type === "usb" && activeCameraSource2.device) {
+          camera2.device = activeCameraSource2.device;
+        }
+      }
+
+      // Detect Camera 2 capture format.
+      try {
+        cameraFormat2 = await camera2.detectCaptureFormat(CAMERA_DEVICE_2);
+        streamController2.captureFormat = cameraFormat2;
+        console.log(`📹 [Cam2] Capture format: ${cameraFormat2.toUpperCase()}`);
+      } catch (e) {
+        console.error("⚠️  [Cam2] Format detection failed:", e.message);
+        cameraFormat2 = "mjpeg";
+        streamController2.captureFormat = cameraFormat2;
+      }
+
+      // Start Camera 2 idle preview.
+      try {
+        await startPersistentIdlePreview(2);
+        console.log("✅ [Cam2] Idle preview started");
+        io.emit("refreshIdlePreview", { cameraIndex: 2 });
+      } catch (e) {
+        console.error("⚠️  [Cam2] Idle preview failed:", e.message);
+      }
+
+      // Wait for preview to stabilise, then auto-start Camera 2 stream if configured.
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      try {
+        await streamController2.initialize();
+      } catch (e) {
+        console.error("❌ [Cam2] Stream controller init failed:", e.message);
+      }
+
+      // Apply PTZ config in the background.
+      try {
+        await camera2.applyConfig();
+        const usedStartup2 = await camera2.applyStartupPosition();
+        if (usedStartup2) {
+          console.log("📌 [Cam2] Applied startup position");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await camera2.syncPosition();
+        cameraInitialized2 = true;
+        console.log("✅ [Cam2] Camera 2 initialized successfully\n");
+      } catch (e) {
+        console.error("❌ [Cam2] Camera init error:", e.message);
+        cameraInitialized2 = true; // allow commands even if PTZ init failed
+      }
+    } catch (err) {
+      console.error("❌ [Cam2] Boot sequence error:", err.message);
+      cameraInitialized2 = true;
+    }
+  })();
+
   // Start Puppeteer overlay ASYNCHRONOUSLY — don't block the preview
   // When the first screenshot arrives, restart the preview with the overlay
   const hasRemoteOnBoot = streamController.streamConfig.remoteOverlayEnabled &&
