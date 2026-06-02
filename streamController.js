@@ -863,7 +863,13 @@ class StreamController extends EventEmitter {
           const ffmpegArgs = [...ffmpegAudioArgs, ...ffmpegVideoArgs, ...ffmpegOutputArgs];
 
           console.log("Starting ffmpeg with args:", ffmpegArgs.join(" "));
-          this.ffmpegProcess = spawn("ffmpeg", ffmpegArgs, {
+          // Spawn ffmpeg via `nice -n -5` to give the A/V mux process slightly
+          // higher scheduling priority than the default.  GStreamer's Python overlay
+          // pipeline runs at 100%+ CPU continuously; without a priority bump the OS
+          // scheduler can preempt ffmpeg's ALSA capture thread long enough to cause
+          // a buffer underrun → audible choppiness that worsens over many hours.
+          // nice -n -5 keeps ffmpeg competitive without requiring root/SCHED_FIFO.
+          this.ffmpegProcess = spawn("nice", ["-n", "-5", "ffmpeg", ...ffmpegArgs], {
             stdio: ["pipe", "pipe", "pipe"],
           });
 
@@ -916,7 +922,7 @@ class StreamController extends EventEmitter {
                 const retryArgs = [...silentAudioArgs, ...ffmpegVideoArgs, ...ffmpegOutputArgs];
                 console.log("🔄 Retrying ffmpeg with silent audio:", retryArgs.join(" "));
 
-                this.ffmpegProcess = spawn("ffmpeg", retryArgs, { stdio: ["pipe", "pipe", "pipe"] });
+                this.ffmpegProcess = spawn("nice", ["-n", "-5", "ffmpeg", ...retryArgs], { stdio: ["pipe", "pipe", "pipe"] });
                 gstStdout.pipe(this.ffmpegProcess.stdin);
 
                 let retryStderrBuf = "";
