@@ -508,9 +508,33 @@ sudo apt install -y tzdata
 
 ### 2h. ImageMagick + wkhtmltoimage (local HTML scoreboard overlay)
 
+**Ubuntu 20.04 (Focal):**
 ```bash
 sudo apt install -y imagemagick wkhtmltopdf
 ```
+
+**Ubuntu 22.04+ (Jammy and newer — including Intel x86 installs):**
+
+`wkhtmltopdf` was removed from Ubuntu 22.04's official repositories. Install ImageMagick via apt and download the `wkhtmltopdf` `.deb` directly from the project's GitHub releases:
+
+```bash
+sudo apt install -y imagemagick
+
+# Download the pre-built .deb for Ubuntu 22.04 x86_64
+wget https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.jammy_amd64.deb
+
+# Install it (pulls in any missing dependencies automatically)
+sudo apt install -y ./wkhtmltox_0.12.6.1-3.jammy_amd64.deb
+
+# Clean up the downloaded file
+rm wkhtmltox_0.12.6.1-3.jammy_amd64.deb
+```
+
+> **Verify:**
+> ```bash
+> wkhtmltoimage --version
+> ```
+> You should see `wkhtmltoimage 0.12.6.1 (with patched qt)`. The "with patched qt" part is important — the unpatched build from some mirrors does not support headless rendering correctly.
 
 ### 2i. Chromium browser (Puppeteer headless — remote URL overlay)
 
