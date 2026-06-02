@@ -456,10 +456,20 @@ The service auto-detects which encoder is available at startup — no manual con
 
 ### 2d. GDK Pixbuf overlay (PNG compositing into the stream)
 
+> **Note:** The dev package was renamed in Ubuntu 22.04. Use whichever command matches your Ubuntu version.
+
+**Ubuntu 20.04 (Focal):**
 ```bash
 sudo apt install -y \
   gstreamer1.0-gtk3 \
   libgdk-pixbuf2.0-dev
+```
+
+**Ubuntu 22.04+ (Jammy and newer — including Intel x86 installs):**
+```bash
+sudo apt install -y \
+  gstreamer1.0-gtk3 \
+  libgdk-pixbuf-xlib-2.0-dev
 ```
 
 > **Verify:**
