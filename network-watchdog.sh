@@ -6,11 +6,15 @@
 # A soft service restart can't fix this — only a reboot can.
 #
 # Strategy:
-#   1. Try to ping the default gateway on every active interface.
-#   2. If ALL pings fail, increment a failure counter in /run/net-watchdog-fails.
-#   3. After 2 consecutive failures (20 minutes of being unreachable), reboot.
-#   4. On any success, reset the counter and attempt a WiFi driver reset first
-#      if the rtw_8822bu driver is showing queue-flush errors.
+#   1. For each active interface:
+#      a. If the interface is a WiFi AP/hotspot, treat it as reachable — it IS
+#         the gateway, there is no upstream host to ping.
+#      b. Otherwise, ping the interface's default gateway (or 192.168.50.1).
+#   2. If ALL interfaces fail, increment a failure counter.
+#   3. After 2 consecutive failures (20 minutes), reboot.
+#   4. On any success, reset the counter.
+#      If the rtw_8822bu USB WiFi driver shows stuck-queue errors, attempt a
+#      USB rebind (Rockchip / USB-adapter hardware only).
 #
 # Run by network-watchdog.timer every 10 minutes.
 
@@ -19,9 +23,22 @@ FAIL_FILE="/run/net-watchdog-fails"
 MAX_FAILS=2          # reboot after this many consecutive all-interface failures
 WIFI_DRIVER="rtw_8822bu"
 
-# ── Test one interface: ping its default gateway ──────────────────────────────
+# ── Detect if an interface is operating as a WiFi Access Point ───────────────
+# When it is, the device IS the gateway — no upstream host to ping.
+# Returns 0 (true) if AP mode, 1 (false) otherwise.
+is_ap_mode() {
+    local iface="$1"
+    iw dev "$iface" info 2>/dev/null | grep -q "type AP"
+}
+
+# ── Test one interface: pass if AP mode, otherwise ping its default gateway ──
 ping_iface() {
     local iface="$1"
+    # AP/hotspot interface: this device is the gateway — always consider reachable.
+    if is_ap_mode "$iface"; then
+        logger -t "$LOG_TAG" "ℹ️   $iface is a WiFi AP (hotspot) — treating as reachable"
+        return 0
+    fi
     local gw
     gw=$(ip route show dev "$iface" 2>/dev/null | awk '/default/ {print $3; exit}')
     # No default route on this interface — try pinging the AP IP instead
