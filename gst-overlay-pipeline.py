@@ -84,6 +84,13 @@ def main():
     capture_format  = sys.argv[27] if len(sys.argv) > 27 else "mjpeg"
     # MediaMTX RTMP preview path (arg 28) — e.g. rtmp://localhost:1935/preview or /preview2
     preview_rtmp_url = sys.argv[28] if len(sys.argv) > 28 else "rtmp://localhost:1935/preview"
+    # Active encoder (arg 29) — e.g. mpph264enc (Rockchip), vaapih264enc (Intel), x264enc (soft)
+    # Passed from streamController.js so this script can select the matching JPEG decoder and
+    # H.264/H.265 encoder without any platform-detection logic here.
+    encoder = sys.argv[29] if len(sys.argv) > 29 else "mpph264enc"
+    # JPEG decoder: Rockchip MPP hardware (mppjpegdec) for mpp* encoders, software jpegdec for
+    # Intel VA-API (vaapih264enc) and software (x264enc) encoders.
+    jpeg_decoder = 'mppjpegdec' if encoder.startswith('mpp') else 'jpegdec'
 
     # GStreamer videoflip method:
     #   0 = identity (none), 2 = rotate-180, 4 = horizontal-flip, 5 = vertical-flip
@@ -376,7 +383,7 @@ def main():
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
         )
     else:
-        # jpegparse is required by mppjpegdec (Rockchip hardware decoder needs parsed frames).
+        # jpegparse is required before mppjpegdec (Rockchip hardware decoder needs parsed frames).
         # For software jpegdec (Intel, x86) we skip jpegparse — it is too strict and rejects
         # JPEG streams with minor header quirks (e.g. "Duplicated or bad SOF marker") that
         # jpegdec handles gracefully without the intermediary parser.
@@ -418,25 +425,35 @@ def main():
         # frames (fast pool shots) rather than raising quantizer and pixelating.
         # SRT latency=500ms absorbs the short bursts; average bitrate stays near bps target.
         + (
-            # H.265 (HEVC) — Rockchip MPP hardware encoder, SRT / RTSP only
-            f'! mpph265enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr '
-            f'! video/x-h265,stream-format=byte-stream '
-            f'! h265parse config-interval=-1 '
+            # H.265 (HEVC) — Rockchip MPP or Intel VA-API hardware encoder, SRT/RTSP only.
+            # RTMP (FLV) only supports H.264 so codec is forced to h264 for RTMP above.
+            (f'! mpph265enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr '
+             if encoder.startswith('mpp') else
+             f'! vaapih265enc bitrate={bitrate_kbps} keyframe-period=15 ')
+            + f'! video/x-h265,stream-format=byte-stream '
+            + f'! h265parse config-interval=-1 '
             if codec == "h265" else
-            # H.264 (default) — Rockchip MPP hardware encoder, all protocols
-            f'! mpph264enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr profile=baseline '
-            f'! video/x-h264,stream-format=byte-stream '
+            # H.264 — encoder selected by the 'encoder' argument (arg 29):
+            #   mpph264enc  : Rockchip MPP hardware (bps in bits, VBR with burst headroom)
+            #   vaapih264enc: Intel VA-API hardware (bitrate in kbps, keyframe-period)
+            #   x264enc     : software fallback (bitrate in kbps, ultrafast/zerolatency)
+            (f'! mpph264enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr profile=baseline '
+             if encoder == 'mpph264enc' else
+             f'! vaapih264enc bitrate={bitrate_kbps} keyframe-period=15 '
+             if encoder == 'vaapih264enc' else
+             f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
+            + f'! video/x-h264,stream-format=byte-stream '
             # RTMP+audio hybrid: config-interval=0 — SPS/PPS go only into the MPEG-TS PMT.
             # ffmpeg reads them once at startup and writes ONE AVC sequence header in FLV.
             # config-interval=0 is only needed for the ALSA hybrid mode where ffmpeg
             # reads the MPEG-TS stdout.  In that path a DTS monotonicity issue arises
             # because ffmpeg re-emits inline SPS+PPS+IDR as two buffers with the same
             # DTS, causing MediaMTX to drop the connection.
-            # For pure-GStreamer paths (NDI, RTSP audio, video-only RTMP), mpph264enc
+            # For pure-GStreamer paths (NDI, RTSP audio, video-only RTMP), the encoder
             # uses header-mode=each-idr which already inlines SPS+PPS before every IDR;
             # keeping config-interval=-1 lets h264parse pass them through as-is so
             # flvmux always sees the decoder configuration record alongside the keyframe.
-            f'! h264parse config-interval={"0" if protocol == "rtmp" and audio_device else "-1"} '
+            + f'! h264parse config-interval={"0" if protocol == "rtmp" and audio_device else "-1"} '
         )
         # Thread boundary before mux to decouple encoder from network I/O.
         # All RTMP paths (video-only, NDI audio, RTSP audio) use flvmux which
@@ -500,8 +517,13 @@ def main():
         f'! videoscale ! video/x-raw,width=1280,height=720 '
         f'! videorate ! video/x-raw,framerate=15/1 '
         f'! videoconvert ! video/x-raw,format=NV12 '
-        f'! mpph264enc bps=500000 header-mode=each-idr gop=15 '
-        f'! h264parse config-interval=-1 '
+        # Preview encoder: same hardware selection as the main stream encoder.
+        + (f'! mpph264enc bps=500000 header-mode=each-idr gop=15 '
+           if encoder == 'mpph264enc' else
+           f'! vaapih264enc bitrate=500 keyframe-period=15 '
+           if encoder == 'vaapih264enc' else
+           f'! x264enc bitrate=500 speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
+        + f'! h264parse config-interval=-1 '
         f'! video/x-h264,stream-format=avc,alignment=au '
         f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream '
         f'! flvmux streamable=true '
