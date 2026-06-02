@@ -14,9 +14,18 @@ Usage:
 
 import ctypes
 import json
+import os
 import sys
 
-NDI_LIB_PATH = "/usr/local/lib/libndi.so.6"
+# Search for the NDI runtime library in the locations used by each platform:
+#   /usr/local/lib/libndi.so.6          — ARM64 (Rockchip RK3588, Orange Pi 5)
+#   /usr/lib/x86_64-linux-gnu/libndi.so.6 — Intel x86_64 (GMKtec G5 N97, etc.)
+_NDI_LIB_CANDIDATES = [
+    "/usr/local/lib/libndi.so.6",
+    "/usr/lib/x86_64-linux-gnu/libndi.so.6",
+    "/usr/lib/aarch64-linux-gnu/libndi.so.6",
+]
+NDI_LIB_PATH = next((p for p in _NDI_LIB_CANDIDATES if os.path.exists(p)), _NDI_LIB_CANDIDATES[0])
 
 
 class _NDIlib_source_t(ctypes.Structure):

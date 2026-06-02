@@ -2864,7 +2864,10 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
         // since we're already NV12, which is what mpph264enc needs.
       ];
     } else {
-      // MJPEG camera (default): hardware JPEG decode via mppjpegdec
+      // MJPEG camera (default): JPEG decode → scale to 720p.
+      // Use _getJpegDecoder() so Rockchip uses mppjpegdec (hardware) and Intel / other
+      // hardware uses jpegdec (software, fast enough on N97 at 1080p@15fps preview).
+      const jpegDec = sc._getJpegDecoder(config.encoder);
       gstArgs = [
         "v4l2src",
         `device=${device}`,
@@ -2874,9 +2877,9 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
         "!",
         "jpegparse",
         "!",
-        "mppjpegdec",          // Hardware JPEG decode → NV12 at full resolution
+        jpegDec,               // Hardware (mppjpegdec) or software (jpegdec) JPEG decode
         "!",
-        "videoscale",          // NV12 1920×1080 → NV12 1280×720
+        "videoscale",          // Decode resolution → 1280×720
         "!",
         "video/x-raw,width=1280,height=720",
         "!",
@@ -3011,17 +3014,22 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
   }
 
   // H.264 encode and push to MediaMTX for WebRTC delivery.
-  // videoconvert→NV12 is required because mpph264enc (Rockchip MPP) only accepts NV12.
+  // Encoder is selected dynamically to match the hardware on this machine:
+  //   Rockchip (mpph264enc): needs NV12 input, bitrate in bps
+  //   Intel VA-API (vaapih264enc): accepts any raw format, bitrate in kbps
+  //   Software / other (x264enc): needs I420 input, bitrate in kbps
   // config-interval=-1 on h264parse embeds SPS/PPS before every IDR so MediaMTX can
   // start a new WebRTC session mid-stream without waiting for the next keyframe.
   // async=false on rtmpsink lets the pipeline reach PLAYING before RTMP connects.
+  const idleEncoder = config.encoder || "mpph264enc";
+  const idleEncArgs = idleEncoder === "vaapih264enc"
+    ? ["videoconvert", "!", "vaapih264enc", "bitrate=2000", "keyframe-period=15", "!"]
+    : idleEncoder === "x264enc" || idleEncoder === "omxh264enc"
+    ? ["videoconvert", "!", "video/x-raw,format=I420", "!", "x264enc", "bitrate=2000", "speed-preset=ultrafast", "tune=zerolatency", "key-int-max=15", "!"]
+    : ["videoconvert", "!", "video/x-raw,format=NV12", "!", "mpph264enc", "bps=2000000", "header-mode=each-idr", "gop=15", "!"];
+
   gstArgs.push(
-    "videoconvert",
-    "!",
-    "video/x-raw,format=NV12",
-    "!",
-    "mpph264enc", "bps=2000000", "header-mode=each-idr", "gop=15",
-    "!",
+    ...idleEncArgs,
     "h264parse", "config-interval=-1",
     "!",
     "video/x-h264,stream-format=avc,alignment=au",

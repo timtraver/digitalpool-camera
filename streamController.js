@@ -70,7 +70,7 @@ class StreamController extends EventEmitter {
     // Active input source — updated via setInputSource() when the user switches in the UI.
     this.inputSource = { type: "usb", device: cameraDevice, rtspUrl: "" };
     // Detected at startup by cameraController.detectCaptureFormat().
-    // 'mjpeg' → image/jpeg ! jpegparse ! mppjpegdec (hardware decode, for OBSBOT etc.)
+    // 'mjpeg' → image/jpeg ! jpegparse ! <decoder> (mppjpegdec on Rockchip, jpegdec elsewhere)
     // 'yuyv'  → video/x-raw,format=YUYV ! videoconvert (software convert, YUYV-only cameras)
     this.captureFormat = 'mjpeg';
     this.gstProcess = null;
@@ -164,6 +164,12 @@ class StreamController extends EventEmitter {
    * Initialize and auto-start if configured
    */
   async initialize() {
+    // Auto-detect encoder: if the configured encoder is not available on this
+    // hardware, switch to the best available one and persist the change.
+    // This lets the same codebase run on RK3588 (mpph264enc) and Intel N97
+    // (vaapih264enc) without any manual config editing.
+    await this._autoDetectEncoder();
+
     if (this.streamConfig.autoStart) {
       console.log("🚀 Auto-starting stream on server startup...");
       // Wait a moment for the system to be ready
@@ -175,6 +181,60 @@ class StreamController extends EventEmitter {
         console.error("❌ Auto-start failed:", result.error);
       }
     }
+  }
+
+  /**
+   * Check whether the configured encoder plugin is present on this machine.
+   * If it is missing, run full encoder detection and update streamConfig.encoder
+   * to the best available option, then persist the change.
+   *
+   * Rockchip RK3588  → mpph264enc   (Rockchip MPP GStreamer plugin)
+   * Intel N97 / iGPU → vaapih264enc (gstreamer1.0-vaapi)
+   * NVIDIA Jetson    → nvv4l2h264enc
+   * Software         → x264enc
+   */
+  async _autoDetectEncoder() {
+    const configured = this.streamConfig.encoder || "mpph264enc";
+
+    const available = await new Promise((resolve) => {
+      const check = spawn("gst-inspect-1.0", [configured]);
+      check.on("close", (code) => resolve(code === 0));
+      check.on("error", () => resolve(false));
+    });
+
+    if (available) {
+      console.log(`✅ Encoder "${configured}" confirmed available on this hardware`);
+      return;
+    }
+
+    console.log(`⚠️  Configured encoder "${configured}" not found — running hardware detection…`);
+    const result = await StreamController.testGStreamer();
+
+    if (result.success && result.encoder !== configured) {
+      console.log(`🔧 Auto-switching encoder: ${configured} → ${result.encoder} (${result.message})`);
+      this.streamConfig.encoder = result.encoder;
+      this.saveConfig();
+    } else if (!result.success) {
+      console.error("❌ No GStreamer encoder found — streaming will fail:", result.error);
+    }
+  }
+
+  /**
+   * Return the GStreamer JPEG decoder element name appropriate for the
+   * active encoder family.
+   *
+   * Rockchip (mpph264enc / mpph265enc) → mppjpegdec (MPP hardware JPEG decode)
+   * Everything else (Intel vaapih264enc, NVIDIA, x264enc) → jpegdec (software)
+   *
+   * On Intel N97, the CPU is fast enough for software JPEG decode at 1080p@30fps,
+   * and using jpegdec avoids an additional dependency on vaapijpegdec.
+   *
+   * @param {string} [encoder] - encoder name; falls back to this.streamConfig.encoder
+   * @returns {string} GStreamer element name
+   */
+  _getJpegDecoder(encoder) {
+    const enc = encoder || this.streamConfig.encoder || "mpph264enc";
+    return enc.startsWith("mpp") ? "mppjpegdec" : "jpegdec";
   }
 
   /**
@@ -1338,6 +1398,9 @@ class StreamController extends EventEmitter {
       this.captureFormat || "mjpeg",                           // arg 27
       // Preview RTMP path for MediaMTX (arg 28) — /preview or /preview2
       `rtmp://localhost:1935${this.previewPath}`,              // arg 28
+      // Active encoder (arg 29) — e.g. mpph264enc, vaapih264enc, x264enc
+      // Lets gst-overlay-pipeline.py select the right encoder and JPEG decoder
+      this.streamConfig.encoder || "mpph264enc",              // arg 29
     ];
 
     return {
@@ -1451,7 +1514,8 @@ class StreamController extends EventEmitter {
       ];
     } else {
       pipeline = [
-        // USB camera: MJPEG capture → MPP hardware JPEG decode → rate control
+        // USB camera: MJPEG capture → hardware or software JPEG decode → rate control
+        // Decoder is chosen by _getJpegDecoder(): mppjpegdec on Rockchip, jpegdec elsewhere.
         "v4l2src",
         `device=${this.cameraDevice}`,
         "do-timestamp=true",
@@ -1460,7 +1524,7 @@ class StreamController extends EventEmitter {
         "!",
         "jpegparse",
         "!",
-        "mppjpegdec",
+        this._getJpegDecoder(encoder),
         "!",
         "videorate",
         "!",
@@ -1620,23 +1684,62 @@ class StreamController extends EventEmitter {
 
     // Encoding pipeline
     if (codec === "h265") {
-      // Rockchip MPP H.265 hardware encoder (Orange Pi 5 / RK3588)
-      // Incompatible with RTMP — enforced in UI and above; only reached for SRT / RTSP
-      if (hasAnyOverlay) {
-        pipeline.push("videoconvert", "!", "video/x-raw,format=NV12", "!");
+      // H.265 (HEVC) — incompatible with RTMP (FLV only supports H.264);
+      // only reached for SRT / RTSP.  Encoder chosen by hardware family.
+      if (encoder === "vaapih264enc") {
+        // Intel VA-API H.265 encoder
+        const bitrate_kbps = Math.round(bitrate / 1000);
+        pipeline.push(
+          "videoconvert",
+          "!",
+          "vaapih265enc",
+          `bitrate=${bitrate_kbps}`,
+          "rate-control=vbr",
+          "keyframe-period=5",  // Keyframe every ~167ms at 30fps
+          "!",
+          "video/x-h265,stream-format=byte-stream",
+          "!",
+          "h265parse",
+          "config-interval=-1",
+          "!",
+        );
+      } else {
+        // Rockchip MPP H.265 hardware encoder (Orange Pi 5 / RK3588)
+        if (hasAnyOverlay) {
+          pipeline.push("videoconvert", "!", "video/x-raw,format=NV12", "!");
+        }
+        pipeline.push(
+          "mpph265enc",
+          `bps=${bitrate}`,
+          `bps-max=${Math.round(bitrate * 1.6)}`,
+          "rc-mode=vbr",
+          "gop=5",                // Keyframe every ~167ms at 30fps, ~83ms at 60fps
+          "header-mode=each-idr", // VPS/SPS/PPS prepended to every IDR in the bitstream
+          "!",
+          "video/x-h265,stream-format=byte-stream",
+          "!",
+          "h265parse",
+          "config-interval=-1",   // Inline parameter sets; RTMP not supported with H.265
+          "!",
+        );
       }
+    } else if (encoder === "vaapih264enc") {
+      // Intel VA-API H.264 hardware encoder (N97, other x86 with Intel iGPU)
+      // vaapih264enc accepts most raw formats via VA-API; videoconvert normalises.
+      // bitrate is in kbps (not bps like mpph264enc).
+      const bitrate_kbps = Math.round(bitrate / 1000);
       pipeline.push(
-        "mpph265enc",
-        `bps=${bitrate}`,
-        `bps-max=${Math.round(bitrate * 1.6)}`,
-        "rc-mode=vbr",
-        "gop=5",                // Keyframe every ~167ms at 30fps, ~83ms at 60fps
-        "header-mode=each-idr", // VPS/SPS/PPS prepended to every IDR in the bitstream
+        "videoconvert",
         "!",
-        "video/x-h265,stream-format=byte-stream",
+        "vaapih264enc",
+        `bitrate=${bitrate_kbps}`,
+        "rate-control=vbr",
+        "keyframe-period=5",    // Keyframe every ~167ms at 30fps
         "!",
-        "h265parse",
-        "config-interval=-1",   // Inline parameter sets; RTMP not supported with H.265
+        "video/x-h264,stream-format=byte-stream",
+        "!",
+        "h264parse",
+        `config-interval=${protocol === "rtmp" && this.streamConfig.audioEnabled ? "0" : "-1"}`,
         "!",
       );
     } else if (encoder === "mpph264enc") {
@@ -1881,15 +1984,26 @@ class StreamController extends EventEmitter {
       "!",
       "video/x-raw,framerate=15/1",
       "!",
-      "videoconvert",
-      "!",
-      "video/x-raw,format=NV12",
-      "!",
-      "mpph264enc",
-      "bps=500000",
-      "header-mode=each-idr",
-      "gop=15",
-      "!",
+      // Preview encoder — matches the main encoder family so all hardware paths work.
+      // Rockchip: mpph264enc (requires NV12 input)
+      // Intel VA-API: vaapih264enc (accepts any raw format; bitrate in kbps)
+      // Software / other: x264enc
+      ...(encoder === "vaapih264enc"
+        ? [
+            "videoconvert", "!",
+            "vaapih264enc", "bitrate=500", "keyframe-period=15", "!",
+          ]
+        : encoder === "x264enc" || encoder === "omxh264enc"
+        ? [
+            "videoconvert", "!", "video/x-raw,format=I420", "!",
+            "x264enc", "bitrate=500", "speed-preset=ultrafast", "tune=zerolatency", "key-int-max=15", "!",
+          ]
+        : [
+            // Default: Rockchip mpph264enc (also used as preview encoder for nvv4l2h264enc fallback)
+            "videoconvert", "!", "video/x-raw,format=NV12", "!",
+            "mpph264enc", "bps=500000", "header-mode=each-idr", "gop=15", "!",
+          ]
+      ),
       "h264parse",
       "config-interval=-1",
       "!",
@@ -2081,12 +2195,6 @@ class StreamController extends EventEmitter {
     return new Promise((resolve) => {
       // Try mpph264enc first (Rockchip MPP hardware encoder, Orange Pi 5 / RK3588)
       const test = spawn("gst-inspect-1.0", ["mpph264enc"]);
-      let output = "";
-
-      test.stdout.on("data", (data) => {
-        output += data.toString();
-      });
-
       test.on("close", (code) => {
         if (code === 0) {
           resolve({
@@ -2095,14 +2203,14 @@ class StreamController extends EventEmitter {
             message: "Rockchip MPP hardware encoder available",
           });
         } else {
-          // Try x264enc (software fallback)
-          const testX264 = spawn("gst-inspect-1.0", ["x264enc"]);
-          testX264.on("close", (x264Code) => {
-            if (x264Code === 0) {
+          // Try vaapih264enc (Intel VA-API hardware encoder — N97, other x86 iGPU)
+          const testVaapi = spawn("gst-inspect-1.0", ["vaapih264enc"]);
+          testVaapi.on("close", (vaapiCode) => {
+            if (vaapiCode === 0) {
               resolve({
                 success: true,
-                encoder: "x264enc",
-                message: "x264 software encoder available",
+                encoder: "vaapih264enc",
+                message: "Intel VA-API hardware encoder available",
               });
             } else {
               // Try nvv4l2h264enc (Jetson)
@@ -2115,9 +2223,21 @@ class StreamController extends EventEmitter {
                     message: "NVIDIA hardware encoder available",
                   });
                 } else {
-                  resolve({
-                    success: false,
-                    error: "No encoder found (tried mpph264enc, x264enc, nvv4l2h264enc)",
+                  // Try x264enc (software fallback)
+                  const testX264 = spawn("gst-inspect-1.0", ["x264enc"]);
+                  testX264.on("close", (x264Code) => {
+                    if (x264Code === 0) {
+                      resolve({
+                        success: true,
+                        encoder: "x264enc",
+                        message: "x264 software encoder available",
+                      });
+                    } else {
+                      resolve({
+                        success: false,
+                        error: "No encoder found (tried mpph264enc, vaapih264enc, nvv4l2h264enc, x264enc)",
+                      });
+                    }
                   });
                 }
               });

@@ -659,45 +659,54 @@ Download the NDI SDK for Linux from the official NDI developer site:
 > **Download:** https://ndi.video/for-developers/ndi-sdk/download/
 > Choose **Linux** → download the `.tar.gz` or self-extracting `.sh` installer.
 
-Extract the archive, then copy the shared library for **your architecture** to `/usr/local/lib`. The SDK ships libraries for several architectures inside the `lib/` folder — use only the one that matches your machine.
+Extract the archive, then copy the shared library for **your architecture** to the correct system library directory. The SDK ships libraries for several architectures inside the `lib/` folder — use only the one that matches your machine.
 
 **ARM64 — Rockchip RK3588 (Orange Pi 5, Radxa Rock 5C, and similar):**
 ```bash
 sudo cp "./NDI SDK for Linux/lib/aarch64-linux-gnu/libndi.so.6" /usr/local/lib/
 sudo chmod 755 /usr/local/lib/libndi.so.6
+
+# Create the unversioned symlink the linker needs at build time (-lndi):
+sudo ln -sf /usr/local/lib/libndi.so.6 /usr/local/lib/libndi.so
+sudo ldconfig
 ```
 
 **Intel x86_64 — GMKtec G5 N97, and other x86_64 machines:**
+
+> **Important:** Install to `/usr/lib/x86_64-linux-gnu/` — **not** `/usr/local/lib/`. The Rust
+> toolchain on x86_64 uses `rust-lld` (LLVM's linker), which does not reliably search
+> `/usr/local/lib` even when `LIBRARY_PATH` is set. Installing to the arch-specific system path
+> ensures the linker finds the library without any special flags.
+
 ```bash
-sudo cp "./NDI SDK for Linux/lib/x86_64-linux-gnu/libndi.so.6" /usr/local/lib/
-sudo chmod 755 /usr/local/lib/libndi.so.6
+sudo cp "./NDI SDK for Linux/lib/x86_64-linux-gnu/libndi.so.6" /usr/lib/x86_64-linux-gnu/
+sudo chmod 755 /usr/lib/x86_64-linux-gnu/libndi.so.6
+
+# Create the unversioned symlink the linker needs at build time (-lndi):
+sudo ln -sf /usr/lib/x86_64-linux-gnu/libndi.so.6 /usr/lib/x86_64-linux-gnu/libndi.so
+sudo ldconfig
 ```
 
-Then for **both architectures**, create the linker symlink and refresh the cache:
+Verify — you should see two lines, one for `.so.6` and one for `.so`:
 
 ```bash
-# Create the unversioned symlink required by the linker (-lndi at build time):
-sudo ln -sf /usr/local/lib/libndi.so.6 /usr/local/lib/libndi.so
-
-# Refresh the dynamic linker cache so other programs can find it:
-sudo ldconfig
-
-# Verify — you should see two lines, one for .so.6 and one for .so:
 ldconfig -p | grep libndi
 # ARM64 example output:
 #   libndi.so.6 (libc6,AArch64) => /usr/local/lib/libndi.so.6
 #   libndi.so   (libc6,AArch64) => /usr/local/lib/libndi.so
 # Intel x86_64 example output:
-#   libndi.so.6 (libc6,x86-64)  => /usr/local/lib/libndi.so.6
-#   libndi.so   (libc6,x86-64)  => /usr/local/lib/libndi.so
+#   libndi.so.6 (libc6,x86-64)  => /usr/lib/x86_64-linux-gnu/libndi.so.6
+#   libndi.so   (libc6,x86-64)  => /usr/lib/x86_64-linux-gnu/libndi.so
 ```
 
 > **Why two files?** `libndi.so.6` is the runtime library (loaded at runtime by `ldconfig`). `libndi.so` is the unversioned symlink the linker needs at *build* time (`-lndi`). Without it the `cargo build` step will fail with `cannot find -lndi`.
 
-> **Version note:** The app and `ndi-discover.py` hard-code the path `/usr/local/lib/libndi.so.6`. If you install a different major version (e.g. `.so.5` or `.so.7`), create a symlink to normalise it:
+> **Version note:** The app and `ndi-discover.py` hard-code the runtime path `/usr/local/lib/libndi.so.6` (ARM64) or `/usr/lib/x86_64-linux-gnu/libndi.so.6` (Intel). If you install a different major version (e.g. `.so.5` or `.so.7`), create a symlink to normalise it:
 > ```bash
+> # ARM64:
 > sudo ln -sf /usr/local/lib/libndi.so.X /usr/local/lib/libndi.so.6
-> sudo ln -sf /usr/local/lib/libndi.so.6 /usr/local/lib/libndi.so
+> # Intel x86_64:
+> sudo ln -sf /usr/lib/x86_64-linux-gnu/libndi.so.X /usr/lib/x86_64-linux-gnu/libndi.so.6
 > sudo ldconfig
 > ```
 
@@ -740,12 +749,18 @@ Now clone and build the plugin (same steps for both architectures):
 ```bash
 git clone https://github.com/teltek/gst-plugin-ndi.git
 cd gst-plugin-ndi
-
-# Point the build system at the NDI SDK library:
-export LIBRARY_PATH=/usr/local/lib:$LIBRARY_PATH
-
 cargo build --release
 ```
+
+> **If you get `unable to find library -lndi`**, confirm the unversioned symlink was created correctly in Step 1:
+> ```bash
+> # ARM64:
+> ls -la /usr/local/lib/libndi*
+> # Intel x86_64:
+> ls -la /usr/lib/x86_64-linux-gnu/libndi*
+> # Both should show libndi.so.6 (real file) AND libndi.so (symlink).
+> # Re-run the ldconfig line from Step 1 if either is missing.
+> ```
 
 Install the compiled plugin into the system GStreamer plugin directory — **the path differs by architecture:**
 
