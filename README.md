@@ -1427,6 +1427,8 @@ ubuntu ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /etc/NetworkManager/dnsmasq-shared.
 ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/NetworkManager/dnsmasq-shared.d/captive-portal.conf
 ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl reload NetworkManager
 ubuntu ALL=(ALL) NOPASSWD: /usr/sbin/iptables -t nat *
+# v4l2-ctl — camera format queries, PTZ controls, and image controls
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/v4l2-ctl *
 EOF
 
 # Validate syntax before applying
@@ -1518,7 +1520,24 @@ The WiFi hotspot is managed by a **dedicated systemd service** (`digitalpool-hot
 
 - The hotspot comes up even if the camera app crashes or hasn't started yet.
 - MediaMTX and the camera service start **after** the hotspot so the hotspot IP (`192.168.50.1`) is already present when `mediamtx-update-hosts.sh` injects ICE candidates — making the WebRTC preview work over hotspot on every boot.
-- A **udev rule** fires the moment the USB WiFi adapter is detected by the kernel, eliminating any software-level delay on top of hardware enumeration time.
+- The script auto-detects whichever WiFi interface is present — USB dongle (`wlx…`) or built-in PCIe/M.2 chip (`wlp…`) — with no configuration required.
+
+### Before you begin — verify AP+STA concurrent mode
+
+The hotspot runs as an **Access Point** on the same chip that also connects to your venue network as a **client** (STA). This requires the WiFi chip to support simultaneous AP+STA mode.
+
+```bash
+iw list | grep -A 20 "valid interface combinations"
+```
+
+Look for a combination line that includes both `AP` and `managed`:
+```
+#{ managed } <= 1, #{ AP } <= 1, total <= 2, ...   ← AP+STA supported ✅
+```
+
+If no such line exists, the chip only supports one mode at a time — the hotspot will still work, but the device cannot simultaneously connect to a venue WiFi network.
+
+> **Intel built-in chips (GMKtec G5 N97 and similar):** Most Intel WiFi 5/6/6E chips (AX200, AX201, AX210, AX211) support AP+STA concurrent mode on Linux. Confirm with `iw list` before proceeding.
 
 ### Install the hotspot script and service
 
@@ -1541,45 +1560,45 @@ sudo journalctl -u digitalpool-hotspot --no-pager -n 30
 ```
 
 You should see lines like:
+
+*USB WiFi dongle (Rockchip / Orange Pi 5):*
 ```
-📡 WiFi interface: wlx8c86ddaa1f53 (found after 0s)
+📡 WiFi interface: wlx8c86ddaa1f53 (found after 26s)
 📡 Device SSID suffix: 1F53  →  DigitalPool-1F53
 ✅ Hotspot up — SSID: DigitalPool-1F53  IP: 192.168.50.1
-✅ Captive portal: port 80 → 3000 redirect active on wlx8c86ddaa1f53
-✅ SSH (port 22) allowed inbound on wlx8c86ddaa1f53
 ```
 
-The SSID is automatically derived from the last 4 hex characters of the adapter's MAC address (e.g. `DigitalPool-1F53`). This ensures two cameras at the same venue never broadcast the same SSID.
+*Built-in WiFi chip (Intel GMKtec G5 N97):*
+```
+📡 WiFi interface: wlp2s0 (found after 0s)
+📡 Device SSID suffix: A3F1  →  DigitalPool-A3F1
+✅ Hotspot up — SSID: DigitalPool-A3F1  IP: 192.168.50.1
+```
 
-> **Self-healing profile:** If you clone an SD card to a device with a different WiFi adapter, the script detects the SSID or interface mismatch automatically and recreates the NM profile with the correct values — no manual intervention needed.
+The SSID is automatically derived from the last 4 hex characters of the interface MAC address (e.g. `DigitalPool-A3F1`). This ensures two cameras at the same venue never broadcast the same SSID.
 
-### Install the udev rule for instant startup
+> **Self-healing profile:** If the hardware changes (different chip or cloned image), the script detects the SSID or interface mismatch automatically and recreates the NM profile — no manual intervention needed.
 
-Without a udev rule, systemd service ordering introduces a software delay on top of the hardware enumeration time. The udev rule fires the hotspot service the instant the kernel registers the WiFi adapter — zero additional delay:
+### Install the udev rule (USB WiFi adapters only)
+
+The udev rule (`99-digitalpool-hotspot.rules`) fires the hotspot service the instant the kernel registers the WiFi interface. For **USB WiFi adapters** this eliminates the software delay on top of hardware enumeration time.
+
+For **built-in WiFi chips** the udev rule is optional — the chip is present before NetworkManager starts, so the regular `After=NetworkManager.service` ordering in the systemd unit is sufficient. Installing the rule on a built-in-chip machine is harmless (it just starts an already-enabled service redundantly).
 
 ```bash
 sudo cp ~/digitalpool-camera/99-digitalpool-hotspot.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules
 ```
 
-**Verify the rule is active:**
-
-```bash
-ls /etc/udev/rules.d/99-digitalpool-hotspot.rules
-# Should exist — no output from udevadm means the rule loaded cleanly
-```
-
-On the next cold boot, the hotspot service will fire the moment the kernel detects the WiFi hardware. Combined with the boot optimizations in Section 1j, expect the hotspot to be visible within **~35–45 seconds** of power-on (dominated by USB adapter hardware enumeration, typically ~26 s on the Orange Pi 5).
-
 ### Hotspot timing on cold boot
 
-| Phase | Duration | Notes |
+| Phase | Rockchip + USB dongle | Intel + built-in WiFi |
 |---|---|---|
-| BIOS / U-Boot | ~5 s | SBC-specific, not tuneable |
-| Kernel | ~4 s | |
-| USB WiFi adapter enumeration | ~26 s | Hardware-dependent — typical for RTL8822BU |
-| Hotspot AP activation | ~8 s | `nmcli connection up` via NM |
-| **Total from power-on** | **~43 s** | Down from ~4 minutes before optimization |
+| BIOS / U-Boot | ~5 s | ~5 s |
+| Kernel | ~4 s | ~4 s |
+| WiFi hardware ready | ~26 s (USB enumeration) | ~1 s (PCIe/M.2) |
+| Hotspot AP activation | ~8 s | ~8 s |
+| **Total from power-on** | **~43 s** | **~18 s** |
 
 ---
 

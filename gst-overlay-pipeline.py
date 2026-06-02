@@ -84,14 +84,6 @@ def main():
     capture_format  = sys.argv[27] if len(sys.argv) > 27 else "mjpeg"
     # MediaMTX RTMP preview path (arg 28) — e.g. rtmp://localhost:1935/preview or /preview2
     preview_rtmp_url = sys.argv[28] if len(sys.argv) > 28 else "rtmp://localhost:1935/preview"
-    # Active encoder name (arg 29) — e.g. mpph264enc, vaapih264enc, x264enc.
-    # Selects both the video encoder and the MJPEG decoder for the capture source.
-    encoder = sys.argv[29] if len(sys.argv) > 29 else "mpph264enc"
-
-    # Derive the JPEG decoder element from the encoder family.
-    # Rockchip (mpph264enc/mpph265enc) → mppjpegdec (MPP hardware JPEG decode)
-    # Intel VA-API / software / other   → jpegdec   (software, fast enough on N97)
-    jpeg_decoder = "mppjpegdec" if encoder.startswith("mpp") else "jpegdec"
 
     # GStreamer videoflip method:
     #   0 = identity (none), 2 = rotate-180, 4 = horizontal-flip, 5 = vertical-flip
@@ -384,11 +376,16 @@ def main():
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
         )
     else:
+        # jpegparse is required by mppjpegdec (Rockchip hardware decoder needs parsed frames).
+        # For software jpegdec (Intel, x86) we skip jpegparse — it is too strict and rejects
+        # JPEG streams with minor header quirks (e.g. "Duplicated or bad SOF marker") that
+        # jpegdec handles gracefully without the intermediary parser.
+        parse_str = 'jpegparse ! ' if jpeg_decoder == 'mppjpegdec' else ''
         print(f"📹 Input source: USB v4l2src (MJPEG) → {camera_device} [{jpeg_decoder}]", file=sys.stderr)
         source_str = (
             f'v4l2src device={camera_device} do-timestamp=true '
             f'! image/jpeg,width={width},height={height} '
-            f'! jpegparse ! {jpeg_decoder} '
+            f'! {parse_str}{jpeg_decoder} '
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
         )
 
@@ -400,68 +397,6 @@ def main():
     #   Thread 3: queue → mpph264enc → h264parse → queue → mux → fdsink (encode+stream)
     #   Thread 4: queue → videorate → videoscale → jpegenc → tcpserversink (preview)
     #   Audio is handled by ffmpeg (ALSA capture) outside this pipeline.
-    # ── Build the encoder string based on hardware/encoder family ──────────────
-    # encode_str is inserted into the pipeline after the encode queue and
-    # encode_convert (NV12 conversion when overlays are active).
-    # RTMP+ALSA hybrid uses config-interval=0 to avoid DTS monotonicity errors
-    # when ffmpeg re-reads inline SPS+PPS+IDR from the MPEG-TS stream.
-    h264_cfg = "0" if protocol == "rtmp" and audio_device else "-1"
-    bitrate_kbps = bitrate // 1000
-
-    if codec == "h265":
-        if encoder == "vaapih264enc":
-            # Intel VA-API H.265 (vaapih265enc) — SRT / RTSP only
-            encode_str = (
-                f'! videoconvert '
-                f'! vaapih265enc bitrate={bitrate_kbps} rate-control=vbr keyframe-period=5 '
-                f'! video/x-h265,stream-format=byte-stream '
-                f'! h265parse config-interval=-1 '
-            )
-        else:
-            # Rockchip MPP H.265 — SRT / RTSP only
-            encode_str = (
-                f'! mpph265enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr '
-                f'! video/x-h265,stream-format=byte-stream '
-                f'! h265parse config-interval=-1 '
-            )
-    elif encoder == "vaapih264enc":
-        # Intel VA-API H.264 — bitrate in kbps; accepts most raw formats via VA-API
-        encode_str = (
-            f'! videoconvert '
-            f'! vaapih264enc bitrate={bitrate_kbps} rate-control=vbr keyframe-period=5 '
-            f'! video/x-h264,stream-format=byte-stream '
-            f'! h264parse config-interval={h264_cfg} '
-        )
-    elif encoder == "x264enc":
-        # Software H.264 encoder (fallback)
-        encode_str = (
-            f'! videoconvert ! video/x-raw,format=I420 '
-            f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max=5 '
-            f'! video/x-h264,stream-format=byte-stream '
-            f'! h264parse config-interval={h264_cfg} '
-        )
-    else:
-        # Default: Rockchip MPP H.264 (mpph264enc) — also used for any unknown encoder
-        # Constrained VBR: bps_max=1.6x allows burst for high-motion frames without
-        # raising quantiser (pixelation).  SRT latency=500ms absorbs the bursts.
-        # RTMP+audio hybrid: config-interval=0 so SPS/PPS only appear in MPEG-TS PMT
-        # (prevents DTS monotonicity errors when ffmpeg re-reads them from stdout).
-        encode_str = (
-            f'! mpph264enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr profile=baseline '
-            f'! video/x-h264,stream-format=byte-stream '
-            f'! h264parse config-interval={h264_cfg} '
-        )
-
-    # ── Preview encoder (720p@15fps) ────────────────────────────────────────
-    # Matches the main encoder family so all hardware paths work correctly.
-    if encoder == "vaapih264enc":
-        preview_enc_str = f'! videoconvert ! vaapih264enc bitrate=500 keyframe-period=15 '
-    elif encoder == "x264enc":
-        preview_enc_str = f'! videoconvert ! video/x-raw,format=I420 ! x264enc bitrate=500 speed-preset=ultrafast tune=zerolatency key-int-max=15 '
-    else:
-        # Rockchip mpph264enc (default for mpph264enc, mpph265enc, nvv4l2h264enc, etc.)
-        preview_enc_str = f'! videoconvert ! video/x-raw,format=NV12 ! mpph264enc bps=500000 header-mode=each-idr gop=15 '
-
     pipeline_str = (
         f'{source_str}'
         # Thread boundary: isolate overlay compositing (or just buffering) from capture.
@@ -479,7 +414,30 @@ def main():
         # Encode branch (own thread)
         f't. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
         f'{encode_convert}'
-        + f'{encode_str}'
+        # Constrained VBR: bps_max=1.6x target allows the encoder to burst for high-motion
+        # frames (fast pool shots) rather than raising quantizer and pixelating.
+        # SRT latency=500ms absorbs the short bursts; average bitrate stays near bps target.
+        + (
+            # H.265 (HEVC) — Rockchip MPP hardware encoder, SRT / RTSP only
+            f'! mpph265enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr '
+            f'! video/x-h265,stream-format=byte-stream '
+            f'! h265parse config-interval=-1 '
+            if codec == "h265" else
+            # H.264 (default) — Rockchip MPP hardware encoder, all protocols
+            f'! mpph264enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr profile=baseline '
+            f'! video/x-h264,stream-format=byte-stream '
+            # RTMP+audio hybrid: config-interval=0 — SPS/PPS go only into the MPEG-TS PMT.
+            # ffmpeg reads them once at startup and writes ONE AVC sequence header in FLV.
+            # config-interval=0 is only needed for the ALSA hybrid mode where ffmpeg
+            # reads the MPEG-TS stdout.  In that path a DTS monotonicity issue arises
+            # because ffmpeg re-emits inline SPS+PPS+IDR as two buffers with the same
+            # DTS, causing MediaMTX to drop the connection.
+            # For pure-GStreamer paths (NDI, RTSP audio, video-only RTMP), mpph264enc
+            # uses header-mode=each-idr which already inlines SPS+PPS before every IDR;
+            # keeping config-interval=-1 lets h264parse pass them through as-is so
+            # flvmux always sees the decoder configuration record alongside the keyframe.
+            f'! h264parse config-interval={"0" if protocol == "rtmp" and audio_device else "-1"} '
+        )
         # Thread boundary before mux to decouple encoder from network I/O.
         # All RTMP paths (video-only, NDI audio, RTSP audio) use flvmux which
         # requires strict DTS monotonicity — no leaky, 2s buffer.
@@ -528,24 +486,21 @@ def main():
             if use_ndi_audio and audio_mux_target else ''
         ) +
         # Preview branch (own thread, low priority) — H.264 push to MediaMTX for WebRTC.
-        # Taps raw video from tee t, scales to 720p, encodes at 15 fps using the same
-        # hardware encoder family as the main stream, and pushes to MediaMTX RTMP.
-        # MediaMTX serves this path as WebRTC via WHEP at /api/whep/preview.
+        # Taps raw video from tee t, scales to 720p, encodes at 15 fps with the MPP hardware
+        # encoder, and pushes to rtmp://localhost:1935/preview.  MediaMTX serves this path as
+        # WebRTC via WHEP at http://localhost:8889/preview/whep, which the Node.js server
+        # proxies at /api/whep/preview so the admin browser fetches it over port 3000.
         #
-        # preview_enc_str is selected above based on the encoder arg:
-        #   Rockchip: videoconvert → NV12 → mpph264enc
-        #   Intel:    videoconvert → vaapih264enc (kbps)
-        #   Software: videoconvert → I420 → x264enc
-        #
-        # async=false: rtmpsink must not participate in preroll — with the dynamic NDI
-        # video chain, ndi_in_q.sink is unlinked at parse time, so the preview branch
-        # is not downstream of any live source at pipeline construction time.  A sink
-        # with async=true would block the PAUSED→PLAYING transition waiting for a
-        # preroll buffer that never arrives until PLAYING.
+        # async=false: rtmpsink must not participate in preroll (same reason as the old
+        # tcpserversink — with the dynamic NDI video chain, ndi_in_q.sink is unlinked at
+        # parse time, so the preview branch is not downstream of any live source at pipeline
+        # construction time.  A sink with async=true would block the PAUSED→PLAYING
+        # transition waiting for a preroll buffer that never arrives until PLAYING).
         f't. ! queue max-size-buffers=10 leaky=downstream '
         f'! videoscale ! video/x-raw,width=1280,height=720 '
         f'! videorate ! video/x-raw,framerate=15/1 '
-        f'{preview_enc_str}'
+        f'! videoconvert ! video/x-raw,format=NV12 '
+        f'! mpph264enc bps=500000 header-mode=each-idr gop=15 '
         f'! h264parse config-interval=-1 '
         f'! video/x-h264,stream-format=avc,alignment=au '
         f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream '

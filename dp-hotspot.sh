@@ -30,8 +30,9 @@ MAX_WAIT=60    # seconds to wait for interface to become ready
 INTERVAL=1
 
 # ── Step 1: find the WiFi interface ─────────────────────────────────────────
-# On a cold boot the USB WiFi adapter can take 30-60 s to enumerate.
-# Retry every 3 s for up to 90 s before giving up.
+# On a cold boot, USB WiFi adapters can take 30-60 s to enumerate while
+# built-in PCIe/M.2 chips appear almost immediately.  Retry up to 90 s to
+# handle either hardware type without manual configuration.
 MAX_IFACE_WAIT=90
 IFACE_WAITED=0
 IFACE=""
@@ -43,7 +44,7 @@ while [ "$IFACE_WAITED" -lt "$MAX_IFACE_WAIT" ]; do
     if [ -n "$IFACE" ]; then
         break
     fi
-    echo "⏳ No WiFi interface yet (${IFACE_WAITED}s elapsed) — waiting for USB adapter..."
+    echo "⏳ No WiFi interface yet (${IFACE_WAITED}s elapsed) — waiting..."
     sleep 1
     IFACE_WAITED=$((IFACE_WAITED + 1))
 done

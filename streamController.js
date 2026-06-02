@@ -1513,6 +1513,12 @@ class StreamController extends EventEmitter {
         "!",
       ];
     } else {
+      // jpegparse is required before mppjpegdec (Rockchip hardware decoder needs parsed
+      // frames), but omitted for software jpegdec — jpegparse is too strict and rejects
+      // JPEG streams with minor header quirks (e.g. "Duplicated or bad SOF marker") that
+      // jpegdec handles gracefully on its own.
+      const _jpegDec = this._getJpegDecoder(encoder);
+      const _jpegParseElems = _jpegDec === "mppjpegdec" ? ["jpegparse", "!"] : [];
       pipeline = [
         // USB camera: MJPEG capture → hardware or software JPEG decode → rate control
         // Decoder is chosen by _getJpegDecoder(): mppjpegdec on Rockchip, jpegdec elsewhere.
@@ -1522,9 +1528,8 @@ class StreamController extends EventEmitter {
         "!",
         `image/jpeg,width=${width},height=${height},framerate=${framerate}/1`,
         "!",
-        "jpegparse",
-        "!",
-        this._getJpegDecoder(encoder),
+        ..._jpegParseElems,
+        _jpegDec,
         "!",
         "videorate",
         "!",

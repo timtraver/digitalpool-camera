@@ -2867,7 +2867,13 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
       // MJPEG camera (default): JPEG decode → scale to 720p.
       // Use _getJpegDecoder() so Rockchip uses mppjpegdec (hardware) and Intel / other
       // hardware uses jpegdec (software, fast enough on N97 at 1080p@15fps preview).
+      //
+      // jpegparse is required before mppjpegdec (Rockchip hardware decoder needs parsed
+      // frames), but omitted for software jpegdec — jpegparse is too strict and rejects
+      // JPEG streams with minor header quirks (e.g. "Duplicated or bad SOF marker") that
+      // jpegdec handles gracefully on its own.
       const jpegDec = sc._getJpegDecoder(config.encoder);
+      const jpegParseArgs = jpegDec === "mppjpegdec" ? ["jpegparse", "!"] : [];
       gstArgs = [
         "v4l2src",
         `device=${device}`,
@@ -2875,8 +2881,7 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
         "!",
         `image/jpeg,width=${config.width || 1920},height=${config.height || 1080}`,
         "!",
-        "jpegparse",
-        "!",
+        ...jpegParseArgs,
         jpegDec,               // Hardware (mppjpegdec) or software (jpegdec) JPEG decode
         "!",
         "videoscale",          // Decode resolution → 1280×720
