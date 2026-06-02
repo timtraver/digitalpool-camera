@@ -715,14 +715,24 @@ class StreamController extends EventEmitter {
           ]
           : [
             "-loglevel", "warning",
-            "-use_wallclock_as_timestamps", "1",
+            // Do NOT use -use_wallclock_as_timestamps for the ALSA input.
+            //
+            // USB ASYNC audio endpoints (like the OBSBOT Tiny SE) have their own
+            // internal crystal and derive timestamps via USB SOF feedback packets.
+            // ALSA surfaces these as accurate POSIX timestamps (seconds since epoch).
+            //
+            // Overriding them with av_gettime() (wall clock stamped AFTER read()
+            // returns) introduces OS scheduling jitter of ±5–15 ms per packet.
+            // The AAC encoder sees packets arriving "early" and "late" relative to
+            // their nominal cadence → audible choppiness from the very first frame.
+            //
+            // ALSA's POSIX timestamps are absolute (same epoch as the system wall
+            // clock) so they naturally align with the wall-clock video stream.
+            // aresample=async=10000 below handles any residual USB clock rate drift.
             ...(audioOffsetSec !== 0 ? ["-itsoffset", String(audioOffsetSec)] : []),
             "-f", "alsa",
-            // Capture at the camera's native 32 kHz — do NOT ask the ALSA plug layer
-            // to resample to 48 kHz because plughw silently produces zeros when the
-            // USB device's actual hardware rate differs from the requested rate.
-            // ffmpeg's libswresample (via the aresample filter below) handles the
-            // 32000→48000 Hz upsample reliably and without silent failures.
+            // Capture at the OBSBOT's confirmed native rate (32 kHz, S16_LE stereo).
+            // Specifying it explicitly avoids negotiation uncertainty.
             "-ar", "32000",
             "-ac", "2",
             // Large input queue: ALSA delivers audio in potentially uneven bursts
