@@ -80,8 +80,11 @@ fi
 echo 0 > "$FAIL_FILE"
 
 # ── Opportunistic WiFi driver reset if stuck-queue errors are present ─────────
+# grep -c always prints a count (even "0") — drop the || echo 0 which caused
+# STUCK to become "0\n0" when there were no matches (grep exits 1 on zero matches,
+# triggering the || branch even though grep had already output "0").
 STUCK=$(journalctl -k --since "15 minutes ago" --no-pager -q 2>/dev/null \
-        | grep -c "timed out to flush queue" || echo 0)
+        | grep -c "timed out to flush queue")
 
 if [ "$STUCK" -gt 0 ]; then
     logger -t "$LOG_TAG" "⚠️  rtw_8822bu queue-flush errors detected ($STUCK) — attempting USB rebind"
