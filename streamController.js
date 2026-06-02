@@ -773,25 +773,18 @@ class StreamController extends EventEmitter {
             : []),
           "-c:a", "aac",
           "-b:a", "128k",
-          // Audio filter chain for long-running USB capture stability:
+          // Audio filter for long-running USB capture stability:
           //
-          // 1. aresample=48000:async=10000
+          // aresample=48000:async=10000
           //    Resample 32 kHz → 48 kHz for AAC.  The USB audio oscillator runs at
           //    a slightly different rate than the system clock (typically ±0.01–0.1%).
-          //    Over 13+ hours this accumulates 1–5 seconds of excess buffered audio.
+          //    Over 13+ hours this accumulates ~65 ms of drift (-1.3 ppm measured).
           //    -use_wallclock_as_timestamps replaces PTS values but does NOT slow
           //    the USB oscillator — the ALSA buffer still fills up over time.
           //    async=10000 allows the resampler to correct up to 10 000 samples/sec
           //    (vs the old 1000), so large accumulated drift is absorbed gradually
           //    and inaudibly rather than in abrupt glitches.
-          //
-          // 2. afifo
-          //    Smooths audio packet sizes into a steady FIFO before the AAC encoder.
-          //    ALSA sometimes delivers audio in uneven burst sizes (especially after
-          //    hours of runtime).  afifo re-packetizes the stream into uniform blocks
-          //    so the encoder never receives a mix of tiny and huge frames — which
-          //    would cause the encoder to stall or skip, producing audible gaps.
-          "-af", "aresample=48000:async=10000,afifo",
+          "-af", "aresample=48000:async=10000",
           // max_interleave_delta: both streams share the same wall-clock epoch, so
           // the interleave delta stays near zero. 1 s cap is a safety margin.
           // muxdelay=0 removes mux buffering.
