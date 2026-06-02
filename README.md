@@ -359,7 +359,13 @@ sudo apt install -y \
   libgstreamer-plugins-base1.0-dev
 ```
 
-### 2c. Rockchip MPP hardware encoder / decoder
+### 2c. Hardware encoder / decoder
+
+This step differs depending on your hardware. Install **only the section that matches your machine.**
+
+---
+
+#### 2c-i. Rockchip RK3588 (Orange Pi 5, Radxa Rock 5C, and similar)
 
 The MPP (Media Process Platform) plugin (`gstreamer1.0-rockchip1`) provides:
 - **Encoders:** `mpph264enc`, `mpph265enc`, `mppjpegenc`, `mppvp8enc`
@@ -403,6 +409,50 @@ sudo apt install -y \
 > sudo apt install --reinstall gstreamer1.0-rockchip1
 > rm -f ~/.cache/gstreamer-1.0/registry.aarch64.bin
 > ```
+
+---
+
+#### 2c-ii. Intel x86 (GMKtec G5 N97, and other Intel iGPU machines)
+
+The VA-API plugin (`gstreamer1.0-vaapi`) provides Intel integrated GPU hardware encoding and decoding via the kernel's VA-API interface. It supplies:
+- **Encoders:** `vaapih264enc`, `vaapih265enc`
+- **Decoders:** `vaapidecodebin`, `vaapih264dec`, `vaapih265dec`, `vaapijpegdec`
+
+```bash
+sudo apt install -y \
+  gstreamer1.0-vaapi \
+  intel-media-va-driver-non-free \
+  vainfo
+```
+
+> **Note:** `intel-media-va-driver-non-free` is the iHD driver required for Gen 9+ Intel GPUs (Braswell, Apollo Lake, Jasper Lake, Alder Lake-N, and newer). The N97 is Alder Lake-N so this is the correct driver. If it is not in your apt sources, try `intel-media-va-driver` (the open-source variant) instead.
+
+Verify the VA-API driver and GStreamer plugin are working:
+
+```bash
+# Confirm VA-API sees the GPU
+vainfo
+
+# Confirm GStreamer can use the hardware encoders
+gst-inspect-1.0 vaapih264enc   # H.264 hardware encoder
+gst-inspect-1.0 vaapih265enc   # H.265 hardware encoder
+```
+
+> **If `vainfo` shows no supported profiles** the driver is not loaded. Check that your user is in the `video` and `render` groups:
+> ```bash
+> sudo usermod -aG video,render $USER
+> # Log out and back in, then retry vainfo
+> ```
+>
+> **If `gst-inspect-1.0 vaapih264enc` fails** after installing the package, clear the GStreamer plugin cache and try again:
+> ```bash
+> rm -f ~/.cache/gstreamer-1.0/registry.x86_64.bin
+> gst-inspect-1.0 vaapih264enc
+> ```
+
+The service auto-detects which encoder is available at startup — no manual configuration is needed after installation.
+
+---
 
 ### 2d. GDK Pixbuf overlay (PNG compositing into the stream)
 
