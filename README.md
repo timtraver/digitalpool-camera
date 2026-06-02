@@ -659,26 +659,37 @@ Download the NDI SDK for Linux from the official NDI developer site:
 > **Download:** https://ndi.video/for-developers/ndi-sdk/download/
 > Choose **Linux** → download the `.tar.gz` or self-extracting `.sh` installer.
 
-Extract / run the installer, then copy the shared library to `/usr/local/lib`:
+Extract the archive, then copy the shared library for **your architecture** to `/usr/local/lib`. The SDK ships libraries for several architectures inside the `lib/` folder — use only the one that matches your machine.
+
+**ARM64 — Rockchip RK3588 (Orange Pi 5, Radxa Rock 5C, and similar):**
+```bash
+sudo cp "./NDI SDK for Linux/lib/aarch64-linux-gnu/libndi.so.6" /usr/local/lib/
+sudo chmod 755 /usr/local/lib/libndi.so.6
+```
+
+**Intel x86_64 — GMKtec G5 N97, and other x86_64 machines:**
+```bash
+sudo cp "./NDI SDK for Linux/lib/x86_64-linux-gnu/libndi.so.6" /usr/local/lib/
+sudo chmod 755 /usr/local/lib/libndi.so.6
+```
+
+Then for **both architectures**, create the linker symlink and refresh the cache:
 
 ```bash
-# Example — exact filename varies by SDK version:
-# tar -xzf NDI_SDK_Linux.tar.gz
-# The library will be inside the extracted directory, e.g.:
-sudo cp ./NDI\ SDK\ for\ Linux/lib/aarch64-linux-gnu/libndi.so.6 /usr/local/lib/
-sudo chmod 755 /usr/local/lib/libndi.so.6
-
 # Create the unversioned symlink required by the linker (-lndi at build time):
 sudo ln -sf /usr/local/lib/libndi.so.6 /usr/local/lib/libndi.so
 
 # Refresh the dynamic linker cache so other programs can find it:
 sudo ldconfig
 
-# Verify:
+# Verify — you should see two lines, one for .so.6 and one for .so:
 ldconfig -p | grep libndi
-# Should print both:
+# ARM64 example output:
 #   libndi.so.6 (libc6,AArch64) => /usr/local/lib/libndi.so.6
 #   libndi.so   (libc6,AArch64) => /usr/local/lib/libndi.so
+# Intel x86_64 example output:
+#   libndi.so.6 (libc6,x86-64)  => /usr/local/lib/libndi.so.6
+#   libndi.so   (libc6,x86-64)  => /usr/local/lib/libndi.so
 ```
 
 > **Why two files?** `libndi.so.6` is the runtime library (loaded at runtime by `ldconfig`). `libndi.so` is the unversioned symlink the linker needs at *build* time (`-lndi`). Without it the `cargo build` step will fail with `cannot find -lndi`.
@@ -698,8 +709,12 @@ The GStreamer NDI plugin is written in Rust and provides the `ndisrc` and `ndisr
 # Install Rust toolchain (if not already present):
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
+```
 
-# Install GStreamer development headers and librga (needed for linking):
+Install the GStreamer development headers. **The dependencies differ by architecture:**
+
+**ARM64 — Rockchip RK3588:**
+```bash
 # librga-dev is available from the jjriek/rockchip-multimedia PPA added in step 2c.
 # Without it, the Rockchip-patched gstreamer-video-1.0.pc pulls in librga as a
 # dependency and cargo will fail with "Package 'librga' not found".
@@ -709,28 +724,52 @@ sudo apt install -y \
   libgstreamer-plugins-bad1.0-dev \
   librga2 \
   librga-dev
+```
 
-# Clone and build the Teltek plugin:
+**Intel x86_64:**
+```bash
+# librga is Rockchip-only — do not install it on Intel.
+sudo apt install -y \
+  libgstreamer1.0-dev \
+  libgstreamer-plugins-base1.0-dev \
+  libgstreamer-plugins-bad1.0-dev
+```
+
+Now clone and build the plugin (same steps for both architectures):
+
+```bash
 git clone https://github.com/teltek/gst-plugin-ndi.git
 cd gst-plugin-ndi
 
-# Point the build system at the NDI SDK headers (adjust path to match your SDK):
-export NDI_SDK_DIR="$HOME/NDI SDK for Linux"
-# Or if you only copied the .so (no headers), set the library path:
+# Point the build system at the NDI SDK library:
 export LIBRARY_PATH=/usr/local/lib:$LIBRARY_PATH
 
 cargo build --release
+```
 
-# Install the compiled plugin into the system GStreamer plugin directory:
+Install the compiled plugin into the system GStreamer plugin directory — **the path differs by architecture:**
+
+**ARM64 — Rockchip RK3588:**
+```bash
 sudo cp target/release/libgstndi.so \
      /usr/lib/aarch64-linux-gnu/gstreamer-1.0/
+```
 
+**Intel x86_64:**
+```bash
+sudo cp target/release/libgstndi.so \
+     /usr/lib/x86_64-linux-gnu/gstreamer-1.0/
+```
+
+Then verify the plugin loaded:
+
+```bash
 # Refresh the GStreamer plugin registry:
-gst-inspect-1.0 ndisrc   # must succeed — prints element details
+gst-inspect-1.0 ndisrc       # must succeed — prints element details
 gst-inspect-1.0 ndisrcdemux
 ```
 
-> **Tip:** If you do not have the NDI SDK headers, the plugin repository also publishes pre-built binaries in its Releases section for some architectures. Check https://github.com/teltek/gst-plugin-ndi/releases.
+> **Tip:** If you do not want to build from source, the plugin repository also publishes pre-built binaries in its Releases section for some architectures. Check https://github.com/teltek/gst-plugin-ndi/releases.
 
 #### Step 3 — Verify GStreamer NDI elements
 
@@ -739,9 +778,12 @@ gst-inspect-1.0 ndisrcdemux
 gst-inspect-1.0 ndisrc
 gst-inspect-1.0 ndisrcdemux
 
-# For NDI HX/HX3 — generic hardware decoder must be present:
-gst-inspect-1.0 mppvideodec  # handles H.264, H.265, VP8, JPEG (no separate mpph264dec/mpph265dec)
+# For NDI HX/HX3 on Rockchip — the generic MPP hardware decoder must be present:
+gst-inspect-1.0 mppvideodec  # handles H.264, H.265, VP8, JPEG (Rockchip only)
 # If missing: sudo apt install --reinstall gstreamer1.0-rockchip1
+
+# For NDI HX/HX3 on Intel — avdec_h264 / avdec_h265 (software) are used automatically;
+# vaapidecodebin can also be used if gstreamer1.0-vaapi is installed (step 2c-ii).
 ```
 
 > **Note:** The NDI library discovery test (`ndi-discover.py`) requires the `digitalpool-camera` repo to be cloned first. That check is in **Section 4c** below.
@@ -1880,11 +1922,15 @@ python3 /home/ubuntu/digitalpool-camera/ndi-discover.py 3000
 
 ```bash
 # Check if the plugin .so is in the GStreamer plugin path:
+# ARM64 (Rockchip):
 ls /usr/lib/aarch64-linux-gnu/gstreamer-1.0/libgstndi.so
+# Intel x86_64:
+ls /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstndi.so
 
 # If missing, rebuild and reinstall the plugin (see section 2l, Step 2).
 # After installing, force-refresh the GStreamer plugin registry:
-rm -f ~/.cache/gstreamer-1.0/registry.aarch64.bin
+rm -f ~/.cache/gstreamer-1.0/registry.aarch64.bin   # ARM64
+rm -f ~/.cache/gstreamer-1.0/registry.x86_64.bin    # Intel x86_64
 gst-inspect-1.0 ndisrc   # must print element details, not "no such element"
 ```
 
