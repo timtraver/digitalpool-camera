@@ -3822,6 +3822,21 @@ server.listen(PORT, async () => {
         }
       }
 
+      // If Camera 2 is configured as a USB source but the device file does not
+      // exist on this machine, skip the full init sequence.  This prevents a
+      // flood of "Cannot open device" errors on single-camera setups where the
+      // second device (default /dev/video2) is simply not present.
+      // Non-USB sources (RTSP, NDI) are network streams and always proceed.
+      const cam2UsbDevice = activeCameraSource2.type === "usb"
+        ? (activeCameraSource2.device || CAMERA_DEVICE_2)
+        : null;
+      if (cam2UsbDevice && !fsSync.existsSync(cam2UsbDevice)) {
+        console.log(`ℹ️  [Cam2] Device ${cam2UsbDevice} not present — skipping Camera 2 init.`);
+        console.log(`ℹ️  [Cam2] Connect a second camera and restart the service to activate Camera 2.`);
+        cameraInitialized2 = true;
+        return;
+      }
+
       // Detect Camera 2 capture format.
       try {
         cameraFormat2 = await camera2.detectCaptureFormat(CAMERA_DEVICE_2);
