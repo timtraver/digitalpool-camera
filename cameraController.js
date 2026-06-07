@@ -494,10 +494,18 @@ class CameraController {
   }
 
   /**
-   * Reset all controls to defaults and save
+   * Reset all controls to defaults and save.  Also re-runs control discovery
+   * so a manual reset doubles as a "re-read camera capabilities" action —
+   * useful when a camera was hot-plugged or its driver state was stale at boot.
    */
   async resetToDefaults() {
     console.log("🔄 Resetting camera to default values...");
+
+    // Re-query the device for its real hardware control set/ranges before
+    // applyConfig() scales the default values against them.
+    this.discoveredControls = null;
+    await this.discoverControls(this.device);
+
     this.config = this.getDefaults();
     this.saveConfig();
 

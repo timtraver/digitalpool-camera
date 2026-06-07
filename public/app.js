@@ -313,9 +313,17 @@ socket.on("cameraConfig", (data) => {
 
 // Handle camera reset response
 socket.on("cameraConfigReset", (data) => {
+  // Ignore broadcasts for the non-active camera so multi-tab/multi-client
+  // sessions don't get cross-talk.
+  if (data.cameraIndex && data.cameraIndex !== activeCamIndex) return;
   if (data.success && data.config) {
-    console.log("🔄 Camera reset to defaults:", data.config);
+    console.log(`🔄 [Cam${data.cameraIndex || 1}] Reset to defaults — capabilities re-read`);
     loadCameraConfigToUI(data.config);
+    // Re-apply availability with the freshly-discovered hardware controls so
+    // newly-supported rows un-dim and unsupported rows dim, all in one pass.
+    if (data.supportedControls) {
+      applyControlAvailability(data.supportedControls);
+    }
     // Clear the startup/home position display since it was also reset
     const startupPosInfo = document.getElementById("startupPosInfo");
     if (startupPosInfo) {
@@ -733,8 +741,9 @@ function loadCameraConfigToUI(config) {
 
 /**
  * Dim (and disable) any camera control rows whose v4l2 control is not
- * supported by the currently-attached camera.  Also marks entire sections
- * with a "(not supported)" badge when none of their controls are available.
+ * supported by the currently-attached camera, and un-dim controls that ARE
+ * supported.  Symmetric so it can be safely re-run after a camera swap or
+ * a manual capability re-read (Reset All) without leaving stale state.
  *
  * @param {string[]} supportedControls - Array of v4l2 control names reported
  *   by the server from camera.discoveredControls.  When empty/missing the
@@ -765,50 +774,68 @@ function applyControlAvailability(supportedControls) {
   };
 
   for (const [controlName, elementId] of Object.entries(CONTROL_MAP)) {
-    if (supported.has(controlName)) continue;        // control is available — leave it alone
     const el = document.getElementById(elementId);
     if (!el) continue;
     const row = el.closest(".control-item");
     if (!row) continue;
-    // Dim the entire row so the label, input, and value display all fade together.
-    row.style.opacity = "0.35";
-    row.style.pointerEvents = "none";
-    row.title = "Not supported by this camera";
-    el.disabled = true;
+    if (supported.has(controlName)) {
+      // Re-enable a previously-dimmed row in case the camera was swapped or
+      // capabilities were re-read.
+      row.style.opacity = "";
+      row.style.pointerEvents = "";
+      row.title = "";
+      el.disabled = false;
+    } else {
+      // Dim the entire row so label, input, and value display fade together.
+      row.style.opacity = "0.35";
+      row.style.pointerEvents = "none";
+      row.title = "Not supported by this camera";
+      el.disabled = true;
+    }
   }
 
   // Dim the directional pad and Set-Home button when pan/tilt aren't available.
   const hasPan  = supported.has("pan_absolute");
   const hasTilt = supported.has("tilt_absolute");
+  const padContainer = document.querySelector(".directional-pad-container");
+  const homeBtn = document.getElementById("setStartupPosition");
   if (!hasPan && !hasTilt) {
-    const padContainer = document.querySelector(".directional-pad-container");
     if (padContainer) {
       padContainer.style.opacity = "0.35";
       padContainer.style.pointerEvents = "none";
       padContainer.title = "Pan/tilt not supported by this camera";
     }
-    const homeBtn = document.getElementById("setStartupPosition");
     if (homeBtn) { homeBtn.disabled = true; homeBtn.style.opacity = "0.35"; }
+  } else {
+    if (padContainer) {
+      padContainer.style.opacity = "";
+      padContainer.style.pointerEvents = "";
+      padContainer.title = "";
+    }
+    if (homeBtn) { homeBtn.disabled = false; homeBtn.style.opacity = ""; }
   }
 
-  // After individual rows are dimmed, check each collapsible section.
-  // If every input/select inside a section is disabled, mark the whole section
-  // with a "(not supported)" badge on its summary so the user knows at a glance.
+  // After individual rows are updated, refresh each collapsible section's
+  // "(not supported)" badge based on current state.
   document.querySelectorAll("details.cam-subsection").forEach((section) => {
     const inputs = Array.from(section.querySelectorAll("input, select"));
-    if (inputs.length === 0) return;
-    const allDisabled = inputs.every((inp) => inp.disabled);
-    if (!allDisabled) return;
     const titleEl = section.querySelector(".cam-subsection-title");
     if (!titleEl) return;
-    // Avoid adding a duplicate badge on re-runs.
-    if (titleEl.querySelector(".unsupported-badge")) return;
-    const badge = document.createElement("span");
-    badge.className = "unsupported-badge";
-    badge.style.cssText = "font-size:10px;opacity:0.55;margin-left:8px;font-style:italic;font-weight:normal;";
-    badge.textContent = "(not supported)";
-    titleEl.appendChild(badge);
-    section.style.opacity = "0.5";
+    const existingBadge = titleEl.querySelector(".unsupported-badge");
+    const allDisabled = inputs.length > 0 && inputs.every((inp) => inp.disabled);
+    if (allDisabled) {
+      if (!existingBadge) {
+        const badge = document.createElement("span");
+        badge.className = "unsupported-badge";
+        badge.style.cssText = "font-size:10px;opacity:0.55;margin-left:8px;font-style:italic;font-weight:normal;";
+        badge.textContent = "(not supported)";
+        titleEl.appendChild(badge);
+      }
+      section.style.opacity = "0.5";
+    } else {
+      if (existingBadge) existingBadge.remove();
+      section.style.opacity = "";
+    }
   });
 
   console.log(`🎛️  Control availability applied — ${supportedControls.length} controls supported by this camera`);

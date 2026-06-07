@@ -1915,12 +1915,25 @@ app.get("/api/stream/whep-base", requireAuth, (req, res) => {
   res.json({ whepBase: `http://${urlHost}:8889` });
 });
 
-// API endpoint to reset camera to defaults
+// API endpoint to reset camera to defaults.  Also re-discovers hardware
+// capabilities (resetToDefaults clears and re-queries the control map) and
+// returns the fresh supportedControls/ptzRanges so the UI can refresh its
+// dim state without a separate getCameraConfig round-trip.
 app.post("/api/camera/reset", async (req, res) => {
   const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
   const cam = getCam(camIdx);
   const result = await cam.resetToDefaults();
-  res.json({ success: true, results: result, config: cam.config });
+  const hwControls = cam.discoveredControls || cam.controls;
+  const ptzRanges = {};
+  if (hwControls.pan_absolute)  ptzRanges.pan_absolute  = { min: hwControls.pan_absolute.min,  max: hwControls.pan_absolute.max,  step: hwControls.pan_absolute.step  };
+  if (hwControls.tilt_absolute) ptzRanges.tilt_absolute = { min: hwControls.tilt_absolute.min, max: hwControls.tilt_absolute.max, step: hwControls.tilt_absolute.step };
+  res.json({
+    success: true,
+    results: result,
+    config: cam.config,
+    supportedControls: Object.keys(hwControls),
+    ptzRanges,
+  });
 });
 
 // ============ STREAMING API ENDPOINTS ============
@@ -3345,11 +3358,21 @@ io.on("connection", (socket) => {
     const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
     const cam = getCam(camIdx);
     const results = await cam.resetToDefaults();
-    socket.emit("cameraConfigReset", {
+    // resetToDefaults re-runs discoverControls — include the fresh hardware
+    // control set and PTZ ranges so the UI refreshes its dim state too.
+    const hwControls = cam.discoveredControls || cam.controls;
+    const ptzRanges = {};
+    if (hwControls.pan_absolute)  ptzRanges.pan_absolute  = { min: hwControls.pan_absolute.min,  max: hwControls.pan_absolute.max,  step: hwControls.pan_absolute.step  };
+    if (hwControls.tilt_absolute) ptzRanges.tilt_absolute = { min: hwControls.tilt_absolute.min, max: hwControls.tilt_absolute.max, step: hwControls.tilt_absolute.step };
+    // Broadcast to all clients so other tabs/devices viewing the same camera
+    // pick up the refreshed capabilities, mirroring the source-switch handler.
+    io.emit("cameraConfigReset", {
       cameraIndex: camIdx,
       success: true,
       results: results,
       config: cam.config,
+      supportedControls: Object.keys(hwControls),
+      ptzRanges,
     });
   });
 
@@ -3837,9 +3860,20 @@ server.listen(PORT, async () => {
         return;
       }
 
+      // Activate Camera 2 and discover its real hardware controls (mirrors
+      // Camera 1's activateCamera call).  Without this, camera2.discoveredControls
+      // stays null and the server falls back to the static OBSBOT-based control
+      // map for every Camera 2 query (getCameraConfig, setControl scaling,
+      // supportedControls list), giving the UI wrong capabilities and ranges.
+      try {
+        await camera2.activateCamera();
+      } catch (e) {
+        console.error("⚠️  [Cam2] Activation failed:", e.message);
+      }
+
       // Detect Camera 2 capture format.
       try {
-        cameraFormat2 = await camera2.detectCaptureFormat(CAMERA_DEVICE_2);
+        cameraFormat2 = await camera2.detectCaptureFormat(camera2.device || CAMERA_DEVICE_2);
         streamController2.captureFormat = cameraFormat2;
         console.log(`📹 [Cam2] Capture format: ${cameraFormat2.toUpperCase()}`);
       } catch (e) {
