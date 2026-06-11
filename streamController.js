@@ -383,6 +383,14 @@ class StreamController extends EventEmitter {
       console.log("Checking for processes using camera device...");
       await this._killCameraProcesses();
 
+      // Kill any processes holding ALSA audio capture devices.
+      // Required when audio is enabled: a stale ffmpeg from a previous hybrid-mode
+      // run may still hold plughw:X,0 open, causing "Device is being used by another
+      // application" when GStreamer's alsasrc (native OMX path) tries to open it.
+      if (this.streamConfig.audioEnabled) {
+        await this._killAudioDeviceProcesses();
+      }
+
       // Kill any process using port 8555 (legacy TCP preview server — Camera 1 only).
       // Camera 2 does not use port 8555 so skipping this prevents interfering with
       // an unrelated process that happens to be on that port.
@@ -1190,6 +1198,37 @@ class StreamController extends EventEmitter {
       console.log("✅ Camera resources cleaned up (forced)");
     } catch (error) {
       console.log("Error cleaning up camera processes:", error.message);
+    }
+  }
+
+  /**
+   * Kill any processes holding ALSA audio capture devices open.
+   *
+   * When transitioning from the ffmpeg hybrid path to native GStreamer ALSA audio
+   * (OMX+RTMP), a stale ffmpeg process may still hold plughw:X,0 open.
+   * GStreamer's alsasrc will fail with "Device is being used by another application"
+   * unless those processes are cleared first.
+   *
+   * Strategy:
+   *   1. pkill ffmpeg — the most common holder; exits immediately on SIGKILL.
+   *   2. fuser -k on all ALSA capture PCM devices — catches any other process.
+   *   3. 400 ms settle time for the ALSA kernel driver to release the device.
+   */
+  async _killAudioDeviceProcesses() {
+    const { exec } = require("child_process");
+    const util = require("util");
+    const execPromise = util.promisify(exec);
+    try {
+      console.log("🎤 Releasing ALSA audio capture devices...");
+      // Kill stale ffmpeg — primary culprit after a previous hybrid stream attempt.
+      await execPromise(`pkill -9 -x ffmpeg 2>/dev/null || true`);
+      // Fuser-kill any remaining holder of ALSA capture PCM nodes.
+      await execPromise(`sudo fuser -k /dev/snd/pcmC*D*c 2>/dev/null || true`);
+      // Let the ALSA kernel driver fully release the device before GStreamer opens it.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      console.log("✅ ALSA audio devices released");
+    } catch (error) {
+      console.log(`⚠️  Audio device cleanup warning: ${error.message}`);
     }
   }
 
