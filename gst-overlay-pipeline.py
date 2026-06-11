@@ -441,28 +441,34 @@ def main():
              if encoder == 'mpph264enc' else
              f'! vaapih264enc bitrate={bitrate_kbps} keyframe-period=15 '
              if encoder == 'vaapih264enc' else
+             # OMX (Allwinner): h264parse must come BEFORE the byte-stream cap filter.
+             # The Allwinner OMX encoder outputs SPS/PPS as GStreamer caps (codec_data)
+             # rather than as inline NAL units.  If the byte-stream cap filter is placed
+             # first, the SPS/PPS are never written into the MPEG-TS stream, so ffmpeg
+             # probes H.264 frames without SPS/PPS → "dimensions not set" fatal error.
+             # Placing h264parse first lets it extract SPS/PPS from the upstream caps
+             # and inject them inline before every IDR (config-interval=-1).
+             # alignment=au groups SPS+PPS+IDR into one access unit buffer so mpegtsmux
+             # emits a single PES packet that ffmpeg can always parse in one shot.
              f'! omxh264videoenc target-bitrate={bitrate} control-rate=constant interval-intraframes=5 '
+             f'! h264parse config-interval=-1 alignment=au '
+             f'! video/x-h264,stream-format=byte-stream,alignment=au '
              if encoder == 'omxh264videoenc' else
              f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
-            + f'! video/x-h264,stream-format=byte-stream '
-            # RTMP+audio hybrid: config-interval=0 — SPS/PPS go only into the MPEG-TS PMT.
-            # ffmpeg reads them once at startup and writes ONE AVC sequence header in FLV.
-            # config-interval=0 is only needed for the ALSA hybrid mode where ffmpeg
-            # reads the MPEG-TS stdout.  In that path a DTS monotonicity issue arises
-            # because ffmpeg re-emits inline SPS+PPS+IDR as two buffers with the same
-            # DTS, causing MediaMTX to drop the connection.
-            # For pure-GStreamer paths (NDI, RTSP audio, video-only RTMP), the encoder
-            # uses header-mode=each-idr which already inlines SPS+PPS before every IDR;
-            # keeping config-interval=-1 lets h264parse pass them through as-is so
-            # flvmux always sees the decoder configuration record alongside the keyframe.
-            # OMX (Allwinner) uses config-interval=-1 so SPS/PPS are always embedded
-            # inline before every IDR.  This ensures ffmpeg can probe codec parameters
-            # from the MPEG-TS stream even before the slow-starting OMX encoder has
-            # produced its first frame (the PAT/PMT is written immediately but without
-            # extradata until h264parse has seen SPS/PPS — inline SPS/PPS avoid that
-            # race).  Other encoders keep config-interval=0 in the ALSA+RTMP path to
-            # prevent duplicate-DTS AVC sequence headers in FLV.
-            + f'! h264parse config-interval={"0" if protocol == "rtmp" and audio_device and encoder != "omxh264videoenc" else "-1"} '
+            + ('' if encoder == 'omxh264videoenc' else
+               # Non-OMX encoders: cap filter then h264parse.
+               # RTMP+audio hybrid: config-interval=0 — SPS/PPS go only into the MPEG-TS PMT.
+               # ffmpeg reads them once at startup and writes ONE AVC sequence header in FLV.
+               # config-interval=0 is only needed for the ALSA hybrid mode where ffmpeg
+               # reads the MPEG-TS stdout.  In that path a DTS monotonicity issue arises
+               # because ffmpeg re-emits inline SPS+PPS+IDR as two buffers with the same
+               # DTS, causing MediaMTX to drop the connection.
+               # For pure-GStreamer paths (NDI, RTSP audio, video-only RTMP), the encoder
+               # uses header-mode=each-idr which already inlines SPS+PPS before every IDR;
+               # keeping config-interval=-1 lets h264parse pass them through as-is so
+               # flvmux always sees the decoder configuration record alongside the keyframe.
+               f'! video/x-h264,stream-format=byte-stream '
+               f'! h264parse config-interval={"0" if protocol == "rtmp" and audio_device else "-1"} ')
         )
         # Thread boundary before mux to decouple encoder from network I/O.
         # All RTMP paths (video-only, NDI audio, RTSP audio) use flvmux which
