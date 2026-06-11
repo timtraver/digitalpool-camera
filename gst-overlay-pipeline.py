@@ -482,12 +482,21 @@ def main():
              #     PMT always contains the parameters (used by ffmpeg in SRT hybrid mode).
              f'! omxh264videoenc target-bitrate={bitrate} control-rate=constant interval-intraframes=5 '
              f'! h264parse config-interval=-1 '
-             # Do NOT add alignment=au here — flvmux's pad template on GStreamer 1.18
-             # only declares stream-format=avc without an alignment field.  The caps
-             # intersection with alignment=au is empty on this build, causing
-             # parse_launch to fail with "queue can't handle caps".  Let GStreamer
-             # negotiate alignment naturally; flvmux will request au-aligned buffers.
-             f'! video/x-h264,stream-format={"avc" if protocol == "rtmp" and audio_device else "byte-stream"} '
+             # Caps filter strategy for OMX:
+             #
+             # Native RTMP+audio path (flvmux): NO explicit capsfilter.
+             #   h264parse naturally outputs stream-format=avc,alignment=au.
+             #   GStreamer 1.18's flvmux pad template declares only
+             #   "video/x-h264, stream-format=avc" — no alignment field.
+             #   Any capsfilter propagates alignment=au into the static link check,
+             #   which parse_launch rejects with "queue can't handle caps".
+             #   Without a capsfilter parse_launch uses flexible pad templates;
+             #   runtime negotiation then resolves the format correctly.
+             #
+             # All other OMX paths (SRT or video-only RTMP → mpegtsmux/ffmpeg):
+             #   Explicit byte-stream filter ensures ffmpeg gets inline SPS/PPS.
+             + ('' if protocol == 'rtmp' and audio_device else
+                '! video/x-h264,stream-format=byte-stream ')
              if encoder == 'omxh264videoenc' else
              f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
             + ('' if encoder == 'omxh264videoenc' else
