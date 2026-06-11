@@ -229,12 +229,14 @@ def main():
             # without performing a template-caps intersection, sidestepping the bug.
             # flvmux (name=mux) is defined as a separate chain in the same pipeline
             # string — parse_launch resolves the forward reference in its second pass.
-            # output_sink ends the video chain with an explicit pad request.
-            # flvmux name=mux is defined as a PIPELINE PREFIX (prepended to the
-            # full pipeline_str below) so it is created BEFORE this reference —
-            # GStreamer 1.18 parse_launch resolves named-element references
-            # left-to-right and does not support forward references.
-            output_sink = f'! mux.video '
+            # Use a fakesink placeholder during parse_launch.
+            # GStreamer 1.18 parse_launch rejects ANY link to flvmux when the
+            # upstream queue carries stream-format=avc,alignment=au — even with
+            # explicit pad requests (! mux.video) or forward-declared named elements.
+            # fakesink accepts all caps, so parse_launch succeeds.  After
+            # parse_launch we retrieve mainvidq and flvmux by name, unlink
+            # the placeholder, and manually link the queue to flvmux.video.
+            output_sink = f'! fakesink name=vidplaceholder sync=false async=false '
             audio_mux_target = 'mux.audio'
         elif audio_device:
             # Hybrid mode: GStreamer outputs VIDEO-ONLY MPEG-TS to stdout (fdsink fd=1).
@@ -529,7 +531,11 @@ def main():
         # a DTS gap that causes MediaMTX to close the connection.
         # mpegtsmux paths (SRT, or RTMP+ALSA hybrid with non-OMX encoders): 500 ms leaky
         # queue is safe because mpegtsmux has only one video input and never stalls on audio.
-        + (f'! queue max-size-buffers=0 max-size-time=2000000000 max-size-bytes=0 '
+        # OMX native RTMP path: name the queue so we can retrieve it by name
+        # after parse_launch and manually relink it to flvmux's video pad.
+        + (f'! queue name=mainvidq max-size-buffers=0 max-size-time=2000000000 max-size-bytes=0 '
+           if encoder == 'omxh264videoenc' and protocol == 'rtmp' and audio_device else
+           f'! queue max-size-buffers=0 max-size-time=2000000000 max-size-bytes=0 '
            if protocol == "rtmp" and (not audio_device or encoder == 'omxh264videoenc') else
            f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream ')
         + output_sink +
@@ -628,6 +634,33 @@ def main():
     print(f"\nPipeline: {pipeline_str}\n", file=sys.stderr)
 
     pipeline = Gst.parse_launch(pipeline_str)
+
+    # ── OMX native RTMP: relink video queue → flvmux programmatically ─────────
+    # parse_launch uses fakesink as a placeholder for the video chain because
+    # GStreamer 1.18 flvmux's accept_caps() rejects alignment=au (not declared
+    # in its pad template) from h264parse, causing every parse_launch variant to
+    # fail with "queue can't handle caps".  Now that all elements are created we
+    # unlink the placeholder and connect mainvidq's src to flvmux's video pad.
+    if encoder == 'omxh264videoenc' and protocol == 'rtmp' and audio_device:
+        mainvidq    = pipeline.get_by_name("mainvidq")
+        vidph       = pipeline.get_by_name("vidplaceholder")
+        mux_el      = pipeline.get_by_name("mux")
+        if not mainvidq or not mux_el:
+            print("❌ OMX relink: mainvidq or mux element not found in pipeline", file=sys.stderr)
+            sys.exit(1)
+        q_src = mainvidq.get_static_pad("src")
+        if vidph:
+            q_src.unlink(vidph.get_static_pad("sink"))
+            pipeline.remove(vidph)
+        video_pad = mux_el.get_request_pad("video")
+        if not video_pad:
+            print("❌ OMX relink: flvmux has no 'video' request pad", file=sys.stderr)
+            sys.exit(1)
+        link_ret = q_src.link(video_pad)
+        if link_ret != Gst.PadLinkReturn.OK:
+            print(f"❌ OMX relink: pad link returned {link_ret}", file=sys.stderr)
+            sys.exit(1)
+        print("✅ OMX relink: mainvidq.src → flvmux.video linked successfully", file=sys.stderr)
 
     # ── Programmatically disable element clock provision ───────────────────
     # v4l2src defaults to offering its USB-oscillator / kernel CLOCK_MONOTONIC
