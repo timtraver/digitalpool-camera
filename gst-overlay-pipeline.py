@@ -727,11 +727,20 @@ def main():
         print("✅ OMX relink: mainaudq.src → flvmux.audio linked successfully", file=sys.stderr)
 
         # ── warm-up DROP probes ────────────────────────────────────────────
-        # Drop all buffers on both pads until the video probe sees the first IDR.
-        # When the video probe detects the IDR, h264parse has already emitted
-        # a CAPS event (not blocked by buffer probes) carrying codec_data to flvmux.
-        # Passing the IDR buffer through then triggers flvmux to write the valid
-        # AVC sequence header before the first frame payload.
+        # Drop all buffers on both pads until the video probe sees the first IDR
+        # that also carries valid codec_data (SPS+PPS) in the current pad caps.
+        #
+        # OMX warm-up IDR frames are "headerless" — they carry no SPS/PPS NALUs,
+        # so h264parse cannot extract codec_data from them.  Without codec_data,
+        # flvmux writes an empty AVC Decoder Configuration Record.  MediaMTX
+        # receives the malformed sequence header and closes the connection, causing
+        # the "Failed to write data" error ~3 s later.
+        #
+        # Key: CAPS events flow ahead of their associated buffer through the queue
+        # (GStreamer serialises them in-order).  By the time our BUFFER probe fires
+        # on the IDR, pad.get_current_caps() already reflects h264parse's latest
+        # CAPS event — so if codec_data is set there, flvmux has already received
+        # it and can write a valid AVC sequence header for the IDR that follows.
         _omx_warmup_done = [False]
 
         def _omx_audio_warmup_drop(pad, info):
@@ -743,13 +752,31 @@ def main():
             if _omx_warmup_done[0]:
                 return Gst.PadProbeReturn.REMOVE
             buf = info.get_buffer()
-            is_idr = buf and not bool(buf.get_flags() & Gst.BufferFlags.DELTA_UNIT)
-            if is_idr:
-                _omx_warmup_done[0] = True  # audio probe removes itself next call
-                print("🔑 OMX: first IDR reached flvmux — warm-up complete, stream is live",
+            is_keyframe = buf and not bool(buf.get_flags() & Gst.BufferFlags.DELTA_UNIT)
+            if not is_keyframe:
+                return Gst.PadProbeReturn.DROP  # P-frame / B-frame — discard
+
+            # Keyframe detected.  Only pass through once codec_data is confirmed
+            # in the current pad caps (i.e. h264parse has seen SPS+PPS).
+            caps = pad.get_current_caps()
+            has_codec_data = False
+            if caps and caps.get_size() > 0:
+                try:
+                    val = caps.get_structure(0).get_value("codec_data")
+                    has_codec_data = val is not None
+                except Exception:
+                    pass
+
+            if not has_codec_data:
+                # OMX warm-up IDR — headerless, no SPS/PPS yet — keep dropping.
+                print("⚠️ OMX: IDR without codec_data — still dropping warm-up frame",
                       file=sys.stderr)
-                return Gst.PadProbeReturn.REMOVE  # pass IDR through, remove self
-            return Gst.PadProbeReturn.DROP  # drop warm-up frames
+                return Gst.PadProbeReturn.DROP
+
+            # First IDR with valid codec_data — let it through.
+            _omx_warmup_done[0] = True  # audio probe removes itself on next call
+            print("🔑 OMX: IDR + codec_data confirmed — stream is live", file=sys.stderr)
+            return Gst.PadProbeReturn.REMOVE  # pass IDR through and remove self
 
         mainaudq.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _omx_audio_warmup_drop)
         mainvidq.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _omx_video_warmup_drop)
