@@ -528,25 +528,27 @@ class StreamController extends EventEmitter {
         }
       } else {
         console.log("Starting GStreamer with pipeline:", gstArgs.join(" "));
-        if (useFfmpegAudio) {
-          // stdout is binary MPEG-TS destined for ffmpeg — must be a pipe, not inherited
-          this.gstProcess = spawn("gst-launch-1.0", gstArgs, {
-            stdio: ["ignore", "pipe", "pipe"],
-          });
-        } else {
-          this.gstProcess = spawn("gst-launch-1.0", gstArgs);
-        }
-      }
-
-      if (!useFfmpegAudio) {
-        // In hybrid mode stdout is raw binary MPEG-TS — do not attach a text listener
-        this.gstProcess.stdout.on("data", (data) => {
-          console.log(`GStreamer stdout: ${data}`);
-          this.emit("log", data.toString());
+        // Always pipe stdout and stderr so we can capture diagnostics regardless
+        // of whether ffmpeg audio is used. In ffmpeg-audio mode stdout carries
+        // binary MPEG-TS; in native mode it carries text diagnostics. Either way
+        // the descriptor must be a pipe (not inherited) or gstProcess.stdout is null.
+        this.gstProcess = spawn("gst-launch-1.0", gstArgs, {
+          stdio: ["ignore", "pipe", "pipe"],
         });
       }
 
-      this.gstProcess.stderr.on("data", (data) => {
+      if (!useFfmpegAudio) {
+        // Native GStreamer path — stdout carries text diagnostics (not binary MPEG-TS).
+        // Attach a text listener so log lines reach the UI.
+        if (this.gstProcess && this.gstProcess.stdout) {
+          this.gstProcess.stdout.on("data", (data) => {
+            console.log(`GStreamer stdout: ${data}`);
+            this.emit("log", data.toString());
+          });
+        }
+      }
+
+      if (this.gstProcess && this.gstProcess.stderr) this.gstProcess.stderr.on("data", (data) => {
         const message = data.toString();
 
         // Suppress high-frequency operational messages that add no debugging value.
