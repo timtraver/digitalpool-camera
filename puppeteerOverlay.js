@@ -279,6 +279,12 @@ class PuppeteerOverlay extends EventEmitter {
         "--disable-translate",
         "--metrics-recording-only",
         "--no-first-run",
+        // Disable Chromium's audio backend entirely — this process is screenshot-only
+        // and has no need for audio. Without these flags, Chromium opens the ALSA
+        // capture device (plughw:1,0) on startup when PulseAudio is not running,
+        // preventing GStreamer's alsasrc from opening the same device.
+        "--mute-audio",
+        "--disable-audio-output",
         // Limit to one renderer process — prevents orphaned renderers from
         // accumulating after failed navigations (two renderers were observed
         // consuming ~256 MB when only one page is open).
