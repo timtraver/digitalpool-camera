@@ -229,15 +229,23 @@ def main():
             # without performing a template-caps intersection, sidestepping the bug.
             # flvmux (name=mux) is defined as a separate chain in the same pipeline
             # string — parse_launch resolves the forward reference in its second pass.
-            # Use a fakesink placeholder during parse_launch.
+            # Use fakesink placeholders during parse_launch for BOTH the video
+            # and audio connections to flvmux.
+            #
             # GStreamer 1.18 parse_launch rejects ANY link to flvmux when the
             # upstream queue carries stream-format=avc,alignment=au — even with
             # explicit pad requests (! mux.video) or forward-declared named elements.
-            # fakesink accepts all caps, so parse_launch succeeds.  After
-            # parse_launch we retrieve mainvidq and flvmux by name, unlink
-            # the placeholder, and manually link the queue to flvmux.video.
+            # Additionally, "! mux.audio" can fail to resolve the request-pad
+            # template "audio_%u" correctly on this build, causing parse_launch to
+            # fall back to auto-linking the audio queue to the video pad (producing
+            # the misleading error "queue can't handle caps video/x-h264").
+            #
+            # Solution: fakesink accepts all caps → parse_launch succeeds for both
+            # branches.  After parse_launch we retrieve mainvidq/mainaudq by name,
+            # remove both placeholder sinks, and manually link both queues to
+            # flvmux's request pads via get_pad_template + request_pad.
             output_sink = f'! fakesink name=vidplaceholder sync=false async=false '
-            audio_mux_target = 'mux.audio'
+            audio_mux_target = 'fakesink name=audplaceholder sync=false async=false'
         elif audio_device:
             # Hybrid mode: GStreamer outputs VIDEO-ONLY MPEG-TS to stdout (fdsink fd=1).
             # ffmpeg (spawned by Node.js) captures ALSA audio and muxes it with the
@@ -547,9 +555,14 @@ def main():
             f'audiomixer name=amix latency=200000000 '
             f'! voaacenc bitrate=128000 '
             f'! aacparse '
-            f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream '
-            f'! {audio_mux_target} '
-            f'alsasrc device={audio_device} provide-clock=false do-timestamp=true '
+            # OMX native RTMP: name the audio output queue so we can retrieve it
+            # by name after parse_launch and programmatically link it to
+            # flvmux's audio request pad (bypassing parse_launch caps checks).
+            + (f'! queue name=mainaudq max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream '
+               if encoder == 'omxh264videoenc' and protocol == 'rtmp' and audio_device else
+               f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream ')
+            + f'! {audio_mux_target} '
+            + f'alsasrc device={audio_device} provide-clock=false do-timestamp=true '
             f'buffer-time=50000 latency-time=25000 '
             f'! audio/x-raw,rate=32000,channels=2,format=S16LE '
             f'! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
@@ -635,32 +648,72 @@ def main():
 
     pipeline = Gst.parse_launch(pipeline_str)
 
-    # ── OMX native RTMP: relink video queue → flvmux programmatically ─────────
-    # parse_launch uses fakesink as a placeholder for the video chain because
-    # GStreamer 1.18 flvmux's accept_caps() rejects alignment=au (not declared
-    # in its pad template) from h264parse, causing every parse_launch variant to
-    # fail with "queue can't handle caps".  Now that all elements are created we
-    # unlink the placeholder and connect mainvidq's src to flvmux's video pad.
+    # ── OMX native RTMP: relink video + audio queues → flvmux programmatically ─
+    # parse_launch uses fakesink placeholders for BOTH the video and audio
+    # connections to flvmux because:
+    #   1. GStreamer 1.18 flvmux's accept_caps() rejects alignment=au (not in its
+    #      pad template), so any "! mux.video" or "! queue ! mux.video" link in
+    #      the parse string fails with "queue can't handle caps video/x-h264".
+    #   2. "! mux.audio" uses get_request_pad("audio") which on GStreamer 1.18
+    #      fails to resolve the "audio_%u" template, causing parse_launch to
+    #      auto-link the audio queue to the video pad instead — producing the
+    #      same misleading caps error on the AUDIO queue.
+    # Solution: fakesinks for both → parse_launch succeeds → programmatic relink.
     if encoder == 'omxh264videoenc' and protocol == 'rtmp' and audio_device:
-        mainvidq    = pipeline.get_by_name("mainvidq")
-        vidph       = pipeline.get_by_name("vidplaceholder")
-        mux_el      = pipeline.get_by_name("mux")
-        if not mainvidq or not mux_el:
-            print("❌ OMX relink: mainvidq or mux element not found in pipeline", file=sys.stderr)
+        mainvidq = pipeline.get_by_name("mainvidq")
+        mainaudq = pipeline.get_by_name("mainaudq")
+        vidph    = pipeline.get_by_name("vidplaceholder")
+        audph    = pipeline.get_by_name("audplaceholder")
+        mux_el   = pipeline.get_by_name("mux")
+        if not mainvidq or not mainaudq or not mux_el:
+            print("❌ OMX relink: mainvidq, mainaudq, or mux element not found in pipeline",
+                  file=sys.stderr)
             sys.exit(1)
+
+        # ── video ──────────────────────────────────────────────────────────────
         q_src = mainvidq.get_static_pad("src")
         if vidph:
             q_src.unlink(vidph.get_static_pad("sink"))
             pipeline.remove(vidph)
-        video_pad = mux_el.get_request_pad("video")
+        # GStreamer 1.18 flvmux request-pad template is "video_%u".
+        # Try "video_0" (explicit) then fall back to the template API.
+        video_pad = mux_el.get_request_pad("video_0")
+        if not video_pad:
+            video_pad = mux_el.get_request_pad("video")
+        if not video_pad:
+            vtmpl = mux_el.get_pad_template("video_%u")
+            if vtmpl:
+                video_pad = mux_el.request_pad(vtmpl, None, None)
         if not video_pad:
             print("❌ OMX relink: flvmux has no 'video' request pad", file=sys.stderr)
             sys.exit(1)
         link_ret = q_src.link(video_pad)
         if link_ret != Gst.PadLinkReturn.OK:
-            print(f"❌ OMX relink: pad link returned {link_ret}", file=sys.stderr)
+            print(f"❌ OMX relink: video pad link returned {link_ret}", file=sys.stderr)
             sys.exit(1)
         print("✅ OMX relink: mainvidq.src → flvmux.video linked successfully", file=sys.stderr)
+
+        # ── audio ──────────────────────────────────────────────────────────────
+        a_src = mainaudq.get_static_pad("src")
+        if audph:
+            a_src.unlink(audph.get_static_pad("sink"))
+            pipeline.remove(audph)
+        # GStreamer 1.18 flvmux request-pad template is "audio_%u".
+        audio_pad = mux_el.get_request_pad("audio_0")
+        if not audio_pad:
+            audio_pad = mux_el.get_request_pad("audio")
+        if not audio_pad:
+            atmpl = mux_el.get_pad_template("audio_%u")
+            if atmpl:
+                audio_pad = mux_el.request_pad(atmpl, None, None)
+        if not audio_pad:
+            print("❌ OMX relink: flvmux has no 'audio' request pad", file=sys.stderr)
+            sys.exit(1)
+        link_ret = a_src.link(audio_pad)
+        if link_ret != Gst.PadLinkReturn.OK:
+            print(f"❌ OMX relink: audio pad link returned {link_ret}", file=sys.stderr)
+            sys.exit(1)
+        print("✅ OMX relink: mainaudq.src → flvmux.audio linked successfully", file=sys.stderr)
 
     # ── Programmatically disable element clock provision ───────────────────
     # v4l2src defaults to offering its USB-oscillator / kernel CLOCK_MONOTONIC
