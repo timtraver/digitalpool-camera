@@ -482,7 +482,12 @@ def main():
              #     PMT always contains the parameters (used by ffmpeg in SRT hybrid mode).
              f'! omxh264videoenc target-bitrate={bitrate} control-rate=constant interval-intraframes=5 '
              f'! h264parse config-interval=-1 '
-             f'! video/x-h264,stream-format={"avc" if protocol == "rtmp" and audio_device else "byte-stream"},alignment=au '
+             # Do NOT add alignment=au here — flvmux's pad template on GStreamer 1.18
+             # only declares stream-format=avc without an alignment field.  The caps
+             # intersection with alignment=au is empty on this build, causing
+             # parse_launch to fail with "queue can't handle caps".  Let GStreamer
+             # negotiate alignment naturally; flvmux will request au-aligned buffers.
+             f'! video/x-h264,stream-format={"avc" if protocol == "rtmp" and audio_device else "byte-stream"} '
              if encoder == 'omxh264videoenc' else
              f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
             + ('' if encoder == 'omxh264videoenc' else
