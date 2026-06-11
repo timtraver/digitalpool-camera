@@ -229,11 +229,12 @@ def main():
             # without performing a template-caps intersection, sidestepping the bug.
             # flvmux (name=mux) is defined as a separate chain in the same pipeline
             # string — parse_launch resolves the forward reference in its second pass.
-            output_sink = (
-                f'! mux.video '
-                f'flvmux name=mux streamable=true '
-                f'! rtmpsink location={rtmp_url} sync=false async=false '
-            )
+            # output_sink ends the video chain with an explicit pad request.
+            # flvmux name=mux is defined as a PIPELINE PREFIX (prepended to the
+            # full pipeline_str below) so it is created BEFORE this reference —
+            # GStreamer 1.18 parse_launch resolves named-element references
+            # left-to-right and does not support forward references.
+            output_sink = f'! mux.video '
             audio_mux_target = 'mux.audio'
         elif audio_device:
             # Hybrid mode: GStreamer outputs VIDEO-ONLY MPEG-TS to stdout (fdsink fd=1).
@@ -600,11 +601,29 @@ def main():
            if encoder == 'omxh264videoenc' else
            f'! x264enc bitrate=500 speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
         + f'! h264parse config-interval=-1 '
-        f'! video/x-h264,stream-format=avc,alignment=au '
+        # No explicit caps filter before the unnamed preview flvmux.
+        # Same issue as the main OMX path: on GStreamer 1.18 the flvmux template
+        # lacks an alignment field, so any capsfilter carrying alignment=au causes
+        # parse_launch to fail with "queue can't handle caps".  The preview branch
+        # uses auto-link (! flvmux) which is fine here because the preview flvmux
+        # is unnamed and only has one video input — no pad-request ambiguity.
         f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream '
         f'! flvmux streamable=true '
         f'! rtmpsink location={preview_rtmp_url} sync=false async=false'
     )
+
+    # ── OMX native RTMP: prepend flvmux definition ────────────────────────────
+    # GStreamer 1.18 parse_launch resolves named-element references strictly
+    # left-to-right.  "! mux.video" in the video chain fails unless the element
+    # named "mux" (flvmux) has already been created earlier in the string.
+    # We prepend the flvmux+rtmpsink chain so it appears before any mux.video /
+    # mux.audio reference; audio and video chains then attach to its request pads.
+    if encoder == 'omxh264videoenc' and protocol == 'rtmp' and audio_device:
+        pipeline_str = (
+            f'flvmux name=mux streamable=true '
+            f'! rtmpsink location={rtmp_url} sync=false async=false '
+            + pipeline_str
+        )
 
     print(f"\nPipeline: {pipeline_str}\n", file=sys.stderr)
 
