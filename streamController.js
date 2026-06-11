@@ -556,7 +556,15 @@ class StreamController extends EventEmitter {
         ? (gstArgs.scriptArgs[29] || this.streamConfig.encoder || "mpph264enc")
         : (this.streamConfig.encoder || "mpph264enc");
 
-      console.log(`🔧 [Cam${this.streamId}] useFfmpegAudio check: protocol=${this.streamConfig.protocol}, encoder(config)=${this.streamConfig.encoder}, encoder(gst)=${_gstEncoder}, audioEnabled=${this.streamConfig.audioEnabled}, audioSource=${this.streamConfig.audioSource}, inputType=${this.inputSource.type}`);
+      // arg 5 (0-indexed) is the protocol as seen by the Python/shell script.
+      // _buildPNGOverlayPipeline() translates "rtsp" → "rtmp" (RTSP is served via
+      // local MediaMTX; the script always pushes RTMP to it).  Use the script's
+      // protocol here so the OMX guard fires correctly for both "rtmp" and "rtsp".
+      const _scriptProtocol = (gstArgs.useCompositorScript && gstArgs.scriptArgs && gstArgs.scriptArgs.length > 5)
+        ? (gstArgs.scriptArgs[5] || this.streamConfig.protocol || "rtmp")
+        : (this.streamConfig.protocol === "rtsp" ? "rtmp" : (this.streamConfig.protocol || "rtmp"));
+
+      console.log(`🔧 [Cam${this.streamId}] useFfmpegAudio check: protocol=${this.streamConfig.protocol}, scriptProtocol=${_scriptProtocol}, encoder(config)=${this.streamConfig.encoder}, encoder(gst)=${_gstEncoder}, audioEnabled=${this.streamConfig.audioEnabled}, audioSource=${this.streamConfig.audioSource}, inputType=${this.inputSource.type}`);
 
       const useFfmpegAudio =
         (this.streamConfig.protocol === "srt" || this.streamConfig.protocol === "rtmp" || this.streamConfig.protocol === "rtsp") &&
@@ -566,9 +574,10 @@ class StreamController extends EventEmitter {
         // outputs parameter-less warm-up frames that cause ffmpeg to exit with
         // "[flv] dimensions not set" before the first real IDR arrives.
         // gst-overlay-pipeline.py routes OMX+RTMP+audio directly to flvmux+rtmpsink.
-        // Use _gstEncoder (derived from the actual scriptArgs) rather than
-        // this.streamConfig.encoder to avoid stale-value races.
-        !(this.streamConfig.protocol === "rtmp" && _gstEncoder === "omxh264videoenc") &&
+        // Use _gstEncoder (derived from the actual scriptArgs) and _scriptProtocol
+        // (which maps "rtsp" → "rtmp" to match what the Python script receives)
+        // so the guard fires correctly for both RTMP and RTSP user-facing protocols.
+        !(_scriptProtocol === "rtmp" && _gstEncoder === "omxh264videoenc") &&
         // When audioSource === "external" the user has chosen a plugged-in ALSA
         // device regardless of what the video input type is — enable the hybrid
         // ffmpeg audio path for all input types in that case.
@@ -716,8 +725,8 @@ class StreamController extends EventEmitter {
         // same ALSA device, causing "Device is busy" when GStreamer's alsasrc tries.
         // This guard fires when useFfmpegAudio was incorrectly true (e.g. due to a
         // stale this.streamConfig.encoder after a config-merge from the UI).
-        if (protocol === "rtmp" && _gstEncoder === "omxh264videoenc") {
-          console.log(`⚡ [Cam${this.streamId}] OMX+RTMP native ALSA mode — skipping ffmpeg audio mux (GStreamer handles audio internally)`);
+        if (_scriptProtocol === "rtmp" && _gstEncoder === "omxh264videoenc") {
+          console.log(`⚡ [Cam${this.streamId}] OMX+RTMP native ALSA mode (scriptProtocol=${_scriptProtocol}) — skipping ffmpeg audio mux (GStreamer handles audio internally)`);
           // Fall through to the !useFfmpegAudio block below which declares the stream live.
           // eslint-disable-next-line no-constant-condition
         } else {
@@ -1071,7 +1080,7 @@ class StreamController extends EventEmitter {
       //      In that case the Python script manages RTMP directly — declare live now.
       const _omxNativeSkippedFfmpeg =
         useFfmpegAudio &&
-        this.streamConfig.protocol === "rtmp" &&
+        _scriptProtocol === "rtmp" &&
         _gstEncoder === "omxh264videoenc";
       if (!useFfmpegAudio || _omxNativeSkippedFfmpeg) {
         // Non-hybrid path: GStreamer handles the sink directly — declare live immediately.
