@@ -216,8 +216,13 @@ def main():
             # SPS/PPS injection into the bitstream is required, so the warm-up frames
             # do not cause a failure.
             print(f"🎤 RTMP OMX native mode — GStreamer ALSA → voaacenc → flvmux (no ffmpeg)", file=sys.stderr)
+            # No caps filter here — the encoder section already forces
+            # h264parse to output stream-format=avc,alignment=au via its own
+            # capsfilter.  Adding a SECOND capsfilter immediately before flvmux
+            # causes parse_launch to fail with "could not link queue to mux"
+            # because GStreamer's pad-request auto-link can't resolve the caps
+            # constraint through two consecutive capsfilter elements.
             output_sink = (
-                f'! video/x-h264,stream-format=avc,alignment=au '
                 f'! flvmux name=mux streamable=true '
                 f'! rtmpsink location={rtmp_url} sync=false async=false '
             )
