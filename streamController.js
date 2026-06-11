@@ -458,6 +458,63 @@ class StreamController extends EventEmitter {
 
       const gstArgs = this._buildGStreamerPipeline();
 
+      // ── Pre-spawn ALSA probe ─────────────────────────────────────────────────
+      // Run the arecord existence/busy check BEFORE spawning GStreamer so the
+      // probe never holds the device open at the same time as alsasrc.
+      // --nonblock causes arecord to fail immediately (EBUSY) if the device is
+      // already held; if the device is free arecord opens it and we SIGKILL it
+      // after 200 ms so the device is released well before GStreamer enters PAUSED.
+      //
+      // This block is intentionally placed here — BEFORE the gstProcess spawn —
+      // to close the race that caused "Device is being used by another application":
+      // previously the probe ran inside `if (useFfmpegAudio)` AFTER the GStreamer
+      // Python script had already been spawned, so GStreamer's alsasrc lost the race.
+      let _preProbeAudioDevice = this.streamConfig.audioDevice || "plughw:2,0";
+      let _preProbeAudioDeviceBusy = false;
+      if (
+        this.streamConfig.audioEnabled &&
+        this.streamConfig.protocol !== "rtsp" &&
+        this.inputSource.type !== "rtsp" &&
+        this.inputSource.type !== "ndi"
+      ) {
+        await new Promise((resolve) => {
+          const check = spawn("arecord", ["-D", _preProbeAudioDevice, "--nonblock"], {
+            stdio: ["ignore", "ignore", "pipe"],
+          });
+          // Kill the probe after 200 ms — enough time to detect EBUSY on a busy
+          // device, but short enough that the device is free before GStreamer starts.
+          const probeTimeout = setTimeout(() => {
+            try { check.kill("SIGKILL"); } catch (_) {}
+          }, 200);
+          let checkErr = "";
+          check.stderr.on("data", (d) => { checkErr += d.toString(); });
+          check.on("close", async (chkCode) => {
+            clearTimeout(probeTimeout);
+            // chkCode === null means we killed it (SIGKILL) → device was accessible
+            const killedByUs = chkCode === null;
+            console.log(`🎤 [Cam${this.streamId}] pre-spawn ALSA probe "${_preProbeAudioDevice}" → exit ${chkCode}${checkErr ? " stderr: " + checkErr.trim() : ""}`);
+            if (!killedByUs && chkCode !== 0) {
+              const isBusy = checkErr.includes("Device or resource busy") || checkErr.includes("resource busy");
+              const isMissing = checkErr.includes("No such file") || checkErr.includes("Invalid card");
+              if (isBusy) {
+                console.warn(`⚠️  [Cam${this.streamId}] Audio device "${_preProbeAudioDevice}" is busy — using silent audio fallback.`);
+                _preProbeAudioDeviceBusy = true;
+              } else if (isMissing) {
+                console.warn(`⚠️  [Cam${this.streamId}] Audio device "${_preProbeAudioDevice}" not found — scanning for a valid capture device…`);
+                const detected = await this._detectAlsaCaptureDevice();
+                if (detected) {
+                  console.log(`🎤 [Cam${this.streamId}] Fallback ALSA capture device: ${detected}`);
+                  _preProbeAudioDevice = detected;
+                  this.streamConfig.audioDevice = detected;
+                }
+              }
+            }
+            resolve();
+          });
+          check.on("error", () => resolve()); // arecord not installed — skip
+        });
+      }
+
       // Hybrid A/V sync strategy (audio-enabled SRT/RTMP):
       //   GStreamer (Python pipeline) outputs VIDEO-ONLY MPEG-TS to stdout, and a
       //   separate ffmpeg process captures ALSA audio and muxes both streams.
@@ -641,74 +698,12 @@ class StreamController extends EventEmitter {
         const protocol = this.streamConfig.protocol;
         console.log(`📡 Hybrid mode — ffmpeg muxing ALSA audio + GStreamer video → ${protocol.toUpperCase()}`);
 
-        let audioDevice = this.streamConfig.audioDevice || "plughw:2,0";
-
-        // Verify the configured ALSA device exists; auto-detect a fallback if not.
-        // arecord -l will fail fast if the device string is bogus, so we do a
-        // quick existence check via arecord --duration=0 before spawning the
-        // full ffmpeg pipeline.
-        // audioDevice === null signals "use silent fallback" (anullsrc).
-        let audioDeviceBusy = false;
-        await new Promise((resolve) => {
-          // Use arecord to probe whether the ALSA device is accessible.
-          // IMPORTANT: --duration=0 means "record indefinitely" in ALSA, NOT
-          // "record for 0 seconds". We use --nonblock so the open fails
-          // immediately (rather than blocking) if the device is busy, and
-          // kill the process after 2 s as a safety net in case arecord hangs
-          // (e.g. on some USB audio drivers that don't honour --nonblock).
-          const check = spawn("arecord", ["-D", audioDevice, "--nonblock", "--duration=2"], {
-            stdio: ["ignore", "ignore", "pipe"],
-          });
-
-          // Hard-kill the probe after 2.5 s regardless of what it's doing.
-          // This ensures the Promise always resolves even if the ALSA driver
-          // or arecord itself hangs during device open / close.
-          const probeTimeout = setTimeout(() => {
-            try { check.kill("SIGKILL"); } catch (_) {}
-          }, 2500);
-          let checkErr = "";
-          check.stderr.on("data", (d) => { checkErr += d.toString(); });
-          check.on("close", async (chkCode) => {
-            clearTimeout(probeTimeout);
-            console.log(`🎤 [Cam${this.streamId}] arecord probe "${audioDevice}" → exit ${chkCode}${checkErr ? " stderr: " + checkErr.trim() : ""}`);
-            if (chkCode !== 0) {
-              const isBusy = checkErr.includes("Device or resource busy") ||
-                             checkErr.includes("resource busy");
-              // "No such file" or "Invalid" reliably mean the device path doesn't exist.
-              // "cannot open" alone is NOT treated as missing — some ALSA devices return
-              // it for format-mismatch reasons even when the device is present; letting
-              // ffmpeg's own ALSA open attempt handle that avoids misdirecting to the
-              // fallback (which would return the first audio card, usually the onboard
-              // Rockchip codec, not the camera mic).
-              const isMissing = checkErr.includes("No such file") ||
-                                checkErr.includes("Invalid card");
-              if (isBusy) {
-                // Device exists but is held by another process (e.g., the other camera).
-                // Fall back to a silent audio track so the stream still starts.
-                console.warn(`⚠️  [Cam${this.streamId}] Audio device "${audioDevice}" is busy — ` +
-                  `using silent audio fallback. To fix, go to Stream Settings → Audio ` +
-                  `and disable audio or select a different device.`);
-                audioDeviceBusy = true;
-              } else if (isMissing) {
-                console.warn(`⚠️  [Cam${this.streamId}] Audio device "${audioDevice}" not found — scanning for a valid capture device…`);
-                const detected = await this._detectAlsaCaptureDevice();
-                if (detected) {
-                  console.log(`🎤 [Cam${this.streamId}] Fallback ALSA capture device: ${detected}`);
-                  audioDevice = detected;
-                } else {
-                  console.warn(`⚠️  [Cam${this.streamId}] No ALSA capture device found — audio will be absent from this stream`);
-                }
-              } else {
-                // Unknown arecord error (e.g. format mismatch on --duration=0 probe).
-                // Let ffmpeg try the device anyway — it handles ALSA format negotiation
-                // more robustly than arecord's default params.
-                console.log(`🎤 [Cam${this.streamId}] arecord probe returned non-zero for unknown reason — proceeding with ffmpeg`);
-              }
-            }
-            resolve();
-          });
-          check.on("error", () => resolve()); // arecord not installed — skip
-        });
+        // Re-use results from the pre-spawn ALSA probe that ran before GStreamer
+        // was started.  The probe already verified the device exists and is free,
+        // updated this.streamConfig.audioDevice on device-not-found, and set the
+        // busy flag so we can fall back to anullsrc without opening the device again.
+        let audioDevice = _preProbeAudioDevice;
+        let audioDeviceBusy = _preProbeAudioDeviceBusy;
 
         // ── Part 1: Audio input args (built now) ────────────────────────────
         // -use_wallclock_as_timestamps 1 replaces ALSA's USB-clock-derived PTS
