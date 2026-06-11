@@ -3450,8 +3450,24 @@ io.on("connection", (socket) => {
   socket.on("startStream", async (config) => {
     const camIdx = parseInt(config?.cameraIndex) === 2 ? 2 : 1;
     const sc = getSC(camIdx);
+    // Guard: prevent the idle preview's 'close' event from auto-restarting a new
+    // preview process while we're still in the startStream sequence.  Without this,
+    // _killCameraProcesses() inside startStream kills the idle preview, the close
+    // handler fires (sc.isStreaming is still false), a fresh idle preview grabs the
+    // camera, and the main pipeline immediately fails with "Device busy".
+    isRestartInProgress[camIdx] = true;
+    await _killIdlePreviewForCamera(camIdx);
     io.emit("streamStatus", { ...sc.getStatus(), status: "starting", cameraIndex: camIdx });
     const result = await sc.startStream(config);
+    if (!result.success) {
+      // Stream failed to start — clear the guard and restore the idle preview so
+      // the user still has a live WebRTC preview.
+      isRestartInProgress[camIdx] = false;
+      startPersistentIdlePreview(camIdx)
+        .then(() => io.emit("refreshIdlePreview", { cameraIndex: camIdx }))
+        .catch(() => {});
+    }
+    // On success, isRestartInProgress[camIdx] is cleared by the "started" event handler.
     socket.emit("streamResult", result);
   });
 
