@@ -455,7 +455,14 @@ def main():
             # uses header-mode=each-idr which already inlines SPS+PPS before every IDR;
             # keeping config-interval=-1 lets h264parse pass them through as-is so
             # flvmux always sees the decoder configuration record alongside the keyframe.
-            + f'! h264parse config-interval={"0" if protocol == "rtmp" and audio_device else "-1"} '
+            # OMX (Allwinner) uses config-interval=-1 so SPS/PPS are always embedded
+            # inline before every IDR.  This ensures ffmpeg can probe codec parameters
+            # from the MPEG-TS stream even before the slow-starting OMX encoder has
+            # produced its first frame (the PAT/PMT is written immediately but without
+            # extradata until h264parse has seen SPS/PPS — inline SPS/PPS avoid that
+            # race).  Other encoders keep config-interval=0 in the ALSA+RTMP path to
+            # prevent duplicate-DTS AVC sequence headers in FLV.
+            + f'! h264parse config-interval={"0" if protocol == "rtmp" and audio_device and encoder != "omxh264videoenc" else "-1"} '
         )
         # Thread boundary before mux to decouple encoder from network I/O.
         # All RTMP paths (video-only, NDI audio, RTSP audio) use flvmux which
@@ -520,11 +527,17 @@ def main():
         f'! videorate ! video/x-raw,framerate=15/1 '
         f'! videoconvert ! video/x-raw,format=NV12 '
         # Preview encoder: same hardware selection as the main stream encoder.
+        # Exception: omxh264videoenc (Allwinner) has a multi-second cold-start delay
+        # that causes librtmp to drop the RTMP connection before the first frame arrives.
+        # Fall back to x264enc for the preview branch so the WebRTC preview is always
+        # available immediately.  The main stream still uses OMX hardware encoding.
         + (f'! mpph264enc bps=500000 header-mode=each-idr gop=15 '
            if encoder == 'mpph264enc' else
            f'! vaapih264enc bitrate=500 keyframe-period=15 '
            if encoder == 'vaapih264enc' else
-           f'! omxh264videoenc target-bitrate=500000 control-rate=constant interval-intraframes=15 '
+           # OMX: fall back to x264enc — NV12→I420 conversion required for x264enc input.
+           f'! videoconvert ! video/x-raw,format=I420 '
+           f'! x264enc bitrate=500 speed-preset=ultrafast tune=zerolatency key-int-max=15 '
            if encoder == 'omxh264videoenc' else
            f'! x264enc bitrate=500 speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
         + f'! h264parse config-interval=-1 '

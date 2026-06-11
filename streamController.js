@@ -777,10 +777,18 @@ class StreamController extends EventEmitter {
           //     Uses the identity max(a,b) = (a+b+|a-b|)/2 to avoid commas inside the
           //     BSF option string (ffmpeg's BSF parser treats commas as chain delimiters).
           ...(protocol === "rtmp" || protocol === "rtsp"
-            ? ["-bsf:v",
-               "filter_units=remove_types=7-8,setts=" +
-               "dts=(DTS+PREV_OUTDTS+100+abs(DTS-PREV_OUTDTS-100))/2:" +
-               "pts=(PTS+PREV_OUTPTS+100+abs(PTS-PREV_OUTPTS-100))/2"]
+            ? this.streamConfig.encoder === "omxh264videoenc"
+              // Allwinner OMX: 'setts' BSF requires FFmpeg ≥ 4.4; Debian Bullseye ships
+              // 4.3.x so the BSF chain fails with "Bitstream filter not found".
+              // h264parse uses config-interval=-1 for OMX so SPS/PPS are always inline —
+              // filter_units (strip inline SPS/PPS) is therefore not needed either.
+              // Skip -bsf:v entirely for OMX; address any DTS monotonicity issues if
+              // they appear in practice.
+              ? []
+              : ["-bsf:v",
+                 "filter_units=remove_types=7-8,setts=" +
+                 "dts=(DTS+PREV_OUTDTS+100+abs(DTS-PREV_OUTDTS-100))/2:" +
+                 "pts=(PTS+PREV_OUTPTS+100+abs(PTS-PREV_OUTPTS-100))/2"]
             : []),
           "-c:a", "aac",
           "-b:a", "128k",
@@ -2040,8 +2048,10 @@ class StreamController extends EventEmitter {
           ]
         : encoder === "omxh264videoenc"
         ? [
-            "videoconvert", "!", "video/x-raw,format=NV12", "!",
-            "omxh264videoenc", "target-bitrate=500000", "control-rate=constant", "interval-intraframes=15", "!",
+            // OMX cold-start delay kills the RTMP preview connection — use x264enc
+            // for the preview branch exactly as buildIdlePreviewGstArgs does.
+            "videoconvert", "!", "video/x-raw,format=I420", "!",
+            "x264enc", "bitrate=500", "speed-preset=ultrafast", "tune=zerolatency", "key-int-max=15", "!",
           ]
         : encoder === "x264enc"
         ? [

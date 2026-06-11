@@ -3040,11 +3040,12 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
   // start a new WebRTC session mid-stream without waiting for the next keyframe.
   // async=false on rtmpsink lets the pipeline reach PLAYING before RTMP connects.
   const idleEncoder = config.encoder || "mpph264enc";
+  // omxh264videoenc (Allwinner OMX) has a multi-second cold-start delay that causes
+  // librtmp to drop the RTMP connection before the first frame arrives.  Fall back to
+  // x264enc for the idle preview only — the main stream still uses hardware encoding.
   const idleEncArgs = idleEncoder === "vaapih264enc"
     ? ["videoconvert", "!", "vaapih264enc", "bitrate=2000", "keyframe-period=15", "!"]
-    : idleEncoder === "omxh264videoenc"
-    ? ["videoconvert", "!", "video/x-raw,format=NV12", "!", "omxh264videoenc", "target-bitrate=2000000", "control-rate=constant", "interval-intraframes=15", "!"]
-    : idleEncoder === "x264enc"
+    : idleEncoder === "x264enc" || idleEncoder === "omxh264videoenc"
     ? ["videoconvert", "!", "video/x-raw,format=I420", "!", "x264enc", "bitrate=2000", "speed-preset=ultrafast", "tune=zerolatency", "key-int-max=15", "!"]
     : ["videoconvert", "!", "video/x-raw,format=NV12", "!", "mpph264enc", "bps=2000000", "header-mode=each-idr", "gop=15", "!"];
 
