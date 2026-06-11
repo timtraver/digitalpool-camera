@@ -188,10 +188,11 @@ class StreamController extends EventEmitter {
    * If it is missing, run full encoder detection and update streamConfig.encoder
    * to the best available option, then persist the change.
    *
-   * Rockchip RK3588  → mpph264enc   (Rockchip MPP GStreamer plugin)
-   * Intel N97 / iGPU → vaapih264enc (gstreamer1.0-vaapi)
-   * NVIDIA Jetson    → nvv4l2h264enc
-   * Software         → x264enc
+   * Rockchip RK3588      → mpph264enc      (Rockchip MPP GStreamer plugin)
+   * Intel N97 / iGPU    → vaapih264enc    (gstreamer1.0-vaapi)
+   * NVIDIA Jetson        → nvv4l2h264enc
+   * Allwinner A733 (OMX) → omxh264videoenc (libgstreamer-openmax-allwinner)
+   * Software             → x264enc
    */
   async _autoDetectEncoder() {
     const configured = this.streamConfig.encoder || "mpph264enc";
@@ -1845,9 +1846,22 @@ class StreamController extends EventEmitter {
         `config-interval=${protocol === "rtmp" && this.streamConfig.audioEnabled ? "0" : "-1"}`,
         "!",
       );
-    } else if (encoder === "omxh264enc") {
-      // OpenMAX encoder (fallback)
-      pipeline.push("omxh264enc", `bitrate=${bitrate}`, "!", "h264parse", "!");
+    } else if (encoder === "omxh264videoenc") {
+      // Allwinner OpenMAX H.264 hardware encoder (Radxa Cubie A7S / A733)
+      pipeline.push(
+        "videoconvert",
+        "!",
+        "video/x-raw,format=NV12",
+        "!",
+        "omxh264videoenc",
+        `target-bitrate=${bitrate}`,
+        "control-rate=constant",
+        "interval-intraframes=5",   // Keyframe every ~167ms at 30fps
+        "!",
+        "h264parse",
+        `config-interval=${protocol === "rtmp" && this.streamConfig.audioEnabled ? "0" : "-1"}`,
+        "!",
+      );
     }
 
     // Add another tee after encoding to split H.264 for output and preview
@@ -2024,7 +2038,12 @@ class StreamController extends EventEmitter {
             "videoconvert", "!",
             "vaapih264enc", "bitrate=500", "keyframe-period=15", "!",
           ]
-        : encoder === "x264enc" || encoder === "omxh264enc"
+        : encoder === "omxh264videoenc"
+        ? [
+            "videoconvert", "!", "video/x-raw,format=NV12", "!",
+            "omxh264videoenc", "target-bitrate=500000", "control-rate=constant", "interval-intraframes=15", "!",
+          ]
+        : encoder === "x264enc"
         ? [
             "videoconvert", "!", "video/x-raw,format=I420", "!",
             "x264enc", "bitrate=500", "speed-preset=ultrafast", "tune=zerolatency", "key-int-max=15", "!",
@@ -2254,19 +2273,31 @@ class StreamController extends EventEmitter {
                     message: "NVIDIA hardware encoder available",
                   });
                 } else {
-                  // Try x264enc (software fallback)
-                  const testX264 = spawn("gst-inspect-1.0", ["x264enc"]);
-                  testX264.on("close", (x264Code) => {
-                    if (x264Code === 0) {
+                  // Try omxh264videoenc (Allwinner OpenMAX — Radxa Cubie A7S / A733)
+                  const testOmx = spawn("gst-inspect-1.0", ["omxh264videoenc"]);
+                  testOmx.on("close", (omxCode) => {
+                    if (omxCode === 0) {
                       resolve({
                         success: true,
-                        encoder: "x264enc",
-                        message: "x264 software encoder available",
+                        encoder: "omxh264videoenc",
+                        message: "Allwinner OpenMAX hardware encoder available",
                       });
                     } else {
-                      resolve({
-                        success: false,
-                        error: "No encoder found (tried mpph264enc, vaapih264enc, nvv4l2h264enc, x264enc)",
+                      // Try x264enc (software fallback)
+                      const testX264 = spawn("gst-inspect-1.0", ["x264enc"]);
+                      testX264.on("close", (x264Code) => {
+                        if (x264Code === 0) {
+                          resolve({
+                            success: true,
+                            encoder: "x264enc",
+                            message: "x264 software encoder available",
+                          });
+                        } else {
+                          resolve({
+                            success: false,
+                            error: "No encoder found (tried mpph264enc, vaapih264enc, nvv4l2h264enc, omxh264videoenc, x264enc)",
+                          });
+                        }
                       });
                     }
                   });

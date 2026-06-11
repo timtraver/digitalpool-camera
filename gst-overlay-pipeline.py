@@ -441,6 +441,8 @@ def main():
              if encoder == 'mpph264enc' else
              f'! vaapih264enc bitrate={bitrate_kbps} keyframe-period=15 '
              if encoder == 'vaapih264enc' else
+             f'! omxh264videoenc target-bitrate={bitrate} control-rate=constant interval-intraframes=5 '
+             if encoder == 'omxh264videoenc' else
              f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
             + f'! video/x-h264,stream-format=byte-stream '
             # RTMP+audio hybrid: config-interval=0 — SPS/PPS go only into the MPEG-TS PMT.
@@ -522,6 +524,8 @@ def main():
            if encoder == 'mpph264enc' else
            f'! vaapih264enc bitrate=500 keyframe-period=15 '
            if encoder == 'vaapih264enc' else
+           f'! omxh264videoenc target-bitrate=500000 control-rate=constant interval-intraframes=15 '
+           if encoder == 'omxh264videoenc' else
            f'! x264enc bitrate=500 speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
         + f'! h264parse config-interval=-1 '
         f'! video/x-h264,stream-format=avc,alignment=au '
