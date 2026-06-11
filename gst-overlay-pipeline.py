@@ -216,14 +216,22 @@ def main():
             # SPS/PPS injection into the bitstream is required, so the warm-up frames
             # do not cause a failure.
             print(f"🎤 RTMP OMX native mode — GStreamer ALSA → voaacenc → flvmux (no ffmpeg)", file=sys.stderr)
-            # No caps filter here — the encoder section already forces
-            # h264parse to output stream-format=avc,alignment=au via its own
-            # capsfilter.  Adding a SECOND capsfilter immediately before flvmux
-            # causes parse_launch to fail with "could not link queue to mux"
-            # because GStreamer's pad-request auto-link can't resolve the caps
-            # constraint through two consecutive capsfilter elements.
+            # Use explicit pad request "! mux.video" instead of auto-link "! flvmux".
+            #
+            # parse_launch's auto-link (!) propagates h264parse's src-pad caps
+            # (stream-format=avc, alignment=au) through the queue and intersects them
+            # against flvmux's pad template.  On GStreamer 1.18 the flvmux template
+            # declares only "video/x-h264, stream-format=avc" — no alignment field.
+            # GStreamer treats the un-declared field as a restriction, so the
+            # intersection is empty and parse_launch fails with "queue can't handle caps".
+            #
+            # With "! mux.video" parse_launch directly requests the named pad on flvmux
+            # without performing a template-caps intersection, sidestepping the bug.
+            # flvmux (name=mux) is defined as a separate chain in the same pipeline
+            # string — parse_launch resolves the forward reference in its second pass.
             output_sink = (
-                f'! flvmux name=mux streamable=true '
+                f'! mux.video '
+                f'flvmux name=mux streamable=true '
                 f'! rtmpsink location={rtmp_url} sync=false async=false '
             )
             audio_mux_target = 'mux.audio'
