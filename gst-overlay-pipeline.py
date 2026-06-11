@@ -451,7 +451,7 @@ def main():
              # alignment=au groups SPS+PPS+IDR into one access unit buffer so mpegtsmux
              # emits a single PES packet that ffmpeg can always parse in one shot.
              f'! omxh264videoenc target-bitrate={bitrate} control-rate=constant interval-intraframes=5 '
-             f'! h264parse config-interval=-1 alignment=au '
+             f'! h264parse config-interval=-1 '
              f'! video/x-h264,stream-format=byte-stream,alignment=au '
              if encoder == 'omxh264videoenc' else
              f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
