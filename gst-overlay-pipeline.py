@@ -198,7 +198,31 @@ def main():
             audio_mux_target = 'mux.'
     elif protocol == "rtmp":
         rtmp_url = destination if destination else "rtmp://localhost:1935/stream"
-        if audio_device:
+        if audio_device and encoder == 'omxh264videoenc':
+            # OMX native mode: GStreamer handles RTMP + ALSA audio directly via flvmux.
+            #
+            # The mpegtsmux → pipe → ffmpeg hybrid path is NOT viable for the Allwinner
+            # OMX encoder because:
+            #   1. omxh264videoenc outputs "garbage" frames during its warm-up phase that
+            #      carry no SPS/PPS headers — ffmpeg probes those frames and fails with
+            #      "[flv] dimensions not set" before the first real IDR ever arrives.
+            #   2. Increasing probesize/analyzeduration only delays the failure; the
+            #      root cause is that the OMX encoder simply does not emit headers until
+            #      the hardware has fully warmed up (several seconds after PLAYING).
+            #
+            # With flvmux + stream-format=avc the SPS/PPS are carried in the caps as
+            # codec_data (the AVC Decoder Configuration Record).  flvmux writes a proper
+            # AVC Sequence Header from those caps before writing any frame — no inline
+            # SPS/PPS injection into the bitstream is required, so the warm-up frames
+            # do not cause a failure.
+            print(f"🎤 RTMP OMX native mode — GStreamer ALSA → voaacenc → flvmux (no ffmpeg)", file=sys.stderr)
+            output_sink = (
+                f'! video/x-h264,stream-format=avc,alignment=au '
+                f'! flvmux name=mux streamable=true '
+                f'! rtmpsink location={rtmp_url} sync=false async=false '
+            )
+            audio_mux_target = 'mux.audio'
+        elif audio_device:
             # Hybrid mode: GStreamer outputs VIDEO-ONLY MPEG-TS to stdout (fdsink fd=1).
             # ffmpeg (spawned by Node.js) captures ALSA audio and muxes it with the
             # incoming video before pushing to the RTMP server as FLV.
@@ -441,18 +465,19 @@ def main():
              if encoder == 'mpph264enc' else
              f'! vaapih264enc bitrate={bitrate_kbps} keyframe-period=15 '
              if encoder == 'vaapih264enc' else
-             # OMX (Allwinner): h264parse must come BEFORE the byte-stream cap filter.
-             # The Allwinner OMX encoder outputs SPS/PPS as GStreamer caps (codec_data)
-             # rather than as inline NAL units.  If the byte-stream cap filter is placed
-             # first, the SPS/PPS are never written into the MPEG-TS stream, so ffmpeg
-             # probes H.264 frames without SPS/PPS → "dimensions not set" fatal error.
-             # Placing h264parse first lets it extract SPS/PPS from the upstream caps
-             # and inject them inline before every IDR (config-interval=-1).
-             # alignment=au groups SPS+PPS+IDR into one access unit buffer so mpegtsmux
-             # emits a single PES packet that ffmpeg can always parse in one shot.
+             # OMX (Allwinner): h264parse always comes BEFORE the stream-format cap filter.
+             # The OMX encoder outputs SPS/PPS as GStreamer caps (codec_data).  h264parse
+             # reads those caps and passes SPS/PPS downstream:
+             #   • flvmux path (RTMP + native ALSA): stream-format=avc — SPS/PPS live in
+             #     codec_data caps; flvmux writes the AVC Decoder Configuration Record
+             #     before any frame.  No inline injection needed; warm-up garbage frames
+             #     do NOT cause "dimensions not set" because flvmux reads caps, not bitstream.
+             #   • mpegtsmux path (RTMP no-audio or SRT): stream-format=byte-stream with
+             #     config-interval=-1 injects SPS+PPS inline before every IDR so the TS
+             #     PMT always contains the parameters (used by ffmpeg in SRT hybrid mode).
              f'! omxh264videoenc target-bitrate={bitrate} control-rate=constant interval-intraframes=5 '
              f'! h264parse config-interval=-1 '
-             f'! video/x-h264,stream-format=byte-stream,alignment=au '
+             f'! video/x-h264,stream-format={"avc" if protocol == "rtmp" and audio_device else "byte-stream"},alignment=au '
              if encoder == 'omxh264videoenc' else
              f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
             + ('' if encoder == 'omxh264videoenc' else
@@ -471,12 +496,13 @@ def main():
                f'! h264parse config-interval={"0" if protocol == "rtmp" and audio_device else "-1"} ')
         )
         # Thread boundary before mux to decouple encoder from network I/O.
-        # All RTMP paths (video-only, NDI audio, RTSP audio) use flvmux which
-        # requires strict DTS monotonicity — no leaky, 2s buffer.
-        # SRT or RTMP+ALSA-audio (mpegtsmux, video-only branch): 500 ms leaky queue
-        # is safe because mpegtsmux has only one input and never stalls on audio.
+        # flvmux paths (RTMP video-only, NDI, RTSP, OMX native ALSA): 2 s non-leaky queue
+        # because flvmux requires strict DTS monotonicity — dropping frames would produce
+        # a DTS gap that causes MediaMTX to close the connection.
+        # mpegtsmux paths (SRT, or RTMP+ALSA hybrid with non-OMX encoders): 500 ms leaky
+        # queue is safe because mpegtsmux has only one video input and never stalls on audio.
         + (f'! queue max-size-buffers=0 max-size-time=2000000000 max-size-bytes=0 '
-           if protocol == "rtmp" and not audio_device else
+           if protocol == "rtmp" and (not audio_device or encoder == 'omxh264videoenc') else
            f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream ')
         + output_sink +
         (

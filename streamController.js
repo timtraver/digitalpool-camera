@@ -483,6 +483,13 @@ class StreamController extends EventEmitter {
       const useFfmpegAudio =
         (this.streamConfig.protocol === "srt" || this.streamConfig.protocol === "rtmp" || this.streamConfig.protocol === "rtsp") &&
         this.streamConfig.audioEnabled &&
+        // OMX encoder + RTMP: GStreamer handles audio natively via flvmux + alsasrc.
+        // The mpegtsmux → pipe → ffmpeg hybrid path fails for OMX because the encoder
+        // outputs parameter-less warm-up frames that cause ffmpeg to exit with
+        // "[flv] dimensions not set" before the first real IDR arrives.
+        // gst-overlay-pipeline.py routes OMX+RTMP+audio directly to flvmux+rtmpsink.
+        !(this.streamConfig.protocol === "rtmp" &&
+          (this.streamConfig.encoder || "mpph264enc") === "omxh264videoenc") &&
         // When audioSource === "external" the user has chosen a plugged-in ALSA
         // device regardless of what the video input type is — enable the hybrid
         // ffmpeg audio path for all input types in that case.
@@ -1867,7 +1874,7 @@ class StreamController extends EventEmitter {
         "interval-intraframes=5",   // Keyframe every ~167ms at 30fps
         "!",
         "h264parse",
-        `config-interval=${protocol === "rtmp" && this.streamConfig.audioEnabled ? "0" : "-1"}`,
+        "config-interval=-1",       // Always inline SPS/PPS — OMX+RTMP+audio uses native flvmux (no ffmpeg DTS issue)
         "!",
       );
     }
