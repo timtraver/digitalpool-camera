@@ -550,8 +550,10 @@ class StreamController extends EventEmitter {
       // Use this as the authoritative encoder value for useFfmpegAudio so it always
       // matches what the Python script actually received — even if startStream's
       // config-merge overwrote this.streamConfig.encoder with a stale value from the UI.
-      const _gstEncoder = (gstArgs.useCompositorScript && gstArgs.scriptArgs && gstArgs.scriptArgs.length > 28)
-        ? (gstArgs.scriptArgs[28] || this.streamConfig.encoder || "mpph264enc")
+      // arg 29 (0-indexed) is the encoder passed to gst-overlay-pipeline.py — see _buildPNGOverlayPipeline().
+      // arg 28 is the preview RTMP path; reading the wrong index caused the OMX guard to always fail.
+      const _gstEncoder = (gstArgs.useCompositorScript && gstArgs.scriptArgs && gstArgs.scriptArgs.length > 29)
+        ? (gstArgs.scriptArgs[29] || this.streamConfig.encoder || "mpph264enc")
         : (this.streamConfig.encoder || "mpph264enc");
 
       console.log(`🔧 [Cam${this.streamId}] useFfmpegAudio check: protocol=${this.streamConfig.protocol}, encoder(config)=${this.streamConfig.encoder}, encoder(gst)=${_gstEncoder}, audioEnabled=${this.streamConfig.audioEnabled}, audioSource=${this.streamConfig.audioSource}, inputType=${this.inputSource.type}`);
