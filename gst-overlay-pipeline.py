@@ -648,25 +648,28 @@ def main():
 
     pipeline = Gst.parse_launch(pipeline_str)
 
-    # ── OMX native RTMP: deferred relink on first IDR (warm-up guard) ────────
-    # The Allwinner A733 OMX encoder emits warm-up frames immediately after
-    # PLAYING before the Cedar VPU is fully initialized.  At that moment
-    # codec_data (SPS/PPS) has not yet been set in the h264parse output caps,
-    # so flvmux cannot write a valid AVC Decoder Configuration Record.
-    # MediaMTX rejects the malformed first FLV tag → "Could not write to resource".
+    # ── OMX native RTMP: relink in PAUSED + warm-up DROP probes ──────────────
+    # Relink must happen in PAUSED state (before PLAYING) so that GStreamer
+    # negotiates caps against pad *templates* rather than against the current
+    # (runtime) caps.  Once the pipeline is PLAYING, mainvidq.src carries
+    # stream-format=avc,alignment=au — GStreamer 1.18's flvmux accept_caps()
+    # rejects alignment=au, so any link attempted during PLAYING returns
+    # GST_PAD_LINK_NOFORMAT.  Relinking in PAUSED avoids this entirely.
     #
-    # Fix (mirrors the NDI video race-guard pattern):
-    #   1. Keep fakesink placeholders connected during warm-up.
-    #   2. Install a BUFFER DROP probe on mainvidq.src that silently discards
-    #      all frames until it detects the first IDR (no DELTA_UNIT flag).
-    #      The IDR confirms that h264parse has extracted codec_data from the
-    #      SPS/PPS NALUs and placed it in the output caps.
-    #   3. On IDR detection, schedule the relink on the GLib main loop via
-    #      idle_add (to avoid streaming-thread deadlocks).
-    #   4. The relink unlinks both fakesinks, links mainvidq→flvmux.video and
-    #      mainaudq→flvmux.audio, then installs a second DROP probe that passes
-    #      only the next IDR and drops preceding P-frames — ensuring MediaMTX
-    #      receives a clean FLV stream: AVC sequence header → IDR → P-frames.
+    # After the relink, the OMX encoder emits warm-up frames immediately when
+    # the pipeline enters PLAYING.  Those frames arrive before h264parse has
+    # extracted SPS/PPS and placed them in the output caps as codec_data.
+    # Without codec_data, flvmux cannot write a valid AVC Decoder Configuration
+    # Record — MediaMTX rejects the malformed FLV tag ("Could not write to resource").
+    #
+    # Fix: install BUFFER DROP probes on both mainvidq.src and mainaudq.src
+    # right after the relink.  The probes discard all buffers until the video
+    # probe detects the first IDR frame (no DELTA_UNIT flag).
+    # Key insight: CAPS events (carrying codec_data) flow in-band with buffers
+    # but are NOT intercepted by BUFFER probes.  So h264parse's CAPS event
+    # (sent immediately before the IDR buffer) reaches flvmux unimpeded.
+    # By the time the IDR buffer itself passes the probe, flvmux already has
+    # codec_data and can write a valid AVC sequence header → MediaMTX happy.
     if encoder == 'omxh264videoenc' and protocol == 'rtmp' and audio_device:
         mainvidq = pipeline.get_by_name("mainvidq")
         mainaudq = pipeline.get_by_name("mainaudq")
@@ -678,91 +681,79 @@ def main():
                   file=sys.stderr)
             sys.exit(1)
 
-        _omx_relink_done      = [False]
-        _omx_post_relink_idr  = [False]
+        # ── video ──────────────────────────────────────────────────────────
+        q_src = mainvidq.get_static_pad("src")
+        if vidph:
+            q_src.unlink(vidph.get_static_pad("sink"))
+            pipeline.remove(vidph)
+        # GStreamer 1.18 flvmux request-pad template is "video_%u".
+        # Try "video_0" (explicit) then fall back to the template API.
+        video_pad = mux_el.get_request_pad("video_0")
+        if not video_pad:
+            video_pad = mux_el.get_request_pad("video")
+        if not video_pad:
+            vtmpl = mux_el.get_pad_template("video_%u")
+            if vtmpl:
+                video_pad = mux_el.request_pad(vtmpl, None, None)
+        if not video_pad:
+            print("❌ OMX relink: flvmux has no 'video' request pad", file=sys.stderr)
+            sys.exit(1)
+        link_ret = q_src.link(video_pad)
+        if link_ret != Gst.PadLinkReturn.OK:
+            print(f"❌ OMX relink: video pad link returned {link_ret}", file=sys.stderr)
+            sys.exit(1)
+        print("✅ OMX relink: mainvidq.src → flvmux.video linked successfully", file=sys.stderr)
 
-        def _do_omx_relink():
-            """Runs on GLib main loop: unlink fakesinks, connect to flvmux."""
-            if _omx_relink_done[0]:
-                return False
+        # ── audio ──────────────────────────────────────────────────────────
+        a_src = mainaudq.get_static_pad("src")
+        if audph:
+            a_src.unlink(audph.get_static_pad("sink"))
+            pipeline.remove(audph)
+        # GStreamer 1.18 flvmux request-pad template is "audio_%u".
+        audio_pad = mux_el.get_request_pad("audio_0")
+        if not audio_pad:
+            audio_pad = mux_el.get_request_pad("audio")
+        if not audio_pad:
+            atmpl = mux_el.get_pad_template("audio_%u")
+            if atmpl:
+                audio_pad = mux_el.request_pad(atmpl, None, None)
+        if not audio_pad:
+            print("❌ OMX relink: flvmux has no 'audio' request pad", file=sys.stderr)
+            sys.exit(1)
+        link_ret = a_src.link(audio_pad)
+        if link_ret != Gst.PadLinkReturn.OK:
+            print(f"❌ OMX relink: audio pad link returned {link_ret}", file=sys.stderr)
+            sys.exit(1)
+        print("✅ OMX relink: mainaudq.src → flvmux.audio linked successfully", file=sys.stderr)
 
-            # ── video ──────────────────────────────────────────────────────
-            q_src = mainvidq.get_static_pad("src")
-            if vidph:
-                q_src.unlink(vidph.get_static_pad("sink"))
-                pipeline.remove(vidph)
-            video_pad = mux_el.get_request_pad("video_0")
-            if not video_pad:
-                video_pad = mux_el.get_request_pad("video")
-            if not video_pad:
-                vtmpl = mux_el.get_pad_template("video_%u")
-                if vtmpl:
-                    video_pad = mux_el.request_pad(vtmpl, None, None)
-            if not video_pad:
-                print("❌ OMX relink: flvmux has no 'video' request pad", file=sys.stderr)
-                return False
-            link_ret = q_src.link(video_pad)
-            if link_ret != Gst.PadLinkReturn.OK:
-                print(f"❌ OMX relink: video pad link returned {link_ret}", file=sys.stderr)
-                return False
-            print("✅ OMX relink: mainvidq.src → flvmux.video linked successfully", file=sys.stderr)
+        # ── warm-up DROP probes ────────────────────────────────────────────
+        # Drop all buffers on both pads until the video probe sees the first IDR.
+        # When the video probe detects the IDR, h264parse has already emitted
+        # a CAPS event (not blocked by buffer probes) carrying codec_data to flvmux.
+        # Passing the IDR buffer through then triggers flvmux to write the valid
+        # AVC sequence header before the first frame payload.
+        _omx_warmup_done = [False]
 
-            # ── audio ──────────────────────────────────────────────────────
-            a_src = mainaudq.get_static_pad("src")
-            if audph:
-                a_src.unlink(audph.get_static_pad("sink"))
-                pipeline.remove(audph)
-            audio_pad = mux_el.get_request_pad("audio_0")
-            if not audio_pad:
-                audio_pad = mux_el.get_request_pad("audio")
-            if not audio_pad:
-                atmpl = mux_el.get_pad_template("audio_%u")
-                if atmpl:
-                    audio_pad = mux_el.request_pad(atmpl, None, None)
-            if not audio_pad:
-                print("❌ OMX relink: flvmux has no 'audio' request pad", file=sys.stderr)
-                return False
-            link_ret = a_src.link(audio_pad)
-            if link_ret != Gst.PadLinkReturn.OK:
-                print(f"❌ OMX relink: audio pad link returned {link_ret}", file=sys.stderr)
-                return False
-            print("✅ OMX relink: mainaudq.src → flvmux.audio linked successfully", file=sys.stderr)
+        def _omx_audio_warmup_drop(pad, info):
+            if _omx_warmup_done[0]:
+                return Gst.PadProbeReturn.REMOVE  # warm-up over — remove self
+            return Gst.PadProbeReturn.DROP
 
-            # Signal the warm-up probe to remove itself on its next invocation.
-            _omx_relink_done[0] = True
-
-            # Install a second probe that drops P-frames until the first post-relink
-            # IDR arrives.  This ensures MediaMTX gets IDR-first FLV video data and
-            # the AVC sequence header can be written before any frame payload.
-            def _wait_for_post_relink_idr(pad, info):
-                if _omx_post_relink_idr[0]:
-                    return Gst.PadProbeReturn.REMOVE
-                buf = info.get_buffer()
-                is_idr = buf and not bool(buf.get_flags() & Gst.BufferFlags.DELTA_UNIT)
-                if is_idr:
-                    _omx_post_relink_idr[0] = True
-                    print("🔑 OMX: post-relink IDR reached flvmux — stream is live", file=sys.stderr)
-                    return Gst.PadProbeReturn.REMOVE  # pass the IDR through
-                return Gst.PadProbeReturn.DROP        # drop preceding P-frames
-
-            mainvidq.get_static_pad("src").add_probe(
-                Gst.PadProbeType.BUFFER, _wait_for_post_relink_idr)
-            return False  # run once
-
-        def _drop_warmup_detect_idr(pad, info):
-            """DROP probe on mainvidq.src: discard warm-up frames; trigger relink on first IDR."""
-            if _omx_relink_done[0]:
-                return Gst.PadProbeReturn.REMOVE   # relink done — remove this probe
+        def _omx_video_warmup_drop(pad, info):
+            if _omx_warmup_done[0]:
+                return Gst.PadProbeReturn.REMOVE
             buf = info.get_buffer()
             is_idr = buf and not bool(buf.get_flags() & Gst.BufferFlags.DELTA_UNIT)
             if is_idr:
-                print("🎯 OMX: first IDR detected — scheduling relink to flvmux", file=sys.stderr)
-                GLib.idle_add(_do_omx_relink)
-            return Gst.PadProbeReturn.DROP  # drop all frames until relink is done
+                _omx_warmup_done[0] = True  # audio probe removes itself next call
+                print("🔑 OMX: first IDR reached flvmux — warm-up complete, stream is live",
+                      file=sys.stderr)
+                return Gst.PadProbeReturn.REMOVE  # pass IDR through, remove self
+            return Gst.PadProbeReturn.DROP  # drop warm-up frames
 
-        mainvidq.get_static_pad("src").add_probe(
-            Gst.PadProbeType.BUFFER, _drop_warmup_detect_idr)
-        print("⏳ OMX warm-up: DROP probe on mainvidq.src — will relink to flvmux on first IDR",
+        mainaudq.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _omx_audio_warmup_drop)
+        mainvidq.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _omx_video_warmup_drop)
+        print("⏳ OMX warm-up: DROP probes on mainvidq + mainaudq — passing first IDR to flvmux",
               file=sys.stderr)
 
     # ── Programmatically disable element clock provision ───────────────────
