@@ -526,12 +526,12 @@ def main():
         # Preview encoder: same hardware selection as the main stream encoder.
         # Each branch must include a videoconvert so the encoder receives its
         # required pixel format regardless of what videoscale/videorate output.
-        + (f'! videoconvert ! video/x-raw,format=NV12 ! mpph264enc bps=800000 header-mode=each-idr gop=30 '
+        + (f'! videoconvert ! video/x-raw,format=NV12 ! mpph264enc bps=2500000 header-mode=each-idr gop=30 '
            if encoder == 'mpph264enc' else
-           f'! videoconvert ! video/x-raw,format=NV12 ! vaapih264enc bitrate=800 keyframe-period=30 '
+           f'! videoconvert ! video/x-raw,format=NV12 ! vaapih264enc bitrate=2500 keyframe-period=30 '
            if encoder == 'vaapih264enc' else
            f'! videoconvert ! video/x-raw,format=I420 '
-           f'! x264enc bitrate=800 speed-preset=ultrafast tune=zerolatency key-int-max=30 ')
+           f'! x264enc bitrate=2500 speed-preset=ultrafast tune=zerolatency key-int-max=30 ')
         + f'! h264parse config-interval=-1 '
         f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream '
         f'! flvmux streamable=true '
