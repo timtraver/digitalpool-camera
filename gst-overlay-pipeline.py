@@ -500,26 +500,39 @@ def main():
              #     config-interval=-1 injects SPS+PPS inline before every IDR so the TS
              #     PMT always contains the parameters (used by ffmpeg in SRT hybrid mode).
              f'! omxh264videoenc target-bitrate={bitrate} control-rate=constant interval-intraframes=5 '
-             f'! h264parse config-interval=-1 '
-             # Caps filter strategy for OMX:
+             # h264parse strategy for OMX (Allwinner A733 / Cedar VPU):
              #
-             # Native RTMP+audio path (flvmux → rtmpsink):
-             #   Force stream-format=avc so h264parse propagates codec_data
-             #   (the AVCDecoderConfigurationRecord with SPS+PPS) in its output
-             #   caps.  Without this constraint, caps negotiation with fakesink
-             #   (vidplaceholder) settles on byte-stream, which never populates
-             #   codec_data.  flvmux then writes an empty AVC sequence header,
-             #   and MediaMTX closes the connection ("Failed to write data").
+             # The Cedar OMX encoder outputs stream-format=avc (NALU length-prefixed)
+             # but NEVER sets codec_data in the GStreamer caps.  SPS and PPS are
+             # embedded as NALUs inside each IDR frame's buffer data, not in the caps.
+             # h264parse in AVC→AVC passthrough mode can't determine nal-length-size
+             # without codec_data, so it cannot extract SPS/PPS → codec_data stays
+             # empty → flvmux writes an empty AVC Decoder Configuration Record →
+             # MediaMTX closes the RTMP connection ("Failed to write data").
              #
-             #   The capsfilter goes BEFORE mainvidq (not after), so parse_launch
-             #   only needs to link h264parse→capsfilter→queue→fakesink — all of
-             #   which accept any h264 caps.  The problematic mainvidq→flvmux link
-             #   is done manually in PAUSED state (avoiding the alignment=au
-             #   rejection that occurs when linking during PLAYING).
+             # Double-h264parse workaround (native RTMP+audio / flvmux path):
+             #   Pass 1: h264parse converts AVC → byte-stream.
+             #           Without input codec_data it defaults to nal-length-size=4,
+             #           which matches Cedar VPU output.  It finds SPS (type 7) and
+             #           PPS (type 8) NALUs in the buffer, strips length prefixes,
+             #           and outputs start-code NALUs.
+             #   Pass 2: h264parse receives byte-stream with inline SPS+PPS,
+             #           trivially finds them via start codes, builds a proper
+             #           AVCDecoderConfigurationRecord (codec_data), and sends it
+             #           in the output CAPS event before the first IDR buffer.
+             #           flvmux receives codec_data → writes valid AVC sequence
+             #           header → MediaMTX accepts the stream.
+             #   config-interval=-1 on pass 2 re-sends codec_data before every IDR,
+             #   keeping the sequence header current even after encoder key-frame resets.
              #
-             # All other OMX paths (SRT or video-only RTMP → mpegtsmux/ffmpeg):
-             #   Explicit byte-stream filter ensures ffmpeg gets inline SPS/PPS.
-             + ('! video/x-h264,stream-format=avc ' if protocol == 'rtmp' and audio_device else
+             # All other OMX paths (SRT / video-only RTMP → mpegtsmux/ffmpeg):
+             #   Single h264parse with byte-stream output; ffmpeg reads inline SPS/PPS.
+             + ('! h264parse '
+                '! video/x-h264,stream-format=byte-stream '
+                '! h264parse config-interval=-1 '
+                '! video/x-h264,stream-format=avc '
+                if protocol == 'rtmp' and audio_device else
+                '! h264parse config-interval=-1 '
                 '! video/x-h264,stream-format=byte-stream ')
              if encoder == 'omxh264videoenc' else
              f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
