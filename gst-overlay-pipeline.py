@@ -358,13 +358,17 @@ def main():
             f'{text_overlay}'
             f'{timestamp_overlay}'
         )
-        # Allwinner Cedar VPU (OMX): the platform's software videoconvert does
-        # not correctly populate the UV chroma plane when converting BGRA→NV12
-        # directly, resulting in a greyscale output from the OMX encoder.
-        # Routing through I420 as an intermediate format forces the standard
-        # YUV planar conversion path which preserves all three colour channels.
+        # Allwinner Cedar VPU (OMX): feeding NV12 (semi-planar, interleaved UV)
+        # causes greyscale output regardless of whether the conversion goes
+        # BGRA→NV12 directly or BGRA→I420→NV12.  The Cedar VPU gst-omx plugin
+        # appears to only read the Y plane from NV12 buffers allocated by
+        # GStreamer's default system-memory allocator (the hardware normally
+        # expects ION/DMA memory with specific stride/alignment).
+        # Fix: feed I420 (fully planar, separate Y/U/V planes) directly to the
+        # encoder.  The Cedar OMX component lists I420 in its sink pad template
+        # and handles planar layout correctly from system memory.
         if encoder == 'omxh264videoenc':
-            encode_convert = '! videoconvert ! video/x-raw,format=I420 ! videoconvert ! video/x-raw,format=NV12 '
+            encode_convert = '! videoconvert ! video/x-raw,format=I420 '
         else:
             encode_convert = f'! videoconvert ! video/x-raw,format=NV12 '
     else:
@@ -511,11 +515,13 @@ def main():
              # Allwinner Cedar VPU — the encoder ignores target-bitrate under CBR
              # and produces ~1 Mbps regardless of the setting.  VBR correctly
              # treats target-bitrate as the average bitrate cap.
-             # interval-intraframes=60: one IDR every 60 frames (= 2 s at 30 fps).
-             # At 5 IDRs/s the encoder was spending most of its bitrate budget on
-             # intra-coded macroblocks, leaving nothing for inter-frame prediction
-             # quality — net effect was low average bitrate with poor P-frame quality.
-             f'! omxh264videoenc target-bitrate={bitrate} control-rate=variable interval-intraframes=60 '
+             # interval-intraframes=30: one IDR every 30 frames (= 1 s at 30 fps).
+             # 60 (2 s) was too long: the warm-up probe must wait up to one full
+             # IDR interval after codec_data injection before the first live IDR
+             # arrives, meaning up to 2 s of dead time at stream start.  30 frames
+             # halves that to ≤1 s, which is the standard for RTMP/HLS delivery
+             # and keeps stream recovery fast after a seek or reconnect.
+             f'! omxh264videoenc target-bitrate={bitrate} control-rate=variable interval-intraframes=30 '
              # h264parse strategy for OMX (Allwinner A733 / Cedar VPU):
              #
              # The Cedar OMX encoder outputs stream-format=avc by DEFAULT when the
@@ -632,9 +638,13 @@ def main():
         # Preview branch: scale to 640×360 (quarter-pixels vs 1280×720) before
         # software x264enc.  Smaller frame = faster encode → lower latency, and
         # 800 kbps at 640×360@15fps looks sharper than 500 kbps at 1280×720.
-        # max-size-buffers=2: tight queue cap prevents preview latency build-up
-        # when x264enc briefly stalls; leaky=downstream drops the oldest frame.
-        f't. ! queue max-size-buffers=2 leaky=downstream '
+        # max-size-buffers=2 leaky=upstream: tight cap prevents preview latency
+        # build-up when x264enc briefly stalls.  leaky=upstream drops the OLDEST
+        # buffered frame (not the newest incoming one), so the encoder always
+        # works on the most recent camera frame.  leaky=downstream (the previous
+        # setting) did the opposite — it discarded new frames and kept stale ones,
+        # causing the preview to lag progressively further behind live.
+        f't. ! queue max-size-buffers=2 leaky=upstream '
         f'! videoscale ! video/x-raw,width=640,height=360 '
         f'! videorate ! video/x-raw,framerate=15/1 '
         # Preview encoder: same hardware selection as the main stream encoder.
@@ -998,7 +1008,13 @@ def main():
                         print(f"⚠️ OMX inject error: {exc}", file=sys.stderr)
                     return False   # do not repeat
 
-                GLib.idle_add(_push_codec_data_caps)
+                # Use PRIORITY_HIGH so the caps event is pushed before the
+                # next streaming-thread buffer reaches the warmup probe.
+                # Default idle priority (200) is too low: the probe can run,
+                # drop an IDR, and wait another full interval-intraframes
+                # frames before the caps event finally fires.
+                GLib.idle_add(_push_codec_data_caps,
+                              priority=GLib.PRIORITY_HIGH)
                 return Gst.PadProbeReturn.REMOVE   # we're done
 
             omxparser.get_static_pad("sink").add_probe(
