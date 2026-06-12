@@ -503,18 +503,23 @@ def main():
              f'! h264parse config-interval=-1 '
              # Caps filter strategy for OMX:
              #
-             # Native RTMP+audio path (flvmux): NO explicit capsfilter.
-             #   h264parse naturally outputs stream-format=avc,alignment=au.
-             #   GStreamer 1.18's flvmux pad template declares only
-             #   "video/x-h264, stream-format=avc" — no alignment field.
-             #   Any capsfilter propagates alignment=au into the static link check,
-             #   which parse_launch rejects with "queue can't handle caps".
-             #   Without a capsfilter parse_launch uses flexible pad templates;
-             #   runtime negotiation then resolves the format correctly.
+             # Native RTMP+audio path (flvmux → rtmpsink):
+             #   Force stream-format=avc so h264parse propagates codec_data
+             #   (the AVCDecoderConfigurationRecord with SPS+PPS) in its output
+             #   caps.  Without this constraint, caps negotiation with fakesink
+             #   (vidplaceholder) settles on byte-stream, which never populates
+             #   codec_data.  flvmux then writes an empty AVC sequence header,
+             #   and MediaMTX closes the connection ("Failed to write data").
+             #
+             #   The capsfilter goes BEFORE mainvidq (not after), so parse_launch
+             #   only needs to link h264parse→capsfilter→queue→fakesink — all of
+             #   which accept any h264 caps.  The problematic mainvidq→flvmux link
+             #   is done manually in PAUSED state (avoiding the alignment=au
+             #   rejection that occurs when linking during PLAYING).
              #
              # All other OMX paths (SRT or video-only RTMP → mpegtsmux/ffmpeg):
              #   Explicit byte-stream filter ensures ffmpeg gets inline SPS/PPS.
-             + ('' if protocol == 'rtmp' and audio_device else
+             + ('! video/x-h264,stream-format=avc ' if protocol == 'rtmp' and audio_device else
                 '! video/x-h264,stream-format=byte-stream ')
              if encoder == 'omxh264videoenc' else
              f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
@@ -741,7 +746,8 @@ def main():
         # on the IDR, pad.get_current_caps() already reflects h264parse's latest
         # CAPS event — so if codec_data is set there, flvmux has already received
         # it and can write a valid AVC sequence header for the IDR that follows.
-        _omx_warmup_done = [False]
+        _omx_warmup_done        = [False]
+        _omx_idr_warning_logged = [False]   # only print the first IDR-without-codec_data
 
         def _omx_audio_warmup_drop(pad, info):
             if _omx_warmup_done[0]:
@@ -769,8 +775,12 @@ def main():
 
             if not has_codec_data:
                 # OMX warm-up IDR — headerless, no SPS/PPS yet — keep dropping.
-                print("⚠️ OMX: IDR without codec_data — still dropping warm-up frame",
-                      file=sys.stderr)
+                # Log only once so the journal stays quiet during multi-second warm-up.
+                if not _omx_idr_warning_logged[0]:
+                    caps_str = caps.to_string() if caps else "None"
+                    print(f"⚠️ OMX: warm-up IDR(s) have no codec_data — dropping until SPS/PPS arrive (caps: {caps_str})",
+                          file=sys.stderr)
+                    _omx_idr_warning_logged[0] = True
                 return Gst.PadProbeReturn.DROP
 
             # First IDR with valid codec_data — let it through.
