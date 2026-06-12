@@ -798,14 +798,36 @@ def main():
             if _omx_warmup_done[0]:
                 return Gst.PadProbeReturn.REMOVE
             buf = info.get_buffer()
-            is_keyframe = buf and not bool(buf.get_flags() & Gst.BufferFlags.DELTA_UNIT)
-            if not is_keyframe:
-                return Gst.PadProbeReturn.DROP  # P-frame / B-frame — discard
-            if not _codec_data_seen[0]:
-                # IDR arrived but codec_data hasn't been seen in a CAPS event yet.
-                # Keep dropping — the next IDR will be checked again.
+            if not buf:
                 return Gst.PadProbeReturn.DROP
-            # First IDR after codec_data arrived — let it through.
+            # Cedar VPU has INVERTED DELTA_UNIT: IDR is marked as DELTA_UNIT, P-frames
+            # are not.  Do NOT use DELTA_UNIT — inspect NALU type bytes directly.
+            # h264parse output is stream-format=avc (4-byte length-prefix per NALU).
+            # Walk ALL NALUs in the access unit: h264parse with config-interval=-1
+            # may inline SPS(7)+PPS(8) before the IDR(5) in the same buffer, so
+            # we cannot just check bytes[4] — we must scan until we find type 5.
+            buf_size = buf.get_size()
+            raw = buf.extract_dup(0, min(buf_size, 256))
+            is_idr = False
+            pos = 0
+            while pos + 5 <= len(raw):
+                nalu_len = int.from_bytes(raw[pos:pos+4], 'big')
+                if nalu_len == 0 or pos + 4 + nalu_len > buf_size:
+                    break
+                nalu_type = raw[pos + 4] & 0x1f
+                if nalu_type == 5:
+                    is_idr = True
+                    break
+                pos += 4 + nalu_len
+            if not is_idr:
+                return Gst.PadProbeReturn.DROP  # non-IDR frame — discard
+            if not _codec_data_seen[0]:
+                # IDR arrived but codec_data hasn't been injected yet.
+                # Keep dropping — the next IDR will be checked again.
+                print("⚠️ OMX: IDR (type 5) without codec_data — still dropping",
+                      file=sys.stderr)
+                return Gst.PadProbeReturn.DROP
+            # First IDR after codec_data — let it through.
             _omx_warmup_done[0] = True  # audio probe removes itself on next call
             print("🔑 OMX: first IDR after codec_data — stream is live", file=sys.stderr)
             return Gst.PadProbeReturn.REMOVE  # pass IDR through and remove self
@@ -820,81 +842,146 @@ def main():
         print("⏳ OMX warm-up: CAPS+BUFFER probes on mainvidq, BUFFER probe on mainaudq",
               file=sys.stderr)
 
-        # ── Diagnostic: hexdump raw OMX encoder output ───────────────────────
-        # Probe the h264parse sink pad (= raw encoder output) for the first 8
-        # buffers.  This tells us:
-        #   • byte-stream format? → look for 00 00 00 01 / 00 00 01 start codes
-        #   • AVCC format?        → look for 4-byte big-endian length prefix
-        #   • which NALU types are present (7=SPS 8=PPS 5=IDR 1=non-IDR)
-        # The output will be printed to the service journal once and removed.
+        # ── OMX codec_data injector ──────────────────────────────────────────
+        #
+        # Root cause (confirmed by hex diagnostic):
+        #   The Cedar VPU gst-omx plugin has INVERTED GstBufferFlags.DELTA_UNIT:
+        #     • SPS+PPS parameter-set packets → marked DELTA_UNIT (non-keyframe)
+        #     • IDR frames                     → marked DELTA_UNIT (non-keyframe) ← BUG
+        #     • P-frames                       → NOT DELTA_UNIT (keyframe)        ← BUG
+        #   h264parse never sees a proper keyframe signal on the IDR buffer, so
+        #   it never emits a CAPS event with codec_data on its src pad.
+        #   Our warm-up drop probe's DELTA_UNIT check was also using the wrong bit.
+        #
+        # Fix — two-part:
+        #
+        # 1. Extract SPS+PPS from the very first parameter-set buffer (byte-stream
+        #    format, contains NALU types 7 and 8 separated by start codes).
+        #    Build the AVCDecoderConfigurationRecord (AVCC record) in Python and
+        #    push a new CAPS event with codec_data onto mainvidq.src via
+        #    GLib.idle_add (runs in the GLib main-loop thread, safe to call
+        #    push_event from there since the streaming thread does not hold the
+        #    pad lock during idle).
+        #
+        # 2. Fix the warm-up drop probe IDR detection: instead of checking
+        #    DELTA_UNIT (which is inverted), inspect the first NALU type byte in
+        #    the buffer payload.  h264parse outputs stream-format=avc (4-byte
+        #    length-prefix), so byte[4] & 0x1f gives the NALU type; type 5 = IDR.
         omxparser = pipeline.get_by_name("omxparser")
         if omxparser:
-            _diag_count = [0]
-            _diag_sps   = [None]   # will hold SPS bytes if found
-            _diag_pps   = [None]   # will hold PPS bytes if found
+            _inject_done = [False]   # set True once codec_data is injected
 
-            def _omx_raw_diag(pad, info):
-                """One-shot raw-buffer diagnostic probe on omxparser.sink."""
-                if _diag_count[0] >= 8:
-                    return Gst.PadProbeReturn.REMOVE
-                buf = info.get_buffer()
-                if not buf:
-                    return Gst.PadProbeReturn.OK
-                size  = buf.get_size()
-                raw   = buf.extract_dup(0, min(size, 128))
-                is_kf = not bool(buf.get_flags() & Gst.BufferFlags.DELTA_UNIT)
-
-                # ── try byte-stream (start-code) parsing ──────────────────
-                bs_nalus = []
+            def _parse_bs_nalus(data):
+                """Walk a byte-stream buffer; return list of (nalu_type, start, end).
+                Trailing zero bytes that are leading-zero prefixes of a 4-byte start
+                code (00 00 00 01) are trimmed from each NALU's end boundary."""
+                results = []
                 i = 0
-                while i < len(raw) - 3:
-                    if raw[i:i+4] == b'\x00\x00\x00\x01':
+                while i < len(data) - 3:
+                    if data[i:i+4] == b'\x00\x00\x00\x01':
                         sc = 4
-                    elif raw[i:i+3] == b'\x00\x00\x01':
+                    elif data[i:i+3] == b'\x00\x00\x01':
                         sc = 3
                     else:
                         i += 1
                         continue
-                    nt = raw[i + sc] & 0x1f if i + sc < len(raw) else -1
-                    bs_nalus.append(nt)
-                    if nt == 7 and _diag_sps[0] is None:
-                        # Try to grab SPS bytes (up to 64 bytes)
-                        _diag_sps[0] = raw[i + sc: i + sc + 64]
-                    if nt == 8 and _diag_pps[0] is None:
-                        _diag_pps[0] = raw[i + sc: i + sc + 32]
-                    i += sc + 1
+                    nalu_start = i + sc
+                    # find end of this NALU (next 3-byte start code pattern or end of data)
+                    j = nalu_start + 1
+                    while j < len(data) - 2:
+                        if data[j:j+3] == b'\x00\x00\x01':
+                            break
+                        j += 1
+                    nalu_end = j if j < len(data) - 2 else len(data)
+                    # Trim trailing zero bytes: the leading 00 in 00 00 00 01 start
+                    # codes is not part of the NALU payload.
+                    while nalu_end > nalu_start + 1 and data[nalu_end - 1] == 0:
+                        nalu_end -= 1
+                    nt = data[nalu_start] & 0x1f if nalu_start < len(data) else -1
+                    results.append((nt, nalu_start, nalu_end))
+                    i = nalu_end
+                return results
 
-                # ── try AVCC (4-byte length prefix) parsing ───────────────
-                avcc_nalus = []
-                pos = 0
-                while pos + 5 <= len(raw):
-                    nlen = int.from_bytes(raw[pos:pos+4], 'big')
-                    if nlen == 0 or pos + 4 + nlen > len(raw) + 4:
-                        break
-                    nt = raw[pos + 4] & 0x1f
-                    avcc_nalus.append(nt)
-                    if nt == 7 and _diag_sps[0] is None:
-                        _diag_sps[0] = raw[pos + 4: pos + 4 + min(nlen, 64)]
-                    if nt == 8 and _diag_pps[0] is None:
-                        _diag_pps[0] = raw[pos + 4: pos + 4 + min(nlen, 32)]
-                    pos += 4 + nlen
+            def _build_avcc_record(sps_nalu, pps_nalu):
+                """Build AVCDecoderConfigurationRecord from raw NALU bytes (type byte included)."""
+                return bytes([
+                    0x01,               # configurationVersion
+                    sps_nalu[1],        # AVCProfileIndication
+                    sps_nalu[2],        # profile_compatibility
+                    sps_nalu[3],        # AVCLevelIndication
+                    0xFF,               # 6 reserved bits | lengthSizeMinusOne=3 (→ 4-byte)
+                    0xE1,               # 3 reserved bits | numSPS=1
+                    (len(sps_nalu) >> 8) & 0xFF,
+                    len(sps_nalu) & 0xFF,
+                ]) + bytes(sps_nalu) + bytes([
+                    0x01,               # numPPS=1
+                    (len(pps_nalu) >> 8) & 0xFF,
+                    len(pps_nalu) & 0xFF,
+                ]) + bytes(pps_nalu)
 
-                hex_head = ' '.join(f'{b:02x}' for b in raw[:32])
-                print(f"🔬 OMX raw[{_diag_count[0]}]: size={size} kf={is_kf} "
-                      f"bs_nalus={bs_nalus} avcc_nalus={avcc_nalus} | {hex_head}",
-                      file=sys.stderr)
-                if _diag_sps[0] is not None and _diag_pps[0] is not None:
-                    sps_hex = ' '.join(f'{b:02x}' for b in _diag_sps[0])
-                    pps_hex = ' '.join(f'{b:02x}' for b in _diag_pps[0])
-                    print(f"🔬 OMX SPS bytes: {sps_hex}", file=sys.stderr)
-                    print(f"🔬 OMX PPS bytes: {pps_hex}", file=sys.stderr)
+            def _omx_inject_codec_data(pad, info):
+                """
+                Probe on omxparser.sink.
+                Fires on every input buffer; removes itself after injecting codec_data.
+                """
+                if _inject_done[0]:
+                    return Gst.PadProbeReturn.REMOVE
+                buf = info.get_buffer()
+                if not buf:
+                    return Gst.PadProbeReturn.OK
+                raw = buf.extract_dup(0, min(buf.get_size(), 512))
 
-                _diag_count[0] += 1
-                return Gst.PadProbeReturn.OK
+                nalus = _parse_bs_nalus(raw)
+                sps = next((raw[s:e] for t, s, e in nalus if t == 7), None)
+                pps = next((raw[s:e] for t, s, e in nalus if t == 8), None)
+                if sps is None or pps is None:
+                    return Gst.PadProbeReturn.OK   # not a parameter-set buffer
+
+                avcc = _build_avcc_record(sps, pps)
+                avcc_hex = ''.join(f'{b:02x}' for b in avcc)
+                sps_hex  = ' '.join(f'{b:02x}' for b in sps)
+                pps_hex  = ' '.join(f'{b:02x}' for b in pps)
+                print(f"🔬 OMX: SPS={sps_hex}", file=sys.stderr)
+                print(f"🔬 OMX: PPS={pps_hex}", file=sys.stderr)
+                print(f"🔬 OMX: AVCC record={avcc_hex}", file=sys.stderr)
+                _inject_done[0] = True
+
+                # Schedule caps injection on GLib main loop (safe cross-thread).
+                def _push_codec_data_caps():
+                    try:
+                        src_pad = mainvidq.get_static_pad("src")
+                        cur_caps = src_pad.get_current_caps() or src_pad.get_allowed_caps()
+                        if cur_caps is None or cur_caps.is_empty():
+                            print("⚠️ OMX inject: mainvidq.src has no caps yet — retrying",
+                                  file=sys.stderr)
+                            return True   # retry on next idle
+                        cur_str = cur_caps.to_string()
+                        if 'codec_data' in cur_str:
+                            # Already has codec_data (h264parse caught up) — just signal
+                            _codec_data_seen[0] = True
+                            print("📦 OMX: codec_data already in caps — no injection needed",
+                                  file=sys.stderr)
+                            return False
+                        new_caps_str = cur_str + f', codec_data=(buffer){avcc_hex}'
+                        new_caps = Gst.Caps.from_string(new_caps_str)
+                        if new_caps and not new_caps.is_empty():
+                            src_pad.push_event(Gst.Event.new_caps(new_caps))
+                            _codec_data_seen[0] = True
+                            print("📦 OMX: codec_data injected into mainvidq.src caps",
+                                  file=sys.stderr)
+                        else:
+                            print(f"⚠️ OMX inject: failed to build caps from: {new_caps_str}",
+                                  file=sys.stderr)
+                    except Exception as exc:
+                        print(f"⚠️ OMX inject error: {exc}", file=sys.stderr)
+                    return False   # do not repeat
+
+                GLib.idle_add(_push_codec_data_caps)
+                return Gst.PadProbeReturn.REMOVE   # we're done
 
             omxparser.get_static_pad("sink").add_probe(
-                Gst.PadProbeType.BUFFER, _omx_raw_diag)
-            print("🔬 OMX raw diagnostic probe installed on omxparser.sink (first 8 bufs)",
+                Gst.PadProbeType.BUFFER, _omx_inject_codec_data)
+            print("🔬 OMX codec_data injector probe installed on omxparser.sink",
                   file=sys.stderr)
 
     # ── Programmatically disable element clock provision ───────────────────
