@@ -358,7 +358,15 @@ def main():
             f'{text_overlay}'
             f'{timestamp_overlay}'
         )
-        encode_convert = f'! videoconvert ! video/x-raw,format=NV12 '
+        # Allwinner Cedar VPU (OMX): the platform's software videoconvert does
+        # not correctly populate the UV chroma plane when converting BGRA→NV12
+        # directly, resulting in a greyscale output from the OMX encoder.
+        # Routing through I420 as an intermediate format forces the standard
+        # YUV planar conversion path which preserves all three colour channels.
+        if encoder == 'omxh264videoenc':
+            encode_convert = '! videoconvert ! video/x-raw,format=I420 ! videoconvert ! video/x-raw,format=NV12 '
+        else:
+            encode_convert = f'! videoconvert ! video/x-raw,format=NV12 '
     else:
         overlay_section = ''
         encode_convert = ''
@@ -499,7 +507,15 @@ def main():
              #   • mpegtsmux path (RTMP no-audio or SRT): stream-format=byte-stream with
              #     config-interval=-1 injects SPS+PPS inline before every IDR so the TS
              #     PMT always contains the parameters (used by ffmpeg in SRT hybrid mode).
-             f'! omxh264videoenc target-bitrate={bitrate} control-rate=constant interval-intraframes=5 '
+             # control-rate=variable: CBR ("constant") is unreliable on the
+             # Allwinner Cedar VPU — the encoder ignores target-bitrate under CBR
+             # and produces ~1 Mbps regardless of the setting.  VBR correctly
+             # treats target-bitrate as the average bitrate cap.
+             # interval-intraframes=60: one IDR every 60 frames (= 2 s at 30 fps).
+             # At 5 IDRs/s the encoder was spending most of its bitrate budget on
+             # intra-coded macroblocks, leaving nothing for inter-frame prediction
+             # quality — net effect was low average bitrate with poor P-frame quality.
+             f'! omxh264videoenc target-bitrate={bitrate} control-rate=variable interval-intraframes=60 '
              # h264parse strategy for OMX (Allwinner A733 / Cedar VPU):
              #
              # The Cedar OMX encoder outputs stream-format=avc by DEFAULT when the
@@ -613,24 +629,30 @@ def main():
         # parse time, so the preview branch is not downstream of any live source at pipeline
         # construction time.  A sink with async=true would block the PAUSED→PLAYING
         # transition waiting for a preroll buffer that never arrives until PLAYING).
-        f't. ! queue max-size-buffers=10 leaky=downstream '
-        f'! videoscale ! video/x-raw,width=1280,height=720 '
+        # Preview branch: scale to 640×360 (quarter-pixels vs 1280×720) before
+        # software x264enc.  Smaller frame = faster encode → lower latency, and
+        # 800 kbps at 640×360@15fps looks sharper than 500 kbps at 1280×720.
+        # max-size-buffers=2: tight queue cap prevents preview latency build-up
+        # when x264enc briefly stalls; leaky=downstream drops the oldest frame.
+        f't. ! queue max-size-buffers=2 leaky=downstream '
+        f'! videoscale ! video/x-raw,width=640,height=360 '
         f'! videorate ! video/x-raw,framerate=15/1 '
-        f'! videoconvert ! video/x-raw,format=NV12 '
         # Preview encoder: same hardware selection as the main stream encoder.
         # Exception: omxh264videoenc (Allwinner) has a multi-second cold-start delay
         # that causes librtmp to drop the RTMP connection before the first frame arrives.
         # Fall back to x264enc for the preview branch so the WebRTC preview is always
         # available immediately.  The main stream still uses OMX hardware encoding.
-        + (f'! mpph264enc bps=500000 header-mode=each-idr gop=15 '
+        + (f'! mpph264enc bps=800000 header-mode=each-idr gop=30 '
            if encoder == 'mpph264enc' else
-           f'! vaapih264enc bitrate=500 keyframe-period=15 '
+           f'! vaapih264enc bitrate=800 keyframe-period=30 '
            if encoder == 'vaapih264enc' else
-           # OMX: fall back to x264enc — NV12→I420 conversion required for x264enc input.
+           # OMX: fall back to x264enc.  Convert directly to I420 (x264enc input
+           # format) without an intermediate NV12 step.
            f'! videoconvert ! video/x-raw,format=I420 '
-           f'! x264enc bitrate=500 speed-preset=ultrafast tune=zerolatency key-int-max=15 '
+           f'! x264enc bitrate=800 speed-preset=ultrafast tune=zerolatency key-int-max=30 '
            if encoder == 'omxh264videoenc' else
-           f'! x264enc bitrate=500 speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
+           f'! videoconvert ! video/x-raw,format=I420 '
+           f'! x264enc bitrate=800 speed-preset=ultrafast tune=zerolatency key-int-max=30 ')
         + f'! h264parse config-interval=-1 '
         # No explicit caps filter before the unnamed preview flvmux.
         # Same issue as the main OMX path: on GStreamer 1.18 the flvmux template
