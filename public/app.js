@@ -2315,6 +2315,44 @@ socket.on("streamDrift", ({ ppm }) => {
                             :            "#4ade80";  // green — negligible
 });
 
+// ── System stats bar ─────────────────────────────────────────────────────────
+// Receives "systemStats" events broadcast by the server every 3 seconds.
+// Shows CPU package temperature (color-coded), RAM usage, and RAPL power draw.
+(function () {
+  const tempEl  = document.getElementById("statCpuTemp");
+  const ramEl   = document.getElementById("statRam");
+  const powerEl = document.getElementById("statPower");
+
+  function updateStats({ cpuTempC, ramUsedGb, ramTotalGb, powerW }) {
+    if (tempEl) {
+      tempEl.textContent = cpuTempC !== null ? `🌡️ ${cpuTempC}°C` : "🌡️ —";
+      // Color-code by temperature: ≤70 = cool (green), ≤85 = warm (amber), >85 = hot (red)
+      tempEl.className = "sys-stat" + (
+        cpuTempC === null  ? "" :
+        cpuTempC > 85      ? " stat-temp-hot" :
+        cpuTempC > 70      ? " stat-temp-warm" :
+                             " stat-temp-cool"
+      );
+    }
+    if (ramEl) {
+      ramEl.textContent = (ramUsedGb !== null && ramTotalGb !== null)
+        ? `💾 ${ramUsedGb}/${ramTotalGb} GB`
+        : "💾 —";
+    }
+    if (powerEl) {
+      powerEl.textContent = powerW !== null ? `⚡ ${powerW}W` : "⚡ —";
+    }
+  }
+
+  socket.on("systemStats", updateStats);
+
+  // Also fetch on page load so stats appear immediately without waiting 3 s.
+  fetch("/api/system/stats")
+    .then(r => r.json())
+    .then(d => { if (d.success) updateStats(d); })
+    .catch(() => {});
+})();
+
 // ── Live TX bitrate sparkline ─────────────────────────────────────────────
 // Receives "streamBitrate" events from the server (1 Hz, Mbps).
 // Draws a scrolling filled-area chart on a canvas below the video.

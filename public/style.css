@@ -67,6 +67,34 @@ header h1 {
   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
+/* ── System stats bar ──────────────────────────────────────────────────────── */
+.sys-stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 20px;
+  background: rgba(8, 14, 24, 0.95);
+  border-bottom: 1px solid rgba(18, 199, 255, 0.12);
+  font-size: 11px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  letter-spacing: 0.3px;
+}
+
+.sys-stat {
+  color: rgba(18, 199, 255, 0.8);
+  white-space: nowrap;
+}
+
+/* Temperature colour states */
+.sys-stat.stat-temp-cool { color: #34d399; } /* green  — ≤70 °C */
+.sys-stat.stat-temp-warm { color: #fbbf24; } /* amber  — ≤85 °C */
+.sys-stat.stat-temp-hot  { color: #f87171; } /* red    — >85 °C */
+
+.sys-stat-sep {
+  color: rgba(255, 255, 255, 0.18);
+  user-select: none;
+}
+
 .status {
   padding: 3px 10px;
   border-radius: 18px;

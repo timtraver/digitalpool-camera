@@ -1072,6 +1072,15 @@ app.post("/api/update", requireAdmin, async (req, res) => {
   }, 800);
 });
 
+// ── System stats API ─────────────────────────────────────────────────────────
+// GET /api/system/stats — CPU temperature, RAM usage, and Intel RAPL power draw.
+// Any authenticated user may read these (no sensitive data).
+app.get("/api/system/stats", requireAuth, (req, res) => {
+  // _readSystemStats is initialised by the polling block near the bottom of server.js.
+  const fn = global._readSystemStats;
+  res.json(fn ? { success: true, ...fn() } : { success: false, error: "stats not ready" });
+});
+
 // ── Timezone API (admin only) ─────────────────────────────────────────────────
 // Curated list of common timezones grouped by region.
 // Each entry: { value: IANA name, label: human-friendly display }
@@ -4196,6 +4205,81 @@ streamController2.on("stopped", async () => {
   }
 });
 
+
+// ── System stats polling ─────────────────────────────────────────────────────
+// Reads CPU temperature (x86_pkg_temp zone), RAM, and Intel RAPL package power.
+// All reads use synchronous fs on /sys and /proc — no child_process overhead.
+// Broadcasts "systemStats" via Socket.IO every 3 seconds to all connected clients.
+{
+  const _statsOs = require("os");
+  const _statsFs = require("fs");
+  const RAPL_ENERGY_PATH = "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj";
+
+  // Find the thermal zone of type "x86_pkg_temp" once at startup and cache it.
+  let _cpuThermalPath = null;
+  function _findCpuThermalPath() {
+    if (_cpuThermalPath) return _cpuThermalPath;
+    try {
+      const thermalDir = "/sys/class/thermal";
+      const zones = _statsFs.readdirSync(thermalDir).filter(d => /^thermal_zone\d+$/.test(d));
+      for (const zone of zones) {
+        try {
+          const type = _statsFs.readFileSync(`${thermalDir}/${zone}/type`, "utf8").trim();
+          if (type === "x86_pkg_temp") {
+            _cpuThermalPath = `${thermalDir}/${zone}/temp`;
+            console.log(`🌡️  System stats: CPU thermal zone = ${zone} (${type})`);
+            return _cpuThermalPath;
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+    _cpuThermalPath = "/sys/class/thermal/thermal_zone0/temp"; // fallback
+    return _cpuThermalPath;
+  }
+
+  // Retain previous RAPL energy reading so we can compute Watts = ΔEnergy / ΔTime.
+  let _raplPrevUj   = null;
+  let _raplPrevTime = null;
+
+  // eslint-disable-next-line no-inner-declarations
+  function _readSystemStats() {
+    // CPU temperature (millidegrees → °C)
+    let cpuTempC = null;
+    try {
+      cpuTempC = Math.round(
+        parseInt(_statsFs.readFileSync(_findCpuThermalPath(), "utf8").trim(), 10) / 1000
+      );
+    } catch (_) {}
+
+    // RAM (bytes → GB, 1 decimal place)
+    const total = _statsOs.totalmem();
+    const free  = _statsOs.freemem();
+    const ramUsedGb  = parseFloat(((total - free) / 1_073_741_824).toFixed(1));
+    const ramTotalGb = parseFloat((total            / 1_073_741_824).toFixed(1));
+
+    // RAPL power (µJ counter delta → Watts)
+    let powerW = null;
+    try {
+      const uj  = parseInt(_statsFs.readFileSync(RAPL_ENERGY_PATH, "utf8").trim(), 10);
+      const now = Date.now();
+      if (_raplPrevUj !== null && uj >= _raplPrevUj) {
+        const deltaSec = (now - _raplPrevTime) / 1000;
+        powerW = Math.round((uj - _raplPrevUj) / 1_000_000 / deltaSec);
+      }
+      _raplPrevUj   = uj;
+      _raplPrevTime = now;
+    } catch (_) {}
+
+    return { cpuTempC, ramUsedGb, ramTotalGb, powerW };
+  }
+
+  // Make _readSystemStats available to the /api/system/stats REST endpoint above.
+  global._readSystemStats = _readSystemStats;
+
+  // Prime RAPL state now; first broadcast (3 s later) will have a valid power figure.
+  _readSystemStats();
+  setInterval(() => { io.emit("systemStats", _readSystemStats()); }, 3000);
+}
 
 // ── Global error safety net ───────────────────────────────────────────────
 // In Node.js v15+ an unhandled Promise rejection crashes the process.
