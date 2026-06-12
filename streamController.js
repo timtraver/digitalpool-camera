@@ -191,7 +191,6 @@ class StreamController extends EventEmitter {
    * Rockchip RK3588      → mpph264enc      (Rockchip MPP GStreamer plugin)
    * Intel N97 / iGPU    → vaapih264enc    (gstreamer1.0-vaapi)
    * NVIDIA Jetson        → nvv4l2h264enc
-   * Allwinner A733 (OMX) → omxh264videoenc (libgstreamer-openmax-allwinner)
    * Software             → x264enc
    */
   async _autoDetectEncoder() {
@@ -385,8 +384,7 @@ class StreamController extends EventEmitter {
 
       // Kill any processes holding ALSA audio capture devices.
       // Required when audio is enabled: a stale ffmpeg from a previous hybrid-mode
-      // run may still hold plughw:X,0 open, causing "Device is being used by another
-      // application" when GStreamer's alsasrc (native OMX path) tries to open it.
+      // run may still hold plughw:X,0 open.
       if (this.streamConfig.audioEnabled) {
         await this._killAudioDeviceProcesses();
       }
@@ -546,38 +544,16 @@ class StreamController extends EventEmitter {
       //   frame_number (setts variable N) is an exact counter, every frame gets an
       //   independent, correctly-spaced DTS — no relative bumping, no accumulation.
       // When gstArgs uses the compositor script the encoder is always scriptArgs[28]
-      // (arg 29 in the shell/Python script, 0-based in the JS array).
-      // Use this as the authoritative encoder value for useFfmpegAudio so it always
-      // matches what the Python script actually received — even if startStream's
-      // config-merge overwrote this.streamConfig.encoder with a stale value from the UI.
       // arg 29 (0-indexed) is the encoder passed to gst-overlay-pipeline.py — see _buildPNGOverlayPipeline().
-      // arg 28 is the preview RTMP path; reading the wrong index caused the OMX guard to always fail.
       const _gstEncoder = (gstArgs.useCompositorScript && gstArgs.scriptArgs && gstArgs.scriptArgs.length > 29)
         ? (gstArgs.scriptArgs[29] || this.streamConfig.encoder || "mpph264enc")
         : (this.streamConfig.encoder || "mpph264enc");
 
-      // arg 5 (0-indexed) is the protocol as seen by the Python/shell script.
-      // _buildPNGOverlayPipeline() translates "rtsp" → "rtmp" (RTSP is served via
-      // local MediaMTX; the script always pushes RTMP to it).  Use the script's
-      // protocol here so the OMX guard fires correctly for both "rtmp" and "rtsp".
-      const _scriptProtocol = (gstArgs.useCompositorScript && gstArgs.scriptArgs && gstArgs.scriptArgs.length > 5)
-        ? (gstArgs.scriptArgs[5] || this.streamConfig.protocol || "rtmp")
-        : (this.streamConfig.protocol === "rtsp" ? "rtmp" : (this.streamConfig.protocol || "rtmp"));
-
-      console.log(`🔧 [Cam${this.streamId}] useFfmpegAudio check: protocol=${this.streamConfig.protocol}, scriptProtocol=${_scriptProtocol}, encoder(config)=${this.streamConfig.encoder}, encoder(gst)=${_gstEncoder}, audioEnabled=${this.streamConfig.audioEnabled}, audioSource=${this.streamConfig.audioSource}, inputType=${this.inputSource.type}`);
+      console.log(`🔧 [Cam${this.streamId}] useFfmpegAudio check: protocol=${this.streamConfig.protocol}, encoder(gst)=${_gstEncoder}, audioEnabled=${this.streamConfig.audioEnabled}, audioSource=${this.streamConfig.audioSource}, inputType=${this.inputSource.type}`);
 
       const useFfmpegAudio =
         (this.streamConfig.protocol === "srt" || this.streamConfig.protocol === "rtmp" || this.streamConfig.protocol === "rtsp") &&
         this.streamConfig.audioEnabled &&
-        // OMX encoder + RTMP: GStreamer handles audio natively via flvmux + alsasrc.
-        // The mpegtsmux → pipe → ffmpeg hybrid path fails for OMX because the encoder
-        // outputs parameter-less warm-up frames that cause ffmpeg to exit with
-        // "[flv] dimensions not set" before the first real IDR arrives.
-        // gst-overlay-pipeline.py routes OMX+RTMP+audio directly to flvmux+rtmpsink.
-        // Use _gstEncoder (derived from the actual scriptArgs) and _scriptProtocol
-        // (which maps "rtsp" → "rtmp" to match what the Python script receives)
-        // so the guard fires correctly for both RTMP and RTSP user-facing protocols.
-        !(_scriptProtocol === "rtmp" && _gstEncoder === "omxh264videoenc") &&
         // When audioSource === "external" the user has chosen a plugged-in ALSA
         // device regardless of what the video input type is — enable the hybrid
         // ffmpeg audio path for all input types in that case.
@@ -720,17 +696,6 @@ class StreamController extends EventEmitter {
       if (useFfmpegAudio) {
         const protocol = this.streamConfig.protocol;
 
-        // Safety guard: if the Python script is in OMX+RTMP native mode it already
-        // handles ALSA via alsasrc internally.  Spawning ffmpeg here would open the
-        // same ALSA device, causing "Device is busy" when GStreamer's alsasrc tries.
-        // This guard fires when useFfmpegAudio was incorrectly true (e.g. due to a
-        // stale this.streamConfig.encoder after a config-merge from the UI).
-        if (_scriptProtocol === "rtmp" && _gstEncoder === "omxh264videoenc") {
-          console.log(`⚡ [Cam${this.streamId}] OMX+RTMP native ALSA mode (scriptProtocol=${_scriptProtocol}) — skipping ffmpeg audio mux (GStreamer handles audio internally)`);
-          // Fall through to the !useFfmpegAudio block below which declares the stream live.
-          // eslint-disable-next-line no-constant-condition
-        } else {
-
         console.log(`📡 Hybrid mode — ffmpeg muxing ALSA audio + GStreamer video → ${protocol.toUpperCase()}`);
 
         // Re-use results from the pre-spawn ALSA probe that ran before GStreamer
@@ -824,18 +789,10 @@ class StreamController extends EventEmitter {
           //     Uses the identity max(a,b) = (a+b+|a-b|)/2 to avoid commas inside the
           //     BSF option string (ffmpeg's BSF parser treats commas as chain delimiters).
           ...(protocol === "rtmp" || protocol === "rtsp"
-            ? this.streamConfig.encoder === "omxh264videoenc"
-              // Allwinner OMX: 'setts' BSF requires FFmpeg ≥ 4.4; Debian Bullseye ships
-              // 4.3.x so the BSF chain fails with "Bitstream filter not found".
-              // h264parse uses config-interval=-1 for OMX so SPS/PPS are always inline —
-              // filter_units (strip inline SPS/PPS) is therefore not needed either.
-              // Skip -bsf:v entirely for OMX; address any DTS monotonicity issues if
-              // they appear in practice.
-              ? []
-              : ["-bsf:v",
-                 "filter_units=remove_types=7-8,setts=" +
-                 "dts=(DTS+PREV_OUTDTS+100+abs(DTS-PREV_OUTDTS-100))/2:" +
-                 "pts=(PTS+PREV_OUTPTS+100+abs(PTS-PREV_OUTPTS-100))/2"]
+            ? ["-bsf:v",
+               "filter_units=remove_types=7-8,setts=" +
+               "dts=(DTS+PREV_OUTDTS+100+abs(DTS-PREV_OUTDTS-100))/2:" +
+               "pts=(PTS+PREV_OUTPTS+100+abs(PTS-PREV_OUTPTS-100))/2"]
             : []),
           "-c:a", "aac",
           "-b:a", "128k",
@@ -1070,19 +1027,9 @@ class StreamController extends EventEmitter {
             }, 2000);
           }
         });
-        } // closes else (non-OMX-native ffmpeg hybrid path)
       }
 
-      // Declare the stream live for:
-      //   a) Pure native GStreamer paths (useFfmpegAudio is false)
-      //   b) OMX+RTMP native ALSA mode where useFfmpegAudio was true but ffmpeg
-      //      was skipped (the safety guard above detected the OMX native condition).
-      //      In that case the Python script manages RTMP directly — declare live now.
-      const _omxNativeSkippedFfmpeg =
-        useFfmpegAudio &&
-        _scriptProtocol === "rtmp" &&
-        _gstEncoder === "omxh264videoenc";
-      if (!useFfmpegAudio || _omxNativeSkippedFfmpeg) {
+      if (!useFfmpegAudio) {
         // Non-hybrid path: GStreamer handles the sink directly — declare live immediately.
         this.isStreaming = true;
         this.emit("started");
@@ -1246,10 +1193,7 @@ class StreamController extends EventEmitter {
   /**
    * Kill any processes holding ALSA audio capture devices open.
    *
-   * When transitioning from the ffmpeg hybrid path to native GStreamer ALSA audio
-   * (OMX+RTMP), a stale ffmpeg process may still hold plughw:X,0 open.
-   * GStreamer's alsasrc will fail with "Device is being used by another application"
-   * unless those processes are cleared first.
+   * A stale ffmpeg from a previous hybrid-mode run may still hold plughw:X,0 open.
    *
    * Strategy:
    *   1. pkill ffmpeg — the most common holder; exits immediately on SIGKILL.
@@ -1942,31 +1886,6 @@ class StreamController extends EventEmitter {
         `config-interval=${protocol === "rtmp" && this.streamConfig.audioEnabled ? "0" : "-1"}`,
         "!",
       );
-    } else if (encoder === "omxh264videoenc") {
-      // Allwinner A733 / Cedar VPU — hardware encoder (omxh264videoenc) is NOT used.
-      // Field testing confirmed the Cedar VPU gst-omx driver accepts only NV12 input
-      // but silently discards the UV chroma plane → greyscale H.264 output regardless
-      // of bitrate settings.  NV21 and I420 both cause not-negotiated errors.
-      // Fix: use x264enc (software H.264).  The A733's 4× Cortex-A55 @ 1.8 GHz
-      // handles 720p/1080p@30fps ultrafast with minimal CPU load.
-      // bitrate is in kbps for x264enc (not bps like omxh264videoenc).
-      const bitrate_kbps = Math.round(bitrate / 1000);
-      pipeline.push(
-        "videoconvert",
-        "!",
-        "video/x-raw,format=I420",
-        "!",
-        "x264enc",
-        `bitrate=${bitrate_kbps}`,
-        "speed-preset=ultrafast",
-        "tune=zerolatency",
-        "key-int-max=30",
-        "threads=0",
-        "!",
-        "h264parse",
-        "config-interval=-1",
-        "!",
-      );
     }
 
     // Add another tee after encoding to split H.264 for output and preview
@@ -2142,13 +2061,6 @@ class StreamController extends EventEmitter {
         ? [
             "videoconvert", "!",
             "vaapih264enc", "bitrate=500", "keyframe-period=15", "!",
-          ]
-        : encoder === "omxh264videoenc"
-        ? [
-            // OMX cold-start delay kills the RTMP preview connection — use x264enc
-            // for the preview branch exactly as buildIdlePreviewGstArgs does.
-            "videoconvert", "!", "video/x-raw,format=I420", "!",
-            "x264enc", "bitrate=500", "speed-preset=ultrafast", "tune=zerolatency", "key-int-max=15", "!",
           ]
         : encoder === "x264enc"
         ? [
@@ -2380,31 +2292,19 @@ class StreamController extends EventEmitter {
                     message: "NVIDIA hardware encoder available",
                   });
                 } else {
-                  // Try omxh264videoenc (Allwinner OpenMAX — Radxa Cubie A7S / A733)
-                  const testOmx = spawn("gst-inspect-1.0", ["omxh264videoenc"]);
-                  testOmx.on("close", (omxCode) => {
-                    if (omxCode === 0) {
+                  // Try x264enc (software fallback)
+                  const testX264 = spawn("gst-inspect-1.0", ["x264enc"]);
+                  testX264.on("close", (x264Code) => {
+                    if (x264Code === 0) {
                       resolve({
                         success: true,
-                        encoder: "omxh264videoenc",
-                        message: "Allwinner OpenMAX hardware encoder available",
+                        encoder: "x264enc",
+                        message: "x264 software encoder available",
                       });
                     } else {
-                      // Try x264enc (software fallback)
-                      const testX264 = spawn("gst-inspect-1.0", ["x264enc"]);
-                      testX264.on("close", (x264Code) => {
-                        if (x264Code === 0) {
-                          resolve({
-                            success: true,
-                            encoder: "x264enc",
-                            message: "x264 software encoder available",
-                          });
-                        } else {
-                          resolve({
-                            success: false,
-                            error: "No encoder found (tried mpph264enc, vaapih264enc, nvv4l2h264enc, omxh264videoenc, x264enc)",
-                          });
-                        }
+                      resolve({
+                        success: false,
+                        error: "No encoder found (tried mpph264enc, vaapih264enc, nvv4l2h264enc, x264enc)",
                       });
                     }
                   });

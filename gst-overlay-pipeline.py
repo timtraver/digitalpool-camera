@@ -198,55 +198,7 @@ def main():
             audio_mux_target = 'mux.'
     elif protocol == "rtmp":
         rtmp_url = destination if destination else "rtmp://localhost:1935/stream"
-        if audio_device and encoder == 'omxh264videoenc':
-            # OMX native mode: GStreamer handles RTMP + ALSA audio directly via flvmux.
-            #
-            # The mpegtsmux → pipe → ffmpeg hybrid path is NOT viable for the Allwinner
-            # OMX encoder because:
-            #   1. omxh264videoenc outputs "garbage" frames during its warm-up phase that
-            #      carry no SPS/PPS headers — ffmpeg probes those frames and fails with
-            #      "[flv] dimensions not set" before the first real IDR ever arrives.
-            #   2. Increasing probesize/analyzeduration only delays the failure; the
-            #      root cause is that the OMX encoder simply does not emit headers until
-            #      the hardware has fully warmed up (several seconds after PLAYING).
-            #
-            # With flvmux + stream-format=avc the SPS/PPS are carried in the caps as
-            # codec_data (the AVC Decoder Configuration Record).  flvmux writes a proper
-            # AVC Sequence Header from those caps before writing any frame — no inline
-            # SPS/PPS injection into the bitstream is required, so the warm-up frames
-            # do not cause a failure.
-            print(f"🎤 RTMP OMX native mode — GStreamer ALSA → voaacenc → flvmux (no ffmpeg)", file=sys.stderr)
-            # Use explicit pad request "! mux.video" instead of auto-link "! flvmux".
-            #
-            # parse_launch's auto-link (!) propagates h264parse's src-pad caps
-            # (stream-format=avc, alignment=au) through the queue and intersects them
-            # against flvmux's pad template.  On GStreamer 1.18 the flvmux template
-            # declares only "video/x-h264, stream-format=avc" — no alignment field.
-            # GStreamer treats the un-declared field as a restriction, so the
-            # intersection is empty and parse_launch fails with "queue can't handle caps".
-            #
-            # With "! mux.video" parse_launch directly requests the named pad on flvmux
-            # without performing a template-caps intersection, sidestepping the bug.
-            # flvmux (name=mux) is defined as a separate chain in the same pipeline
-            # string — parse_launch resolves the forward reference in its second pass.
-            # Use fakesink placeholders during parse_launch for BOTH the video
-            # and audio connections to flvmux.
-            #
-            # GStreamer 1.18 parse_launch rejects ANY link to flvmux when the
-            # upstream queue carries stream-format=avc,alignment=au — even with
-            # explicit pad requests (! mux.video) or forward-declared named elements.
-            # Additionally, "! mux.audio" can fail to resolve the request-pad
-            # template "audio_%u" correctly on this build, causing parse_launch to
-            # fall back to auto-linking the audio queue to the video pad (producing
-            # the misleading error "queue can't handle caps video/x-h264").
-            #
-            # Solution: fakesink accepts all caps → parse_launch succeeds for both
-            # branches.  After parse_launch we retrieve mainvidq/mainaudq by name,
-            # remove both placeholder sinks, and manually link both queues to
-            # flvmux's request pads via get_pad_template + request_pad.
-            output_sink = f'! fakesink name=vidplaceholder sync=false async=false '
-            audio_mux_target = 'fakesink name=audplaceholder sync=false async=false'
-        elif audio_device:
+        if audio_device:
             # Hybrid mode: GStreamer outputs VIDEO-ONLY MPEG-TS to stdout (fdsink fd=1).
             # ffmpeg (spawned by Node.js) captures ALSA audio and muxes it with the
             # incoming video before pushing to the RTMP server as FLV.
@@ -358,28 +310,7 @@ def main():
             f'{text_overlay}'
             f'{timestamp_overlay}'
         )
-        # Allwinner Cedar VPU (OMX) — hardware encoder is NOT used for the main
-        # stream.  gst-inspect + field testing showed:
-        #   • Cedar VPU only supports NV12 input (I420 and NV21 both cause
-        #     not-negotiated errors at pipeline start).
-        #   • NV12 IS accepted but the encoder only reads the Y plane —
-        #     UV chroma is silently discarded → greyscale H.264 output.
-        #     This is a confirmed Cedar VE gst-omx driver bug on the A733.
-        #   • control-rate=constant doesn't exist on this build (only disable
-        #     and variable); target-bitrate is honoured only with variable mode.
-        # Fix: use x264enc (software H.264) for the main encode chain.
-        #   The A733's 4× Cortex-A55 @ 1.8 GHz handles 720p@30fps ultrafast
-        #   trivially (~9% of CPU budget per core).  x264enc correctly encodes
-        #   full-colour I420 and honours the bitrate in kbps.
-        #   The existing named-element pipeline (omxparser, mainvidq, flvmux)
-        #   and the codec_data injector probes all work unchanged with x264enc:
-        #   h264parse (omxparser) sets codec_data naturally on the first IDR,
-        #   so the CAPS probe detects it immediately and the warm-up guard
-        #   passes the first IDR through with no extra delay.
-        if encoder == 'omxh264videoenc':
-            encode_convert = '! videoconvert ! video/x-raw,format=I420 '
-        else:
-            encode_convert = f'! videoconvert ! video/x-raw,format=NV12 '
+        encode_convert = f'! videoconvert ! video/x-raw,format=NV12 '
     else:
         overlay_section = ''
         encode_convert = ''
@@ -510,63 +441,29 @@ def main():
              if encoder == 'mpph264enc' else
              f'! vaapih264enc bitrate={bitrate_kbps} keyframe-period=15 '
              if encoder == 'vaapih264enc' else
-             # OMX (Allwinner): h264parse always comes BEFORE the stream-format cap filter.
-             # The OMX encoder outputs SPS/PPS as GStreamer caps (codec_data).  h264parse
-             # reads those caps and passes SPS/PPS downstream:
-             #   • flvmux path (RTMP + native ALSA): stream-format=avc — SPS/PPS live in
-             #     codec_data caps; flvmux writes the AVC Decoder Configuration Record
-             #     before any frame.  No inline injection needed; warm-up garbage frames
-             #     do NOT cause "dimensions not set" because flvmux reads caps, not bitstream.
-             #   • mpegtsmux path (RTMP no-audio or SRT): stream-format=byte-stream with
-             #     config-interval=-1 injects SPS+PPS inline before every IDR so the TS
-             #     PMT always contains the parameters (used by ffmpeg in SRT hybrid mode).
-             # Allwinner (omxh264videoenc detected): use x264enc software encoder.
-             # omxh264videoenc is kept as the *detection* signal so the JS audio
-             # routing (native flvmux + alsasrc, no ffmpeg hybrid) remains active,
-             # but the actual encode element is replaced with x264enc which:
-             #   • correctly encodes full-colour I420 frames
-             #   • honours target bitrate (in kbps) via VBR
-             #   • emits proper codec_data via h264parse on the very first IDR
-             #     → codec_data injector probe fires immediately, no startup delay
-             # threads=0 lets x264enc auto-select based on CPU topology;
-             # key-int-max=30 = one IDR/second at 30fps — same as the old OMX setting.
-             (f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast '
-              f'tune=zerolatency key-int-max=30 threads=0 '
-              + ('! video/x-h264,stream-format=byte-stream '
-                 '! h264parse name=omxparser config-interval=-1 '
-                 '! video/x-h264,stream-format=avc '
-                 if protocol == 'rtmp' and audio_device else
-                 '! h264parse config-interval=-1 '
-                 '! video/x-h264,stream-format=byte-stream '))
-             if encoder == 'omxh264videoenc' else
              f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
-            + ('' if encoder == 'omxh264videoenc' else
-               # Non-OMX encoders: cap filter then h264parse.
-               # RTMP+audio hybrid: config-interval=0 — SPS/PPS go only into the MPEG-TS PMT.
-               # ffmpeg reads them once at startup and writes ONE AVC sequence header in FLV.
-               # config-interval=0 is only needed for the ALSA hybrid mode where ffmpeg
-               # reads the MPEG-TS stdout.  In that path a DTS monotonicity issue arises
-               # because ffmpeg re-emits inline SPS+PPS+IDR as two buffers with the same
-               # DTS, causing MediaMTX to drop the connection.
-               # For pure-GStreamer paths (NDI, RTSP audio, video-only RTMP), the encoder
-               # uses header-mode=each-idr which already inlines SPS+PPS before every IDR;
-               # keeping config-interval=-1 lets h264parse pass them through as-is so
-               # flvmux always sees the decoder configuration record alongside the keyframe.
-               f'! video/x-h264,stream-format=byte-stream '
-               f'! h264parse config-interval={"0" if protocol == "rtmp" and audio_device else "-1"} ')
+            # Cap filter then h264parse.
+            # RTMP+audio hybrid: config-interval=0 — SPS/PPS go only into the MPEG-TS PMT.
+            # ffmpeg reads them once at startup and writes ONE AVC sequence header in FLV.
+            # config-interval=0 is only needed for the ALSA hybrid mode where ffmpeg
+            # reads the MPEG-TS stdout.  In that path a DTS monotonicity issue arises
+            # because ffmpeg re-emits inline SPS+PPS+IDR as two buffers with the same
+            # DTS, causing MediaMTX to drop the connection.
+            # For pure-GStreamer paths (NDI, RTSP audio, video-only RTMP), the encoder
+            # uses header-mode=each-idr which already inlines SPS+PPS before every IDR;
+            # keeping config-interval=-1 lets h264parse pass them through as-is so
+            # flvmux always sees the decoder configuration record alongside the keyframe.
+            + f'! video/x-h264,stream-format=byte-stream '
+              f'! h264parse config-interval={"0" if protocol == "rtmp" and audio_device else "-1"} '
         )
         # Thread boundary before mux to decouple encoder from network I/O.
-        # flvmux paths (RTMP video-only, NDI, RTSP, OMX native ALSA): 2 s non-leaky queue
+        # flvmux paths (RTMP video-only, NDI, RTSP): 2 s non-leaky queue
         # because flvmux requires strict DTS monotonicity — dropping frames would produce
         # a DTS gap that causes MediaMTX to close the connection.
-        # mpegtsmux paths (SRT, or RTMP+ALSA hybrid with non-OMX encoders): 500 ms leaky
+        # mpegtsmux paths (SRT, or RTMP+ALSA hybrid): 500 ms leaky
         # queue is safe because mpegtsmux has only one video input and never stalls on audio.
-        # OMX native RTMP path: name the queue so we can retrieve it by name
-        # after parse_launch and manually relink it to flvmux's video pad.
-        + (f'! queue name=mainvidq max-size-buffers=0 max-size-time=2000000000 max-size-bytes=0 '
-           if encoder == 'omxh264videoenc' and protocol == 'rtmp' and audio_device else
-           f'! queue max-size-buffers=0 max-size-time=2000000000 max-size-bytes=0 '
-           if protocol == "rtmp" and (not audio_device or encoder == 'omxh264videoenc') else
+        + (f'! queue max-size-buffers=0 max-size-time=2000000000 max-size-bytes=0 '
+           if protocol == "rtmp" and not audio_device else
            f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream ')
         + output_sink +
         (
@@ -577,12 +474,7 @@ def main():
             f'audiomixer name=amix latency=200000000 '
             f'! voaacenc bitrate=128000 '
             f'! aacparse '
-            # OMX native RTMP: name the audio output queue so we can retrieve it
-            # by name after parse_launch and programmatically link it to
-            # flvmux's audio request pad (bypassing parse_launch caps checks).
-            + (f'! queue name=mainaudq max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream '
-               if encoder == 'omxh264videoenc' and protocol == 'rtmp' and audio_device else
-               f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream ')
+            + f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream '
             + f'! {audio_mux_target} '
             + f'alsasrc device={audio_device} provide-clock=false do-timestamp=true '
             f'buffer-time=50000 latency-time=25000 '
@@ -636,379 +528,21 @@ def main():
         f'! videoscale ! video/x-raw,width=640,height=360 '
         f'! videorate ! video/x-raw,framerate=15/1 '
         # Preview encoder: same hardware selection as the main stream encoder.
-        # Exception: omxh264videoenc (Allwinner) has a multi-second cold-start delay
-        # that causes librtmp to drop the RTMP connection before the first frame arrives.
-        # Fall back to x264enc for the preview branch so the WebRTC preview is always
-        # available immediately.  The main stream still uses OMX hardware encoding.
         + (f'! mpph264enc bps=800000 header-mode=each-idr gop=30 '
            if encoder == 'mpph264enc' else
            f'! vaapih264enc bitrate=800 keyframe-period=30 '
            if encoder == 'vaapih264enc' else
-           # OMX: fall back to x264enc.  Convert directly to I420 (x264enc input
-           # format) without an intermediate NV12 step.
-           f'! videoconvert ! video/x-raw,format=I420 '
-           f'! x264enc bitrate=800 speed-preset=ultrafast tune=zerolatency key-int-max=30 '
-           if encoder == 'omxh264videoenc' else
            f'! videoconvert ! video/x-raw,format=I420 '
            f'! x264enc bitrate=800 speed-preset=ultrafast tune=zerolatency key-int-max=30 ')
         + f'! h264parse config-interval=-1 '
-        # No explicit caps filter before the unnamed preview flvmux.
-        # Same issue as the main OMX path: on GStreamer 1.18 the flvmux template
-        # lacks an alignment field, so any capsfilter carrying alignment=au causes
-        # parse_launch to fail with "queue can't handle caps".  The preview branch
-        # uses auto-link (! flvmux) which is fine here because the preview flvmux
-        # is unnamed and only has one video input — no pad-request ambiguity.
         f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream '
         f'! flvmux streamable=true '
         f'! rtmpsink location={preview_rtmp_url} sync=false async=false'
     )
 
-    # ── OMX native RTMP: prepend flvmux definition ────────────────────────────
-    # GStreamer 1.18 parse_launch resolves named-element references strictly
-    # left-to-right.  "! mux.video" in the video chain fails unless the element
-    # named "mux" (flvmux) has already been created earlier in the string.
-    # We prepend the flvmux+rtmpsink chain so it appears before any mux.video /
-    # mux.audio reference; audio and video chains then attach to its request pads.
-    if encoder == 'omxh264videoenc' and protocol == 'rtmp' and audio_device:
-        pipeline_str = (
-            f'flvmux name=mux streamable=true '
-            f'! rtmpsink location={rtmp_url} sync=false async=false '
-            + pipeline_str
-        )
-
     print(f"\nPipeline: {pipeline_str}\n", file=sys.stderr)
 
     pipeline = Gst.parse_launch(pipeline_str)
-
-    # ── OMX native RTMP: relink in PAUSED + warm-up DROP probes ──────────────
-    # Relink must happen in PAUSED state (before PLAYING) so that GStreamer
-    # negotiates caps against pad *templates* rather than against the current
-    # (runtime) caps.  Once the pipeline is PLAYING, mainvidq.src carries
-    # stream-format=avc,alignment=au — GStreamer 1.18's flvmux accept_caps()
-    # rejects alignment=au, so any link attempted during PLAYING returns
-    # GST_PAD_LINK_NOFORMAT.  Relinking in PAUSED avoids this entirely.
-    #
-    # After the relink, the OMX encoder emits warm-up frames immediately when
-    # the pipeline enters PLAYING.  Those frames arrive before h264parse has
-    # extracted SPS/PPS and placed them in the output caps as codec_data.
-    # Without codec_data, flvmux cannot write a valid AVC Decoder Configuration
-    # Record — MediaMTX rejects the malformed FLV tag ("Could not write to resource").
-    #
-    # Fix: install BUFFER DROP probes on both mainvidq.src and mainaudq.src
-    # right after the relink.  The probes discard all buffers until the video
-    # probe detects the first IDR frame (no DELTA_UNIT flag).
-    # Key insight: CAPS events (carrying codec_data) flow in-band with buffers
-    # but are NOT intercepted by BUFFER probes.  So h264parse's CAPS event
-    # (sent immediately before the IDR buffer) reaches flvmux unimpeded.
-    # By the time the IDR buffer itself passes the probe, flvmux already has
-    # codec_data and can write a valid AVC sequence header → MediaMTX happy.
-    if encoder == 'omxh264videoenc' and protocol == 'rtmp' and audio_device:
-        mainvidq = pipeline.get_by_name("mainvidq")
-        mainaudq = pipeline.get_by_name("mainaudq")
-        vidph    = pipeline.get_by_name("vidplaceholder")
-        audph    = pipeline.get_by_name("audplaceholder")
-        mux_el   = pipeline.get_by_name("mux")
-        if not mainvidq or not mainaudq or not mux_el:
-            print("❌ OMX relink: mainvidq, mainaudq, or mux element not found in pipeline",
-                  file=sys.stderr)
-            sys.exit(1)
-
-        # ── video ──────────────────────────────────────────────────────────
-        q_src = mainvidq.get_static_pad("src")
-        if vidph:
-            q_src.unlink(vidph.get_static_pad("sink"))
-            pipeline.remove(vidph)
-        # GStreamer 1.18 flvmux request-pad template is "video_%u".
-        # Try "video_0" (explicit) then fall back to the template API.
-        video_pad = mux_el.get_request_pad("video_0")
-        if not video_pad:
-            video_pad = mux_el.get_request_pad("video")
-        if not video_pad:
-            vtmpl = mux_el.get_pad_template("video_%u")
-            if vtmpl:
-                video_pad = mux_el.request_pad(vtmpl, None, None)
-        if not video_pad:
-            print("❌ OMX relink: flvmux has no 'video' request pad", file=sys.stderr)
-            sys.exit(1)
-        link_ret = q_src.link(video_pad)
-        if link_ret != Gst.PadLinkReturn.OK:
-            print(f"❌ OMX relink: video pad link returned {link_ret}", file=sys.stderr)
-            sys.exit(1)
-        print("✅ OMX relink: mainvidq.src → flvmux.video linked successfully", file=sys.stderr)
-
-        # ── audio ──────────────────────────────────────────────────────────
-        a_src = mainaudq.get_static_pad("src")
-        if audph:
-            a_src.unlink(audph.get_static_pad("sink"))
-            pipeline.remove(audph)
-        # GStreamer 1.18 flvmux request-pad template is "audio_%u".
-        audio_pad = mux_el.get_request_pad("audio_0")
-        if not audio_pad:
-            audio_pad = mux_el.get_request_pad("audio")
-        if not audio_pad:
-            atmpl = mux_el.get_pad_template("audio_%u")
-            if atmpl:
-                audio_pad = mux_el.request_pad(atmpl, None, None)
-        if not audio_pad:
-            print("❌ OMX relink: flvmux has no 'audio' request pad", file=sys.stderr)
-            sys.exit(1)
-        link_ret = a_src.link(audio_pad)
-        if link_ret != Gst.PadLinkReturn.OK:
-            print(f"❌ OMX relink: audio pad link returned {link_ret}", file=sys.stderr)
-            sys.exit(1)
-        print("✅ OMX relink: mainaudq.src → flvmux.audio linked successfully", file=sys.stderr)
-
-        # ── warm-up DROP probes ────────────────────────────────────────────
-        # Drop all buffers on both pads until the video probe sees the first IDR
-        # that also carries valid codec_data (SPS+PPS) in the current pad caps.
-        #
-        # OMX warm-up IDR frames are "headerless" — they carry no SPS/PPS NALUs,
-        # so h264parse cannot extract codec_data from them.  Without codec_data,
-        # flvmux writes an empty AVC Decoder Configuration Record.  MediaMTX
-        # receives the malformed sequence header and closes the connection, causing
-        # the "Failed to write data" error ~3 s later.
-        #
-        # codec_data detection strategy:
-        #   An EVENT_DOWNSTREAM probe on mainvidq.src watches every CAPS event and
-        #   sets _codec_data_seen the moment codec_data (SPS+PPS) arrives there.
-        #   This is race-free: the CAPS event is serialised through the queue ahead
-        #   of the IDR buffer, so by the time our BUFFER probe fires on the IDR,
-        #   flvmux has already received the CAPS event carrying codec_data and can
-        #   write a valid AVC Decoder Configuration Record before the first frame.
-        #
-        #   Using pad.get_current_caps() in the buffer probe is unreliable on some
-        #   GStreamer 1.18 builds because the sticky-cap update and the probe
-        #   callback share the same streaming thread but the ordering guarantee only
-        #   holds for the queue's output thread — not for the probe invocation itself.
-        #   The EVENT probe avoids this ambiguity entirely.
-        _omx_warmup_done    = [False]
-        _codec_data_seen    = [False]   # set by the CAPS event probe
-
-        def _omx_caps_event_probe(pad, info):
-            """EVENT probe — fires on every downstream event; detects codec_data."""
-            event = info.get_event()
-            if event.type != Gst.EventType.CAPS:
-                return Gst.PadProbeReturn.OK   # not a CAPS event — pass through
-            caps = event.parse_caps()
-            if caps and caps.get_size() > 0:
-                try:
-                    val = caps.get_structure(0).get_value("codec_data")
-                    if val is not None:
-                        if not _codec_data_seen[0]:
-                            print("📦 OMX: codec_data received in CAPS event — "
-                                  "flvmux can now write AVC sequence header",
-                                  file=sys.stderr)
-                        _codec_data_seen[0] = True
-                    else:
-                        # Log every caps-without-codec_data so we can diagnose
-                        # how many warm-up cycles the OMX encoder needs.
-                        caps_str = caps.to_string()
-                        print(f"⏳ OMX: CAPS without codec_data (still warming up): {caps_str}",
-                              file=sys.stderr)
-                except Exception as exc:
-                    print(f"⚠️  OMX caps probe error: {exc}", file=sys.stderr)
-            return Gst.PadProbeReturn.OK   # never block events
-
-        def _omx_audio_warmup_drop(pad, info):
-            if _omx_warmup_done[0]:
-                return Gst.PadProbeReturn.REMOVE  # warm-up over — remove self
-            return Gst.PadProbeReturn.DROP
-
-        def _omx_video_warmup_drop(pad, info):
-            if _omx_warmup_done[0]:
-                return Gst.PadProbeReturn.REMOVE
-            buf = info.get_buffer()
-            if not buf:
-                return Gst.PadProbeReturn.DROP
-            # Cedar VPU has INVERTED DELTA_UNIT: IDR is marked as DELTA_UNIT, P-frames
-            # are not.  Do NOT use DELTA_UNIT — inspect NALU type bytes directly.
-            # h264parse output is stream-format=avc (4-byte length-prefix per NALU).
-            # Walk ALL NALUs in the access unit: h264parse with config-interval=-1
-            # may inline SPS(7)+PPS(8) before the IDR(5) in the same buffer, so
-            # we cannot just check bytes[4] — we must scan until we find type 5.
-            buf_size = buf.get_size()
-            raw = buf.extract_dup(0, min(buf_size, 256))
-            is_idr = False
-            pos = 0
-            while pos + 5 <= len(raw):
-                nalu_len = int.from_bytes(raw[pos:pos+4], 'big')
-                if nalu_len == 0 or pos + 4 + nalu_len > buf_size:
-                    break
-                nalu_type = raw[pos + 4] & 0x1f
-                if nalu_type == 5:
-                    is_idr = True
-                    break
-                pos += 4 + nalu_len
-            if not is_idr:
-                return Gst.PadProbeReturn.DROP  # non-IDR frame — discard
-            if not _codec_data_seen[0]:
-                # IDR arrived but codec_data hasn't been injected yet.
-                # Keep dropping — the next IDR will be checked again.
-                print("⚠️ OMX: IDR (type 5) without codec_data — still dropping",
-                      file=sys.stderr)
-                return Gst.PadProbeReturn.DROP
-            # First IDR after codec_data — let it through.
-            _omx_warmup_done[0] = True  # audio probe removes itself on next call
-            print("🔑 OMX: first IDR after codec_data — stream is live", file=sys.stderr)
-            return Gst.PadProbeReturn.REMOVE  # pass IDR through and remove self
-
-        # Event probe must be installed first so it fires before any buffer probe.
-        mainvidq.get_static_pad("src").add_probe(
-            Gst.PadProbeType.EVENT_DOWNSTREAM, _omx_caps_event_probe)
-        mainaudq.get_static_pad("src").add_probe(
-            Gst.PadProbeType.BUFFER, _omx_audio_warmup_drop)
-        mainvidq.get_static_pad("src").add_probe(
-            Gst.PadProbeType.BUFFER, _omx_video_warmup_drop)
-        print("⏳ OMX warm-up: CAPS+BUFFER probes on mainvidq, BUFFER probe on mainaudq",
-              file=sys.stderr)
-
-        # ── OMX codec_data injector ──────────────────────────────────────────
-        #
-        # Root cause (confirmed by hex diagnostic):
-        #   The Cedar VPU gst-omx plugin has INVERTED GstBufferFlags.DELTA_UNIT:
-        #     • SPS+PPS parameter-set packets → marked DELTA_UNIT (non-keyframe)
-        #     • IDR frames                     → marked DELTA_UNIT (non-keyframe) ← BUG
-        #     • P-frames                       → NOT DELTA_UNIT (keyframe)        ← BUG
-        #   h264parse never sees a proper keyframe signal on the IDR buffer, so
-        #   it never emits a CAPS event with codec_data on its src pad.
-        #   Our warm-up drop probe's DELTA_UNIT check was also using the wrong bit.
-        #
-        # Fix — two-part:
-        #
-        # 1. Extract SPS+PPS from the very first parameter-set buffer (byte-stream
-        #    format, contains NALU types 7 and 8 separated by start codes).
-        #    Build the AVCDecoderConfigurationRecord (AVCC record) in Python and
-        #    push a new CAPS event with codec_data onto mainvidq.src via
-        #    GLib.idle_add (runs in the GLib main-loop thread, safe to call
-        #    push_event from there since the streaming thread does not hold the
-        #    pad lock during idle).
-        #
-        # 2. Fix the warm-up drop probe IDR detection: instead of checking
-        #    DELTA_UNIT (which is inverted), inspect the first NALU type byte in
-        #    the buffer payload.  h264parse outputs stream-format=avc (4-byte
-        #    length-prefix), so byte[4] & 0x1f gives the NALU type; type 5 = IDR.
-        omxparser = pipeline.get_by_name("omxparser")
-        if omxparser:
-            _inject_done = [False]   # set True once codec_data is injected
-
-            def _parse_bs_nalus(data):
-                """Walk a byte-stream buffer; return list of (nalu_type, start, end).
-                Trailing zero bytes that are leading-zero prefixes of a 4-byte start
-                code (00 00 00 01) are trimmed from each NALU's end boundary."""
-                results = []
-                i = 0
-                while i < len(data) - 3:
-                    if data[i:i+4] == b'\x00\x00\x00\x01':
-                        sc = 4
-                    elif data[i:i+3] == b'\x00\x00\x01':
-                        sc = 3
-                    else:
-                        i += 1
-                        continue
-                    nalu_start = i + sc
-                    # find end of this NALU (next 3-byte start code pattern or end of data)
-                    j = nalu_start + 1
-                    while j < len(data) - 2:
-                        if data[j:j+3] == b'\x00\x00\x01':
-                            break
-                        j += 1
-                    nalu_end = j if j < len(data) - 2 else len(data)
-                    # Trim trailing zero bytes: the leading 00 in 00 00 00 01 start
-                    # codes is not part of the NALU payload.
-                    while nalu_end > nalu_start + 1 and data[nalu_end - 1] == 0:
-                        nalu_end -= 1
-                    nt = data[nalu_start] & 0x1f if nalu_start < len(data) else -1
-                    results.append((nt, nalu_start, nalu_end))
-                    i = nalu_end
-                return results
-
-            def _build_avcc_record(sps_nalu, pps_nalu):
-                """Build AVCDecoderConfigurationRecord from raw NALU bytes (type byte included)."""
-                return bytes([
-                    0x01,               # configurationVersion
-                    sps_nalu[1],        # AVCProfileIndication
-                    sps_nalu[2],        # profile_compatibility
-                    sps_nalu[3],        # AVCLevelIndication
-                    0xFF,               # 6 reserved bits | lengthSizeMinusOne=3 (→ 4-byte)
-                    0xE1,               # 3 reserved bits | numSPS=1
-                    (len(sps_nalu) >> 8) & 0xFF,
-                    len(sps_nalu) & 0xFF,
-                ]) + bytes(sps_nalu) + bytes([
-                    0x01,               # numPPS=1
-                    (len(pps_nalu) >> 8) & 0xFF,
-                    len(pps_nalu) & 0xFF,
-                ]) + bytes(pps_nalu)
-
-            def _omx_inject_codec_data(pad, info):
-                """
-                Probe on omxparser.sink.
-                Fires on every input buffer; removes itself after injecting codec_data.
-                """
-                if _inject_done[0]:
-                    return Gst.PadProbeReturn.REMOVE
-                buf = info.get_buffer()
-                if not buf:
-                    return Gst.PadProbeReturn.OK
-                raw = buf.extract_dup(0, min(buf.get_size(), 512))
-
-                nalus = _parse_bs_nalus(raw)
-                sps = next((raw[s:e] for t, s, e in nalus if t == 7), None)
-                pps = next((raw[s:e] for t, s, e in nalus if t == 8), None)
-                if sps is None or pps is None:
-                    return Gst.PadProbeReturn.OK   # not a parameter-set buffer
-
-                avcc = _build_avcc_record(sps, pps)
-                avcc_hex = ''.join(f'{b:02x}' for b in avcc)
-                sps_hex  = ' '.join(f'{b:02x}' for b in sps)
-                pps_hex  = ' '.join(f'{b:02x}' for b in pps)
-                print(f"🔬 OMX: SPS={sps_hex}", file=sys.stderr)
-                print(f"🔬 OMX: PPS={pps_hex}", file=sys.stderr)
-                print(f"🔬 OMX: AVCC record={avcc_hex}", file=sys.stderr)
-                _inject_done[0] = True
-
-                # Schedule caps injection on GLib main loop (safe cross-thread).
-                def _push_codec_data_caps():
-                    try:
-                        src_pad = mainvidq.get_static_pad("src")
-                        cur_caps = src_pad.get_current_caps() or src_pad.get_allowed_caps()
-                        if cur_caps is None or cur_caps.is_empty():
-                            print("⚠️ OMX inject: mainvidq.src has no caps yet — retrying",
-                                  file=sys.stderr)
-                            return True   # retry on next idle
-                        cur_str = cur_caps.to_string()
-                        if 'codec_data' in cur_str:
-                            # Already has codec_data (h264parse caught up) — just signal
-                            _codec_data_seen[0] = True
-                            print("📦 OMX: codec_data already in caps — no injection needed",
-                                  file=sys.stderr)
-                            return False
-                        new_caps_str = cur_str + f', codec_data=(buffer){avcc_hex}'
-                        new_caps = Gst.Caps.from_string(new_caps_str)
-                        if new_caps and not new_caps.is_empty():
-                            src_pad.push_event(Gst.Event.new_caps(new_caps))
-                            _codec_data_seen[0] = True
-                            print("📦 OMX: codec_data injected into mainvidq.src caps",
-                                  file=sys.stderr)
-                        else:
-                            print(f"⚠️ OMX inject: failed to build caps from: {new_caps_str}",
-                                  file=sys.stderr)
-                    except Exception as exc:
-                        print(f"⚠️ OMX inject error: {exc}", file=sys.stderr)
-                    return False   # do not repeat
-
-                # Use PRIORITY_HIGH so the caps event is pushed before the
-                # next streaming-thread buffer reaches the warmup probe.
-                # Default idle priority (200) is too low: the probe can run,
-                # drop an IDR, and wait another full interval-intraframes
-                # frames before the caps event finally fires.
-                GLib.idle_add(_push_codec_data_caps,
-                              priority=GLib.PRIORITY_HIGH)
-                return Gst.PadProbeReturn.REMOVE   # we're done
-
-            omxparser.get_static_pad("sink").add_probe(
-                Gst.PadProbeType.BUFFER, _omx_inject_codec_data)
-            print("🔬 OMX codec_data injector probe installed on omxparser.sink",
-                  file=sys.stderr)
 
     # ── Programmatically disable element clock provision ───────────────────
     # v4l2src defaults to offering its USB-oscillator / kernel CLOCK_MONOTONIC
