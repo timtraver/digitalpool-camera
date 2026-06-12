@@ -358,17 +358,24 @@ def main():
             f'{text_overlay}'
             f'{timestamp_overlay}'
         )
-        # Allwinner Cedar VPU (OMX): feeding NV12 (semi-planar, interleaved UV)
-        # causes greyscale output regardless of whether the conversion goes
-        # BGRA→NV12 directly or BGRA→I420→NV12.  The Cedar VPU gst-omx plugin
-        # appears to only read the Y plane from NV12 buffers allocated by
-        # GStreamer's default system-memory allocator (the hardware normally
-        # expects ION/DMA memory with specific stride/alignment).
-        # Fix: feed I420 (fully planar, separate Y/U/V planes) directly to the
-        # encoder.  The Cedar OMX component lists I420 in its sink pad template
-        # and handles planar layout correctly from system memory.
+        # Allwinner Cedar VPU (OMX) colour fix:
+        #
+        # gst-inspect confirms the Cedar VPU ONLY supports 3 sink-pad formats
+        # (indices 0, 1, 2); I420 is NOT one of them and causes a hard
+        # not-negotiated error at pipeline start.
+        #
+        # NV12 (U-first interleaved chroma) is accepted by the plugin but
+        # produces greyscale output: the Cedar VE on A733 appears to internally
+        # expect V-before-U ordering (NV21) when GStreamer's system-memory
+        # allocator is used.  Feeding NV21 swaps the interleaved chroma bytes
+        # so the hardware reads the correct U/V channels → colour output.
+        #
+        # If NV21 is also not available in this build of libgstreamer-openmax,
+        # the pipeline will fall back to the first format the encoder advertises
+        # (NV12) via caps renegotiation; greyscale output would recur but the
+        # pipeline will not crash.
         if encoder == 'omxh264videoenc':
-            encode_convert = '! videoconvert ! video/x-raw,format=I420 '
+            encode_convert = '! videoconvert ! video/x-raw,format=NV21 '
         else:
             encode_convert = f'! videoconvert ! video/x-raw,format=NV12 '
     else:

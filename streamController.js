@@ -1944,15 +1944,25 @@ class StreamController extends EventEmitter {
       );
     } else if (encoder === "omxh264videoenc") {
       // Allwinner OpenMAX H.264 hardware encoder (Radxa Cubie A7S / A733)
+      // NV21 instead of NV12: gst-inspect confirms Cedar VPU only supports
+      // 3 sink-pad formats (indices 0-2); I420 is NOT one of them.  NV12
+      // (U-first) is accepted but produces greyscale — the Cedar VE on A733
+      // internally expects V-before-U (NV21) chroma ordering when GStreamer's
+      // system-memory allocator is used.
+      // control-rate=variable: gst-inspect shows Cedar VPU only has
+      // disable(0) and variable(1); constant(2) is absent — CBR is silently
+      // treated as "default" and the bitrate cap is not enforced.
+      // interval-intraframes=30: one IDR/second at 30fps — fast recovery
+      // and short warm-up wait (vs 60 = 2s which caused startup delay).
       pipeline.push(
         "videoconvert",
         "!",
-        "video/x-raw,format=NV12",
+        "video/x-raw,format=NV21",
         "!",
         "omxh264videoenc",
         `target-bitrate=${bitrate}`,
-        "control-rate=constant",
-        "interval-intraframes=5",   // Keyframe every ~167ms at 30fps
+        "control-rate=variable",
+        "interval-intraframes=30",
         "!",
         "h264parse",
         "config-interval=-1",       // Always inline SPS/PPS — OMX+RTMP+audio uses native flvmux (no ffmpeg DTS issue)
