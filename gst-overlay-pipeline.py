@@ -741,13 +741,46 @@ def main():
         # receives the malformed sequence header and closes the connection, causing
         # the "Failed to write data" error ~3 s later.
         #
-        # Key: CAPS events flow ahead of their associated buffer through the queue
-        # (GStreamer serialises them in-order).  By the time our BUFFER probe fires
-        # on the IDR, pad.get_current_caps() already reflects h264parse's latest
-        # CAPS event — so if codec_data is set there, flvmux has already received
-        # it and can write a valid AVC sequence header for the IDR that follows.
-        _omx_warmup_done        = [False]
-        _omx_idr_warning_logged = [False]   # only print the first IDR-without-codec_data
+        # codec_data detection strategy:
+        #   An EVENT_DOWNSTREAM probe on mainvidq.src watches every CAPS event and
+        #   sets _codec_data_seen the moment codec_data (SPS+PPS) arrives there.
+        #   This is race-free: the CAPS event is serialised through the queue ahead
+        #   of the IDR buffer, so by the time our BUFFER probe fires on the IDR,
+        #   flvmux has already received the CAPS event carrying codec_data and can
+        #   write a valid AVC Decoder Configuration Record before the first frame.
+        #
+        #   Using pad.get_current_caps() in the buffer probe is unreliable on some
+        #   GStreamer 1.18 builds because the sticky-cap update and the probe
+        #   callback share the same streaming thread but the ordering guarantee only
+        #   holds for the queue's output thread — not for the probe invocation itself.
+        #   The EVENT probe avoids this ambiguity entirely.
+        _omx_warmup_done    = [False]
+        _codec_data_seen    = [False]   # set by the CAPS event probe
+
+        def _omx_caps_event_probe(pad, info):
+            """EVENT probe — fires on every downstream event; detects codec_data."""
+            event = info.get_event()
+            if event.type != Gst.EventType.CAPS:
+                return Gst.PadProbeReturn.OK   # not a CAPS event — pass through
+            caps = event.parse_caps()
+            if caps and caps.get_size() > 0:
+                try:
+                    val = caps.get_structure(0).get_value("codec_data")
+                    if val is not None:
+                        if not _codec_data_seen[0]:
+                            print("📦 OMX: codec_data received in CAPS event — "
+                                  "flvmux can now write AVC sequence header",
+                                  file=sys.stderr)
+                        _codec_data_seen[0] = True
+                    else:
+                        # Log every caps-without-codec_data so we can diagnose
+                        # how many warm-up cycles the OMX encoder needs.
+                        caps_str = caps.to_string()
+                        print(f"⏳ OMX: CAPS without codec_data (still warming up): {caps_str}",
+                              file=sys.stderr)
+                except Exception as exc:
+                    print(f"⚠️  OMX caps probe error: {exc}", file=sys.stderr)
+            return Gst.PadProbeReturn.OK   # never block events
 
         def _omx_audio_warmup_drop(pad, info):
             if _omx_warmup_done[0]:
@@ -761,36 +794,23 @@ def main():
             is_keyframe = buf and not bool(buf.get_flags() & Gst.BufferFlags.DELTA_UNIT)
             if not is_keyframe:
                 return Gst.PadProbeReturn.DROP  # P-frame / B-frame — discard
-
-            # Keyframe detected.  Only pass through once codec_data is confirmed
-            # in the current pad caps (i.e. h264parse has seen SPS+PPS).
-            caps = pad.get_current_caps()
-            has_codec_data = False
-            if caps and caps.get_size() > 0:
-                try:
-                    val = caps.get_structure(0).get_value("codec_data")
-                    has_codec_data = val is not None
-                except Exception:
-                    pass
-
-            if not has_codec_data:
-                # OMX warm-up IDR — headerless, no SPS/PPS yet — keep dropping.
-                # Log only once so the journal stays quiet during multi-second warm-up.
-                if not _omx_idr_warning_logged[0]:
-                    caps_str = caps.to_string() if caps else "None"
-                    print(f"⚠️ OMX: warm-up IDR(s) have no codec_data — dropping until SPS/PPS arrive (caps: {caps_str})",
-                          file=sys.stderr)
-                    _omx_idr_warning_logged[0] = True
+            if not _codec_data_seen[0]:
+                # IDR arrived but codec_data hasn't been seen in a CAPS event yet.
+                # Keep dropping — the next IDR will be checked again.
                 return Gst.PadProbeReturn.DROP
-
-            # First IDR with valid codec_data — let it through.
+            # First IDR after codec_data arrived — let it through.
             _omx_warmup_done[0] = True  # audio probe removes itself on next call
-            print("🔑 OMX: IDR + codec_data confirmed — stream is live", file=sys.stderr)
+            print("🔑 OMX: first IDR after codec_data — stream is live", file=sys.stderr)
             return Gst.PadProbeReturn.REMOVE  # pass IDR through and remove self
 
-        mainaudq.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _omx_audio_warmup_drop)
-        mainvidq.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _omx_video_warmup_drop)
-        print("⏳ OMX warm-up: DROP probes on mainvidq + mainaudq — passing first IDR to flvmux",
+        # Event probe must be installed first so it fires before any buffer probe.
+        mainvidq.get_static_pad("src").add_probe(
+            Gst.PadProbeType.EVENT_DOWNSTREAM, _omx_caps_event_probe)
+        mainaudq.get_static_pad("src").add_probe(
+            Gst.PadProbeType.BUFFER, _omx_audio_warmup_drop)
+        mainvidq.get_static_pad("src").add_probe(
+            Gst.PadProbeType.BUFFER, _omx_video_warmup_drop)
+        print("⏳ OMX warm-up: CAPS+BUFFER probes on mainvidq, BUFFER probe on mainaudq",
               file=sys.stderr)
 
     # ── Programmatically disable element clock provision ───────────────────
