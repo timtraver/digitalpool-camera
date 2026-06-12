@@ -1219,10 +1219,25 @@ class StreamController extends EventEmitter {
     const execPromise = util.promisify(exec);
     try {
       console.log("🎤 Releasing ALSA audio capture devices...");
-      // Kill stale ffmpeg — primary culprit after a previous hybrid stream attempt.
-      await execPromise(`pkill -9 -x ffmpeg 2>/dev/null || true`);
-      // Fuser-kill any remaining holder of ALSA capture PCM nodes.
-      await execPromise(`sudo fuser -k /dev/snd/pcmC*D*c 2>/dev/null || true`);
+
+      // Target ONLY the specific audio device this camera will use.
+      // Using `pkill -9 ffmpeg` or `fuser -k /dev/snd/pcmC*D*c` kills ALL ffmpeg
+      // processes system-wide, including the other camera's active hybrid audio
+      // process — causing camera 1's RTSP stream to drop when camera 2 starts.
+      const audioDevice = this.streamConfig.audioDevice || "";
+      const cardMatch = audioDevice.match(/plughw:(\d+),(\d+)/i);
+      if (cardMatch) {
+        const pcmPath = `/dev/snd/pcmC${cardMatch[1]}D${cardMatch[2]}c`;
+        console.log(`🎤 [Cam${this.streamId}] Releasing ${pcmPath} (${audioDevice})...`);
+        await execPromise(`sudo fuser -k ${pcmPath} 2>/dev/null || true`);
+      } else {
+        // Fallback: no specific device known — kill all ALSA capture holders.
+        // This should only be reached if audioDevice is not yet configured.
+        console.warn(`⚠️  [Cam${this.streamId}] No specific audio device — falling back to global ALSA release`);
+        await execPromise(`pkill -9 -x ffmpeg 2>/dev/null || true`);
+        await execPromise(`sudo fuser -k /dev/snd/pcmC*D*c 2>/dev/null || true`);
+      }
+
       // Let the ALSA kernel driver fully release the device before GStreamer opens it.
       await new Promise((resolve) => setTimeout(resolve, 400));
       console.log("✅ ALSA audio devices released");
