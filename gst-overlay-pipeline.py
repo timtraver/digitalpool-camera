@@ -515,17 +515,13 @@ def main():
         # parse time, so the preview branch is not downstream of any live source at pipeline
         # construction time.  A sink with async=true would block the PAUSED→PLAYING
         # transition waiting for a preroll buffer that never arrives until PLAYING).
-        # Preview branch: scale to 640×360 (quarter-pixels vs 1280×720) before
-        # software x264enc.  Smaller frame = faster encode → lower latency, and
-        # 800 kbps at 640×360@15fps looks sharper than 500 kbps at 1280×720.
+        # Preview branch: scale to 1280×720 before encoding.
         # max-size-buffers=2 leaky=upstream: tight cap prevents preview latency
-        # build-up when x264enc briefly stalls.  leaky=upstream drops the OLDEST
+        # build-up when the encoder briefly stalls.  leaky=upstream drops the OLDEST
         # buffered frame (not the newest incoming one), so the encoder always
-        # works on the most recent camera frame.  leaky=downstream (the previous
-        # setting) did the opposite — it discarded new frames and kept stale ones,
-        # causing the preview to lag progressively further behind live.
+        # works on the most recent camera frame.
         f't. ! queue max-size-buffers=2 leaky=upstream '
-        f'! videoscale ! video/x-raw,width=640,height=360 '
+        f'! videoscale ! video/x-raw,width=1280,height=720 '
         f'! videorate ! video/x-raw,framerate=15/1 '
         # Preview encoder: same hardware selection as the main stream encoder.
         # Each branch must include a videoconvert so the encoder receives its

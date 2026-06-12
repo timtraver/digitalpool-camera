@@ -378,6 +378,27 @@ class StreamController extends EventEmitter {
     // For SRT server mode, destination is not needed (device acts as server)
 
     try {
+      // Emit "preparing" FIRST — before killing any processes.
+      //
+      // The "preparing" handler in server.js sets isRestartInProgress[camIdx] = true
+      // synchronously (before its first await), then kills the idle preview via
+      // _killIdlePreviewForCamera().  This ordering is critical:
+      //
+      //   OLD order (bug): _killCameraProcesses() → idle preview close event fires →
+      //     isRestartInProgress still false → close handler restarts idle preview →
+      //     new idle preview grabs /dev/videoN → GStreamer fails "Device busy".
+      //
+      //   NEW order (fix): emit("preparing") → isRestartInProgress = true (sync) →
+      //     _killCameraProcesses() → idle preview close event fires →
+      //     isRestartInProgress = true → close handler does NOT restart → ✓
+      //
+      // The 1500 ms window also lets the PNG overlay be generated before GStreamer starts.
+      await new Promise((resolve) => {
+        this.emit("preparing");
+        // Give event handlers time to complete (idle preview kill + PNG generation)
+        setTimeout(resolve, 1500);
+      });
+
       // Kill any ffmpeg processes using the camera device
       console.log("Checking for processes using camera device...");
       await this._killCameraProcesses();
@@ -418,14 +439,6 @@ class StreamController extends EventEmitter {
       // to release the v4l2 device, so only a small grace period is needed here.
       console.log("⏳ Waiting for resources to be released...");
       await new Promise((resolve) => setTimeout(resolve, 500));
-
-      // Emit "preparing" event so graphics overlay can initialize before GStreamer starts
-      // Wait for the event handlers to complete (they may be async)
-      await new Promise((resolve) => {
-        this.emit("preparing");
-        // Give event handlers time to complete (PNG generation + file write)
-        setTimeout(resolve, 1500);
-      });
 
       // Auto-detect the ALSA capture device for USB cameras when using the
       // camera's built-in mic (audioSource !== "external").  This correlates
