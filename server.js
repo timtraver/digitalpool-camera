@@ -4048,6 +4048,10 @@ async function _killIdlePreviewForCamera(camIdx) {
 streamController.on("preparing", async () => {
   try {
     isRestartInProgress[1] = true;
+    // Tell cam1's audio cleanup to spare cam2's active ffmpeg PID (if any).
+    // This is set synchronously (before any await) so it is guaranteed to be
+    // visible when _killAudioDeviceProcesses() runs after the 1500ms wait.
+    streamController.protectedAudioPid = streamController2.ffmpegProcess?.pid ?? null;
     await _killIdlePreviewForCamera(1);
 
     const hasUrlOverlay = streamController.streamConfig.remoteOverlayEnabled &&
@@ -4091,6 +4095,8 @@ streamController.on("preparing", async () => {
 streamController2.on("preparing", async () => {
   try {
     isRestartInProgress[2] = true;
+    // Tell cam2's audio cleanup to spare cam1's active ffmpeg PID (if any).
+    streamController2.protectedAudioPid = streamController.ffmpegProcess?.pid ?? null;
     await _killIdlePreviewForCamera(2);
 
     const hasUrlOverlay = streamController2.streamConfig.remoteOverlayEnabled &&

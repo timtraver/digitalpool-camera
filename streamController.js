@@ -55,6 +55,11 @@ class StreamController extends EventEmitter {
     this.cameraDevice = cameraDevice;
     // Stream identity — 1 or 2.  Drives config file names, MediaMTX paths, and ports.
     this.streamId = options.streamId || 1;
+    // PID of the sibling camera's active ffmpegProcess that must NOT be killed
+    // during audio device cleanup.  Set by server.js in the "preparing" handler
+    // before _killAudioDeviceProcesses() runs, so we never tear down the other
+    // camera's hybrid-audio process when both cameras are streaming concurrently.
+    this.protectedAudioPid = null;
 
     // Derived per-stream paths / ports based on streamId
     // Camera 1: /live, /preview, SRT :8891
@@ -1218,31 +1223,51 @@ class StreamController extends EventEmitter {
     const util = require("util");
     const execPromise = util.promisify(exec);
     try {
-      console.log("🎤 Releasing ALSA audio capture devices...");
+      console.log(`🎤 [Cam${this.streamId}] Releasing ALSA audio capture device...`);
 
-      // Target ONLY the specific audio device this camera will use.
-      // Using `pkill -9 ffmpeg` or `fuser -k /dev/snd/pcmC*D*c` kills ALL ffmpeg
-      // processes system-wide, including the other camera's active hybrid audio
-      // process — causing camera 1's RTSP stream to drop when camera 2 starts.
+      // Derive the /dev/snd/pcm* path from the configured audio device.
+      // Accepts plughw:X,Y or hw:X,Y formats.
       const audioDevice = this.streamConfig.audioDevice || "";
-      const cardMatch = audioDevice.match(/plughw:(\d+),(\d+)/i);
-      if (cardMatch) {
-        const pcmPath = `/dev/snd/pcmC${cardMatch[1]}D${cardMatch[2]}c`;
-        console.log(`🎤 [Cam${this.streamId}] Releasing ${pcmPath} (${audioDevice})...`);
-        await execPromise(`sudo fuser -k ${pcmPath} 2>/dev/null || true`);
-      } else {
-        // Fallback: no specific device known — kill all ALSA capture holders.
-        // This should only be reached if audioDevice is not yet configured.
-        console.warn(`⚠️  [Cam${this.streamId}] No specific audio device — falling back to global ALSA release`);
-        await execPromise(`pkill -9 -x ffmpeg 2>/dev/null || true`);
-        await execPromise(`sudo fuser -k /dev/snd/pcmC*D*c 2>/dev/null || true`);
+      const cardMatch = audioDevice.match(/(?:plug)?hw:(\d+),(\d+)/i);
+      if (!cardMatch) {
+        // audioDevice not yet set or unrecognised format — skip to avoid
+        // accidentally killing an unrelated process with a broad pkill.
+        console.warn(`⚠️  [Cam${this.streamId}] Audio device "${audioDevice}" format unrecognised — skipping audio cleanup`);
+        return;
+      }
+
+      const pcmPath = `/dev/snd/pcmC${cardMatch[1]}D${cardMatch[2]}c`;
+      console.log(`🎤 [Cam${this.streamId}] Checking ${pcmPath} (${audioDevice})...`);
+
+      // Identify which PIDs are holding this PCM device.
+      const { stdout } = await execPromise(`sudo fuser ${pcmPath} 2>/dev/null || true`);
+      const pids = stdout.replace(pcmPath, "").trim().split(/\s+/).filter((p) => /^\d+$/.test(p));
+
+      if (pids.length === 0) {
+        console.log(`✅ [Cam${this.streamId}] Audio device already free`);
+        return;
+      }
+
+      for (const pidStr of pids) {
+        const pid = parseInt(pidStr, 10);
+        if (!pid) continue;
+
+        // Never kill the sibling camera's active ffmpeg (set by server.js in the
+        // "preparing" handler so that starting cam2 cannot tear down cam1's stream).
+        if (this.protectedAudioPid && pid === this.protectedAudioPid) {
+          console.log(`🛡️  [Cam${this.streamId}] Sparing PID ${pid} (sibling camera's active ffmpeg)`);
+          continue;
+        }
+
+        console.log(`🔪 [Cam${this.streamId}] Killing stale audio holder PID ${pid}...`);
+        try { await execPromise(`sudo kill -9 ${pid} 2>/dev/null || true`); } catch (_) {}
       }
 
       // Let the ALSA kernel driver fully release the device before GStreamer opens it.
       await new Promise((resolve) => setTimeout(resolve, 400));
-      console.log("✅ ALSA audio devices released");
+      console.log(`✅ [Cam${this.streamId}] ALSA audio device released`);
     } catch (error) {
-      console.log(`⚠️  Audio device cleanup warning: ${error.message}`);
+      console.log(`⚠️  [Cam${this.streamId}] Audio device cleanup warning: ${error.message}`);
     }
   }
 
