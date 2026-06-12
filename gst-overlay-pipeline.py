@@ -523,7 +523,7 @@ def main():
              #   No capsfilter here — h264parse config-interval=-1 injects SPS+PPS
              #   inline before every IDR in byte-stream output for ffmpeg.
              + ('! video/x-h264,stream-format=byte-stream '
-                '! h264parse config-interval=-1 '
+                '! h264parse name=omxparser config-interval=-1 '
                 '! video/x-h264,stream-format=avc '
                 if protocol == 'rtmp' and audio_device else
                 '! h264parse config-interval=-1 '
@@ -819,6 +819,83 @@ def main():
             Gst.PadProbeType.BUFFER, _omx_video_warmup_drop)
         print("⏳ OMX warm-up: CAPS+BUFFER probes on mainvidq, BUFFER probe on mainaudq",
               file=sys.stderr)
+
+        # ── Diagnostic: hexdump raw OMX encoder output ───────────────────────
+        # Probe the h264parse sink pad (= raw encoder output) for the first 8
+        # buffers.  This tells us:
+        #   • byte-stream format? → look for 00 00 00 01 / 00 00 01 start codes
+        #   • AVCC format?        → look for 4-byte big-endian length prefix
+        #   • which NALU types are present (7=SPS 8=PPS 5=IDR 1=non-IDR)
+        # The output will be printed to the service journal once and removed.
+        omxparser = pipeline.get_by_name("omxparser")
+        if omxparser:
+            _diag_count = [0]
+            _diag_sps   = [None]   # will hold SPS bytes if found
+            _diag_pps   = [None]   # will hold PPS bytes if found
+
+            def _omx_raw_diag(pad, info):
+                """One-shot raw-buffer diagnostic probe on omxparser.sink."""
+                if _diag_count[0] >= 8:
+                    return Gst.PadProbeReturn.REMOVE
+                buf = info.get_buffer()
+                if not buf:
+                    return Gst.PadProbeReturn.OK
+                size  = buf.get_size()
+                raw   = buf.extract_dup(0, min(size, 128))
+                is_kf = not bool(buf.get_flags() & Gst.BufferFlags.DELTA_UNIT)
+
+                # ── try byte-stream (start-code) parsing ──────────────────
+                bs_nalus = []
+                i = 0
+                while i < len(raw) - 3:
+                    if raw[i:i+4] == b'\x00\x00\x00\x01':
+                        sc = 4
+                    elif raw[i:i+3] == b'\x00\x00\x01':
+                        sc = 3
+                    else:
+                        i += 1
+                        continue
+                    nt = raw[i + sc] & 0x1f if i + sc < len(raw) else -1
+                    bs_nalus.append(nt)
+                    if nt == 7 and _diag_sps[0] is None:
+                        # Try to grab SPS bytes (up to 64 bytes)
+                        _diag_sps[0] = raw[i + sc: i + sc + 64]
+                    if nt == 8 and _diag_pps[0] is None:
+                        _diag_pps[0] = raw[i + sc: i + sc + 32]
+                    i += sc + 1
+
+                # ── try AVCC (4-byte length prefix) parsing ───────────────
+                avcc_nalus = []
+                pos = 0
+                while pos + 5 <= len(raw):
+                    nlen = int.from_bytes(raw[pos:pos+4], 'big')
+                    if nlen == 0 or pos + 4 + nlen > len(raw) + 4:
+                        break
+                    nt = raw[pos + 4] & 0x1f
+                    avcc_nalus.append(nt)
+                    if nt == 7 and _diag_sps[0] is None:
+                        _diag_sps[0] = raw[pos + 4: pos + 4 + min(nlen, 64)]
+                    if nt == 8 and _diag_pps[0] is None:
+                        _diag_pps[0] = raw[pos + 4: pos + 4 + min(nlen, 32)]
+                    pos += 4 + nlen
+
+                hex_head = ' '.join(f'{b:02x}' for b in raw[:32])
+                print(f"🔬 OMX raw[{_diag_count[0]}]: size={size} kf={is_kf} "
+                      f"bs_nalus={bs_nalus} avcc_nalus={avcc_nalus} | {hex_head}",
+                      file=sys.stderr)
+                if _diag_sps[0] is not None and _diag_pps[0] is not None:
+                    sps_hex = ' '.join(f'{b:02x}' for b in _diag_sps[0])
+                    pps_hex = ' '.join(f'{b:02x}' for b in _diag_pps[0])
+                    print(f"🔬 OMX SPS bytes: {sps_hex}", file=sys.stderr)
+                    print(f"🔬 OMX PPS bytes: {pps_hex}", file=sys.stderr)
+
+                _diag_count[0] += 1
+                return Gst.PadProbeReturn.OK
+
+            omxparser.get_static_pad("sink").add_probe(
+                Gst.PadProbeType.BUFFER, _omx_raw_diag)
+            print("🔬 OMX raw diagnostic probe installed on omxparser.sink (first 8 bufs)",
+                  file=sys.stderr)
 
     # ── Programmatically disable element clock provision ───────────────────
     # v4l2src defaults to offering its USB-oscillator / kernel CLOCK_MONOTONIC
