@@ -1943,29 +1943,28 @@ class StreamController extends EventEmitter {
         "!",
       );
     } else if (encoder === "omxh264videoenc") {
-      // Allwinner OpenMAX H.264 hardware encoder (Radxa Cubie A7S / A733)
-      // NV21 instead of NV12: gst-inspect confirms Cedar VPU only supports
-      // 3 sink-pad formats (indices 0-2); I420 is NOT one of them.  NV12
-      // (U-first) is accepted but produces greyscale — the Cedar VE on A733
-      // internally expects V-before-U (NV21) chroma ordering when GStreamer's
-      // system-memory allocator is used.
-      // control-rate=variable: gst-inspect shows Cedar VPU only has
-      // disable(0) and variable(1); constant(2) is absent — CBR is silently
-      // treated as "default" and the bitrate cap is not enforced.
-      // interval-intraframes=30: one IDR/second at 30fps — fast recovery
-      // and short warm-up wait (vs 60 = 2s which caused startup delay).
+      // Allwinner A733 / Cedar VPU — hardware encoder (omxh264videoenc) is NOT used.
+      // Field testing confirmed the Cedar VPU gst-omx driver accepts only NV12 input
+      // but silently discards the UV chroma plane → greyscale H.264 output regardless
+      // of bitrate settings.  NV21 and I420 both cause not-negotiated errors.
+      // Fix: use x264enc (software H.264).  The A733's 4× Cortex-A55 @ 1.8 GHz
+      // handles 720p/1080p@30fps ultrafast with minimal CPU load.
+      // bitrate is in kbps for x264enc (not bps like omxh264videoenc).
+      const bitrate_kbps = Math.round(bitrate / 1000);
       pipeline.push(
         "videoconvert",
         "!",
-        "video/x-raw,format=NV21",
+        "video/x-raw,format=I420",
         "!",
-        "omxh264videoenc",
-        `target-bitrate=${bitrate}`,
-        "control-rate=variable",
-        "interval-intraframes=30",
+        "x264enc",
+        `bitrate=${bitrate_kbps}`,
+        "speed-preset=ultrafast",
+        "tune=zerolatency",
+        "key-int-max=30",
+        "threads=0",
         "!",
         "h264parse",
-        "config-interval=-1",       // Always inline SPS/PPS — OMX+RTMP+audio uses native flvmux (no ffmpeg DTS issue)
+        "config-interval=-1",
         "!",
       );
     }

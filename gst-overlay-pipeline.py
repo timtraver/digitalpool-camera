@@ -358,24 +358,26 @@ def main():
             f'{text_overlay}'
             f'{timestamp_overlay}'
         )
-        # Allwinner Cedar VPU (OMX) colour fix:
-        #
-        # gst-inspect confirms the Cedar VPU ONLY supports 3 sink-pad formats
-        # (indices 0, 1, 2); I420 is NOT one of them and causes a hard
-        # not-negotiated error at pipeline start.
-        #
-        # NV12 (U-first interleaved chroma) is accepted by the plugin but
-        # produces greyscale output: the Cedar VE on A733 appears to internally
-        # expect V-before-U ordering (NV21) when GStreamer's system-memory
-        # allocator is used.  Feeding NV21 swaps the interleaved chroma bytes
-        # so the hardware reads the correct U/V channels → colour output.
-        #
-        # If NV21 is also not available in this build of libgstreamer-openmax,
-        # the pipeline will fall back to the first format the encoder advertises
-        # (NV12) via caps renegotiation; greyscale output would recur but the
-        # pipeline will not crash.
+        # Allwinner Cedar VPU (OMX) — hardware encoder is NOT used for the main
+        # stream.  gst-inspect + field testing showed:
+        #   • Cedar VPU only supports NV12 input (I420 and NV21 both cause
+        #     not-negotiated errors at pipeline start).
+        #   • NV12 IS accepted but the encoder only reads the Y plane —
+        #     UV chroma is silently discarded → greyscale H.264 output.
+        #     This is a confirmed Cedar VE gst-omx driver bug on the A733.
+        #   • control-rate=constant doesn't exist on this build (only disable
+        #     and variable); target-bitrate is honoured only with variable mode.
+        # Fix: use x264enc (software H.264) for the main encode chain.
+        #   The A733's 4× Cortex-A55 @ 1.8 GHz handles 720p@30fps ultrafast
+        #   trivially (~9% of CPU budget per core).  x264enc correctly encodes
+        #   full-colour I420 and honours the bitrate in kbps.
+        #   The existing named-element pipeline (omxparser, mainvidq, flvmux)
+        #   and the codec_data injector probes all work unchanged with x264enc:
+        #   h264parse (omxparser) sets codec_data naturally on the first IDR,
+        #   so the CAPS probe detects it immediately and the warm-up guard
+        #   passes the first IDR through with no extra delay.
         if encoder == 'omxh264videoenc':
-            encode_convert = '! videoconvert ! video/x-raw,format=NV21 '
+            encode_convert = '! videoconvert ! video/x-raw,format=I420 '
         else:
             encode_convert = f'! videoconvert ! video/x-raw,format=NV12 '
     else:
@@ -518,45 +520,24 @@ def main():
              #   • mpegtsmux path (RTMP no-audio or SRT): stream-format=byte-stream with
              #     config-interval=-1 injects SPS+PPS inline before every IDR so the TS
              #     PMT always contains the parameters (used by ffmpeg in SRT hybrid mode).
-             # control-rate=variable: CBR ("constant") is unreliable on the
-             # Allwinner Cedar VPU — the encoder ignores target-bitrate under CBR
-             # and produces ~1 Mbps regardless of the setting.  VBR correctly
-             # treats target-bitrate as the average bitrate cap.
-             # interval-intraframes=30: one IDR every 30 frames (= 1 s at 30 fps).
-             # 60 (2 s) was too long: the warm-up probe must wait up to one full
-             # IDR interval after codec_data injection before the first live IDR
-             # arrives, meaning up to 2 s of dead time at stream start.  30 frames
-             # halves that to ≤1 s, which is the standard for RTMP/HLS delivery
-             # and keeps stream recovery fast after a seek or reconnect.
-             f'! omxh264videoenc target-bitrate={bitrate} control-rate=variable interval-intraframes=30 '
-             # h264parse strategy for OMX (Allwinner A733 / Cedar VPU):
-             #
-             # The Cedar OMX encoder outputs stream-format=avc by DEFAULT when the
-             # downstream caps negotiation doesn't constrain it.  In AVCC mode it
-             # NEVER sets codec_data in the GStreamer caps, and the SPS/PPS are NOT
-             # present as NALUs inside the frame buffers either — they live only
-             # inside the OMX component's internal state.  h264parse therefore has
-             # no way to extract them, so codec_data stays empty forever.
-             #
-             # Fix — force stream-format=byte-stream directly on the encoder output:
-             #   The OMX encoder pad template supports both avc and byte-stream.
-             #   When byte-stream is negotiated the Cedar VPU switches to start-code
-             #   output and embeds SPS+PPS NALUs inline before every IDR frame.
-             #   A single h264parse then trivially finds SPS (type 7) and PPS (type 8)
-             #   via start codes, constructs a proper AVCDecoderConfigurationRecord,
-             #   and emits a CAPS event with codec_data before the first IDR buffer.
-             #   flvmux receives codec_data → writes valid AVC sequence header →
-             #   MediaMTX accepts the stream.
-             #
-             # All other OMX paths (SRT / video-only RTMP → mpegtsmux/ffmpeg):
-             #   No capsfilter here — h264parse config-interval=-1 injects SPS+PPS
-             #   inline before every IDR in byte-stream output for ffmpeg.
-             + ('! video/x-h264,stream-format=byte-stream '
-                '! h264parse name=omxparser config-interval=-1 '
-                '! video/x-h264,stream-format=avc '
-                if protocol == 'rtmp' and audio_device else
-                '! h264parse config-interval=-1 '
-                '! video/x-h264,stream-format=byte-stream ')
+             # Allwinner (omxh264videoenc detected): use x264enc software encoder.
+             # omxh264videoenc is kept as the *detection* signal so the JS audio
+             # routing (native flvmux + alsasrc, no ffmpeg hybrid) remains active,
+             # but the actual encode element is replaced with x264enc which:
+             #   • correctly encodes full-colour I420 frames
+             #   • honours target bitrate (in kbps) via VBR
+             #   • emits proper codec_data via h264parse on the very first IDR
+             #     → codec_data injector probe fires immediately, no startup delay
+             # threads=0 lets x264enc auto-select based on CPU topology;
+             # key-int-max=30 = one IDR/second at 30fps — same as the old OMX setting.
+             (f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast '
+              f'tune=zerolatency key-int-max=30 threads=0 '
+              + ('! video/x-h264,stream-format=byte-stream '
+                 '! h264parse name=omxparser config-interval=-1 '
+                 '! video/x-h264,stream-format=avc '
+                 if protocol == 'rtmp' and audio_device else
+                 '! h264parse config-interval=-1 '
+                 '! video/x-h264,stream-format=byte-stream '))
              if encoder == 'omxh264videoenc' else
              f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
             + ('' if encoder == 'omxh264videoenc' else
