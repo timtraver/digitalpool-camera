@@ -502,33 +502,27 @@ def main():
              f'! omxh264videoenc target-bitrate={bitrate} control-rate=constant interval-intraframes=5 '
              # h264parse strategy for OMX (Allwinner A733 / Cedar VPU):
              #
-             # The Cedar OMX encoder outputs stream-format=avc (NALU length-prefixed)
-             # but NEVER sets codec_data in the GStreamer caps.  SPS and PPS are
-             # embedded as NALUs inside each IDR frame's buffer data, not in the caps.
-             # h264parse in AVC→AVC passthrough mode can't determine nal-length-size
-             # without codec_data, so it cannot extract SPS/PPS → codec_data stays
-             # empty → flvmux writes an empty AVC Decoder Configuration Record →
-             # MediaMTX closes the RTMP connection ("Failed to write data").
+             # The Cedar OMX encoder outputs stream-format=avc by DEFAULT when the
+             # downstream caps negotiation doesn't constrain it.  In AVCC mode it
+             # NEVER sets codec_data in the GStreamer caps, and the SPS/PPS are NOT
+             # present as NALUs inside the frame buffers either — they live only
+             # inside the OMX component's internal state.  h264parse therefore has
+             # no way to extract them, so codec_data stays empty forever.
              #
-             # Double-h264parse workaround (native RTMP+audio / flvmux path):
-             #   Pass 1: h264parse converts AVC → byte-stream.
-             #           Without input codec_data it defaults to nal-length-size=4,
-             #           which matches Cedar VPU output.  It finds SPS (type 7) and
-             #           PPS (type 8) NALUs in the buffer, strips length prefixes,
-             #           and outputs start-code NALUs.
-             #   Pass 2: h264parse receives byte-stream with inline SPS+PPS,
-             #           trivially finds them via start codes, builds a proper
-             #           AVCDecoderConfigurationRecord (codec_data), and sends it
-             #           in the output CAPS event before the first IDR buffer.
-             #           flvmux receives codec_data → writes valid AVC sequence
-             #           header → MediaMTX accepts the stream.
-             #   config-interval=-1 on pass 2 re-sends codec_data before every IDR,
-             #   keeping the sequence header current even after encoder key-frame resets.
+             # Fix — force stream-format=byte-stream directly on the encoder output:
+             #   The OMX encoder pad template supports both avc and byte-stream.
+             #   When byte-stream is negotiated the Cedar VPU switches to start-code
+             #   output and embeds SPS+PPS NALUs inline before every IDR frame.
+             #   A single h264parse then trivially finds SPS (type 7) and PPS (type 8)
+             #   via start codes, constructs a proper AVCDecoderConfigurationRecord,
+             #   and emits a CAPS event with codec_data before the first IDR buffer.
+             #   flvmux receives codec_data → writes valid AVC sequence header →
+             #   MediaMTX accepts the stream.
              #
              # All other OMX paths (SRT / video-only RTMP → mpegtsmux/ffmpeg):
-             #   Single h264parse with byte-stream output; ffmpeg reads inline SPS/PPS.
-             + ('! h264parse '
-                '! video/x-h264,stream-format=byte-stream '
+             #   No capsfilter here — h264parse config-interval=-1 injects SPS+PPS
+             #   inline before every IDR in byte-stream output for ffmpeg.
+             + ('! video/x-h264,stream-format=byte-stream '
                 '! h264parse config-interval=-1 '
                 '! video/x-h264,stream-format=avc '
                 if protocol == 'rtmp' and audio_device else
