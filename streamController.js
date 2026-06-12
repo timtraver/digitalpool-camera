@@ -2073,17 +2073,17 @@ class StreamController extends EventEmitter {
       ...(encoder === "vaapih264enc"
         ? [
             "videoconvert", "!",
-            "vaapih264enc", "bitrate=500", "keyframe-period=15", "!",
+            "vaapih264enc", "bitrate=2500", "keyframe-period=15", "!",
           ]
         : encoder === "x264enc"
         ? [
             "videoconvert", "!", "video/x-raw,format=I420", "!",
-            "x264enc", "bitrate=500", "speed-preset=ultrafast", "tune=zerolatency", "key-int-max=15", "!",
+            "x264enc", "bitrate=2500", "speed-preset=ultrafast", "tune=zerolatency", "key-int-max=15", "!",
           ]
         : [
             // Default: Rockchip mpph264enc (also used as preview encoder for nvv4l2h264enc fallback)
             "videoconvert", "!", "video/x-raw,format=NV12", "!",
-            "mpph264enc", "bps=500000", "header-mode=each-idr", "gop=15", "!",
+            "mpph264enc", "bps=2500000", "header-mode=each-idr", "gop=15", "!",
           ]
       ),
       "h264parse",
