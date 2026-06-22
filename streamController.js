@@ -1631,12 +1631,16 @@ class StreamController extends EventEmitter {
       // list YUYV in its static sink pad template, causing a parse-time link
       // failure when format=YUYV is explicitly constrained.  Without it,
       // GStreamer negotiates YUYV at runtime and videoconvert outputs NV12.
+      // Also omit framerate from the v4l2src caps — some YUYV cameras (e.g.
+      // Minrray10) only deliver 1280x720 at 15 fps, so a 30/1 request fails
+      // with "not-negotiated (-4)".  videorate below normalises whatever the
+      // camera delivers to the requested stream framerate.
       pipeline = [
         "v4l2src",
         `device=${this.cameraDevice}`,
         "do-timestamp=true",
         "!",
-        `video/x-raw,width=${width},height=${height},framerate=${framerate}/1`,
+        `video/x-raw,width=${width},height=${height}`,
         "!",
         "videoconvert",
         "!",

@@ -2903,13 +2903,17 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
         `device=${device}`,
         "do-timestamp=true",
         "!",
-        "video/x-raw,width=1280,height=720,framerate=30/1",  // native 720p from sensor
+        // No framerate in the v4l2src caps — some YUYV cameras (e.g. Minrray10)
+        // only deliver 1280x720 at 15 fps and a 30/1 request fails with
+        // "not-negotiated (-4)".  Negotiate whatever rate the device offers
+        // here; videorate below normalises to the 15 fps preview target.
+        "video/x-raw,width=1280,height=720",
         "!",
         "videoconvert",        // YUYV → NV12
         "!",
         "video/x-raw,format=NV12",
         "!",
-        "videorate",           // 30fps → 15fps
+        "videorate",           // any camera rate → 15fps
         "!",
         "video/x-raw,framerate=15/1",
         "!",
