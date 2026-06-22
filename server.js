@@ -108,6 +108,11 @@ let bootComplete = false;
 // Per-camera flag to suppress intermediate "stopped" events during an atomic restart.
 // Keyed by camera index (1 or 2) so each camera is independent.
 const isRestartInProgress = { 1: false, 2: false };
+// Tracks whether the current stream cycle ever reached the "started" event.
+// Used by the "stopped" handler to detect a pipeline that died during startup
+// (e.g. ALSA "cannot open audio device") so we can clear isRestartInProgress
+// and bring the idle preview back instead of leaving it permanently disabled.
+const _streamReachedStarted = { 1: false, 2: false };
 
 // ── Per-camera controller helpers ─────────────────────────────────────────────
 /** Return the CameraController for index 1 or 2. */
@@ -169,12 +174,25 @@ streamController.on("preparing", () => {
 });
 
 streamController.on("started", () => {
+  _streamReachedStarted[1] = true;
   isRestartInProgress[1] = false;
   const status = streamController.getStatus();
   io.emit("streamStatus", { ...status, status: "started", cameraIndex: 1 });
 });
 
 streamController.on("stopped", (code) => {
+  // If the pipeline died before reaching "started" (e.g. ALSA device missing,
+  // GStreamer plugin error), nothing else will ever clear isRestartInProgress.
+  // Clear it here and restore the idle preview so the UI doesn't stay blank.
+  const reachedStarted = _streamReachedStarted[1];
+  _streamReachedStarted[1] = false;
+  if (!reachedStarted && isRestartInProgress[1]) {
+    console.warn(`⚠️  [Cam1] Stream exited (code ${code}) before reaching 'started' — clearing restart flag and restoring idle preview`);
+    isRestartInProgress[1] = false;
+    startPersistentIdlePreview(1)
+      .then(() => io.emit("refreshIdlePreview", { cameraIndex: 1 }))
+      .catch((err) => console.error("⚠️  [Cam1] idle preview restore failed:", err.message));
+  }
   if (isRestartInProgress[1]) return;
   const status = streamController.getStatus();
   io.emit("streamStatus", { ...status, status: "stopped", code, cameraIndex: 1 });
@@ -208,12 +226,25 @@ streamController2.on("preparing", () => {
 });
 
 streamController2.on("started", () => {
+  _streamReachedStarted[2] = true;
   isRestartInProgress[2] = false;
   const status = streamController2.getStatus();
   io.emit("streamStatus", { ...status, status: "started", cameraIndex: 2 });
 });
 
 streamController2.on("stopped", (code) => {
+  // If the pipeline died before reaching "started" (e.g. ALSA device missing,
+  // GStreamer plugin error), nothing else will ever clear isRestartInProgress.
+  // Clear it here and restore the idle preview so the UI doesn't stay blank.
+  const reachedStarted = _streamReachedStarted[2];
+  _streamReachedStarted[2] = false;
+  if (!reachedStarted && isRestartInProgress[2]) {
+    console.warn(`⚠️  [Cam2] Stream exited (code ${code}) before reaching 'started' — clearing restart flag and restoring idle preview`);
+    isRestartInProgress[2] = false;
+    startPersistentIdlePreview(2)
+      .then(() => io.emit("refreshIdlePreview", { cameraIndex: 2 }))
+      .catch((err) => console.error("⚠️  [Cam2] idle preview restore failed:", err.message));
+  }
   if (isRestartInProgress[2]) return;
   const status = streamController2.getStatus();
   io.emit("streamStatus", { ...status, status: "stopped", code, cameraIndex: 2 });

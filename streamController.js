@@ -124,7 +124,7 @@ class StreamController extends EventEmitter {
       // Audio settings
       audioEnabled: true,      // Include audio in stream
       audioSource: "video",    // "video" = use embedded source audio; "external" = ALSA device
-      audioDevice: "plughw:2,0", // ALSA device used when audioSource === "external"
+      audioDevice: "", // ALSA device used when audioSource === "external"; "" = auto-detect at start
       audioOffset: 0,          // A/V sync offset in ms: negative = advance audio (fix audio lag), positive = delay audio
       // Skia graphics overlay
       skiaGraphicsEnabled: false, // Enable Skia graphics overlay
@@ -465,10 +465,22 @@ class StreamController extends EventEmitter {
           );
           this.streamConfig.audioDevice = detected;
         } else {
-          console.log(
-            `🎤 [Cam${this.streamId}] USB audio auto-detect failed — ` +
-            `using: ${this.streamConfig.audioDevice || "plughw:2,0"}`
-          );
+          // USB-bus correlation failed — typically because the camera has no
+          // on-board mic (e.g. Minrray PTZ).  Fall through to a generic ALSA
+          // capture scan so we still pick up *some* present device rather than
+          // leaving the configured (potentially non-existent) value in place.
+          const fallback = await this._detectAlsaCaptureDevice();
+          if (fallback) {
+            console.log(
+              `🎤 [Cam${this.streamId}] No mic on ${this.cameraDevice} — falling back to first ALSA capture device: ${fallback}`
+            );
+            this.streamConfig.audioDevice = fallback;
+          } else {
+            console.log(
+              `🎤 [Cam${this.streamId}] USB audio auto-detect failed and no ALSA capture device present — ` +
+              `using configured: "${this.streamConfig.audioDevice || ""}"`
+            );
+          }
         }
       }
 
@@ -487,9 +499,12 @@ class StreamController extends EventEmitter {
       // Python script had already been spawned, so GStreamer's alsasrc lost the race.
       let _preProbeAudioDevice = this.streamConfig.audioDevice || "plughw:2,0";
       let _preProbeAudioDeviceBusy = false;
+      // RTSP-protocol streams ALSO use the ffmpeg hybrid path when audioSource
+      // is "video" on a USB cam (see useFfmpegAudio below), so the probe must
+      // run for them too — otherwise a missing audioDevice goes straight to
+      // ffmpeg's alsasrc which crashes the whole pipeline with EBADF/ENOENT.
       if (
         this.streamConfig.audioEnabled &&
-        this.streamConfig.protocol !== "rtsp" &&
         this.inputSource.type !== "rtsp" &&
         this.inputSource.type !== "ndi"
       ) {
