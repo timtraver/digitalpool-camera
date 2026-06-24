@@ -310,7 +310,7 @@ systemd-analyze critical-chain digitalpool-hotspot.service
 # NetworkManager should start at ~3–4 s, hotspot should complete at ~15 s
 ```
 
-> **What is NOT affected:** Ethernet connectivity, Tailscale, NetworkManager, the WiFi hotspot — all continue to work exactly as before. These commands only remove unnecessary *waiting*, not any actual functionality.
+> **What is NOT affected:** Ethernet connectivity, NetBird, NetworkManager, the WiFi hotspot — all continue to work exactly as before. These commands only remove unnecessary *waiting*, not any actual functionality.
 
 ---
 
@@ -828,73 +828,68 @@ sudo ufw reload
 
 ---
 
-### 2m. Tailscale (Remote Access)
+### 2m. NetBird (Remote Access)
 
-Tailscale is required for the **Remote Access** toggle in Admin Settings. The app calls `sudo tailscale up` / `sudo tailscale down` / `sudo tailscale set` on behalf of the `ubuntu` user, so both the binary and the sudo permissions must be in place before enabling it.
+NetBird is required for the **Remote Access** toggle in Admin Settings. The app calls `sudo netbird up` / `sudo netbird down` on behalf of the `ubuntu` user, so both the binary and the sudo permissions must be in place before enabling it.
 
-This project uses a self-hosted **Headscale** server (`https://remote.digitalpool.com`) instead of the Tailscale cloud — the same Tailscale client is used, just pointed at a different login server.
+NetBird creates a WireGuard-based mesh VPN that connects the camera device to your management network regardless of its location — no port forwarding or public IP required.
 
-#### Install Tailscale
-
-```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-```
-
-This installs the `tailscale` binary and enables the `tailscaled` daemon as a systemd service. Verify:
+#### Install NetBird
 
 ```bash
-tailscale version
-sudo systemctl status tailscaled   # must show "active (running)"
+curl -fsSL https://pkgs.netbird.io/install.sh | sh
 ```
 
-> **Do not run `tailscale up` manually.** The Admin Settings UI handles authentication and registration. Running it manually first can leave stale state that confuses the force re-register flow.
+This installs the `netbird` binary and enables the `netbird` daemon as a systemd service. Verify:
+
+```bash
+netbird version
+sudo systemctl status netbird   # must show "active (running)"
+```
+
+> **Do not run `netbird up` manually.** The Admin Settings UI handles authentication and registration. Running it manually first can leave stale state that confuses the force re-register flow.
 
 #### Grant sudo permissions
 
-The app runs several tailscale commands with `sudo` as the `ubuntu` user. Add them to the existing sudoers file (created in Section 7c — if you haven't done Section 7 yet, come back and append these lines then):
+The app runs several netbird commands with `sudo` as the `ubuntu` user. Add them to the existing sudoers file (created in Section 7c — if you haven't done Section 7 yet, come back and append these lines then):
 
 ```bash
 sudo tee -a /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
-# Tailscale — remote access control via the Admin Settings UI
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tailscale up *
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tailscale down
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tailscale set *
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop tailscaled
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl start tailscaled
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/rm -rf /var/lib/tailscale/
+# NetBird — remote access control via the Admin Settings UI
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/netbird up *
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/netbird down
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop netbird
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl start netbird
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/rm -rf /var/lib/netbird/
 EOF
 
 sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
 ```
 
-> **If the sudoers file does not exist yet** (Section 7c not done), create it now with just the tailscale entries and append the rest later:
+> **If the sudoers file does not exist yet** (Section 7c not done), create it now with just the netbird entries and append the rest later:
 > ```bash
 > sudo tee /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
-> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tailscale up *
-> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tailscale down
-> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tailscale set *
-> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop tailscaled
-> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl start tailscaled
-> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/rm -rf /var/lib/tailscale/
+> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/netbird up *
+> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/netbird down
+> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop netbird
+> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl start netbird
+> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/rm -rf /var/lib/netbird/
 > EOF
 > sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
 > ```
 
-#### Configure Headscale credentials in `.env`
+#### Configure NetBird credentials in `.env`
 
-Add the three Headscale variables to `/home/ubuntu/digitalpool-camera/.env`:
+Add the NetBird variables to `/home/ubuntu/digitalpool-camera/.env`:
 
 ```bash
-# Headscale server URL (your self-hosted control plane)
-HEADSCALE_URL=https://remote.digitalpool.com
+# NetBird management server URL (omit for NetBird cloud; set for self-hosted)
+NETBIRD_MANAGEMENT_URL=https://api.netbird.io
 
-# Pre-auth key — generate in the Headscale UI or CLI:
-#   headscale preauthkeys create --user <user> --reusable --expiration 9999d
-HEADSCALE_AUTHKEY=hskey-auth-your-key-here
-
-# Admin API key — allows the app to rename / delete nodes in Headscale:
-#   headscale apikeys create --expiration 9999d
-HEADSCALE_API_KEY=your-api-key-here
+# Setup key — generate in the NetBird Dashboard under Setup Keys:
+#   https://app.netbird.io/setup-keys  (cloud)
+#   https://your-netbird-server/setup-keys  (self-hosted)
+NETBIRD_SETUP_KEY=your-setup-key-here
 ```
 
 After editing `.env`, restart the service to pick up the new values:
@@ -975,7 +970,7 @@ Adjust `CAMERA_DEVICE` if your camera appears on a different node (check with `v
 
 ### 4b. MediaMTX — WebRTC ICE host update script
 
-The admin preview uses WebRTC (WHEP protocol). For WebRTC to work from every network interface — LAN, Tailscale (`100.x.x.x`), and the WiFi hotspot — MediaMTX must include each interface's IP address in its SDP ICE candidates. The `mediamtx-update-hosts.sh` script (included in the repo) detects all current non-loopback IPv4 addresses at startup and injects them into `webrtcAdditionalHosts` in `/etc/mediamtx.yml`.
+The admin preview uses WebRTC (WHEP protocol). For WebRTC to work from every network interface — LAN, NetBird, and the WiFi hotspot — MediaMTX must include each interface's IP address in its SDP ICE candidates. The `mediamtx-update-hosts.sh` script (included in the repo) detects all current non-loopback IPv4 addresses at startup and injects them into `webrtcAdditionalHosts` in `/etc/mediamtx.yml`.
 
 ```bash
 # Install the script
@@ -992,11 +987,11 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl restart mediamtx
 
-# Verify — should list all local IPs including Tailscale and hotspot
+# Verify — should list all local IPs including NetBird and hotspot
 grep webrtcAdditionalHosts /etc/mediamtx.yml
 ```
 
-The script runs every time MediaMTX starts, so it picks up new Tailscale IPs automatically.
+The script runs every time MediaMTX starts, so it picks up new NetBird IPs automatically.
 
 **However**, MediaMTX starts at boot with `After=network.target` — before the WiFi hotspot interface exists. If the hotspot comes up several seconds later (which is normal), `192.168.50.1` won't be in the ICE candidates list until MediaMTX is restarted. A **NetworkManager dispatcher script** fixes this by re-running the update every time any interface comes up:
 
@@ -1018,7 +1013,7 @@ sudo chmod +x /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts
 
 After this, every time the hotspot (or any other interface) comes up — including after a reboot — the dispatcher fires within ~2 seconds and MediaMTX automatically picks up the new IP. No manual `systemctl restart mediamtx` is ever needed.
 
-**Tailscale caveat:** Tailscale creates a `tailscale0` TUN interface directly in the kernel — it is **not** managed by NetworkManager, so the dispatcher above will not fire when Tailscale connects. A **periodic systemd timer** closes this gap by re-running the update script every 60 seconds regardless of how any interface came up:
+**NetBird caveat:** NetBird creates a `wt0` WireGuard interface directly in the kernel — it is **not** managed by NetworkManager, so the dispatcher above will not fire when NetBird connects. A **periodic systemd timer** closes this gap by re-running the update script every 60 seconds regardless of how any interface came up:
 
 ```bash
 # Install the timer units (files are included in the repo)
@@ -1033,9 +1028,9 @@ sudo systemctl enable --now mediamtx-update-hosts.timer
 systemctl list-timers mediamtx-update-hosts.timer
 ```
 
-MediaMTX **hot-reloads** its config file whenever it changes, so the updated `webrtcAdditionalHosts` list takes effect immediately — no MediaMTX restart needed. With this timer in place, any interface (Tailscale, hotspot, a new ethernet link) will be reflected in the ICE candidate list within 60 seconds of coming up, automatically and permanently.
+MediaMTX **hot-reloads** its config file whenever it changes, so the updated `webrtcAdditionalHosts` list takes effect immediately — no MediaMTX restart needed. With this timer in place, any interface (NetBird, hotspot, a new ethernet link) will be reflected in the ICE candidate list within 60 seconds of coming up, automatically and permanently.
 
-**Why you can't preset a CIDR range (e.g. all `100.x.x.x`):** `webrtcAdditionalHosts` takes a list of specific IP addresses — not subnets. ICE candidates must be actual reachable addresses the device currently holds. The periodic timer achieves the same result: any IP the device acquires (Tailscale, hotspot, LAN) is picked up automatically within one timer cycle.
+**Why you can't preset a CIDR range (e.g. all `100.x.x.x`):** `webrtcAdditionalHosts` takes a list of specific IP addresses — not subnets. ICE candidates must be actual reachable addresses the device currently holds. The periodic timer achieves the same result: any IP the device acquires (NetBird, hotspot, LAN) is picked up automatically within one timer cycle.
 
 ### 4b.3. MediaMTX network override — allow start without ethernet
 
@@ -2080,7 +2075,7 @@ Run each block below **once** on any appliance that hasn't had it set up yet.  T
 
 #### WebRTC preview — MediaMTX ICE host update script
 
-Required for the live WebRTC admin preview to work over LAN, Tailscale, and the hotspot simultaneously.
+Required for the live WebRTC admin preview to work over LAN, NetBird, and the hotspot simultaneously.
 
 ```bash
 sudo cp ~/digitalpool-camera/mediamtx-update-hosts.sh /usr/local/bin/
@@ -2148,9 +2143,9 @@ EOF
 sudo chmod +x /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts
 ```
 
-#### Periodic ICE host refresh timer — catch Tailscale and other non-NM interfaces
+#### Periodic ICE host refresh timer — catch NetBird and other non-NM interfaces
 
-Tailscale is not managed by NetworkManager, so the dispatcher above won't fire when Tailscale connects. This timer re-runs the update script every 60 seconds so any interface (Tailscale, hotspot, LAN) is always reflected in the ICE candidate list within one cycle.
+NetBird is not managed by NetworkManager, so the dispatcher above won't fire when NetBird connects. This timer re-runs the update script every 60 seconds so any interface (NetBird, hotspot, LAN) is always reflected in the ICE candidate list within one cycle.
 
 ```bash
 # Check if already present:
@@ -2207,7 +2202,7 @@ grep webrtcAdditionalHosts /etc/mediamtx.yml
 # NM dispatcher for ICE host updates must be present and executable
 ls -l /etc/NetworkManager/dispatcher.d/99-mediamtx-update-hosts
 
-# Periodic ICE host refresh timer must be active (catches Tailscale and other non-NM interfaces)
+# Periodic ICE host refresh timer must be active (catches NetBird and other non-NM interfaces)
 systemctl list-timers mediamtx-update-hosts.timer
 
 # WiFi adapter power-save disabled (rtw_8822bu only — skip if different chipset)

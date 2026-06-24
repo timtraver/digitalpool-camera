@@ -1956,17 +1956,17 @@ async function switchToWebRTCPreview(streamPath, onConnected, _attempt = 0) {
 
   // Determine the best WHEP URL for this access scenario:
   //
-  // • LAN / hotspot / direct Tailscale:
+  // • LAN / hotspot / direct NetBird:
   //     whep-base returns the device IP matching this connection (e.g. 192.168.1.81 or
-  //     192.168.50.1 or 100.64.x.x). That host matches window.location.hostname, so the
+  //     192.168.50.1 or NetBird IP). That host matches window.location.hostname, so the
   //     browser can reach MediaMTX port 8889 directly — no CORS or mixed-content issues.
   //
-  // • Headscale reverse proxy (cameras.digitalpool.com/camera/home-1):
-  //     whep-base returns the Tailscale IP (100.64.x.x) but the page origin is
-  //     cameras.digitalpool.com. The browser cannot make a cross-origin or HTTP→HTTPS
-  //     mixed-content request to that IP, so we route through the Express WHEP proxy
-  //     (/api/whep/<path>) which forwards to MediaMTX on localhost.
-  //     The actual media UDP still flows directly over Tailscale via the ICE candidates
+  // • Reverse proxy (cameras.digitalpool.com/camera/home-1):
+  //     whep-base returns the NetBird IP but the page origin is cameras.digitalpool.com.
+  //     The browser cannot make a cross-origin or HTTP→HTTPS mixed-content request to
+  //     that IP, so we route through the Express WHEP proxy (/api/whep/<path>) which
+  //     forwards to MediaMTX on localhost.
+  //     The actual media UDP still flows directly over NetBird via the ICE candidates
   //     advertised in the SDP answer — only the signaling goes through the proxy.
 
   let whepBase = null; // null → fall back to proxy
@@ -1979,18 +1979,18 @@ async function switchToWebRTCPreview(streamPath, onConnected, _attempt = 0) {
   } catch (_) { /* network error — proxy fallback */ }
 
   // Use the Express proxy if the whepBase host differs from the page host
-  // (different host = proxy/Headscale scenario where direct access is blocked).
+  // (different host = reverse proxy scenario where direct access is blocked).
   const whepHost = whepBase ? new URL(whepBase).hostname : null;
   const useProxy = !whepHost || (whepHost !== window.location.hostname);
   // ── WHEP signaling: Socket.IO relay (proxy path) or direct fetch ───────────
   //
-  // When accessed via a reverse proxy (Headscale), the Express HTTP WHEP proxy
-  // (/api/whep/*) times out because Headscale closes idle HTTP connections before
+  // When accessed via a reverse proxy (NetBird), the Express HTTP WHEP proxy
+  // (/api/whep/*) times out because the proxy closes idle HTTP connections before
   // MediaMTX finishes SDP negotiation.  Relaying the offer over the already-open
   // Socket.IO WebSocket avoids this — the WS connection stays alive through
-  // Headscale with no request timeout.
+  // the reverse proxy with no request timeout.
   //
-  // Direct path (same-host LAN / hotspot / direct Tailscale): plain fetch to
+  // Direct path (same-host LAN / hotspot / direct NetBird): plain fetch to
   // MediaMTX port 8889 — no proxy involved, no timeout concern.
 
   let sdpAnswer;
@@ -4256,7 +4256,7 @@ loadDeviceIp();
     }
   });
 
-  // ── Remote Access (Headscale/Tailscale) ──────────────────────
+  // ── Remote Access (NetBird) ──────────────────────────────────
   function initRemoteAccess() {
     const nameInput   = document.getElementById("remoteDeviceName");
     const saveNameBtn = document.getElementById("saveDeviceNameBtn");
@@ -4365,13 +4365,13 @@ loadDeviceIp();
     });
 
     // "Register as New Device" — used after cloning an SD card to a new unit.
-    // Sends force:true which makes the server wipe /var/lib/tailscale/ before
-    // re-running tailscale up, so Headscale assigns a completely fresh IP.
+    // Sends force:true which makes the server wipe /var/lib/netbird/ before
+    // re-running netbird up, so NetBird assigns a completely fresh peer and IP.
     const reregBtn = document.getElementById("remoteReregisterBtn");
     reregBtn?.addEventListener("click", async () => {
       const name = nameInput?.value.trim();
       if (!name) { showMsg(msg, "❌ Enter a device name first", true); return; }
-      if (!confirm(`Register "${name}" as a brand-new device?\n\nThis will clear the existing Tailscale identity — the old entry in Headscale will become stale and a new IP will be assigned.\n\nOnly do this on a freshly cloned SD card, not on the original device.`)) return;
+      if (!confirm(`Register "${name}" as a brand-new device?\n\nThis will clear the existing NetBird identity — the old peer entry will become stale and a new IP will be assigned.\n\nOnly do this on a freshly cloned SD card, not on the original device.`)) return;
       showMsg(msg, "⏳ Clearing identity and re-registering…");
       reregBtn.disabled = true;
       try {
@@ -4391,7 +4391,7 @@ loadDeviceIp();
     });
   }
 
-  // ── Tailscale SSH (dpadmin only) ─────────────────────────────
+  // ── NetBird SSH (dpadmin only) ───────────────────────────────
   async function initRemoteSsh() {
     const block      = document.getElementById("remoteSshBlock");
     const dot        = document.getElementById("remoteSshDot");

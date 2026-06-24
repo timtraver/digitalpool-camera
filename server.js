@@ -476,7 +476,7 @@ app.put("/api/users/:username/password", express.json(), async (req, res) => {
   }
 });
 
-// ── Remote Access (Tailscale) API ── admin only ─────────────────────────────
+// ── Remote Access (NetBird) API ── admin only ───────────────────────────────
 const REMOTE_CONFIG_FILE = path.join(__dirname, "remote.json");
 
 function loadRemoteConfig() {
@@ -492,82 +492,28 @@ function saveRemoteConfig(cfg) {
 }
 
 /**
- * Look up a Headscale node by its Tailscale IP address.
- * Returns the node object or null.  Shared by rename and delete helpers.
+ * Parse `netbird status --json` and return { ip, connected }.
+ * netbirdIp is returned in CIDR form (e.g. "100.64.0.10/16"); we strip the prefix.
+ * Handles both legacy ("status"/"IP") and current ("daemonStatus"/"netbirdIp") field names.
  */
-async function headscaleFindNode(tailscaleIp) {
-  const apiKey    = process.env.HEADSCALE_API_KEY || "";
-  const serverUrl = (process.env.HEADSCALE_URL || "").replace(/\/$/, "");
-  if (!apiKey || !serverUrl) return null;
-
-  const listOut = await execAsync(
-    `curl -sf -H "Authorization: Bearer ${apiKey}" "${serverUrl}/api/v1/node" 2>/dev/null`
-  );
-  const data  = JSON.parse(listOut.stdout);
-  const nodes = data.nodes || data.machines || []; // field name varies by Headscale version
-  return nodes.find(n =>
-    (n.ip_addresses || n.ipAddresses || []).some(ip => ip === tailscaleIp)
-  ) || null;
-}
-
-/**
- * Rename a node in Headscale's own database (the "givenName" / display name).
- * Tailscale's --hostname flag only updates what the client reports; Headscale
- * stores a separate name field that must be updated via the admin API.
- * Silently skips if HEADSCALE_API_KEY is not configured.
- */
-async function headscaleRenameNode(tailscaleIp, newName) {
-  const apiKey    = process.env.HEADSCALE_API_KEY || "";
-  const serverUrl = (process.env.HEADSCALE_URL || "").replace(/\/$/, "");
-  if (!apiKey || !serverUrl) return;
-
-  try {
-    const node = await headscaleFindNode(tailscaleIp);
-    if (!node) { console.warn(`⚠️  Headscale rename: no node found with IP ${tailscaleIp}`); return; }
-    await execAsync(
-      `curl -sf -X POST -H "Authorization: Bearer ${apiKey}" "${serverUrl}/api/v1/node/${node.id}/rename/${newName}" 2>/dev/null`
-    );
-    console.log(`✅ Headscale: node ${node.id} renamed to "${newName}"`);
-  } catch (e) {
-    console.warn("⚠️  Headscale rename failed:", e.message);
-  }
-}
-
-/**
- * Delete a node from Headscale by its Tailscale IP.
- * Used before force re-registration so the old node record is removed first —
- * without this, tailscale up creates a second node and Headscale ends up with
- * both the stale old entry AND the new one.
- * Silently skips if HEADSCALE_API_KEY is not configured.
- */
-async function headscaleDeleteNode(tailscaleIp) {
-  const apiKey    = process.env.HEADSCALE_API_KEY || "";
-  const serverUrl = (process.env.HEADSCALE_URL || "").replace(/\/$/, "");
-  if (!apiKey || !serverUrl) return;
-
-  try {
-    const node = await headscaleFindNode(tailscaleIp);
-    if (!node) { console.warn(`⚠️  Headscale delete: no node found with IP ${tailscaleIp}`); return; }
-    await execAsync(
-      `curl -sf -X DELETE -H "Authorization: Bearer ${apiKey}" "${serverUrl}/api/v1/node/${node.id}" 2>/dev/null`
-    );
-    console.log(`✅ Headscale: deleted old node ${node.id} (${tailscaleIp})`);
-  } catch (e) {
-    console.warn("⚠️  Headscale delete failed:", e.message);
-  }
+async function netbirdGetStatus() {
+  const { stdout } = await execAsync("netbird status --json 2>/dev/null");
+  const nb = JSON.parse(stdout);
+  const rawIp = nb.localPeerState?.netbirdIp || nb.localPeerState?.IP || null;
+  const ip = rawIp ? rawIp.split("/")[0] : null;
+  const connected = nb.daemonStatus === "Connected" || nb.status === "Connected";
+  return { ip, connected, raw: nb };
 }
 
 app.get("/api/remote/status", requireAdmin, async (req, res) => {
   const cfg = loadRemoteConfig();
   try {
-    // tailscale status --json gives us everything we need
-    const { stdout } = await execAsync("tailscale status --json 2>/dev/null");
-    const ts = JSON.parse(stdout);
-    const ip  = ts.TailscaleIPs?.[0] || null;
-    const up  = ts.BackendState === "Running";
-    res.json({ enabled: up, ip, deviceName: cfg.deviceName, backendState: ts.BackendState });
+    // netbird status --json gives us everything we need
+    const { ip, connected, raw } = await netbirdGetStatus();
+    const state = raw.daemonStatus || raw.status || "Disconnected";
+    res.json({ enabled: connected, ip, deviceName: cfg.deviceName, backendState: state });
   } catch {
-    // tailscale not installed or not running yet
+    // netbird not installed or daemon not running yet
     res.json({ enabled: false, ip: null, deviceName: cfg.deviceName, backendState: "Stopped" });
   }
 });
@@ -580,102 +526,74 @@ app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) =>
     .replace(/[^a-z0-9-]/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
-  // force:true = cloned-device / re-registration path — clears node identity first
-  // so Headscale treats this as a brand-new device and assigns a fresh IP.
+  // force:true = cloned-device / re-registration path — wipes node identity so
+  // NetBird assigns a completely fresh peer and IP.
   const force = !!req.body?.force;
 
   cfg.deviceName = name;
   cfg.enabled    = true;
   saveRemoteConfig(cfg);
   try {
-    const loginServer = process.env.HEADSCALE_URL || "";
-    const authKey     = process.env.HEADSCALE_AUTHKEY || "";
+    const managementUrl = process.env.NETBIRD_MANAGEMENT_URL || "";
+    const setupKey      = process.env.NETBIRD_SETUP_KEY || "";
 
     if (force) {
       // Re-register as a brand-new device (cloned SD card path).
       //
       // Sequence:
-      //   1. Get current IP (while identity is still intact)
-      //   2. Delete old node from Headscale via API
-      //   3. HARD STOP daemon (NO tailscale logout — logout sends a signal to
-      //      Headscale that can trigger a ghost re-registration event, creating
-      //      a second node.  We've already deleted via API so logout is redundant.)
-      //   4. Clear /var/lib/tailscale/ (destroys node private key on disk)
-      //   5. Start daemon fresh (NeedsLogin state — will not auto-connect)
-      //   6. tailscale up --authkey=... → exactly ONE new node in Headscale
+      //   1. Stop netbird daemon
+      //   2. Clear /var/lib/netbird/ (destroys node private key on disk)
+      //   3. Start daemon fresh (NeedsLogin state — will not auto-connect)
+      //   4. netbird up --setup-key=... → fresh peer registration in NetBird
 
-      // Step 1 — capture current IP before we lose the identity
-      console.log("🔄 Force re-register: reading current Tailscale IP…");
-      const { stdout: oldIpOut } = await execAsync("tailscale ip --4 2>/dev/null").catch(() => ({ stdout: "" }));
-      const oldIp = oldIpOut.trim();
-
-      // Step 2 — delete old node from Headscale BEFORE stopping the daemon
-      if (oldIp) {
-        console.log(`🔄 Force re-register: deleting old Headscale node (${oldIp})…`);
-        await headscaleDeleteNode(oldIp);
-      } else {
-        console.warn("⚠️  Force re-register: no current IP — node may already be gone from Headscale");
-      }
-
-      // Step 3 — hard stop (skip tailscale logout to avoid ghost registrations)
-      console.log("🔄 Force re-register: stopping tailscaled daemon…");
-      await execAsync("sudo /usr/bin/systemctl stop tailscaled").catch(() => {});
+      console.log("🔄 Force re-register: stopping netbird daemon…");
+      await execAsync("sudo /usr/bin/systemctl stop netbird").catch(() => {});
       await new Promise(r => setTimeout(r, 1000));
 
-      // Step 4 — wipe all state including the private node key
       console.log("🔄 Force re-register: clearing node state…");
-      await execAsync("sudo rm -rf /var/lib/tailscale/").catch(() => {});
+      await execAsync("sudo rm -rf /var/lib/netbird/").catch(() => {});
 
-      // Step 5 — start daemon with blank state (enters NeedsLogin, won't auto-connect)
-      console.log("🔄 Force re-register: starting fresh tailscaled daemon…");
-      await execAsync("sudo /usr/bin/systemctl start tailscaled").catch(() => {});
+      console.log("🔄 Force re-register: starting fresh netbird daemon…");
+      await execAsync("sudo /usr/bin/systemctl start netbird").catch(() => {});
       await new Promise(r => setTimeout(r, 2000));
-      console.log("🔄 Force re-register: daemon ready — running tailscale up…");
+      console.log("🔄 Force re-register: daemon ready — running netbird up…");
     }
 
-    // Build the tailscale up command.
-    // --reset ensures any stale flags from the previous identity are cleared.
+    // Build the netbird up command.
+    // --hostname sets the display name in the NetBird dashboard.
     // Omit --timeout so the command doesn't exit early on a fresh state wipe —
-    // the daemon will keep trying in the background and we poll for Running below.
-    let upCmd = `sudo tailscale up --hostname=${name} --accept-routes --reset`;
-    if (loginServer) upCmd += ` --login-server=${loginServer}`;
-    if (authKey)     upCmd += ` --authkey=${authKey}`;
+    // the daemon will keep trying in the background and we poll for Connected below.
+    let upCmd = `sudo netbird up --hostname=${name}`;
+    if (managementUrl) upCmd += ` --management-url=${managementUrl}`;
+    if (setupKey)      upCmd += ` --setup-key=${setupKey}`;
 
     try {
       await execAsync(upCmd, { timeout: 30000 });
     } catch (e) {
-      // Non-zero exit is sometimes returned even on success (e.g. "already running")
-      // so we fall through and poll for the Running state below.
-      console.warn("tailscale up warning:", e.stderr || e.message);
+      // Non-zero exit is sometimes returned even on success (e.g. "already connected")
+      // so we fall through and poll for Connected state below.
+      console.warn("netbird up warning:", e.stderr || e.message);
     }
 
-    // Poll tailscale status until BackendState === "Running" (up to 30 s).
-    // tailscale ip --4 returns an IP as soon as Headscale assigns one, but the
-    // node shows as offline in Headscale until the Wireguard session is fully
-    // established.  We must wait for Running, not just for an IP.
+    // Poll netbird status until daemonStatus === "Connected" (up to 30 s).
     let ip = "";
     const deadline = Date.now() + 30000;
     while (Date.now() < deadline) {
       try {
-        const { stdout: stJson } = await execAsync("tailscale status --json 2>/dev/null");
-        const st = JSON.parse(stJson);
-        if (st.BackendState === "Running" && st.TailscaleIPs?.length) {
-          ip = st.TailscaleIPs[0];
+        const st = await netbirdGetStatus();
+        if (st.connected && st.ip) {
+          ip = st.ip;
           break;
         }
-        console.log(`⏳ Tailscale BackendState: ${st.BackendState} — waiting…`);
+        console.log(`⏳ NetBird status: ${st.raw?.daemonStatus || st.raw?.status || "unknown"} — waiting…`);
       } catch { /* status not ready yet */ }
       await new Promise(r => setTimeout(r, 2000));
     }
 
     if (ip) {
-      // Update the Headscale node name (givenName) to match — Tailscale's
-      // --hostname flag only updates what the client reports; the Headscale
-      // database name needs a separate API call to stay in sync.
-      await headscaleRenameNode(ip, name);
       res.json({ success: true, ip, deviceName: name, reregistered: force });
     } else {
-      res.status(500).json({ error: "Tailscale registered but did not reach Running state within 30 s. Check service logs." });
+      res.status(500).json({ error: "NetBird registered but did not reach Connected state within 30 s. Check service logs." });
     }
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -687,7 +605,7 @@ app.post("/api/remote/disable", requireAdmin, async (req, res) => {
   cfg.enabled = false;
   saveRemoteConfig(cfg);
   try {
-    await execAsync("sudo tailscale down");
+    await execAsync("sudo netbird down");
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -725,9 +643,9 @@ app.get("/api/remote/ssh/status", requireAdmin, async (req, res) => {
   const enabled = svcEnabled === "enabled" || sockEnabled === "enabled";
   let ip = null;
   try {
-    const { stdout } = await execAsync("tailscale ip --4 2>/dev/null");
-    ip = stdout.trim() || null;
-  } catch { /* tailscale not running */ }
+    const st = await netbirdGetStatus();
+    ip = st.ip || null;
+  } catch { /* netbird not running */ }
   // canToggleSsh: true for any admin-role user (including hotspot users and dpadmin)
   const canToggleSsh = isHotspotRequest(req) ||
     req.session?.user?.role === "admin" ||
@@ -786,19 +704,22 @@ app.put("/api/remote/name", requireAdmin, express.json(), async (req, res) => {
   const cfg = loadRemoteConfig();
   cfg.deviceName = name;
   saveRemoteConfig(cfg);
-  // If tailscale is running, update hostname AND Headscale givenName live
+  // If netbird is connected, restart with the new hostname.
+  // NetBird does not support live hostname rename — a down/up cycle is required.
   try {
-    const { stdout } = await execAsync("tailscale status --json 2>/dev/null");
-    const ts = JSON.parse(stdout);
-    if (ts.BackendState === "Running") {
-      await execAsync(`sudo tailscale set --hostname=${name}`);
-      // Also rename in Headscale's own database — tailscale set --hostname only
-      // updates what the client reports; the Headscale node name needs the API.
-      const { stdout: ipOut } = await execAsync("tailscale ip --4 2>/dev/null").catch(() => ({ stdout: "" }));
-      const ip = ipOut.trim();
-      if (ip) await headscaleRenameNode(ip, name);
+    const { connected } = await netbirdGetStatus();
+    if (connected) {
+      const managementUrl = process.env.NETBIRD_MANAGEMENT_URL || "";
+      const setupKey      = process.env.NETBIRD_SETUP_KEY || "";
+      await execAsync("sudo netbird down").catch(() => {});
+      let upCmd = `sudo netbird up --hostname=${name}`;
+      if (managementUrl) upCmd += ` --management-url=${managementUrl}`;
+      if (setupKey)      upCmd += ` --setup-key=${setupKey}`;
+      await execAsync(upCmd, { timeout: 30000 }).catch((e) => {
+        console.warn("netbird up (rename) warning:", e.stderr || e.message);
+      });
     }
-  } catch { /* tailscale not running — name saved for next enable */ }
+  } catch { /* netbird not running — name saved for next enable */ }
   res.json({ success: true, deviceName: name });
 });
 
@@ -1945,7 +1866,7 @@ app.get("/api/stream/config", (req, res) => {
 // Using req.socket.localAddress instead of window.location.hostname ensures the
 // URL matches the interface this connection arrived on, which is guaranteed to
 // be one of MediaMTX's ICE candidates (it's a live local interface).
-// This fixes Tailscale, hotspot, and any other non-LAN interface automatically.
+// This fixes NetBird, hotspot, and any other non-LAN interface automatically.
 app.get("/api/stream/whep-base", requireAuth, (req, res) => {
   let host = req.socket.localAddress || "127.0.0.1";
   // Strip IPv6-mapped IPv4 prefix (e.g. ::ffff:192.168.1.81 → 192.168.1.81)
@@ -2571,13 +2492,13 @@ function stripAudioFromSdp(buf) {
 // Proxies WebRTC-HTTP Egress Protocol (WHEP) requests to MediaMTX on port 8889.
 //
 // Used when the browser cannot reach MediaMTX port 8889 directly — specifically
-// when the admin UI is accessed via the Headscale reverse proxy
+// when the admin UI is accessed via a reverse proxy
 // (e.g. cameras.digitalpool.com/camera/home-1). In that case the page is served
 // from an HTTPS origin different from the device IP, so direct cross-origin /
-// mixed-content requests to 100.64.x.x:8889 are blocked by the browser.
+// mixed-content requests to the NetBird IP are blocked by the browser.
 // The proxy routes signaling through the same authenticated Express connection
 // the browser already has open. The actual media UDP still flows directly over
-// Tailscale using the ICE candidates advertised in the SDP answer.
+// NetBird using the ICE candidates advertised in the SDP answer.
 //
 // POST /api/whep/preview  →  POST http://127.0.0.1:8889/preview/whep
 // PATCH/DELETE /api/whep/preview/<sessionId>  →  PATCH/DELETE http://127.0.0.1:8889/preview/whep/<sessionId>
@@ -3437,11 +3358,11 @@ io.on("connection", (socket) => {
   });
 
   // ── WHEP signaling relay over Socket.IO ────────────────────────────────────
-  // When the browser reaches us through a reverse proxy (Headscale/Tailscale),
+  // When the browser reaches us through a reverse proxy (NetBird),
   // the HTTP WHEP proxy (/api/whep/*) times out because the proxy layer closes
   // idle HTTP connections before MediaMTX finishes SDP negotiation.
   // Relaying over the existing Socket.IO WebSocket avoids this — the WS
-  // connection is already stable and long-lived through Headscale.
+  // connection is already stable and long-lived through the reverse proxy.
   socket.on("whep-offer", async ({ streamPath, sdp: offerSdp }) => {
     if (!streamPath || !offerSdp) {
       socket.emit("whep-answer", { error: "missing streamPath or sdp" });
