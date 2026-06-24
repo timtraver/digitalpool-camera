@@ -1214,23 +1214,44 @@ def main():
 
         _load_png_surface()  # pre-load at startup
 
+        # Track the last-seen canvas size so we only log on change, not every frame.
+        _canvas_size = [None]
+
         def on_png_draw(overlay, cr, timestamp, duration):
             """Draw the PNG surface on every frame (GStreamer streaming thread)."""
-            if _cairo_surface[0] is not None:
+            if _cairo_surface[0] is None:
+                return
+
+            # Query the TRUE canvas dimensions from the Cairo clip region.
+            # This is the actual video frame size at this cairooverlay element —
+            # NOT the configured overlay_width/overlay_height, which reflects
+            # what the stream *should* be but may differ if the source delivers
+            # a different resolution or if caps negotiation doesn't force the
+            # prescale to the expected size.
+            x1, y1, x2, y2 = cr.clip_extents()
+            canvas_w = int(x2 - x1)
+            canvas_h = int(y2 - y1)
+
+            if _canvas_size[0] != (canvas_w, canvas_h):
+                _canvas_size[0] = (canvas_w, canvas_h)
                 png_w = _cairo_surface[0].get_width()
                 png_h = _cairo_surface[0].get_height()
-                # Scale the PNG to fit the video frame exactly.
-                # This is a no-op when dimensions already match (scale = 1.0),
-                # but corrects two common mismatches:
-                #   1. Puppeteer DPR > 1: screenshot is 2× or 3× larger than
-                #      the 1920×1080 viewport (e.g. 3840×2160 on HiDPI hosts).
-                #   2. Stream resolution ≠ 1920×1080: if the pipeline is
-                #      configured at 1280×720 the PNG must be downscaled to fit,
-                #      otherwise it overflows the frame and appears cropped/large.
-                if png_w != overlay_width or png_h != overlay_height:
-                    cr.scale(overlay_width / png_w, overlay_height / png_h)
-                cr.set_source_surface(_cairo_surface[0], 0, 0)
-                cr.paint()
+                print(
+                    f"🖼️  cairooverlay canvas: {canvas_w}×{canvas_h}  "
+                    f"PNG: {png_w}×{png_h}  "
+                    f"configured: {overlay_width}×{overlay_height}",
+                    file=sys.stderr
+                )
+
+            png_w = _cairo_surface[0].get_width()
+            png_h = _cairo_surface[0].get_height()
+            # Scale the PNG to fill the actual canvas exactly.
+            # A no-op (scale = 1.0) when sizes already match; corrects both
+            # Puppeteer DPR > 1 screenshots AND pipeline resolution mismatches.
+            if png_w != canvas_w or png_h != canvas_h:
+                cr.scale(canvas_w / png_w, canvas_h / png_h)
+            cr.set_source_surface(_cairo_surface[0], 0, 0)
+            cr.paint()
 
         pngoverlay_el.connect("draw", on_png_draw)
         overlay_element = pngoverlay_el  # so overlay_msg below is correct
