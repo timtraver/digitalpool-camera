@@ -4365,27 +4365,64 @@ process.on("uncaughtException", (err) => {
   // Do NOT exit — the watchdog will restart if the service truly hangs.
 });
 
-// Graceful shutdown - close Puppeteer browsers (one per camera)
-async function _shutdownPuppeteer() {
-  if (puppeteerOverlay)  await puppeteerOverlay.stop();
-  if (puppeteerOverlay2) await puppeteerOverlay2.stop();
-  // Nuclear fallback: kill any surviving Chrome/Chromium processes that were
-  // not cleaned up by _closeBrowser() (e.g. if the browser process group was
-  // not fully torn down). This prevents orphan accumulation across restarts.
+// Graceful shutdown — kill all child processes and exit within a hard deadline.
+//
+// systemd sends SIGTERM, waits TimeoutStopSec, then SIGKILLs everything.
+// We must exit() before that deadline.  The strategy:
+//   1. SIGKILL idle preview GStreamer children synchronously (they are the
+//      heaviest processes and don't need graceful teardown).
+//   2. Ask Puppeteer/Chrome to close gracefully (best-effort, 3 s budget).
+//   3. pkill any surviving Chrome processes as a nuclear fallback.
+//   4. Hard deadline: force process.exit(0) after 7 s regardless of what
+//      async operations are still pending.  TimeoutStopSec=10 in the service
+//      file gives us a 3 s margin before systemd's SIGKILL.
+async function _gracefulShutdown() {
+  console.log("🛑 Shutting down — killing child processes...");
+
+  // ── Step 1: kill idle preview GStreamer processes immediately ──
+  // These are gst-launch-1.0 children spawned by startPersistentIdlePreview().
+  // They hold V4L2 and RTMP resources and must die before the process exits.
+  for (const proc of [currentIdlePreviewProcess, currentIdlePreviewProcess2]) {
+    if (proc && !proc.killed) {
+      try { process.kill(-proc.pid, "SIGKILL"); } catch (_) {}  // process group
+      try { proc.kill("SIGKILL"); }               catch (_) {}  // direct
+    }
+  }
+
+  // ── Step 2: stop Puppeteer browsers (best-effort, capped at 3 s) ──
   try {
-    const { execSync } = require("child_process");
-    execSync('pkill -SIGKILL -f "chromium-browser/chrome" 2>/dev/null || pkill -SIGKILL -f chromium 2>/dev/null || true', { shell: true });
-  } catch (_) { /* pkill not found or no processes — ignore */ }
+    await Promise.race([
+      (async () => {
+        if (puppeteerOverlay)  await puppeteerOverlay.stop();
+        if (puppeteerOverlay2) await puppeteerOverlay2.stop();
+      })(),
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
+  } catch (_) { /* ignore — we're shutting down */ }
+
+  // ── Step 3: nuclear pkill for any surviving Chrome/Chromium children ──
+  try {
+    execSync(
+      'pkill -SIGKILL -f "chromium-browser/chrome" 2>/dev/null; ' +
+      'pkill -SIGKILL -f chromium 2>/dev/null; true',
+      { shell: true, timeout: 2000 }
+    );
+  } catch (_) { /* pkill not found or no processes */ }
+
+  console.log("✅ Shutdown complete");
+  process.exit(0);
 }
 
-process.on("SIGINT", async () => {
-  console.log("\n🛑 Shutting down...");
-  await _shutdownPuppeteer();
-  process.exit(0);
-});
+// Hard deadline: if _gracefulShutdown() somehow hangs past 7 s, exit anyway.
+// TimeoutStopSec=10 in the service file gives us a 3 s buffer before systemd
+// SIGKILLs the entire cgroup.
+function _startShutdown() {
+  setTimeout(() => {
+    console.error("⚠️  Shutdown deadline exceeded — forcing exit");
+    process.exit(1);
+  }, 7000).unref();   // .unref() so the timer doesn't prevent a clean exit
+  _gracefulShutdown().catch(() => process.exit(1));
+}
 
-process.on("SIGTERM", async () => {
-  console.log("\n🛑 Shutting down...");
-  await _shutdownPuppeteer();
-  process.exit(0);
-});
+process.on("SIGINT",  _startShutdown);
+process.on("SIGTERM", _startShutdown);

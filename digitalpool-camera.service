@@ -10,6 +10,11 @@ WorkingDirectory=/home/ubuntu/digitalpool-camera
 ExecStart=/usr/local/bin/node server.js
 Restart=always
 RestartSec=5
+# Node.js SIGTERM handler kills child processes and calls process.exit() within
+# 7 s (hard deadline enforced in server.js _startShutdown).  Give it 10 s here
+# so systemd doesn't race ahead with SIGKILL while children are still dying.
+# Default is 90 s which made every restart feel hung.
+TimeoutStopSec=10
 # Kill any surviving Chrome/Chromium child processes after Node.js exits.
 # Puppeteer launches Chrome as a subprocess; if Node is killed before its
 # SIGTERM handler completes, Chrome's renderer/gpu/zygote children can
