@@ -1830,8 +1830,23 @@ class StreamController extends EventEmitter {
     if (codec === "h265") {
       // H.265 (HEVC) — incompatible with RTMP (FLV only supports H.264);
       // only reached for SRT / RTSP.  Encoder chosen by hardware family.
-      if (encoder === "vaapih264enc") {
-        // Intel VA-API H.265 encoder
+      if (encoder === "vah264enc") {
+        // Intel VA-API H.265 — modern VA plugin (vah265enc, gstreamer1.0-plugins-bad)
+        const bitrate_kbps = Math.round(bitrate / 1000);
+        pipeline.push(
+          "videoconvert", "!", "video/x-raw,format=NV12", "!",
+          "vah265enc",
+          `bitrate=${bitrate_kbps}`,
+          "key-int-max=15",
+          "!",
+          "video/x-h265,stream-format=byte-stream",
+          "!",
+          "h265parse",
+          "config-interval=-1",
+          "!",
+        );
+      } else if (encoder === "vaapih264enc") {
+        // Intel VA-API H.265 — legacy gst-vaapi plugin
         const bitrate_kbps = Math.round(bitrate / 1000);
         pipeline.push(
           "videoconvert",
