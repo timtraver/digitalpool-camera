@@ -442,16 +442,21 @@ def main():
             # RTMP (FLV) only supports H.264 so codec is forced to h264 for RTMP above.
             (f'! mpph265enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr '
              if encoder.startswith('mpp') else
+             f'! vah265enc bitrate={bitrate_kbps} keyframe-period=15 '
+             if encoder == 'vah264enc' else
              f'! vaapih265enc bitrate={bitrate_kbps} keyframe-period=15 ')
             + f'! video/x-h265,stream-format=byte-stream '
             + f'! h265parse config-interval=-1 '
             if codec == "h265" else
             # H.264 — encoder selected by the 'encoder' argument (arg 29):
             #   mpph264enc  : Rockchip MPP hardware (bps in bits, VBR with burst headroom)
-            #   vaapih264enc: Intel VA-API hardware (bitrate in kbps, keyframe-period)
+            #   vah264enc   : Intel VA-API hardware, GStreamer va plugin (Ubuntu 24.04+)
+            #   vaapih264enc: Intel VA-API hardware, GStreamer vaapi plugin (legacy)
             #   x264enc     : software fallback (bitrate in kbps, ultrafast/zerolatency)
             (f'! mpph264enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr profile=baseline '
              if encoder == 'mpph264enc' else
+             f'! vah264enc bitrate={bitrate_kbps} keyframe-period=15 '
+             if encoder == 'vah264enc' else
              f'! vaapih264enc bitrate={bitrate_kbps} keyframe-period=15 '
              if encoder == 'vaapih264enc' else
              f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
