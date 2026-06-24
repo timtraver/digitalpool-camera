@@ -3088,13 +3088,16 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
   // are safe here without contention.
   // omxh264videoenc (Allwinner OMX) has a multi-second cold-start delay that causes
   // librtmp to drop the RTMP connection before the first frame arrives — fall back to x264enc.
-  const idleEncArgs = idleEncoder === "vah264enc"
-    ? ["videoconvert", "!", "video/x-raw,format=NV12", "!", "vah264enc", "bitrate=2000", "key-int-max=15", "!"]
-    : idleEncoder === "vaapih264enc"
-    ? ["videoconvert", "!", "vaapih264enc", "bitrate=2000", "keyframe-period=15", "!"]
-    : idleEncoder === "x264enc" || idleEncoder === "omxh264videoenc"
-    ? ["videoconvert", "!", "video/x-raw,format=I420", "!", "x264enc", "bitrate=2000", "speed-preset=ultrafast", "tune=zerolatency", "key-int-max=15", "!"]
-    : ["videoconvert", "!", "video/x-raw,format=NV12", "!", "mpph264enc", "bps=2000000", "header-mode=each-idr", "gop=15", "!"];
+  // VA-API (vah264enc / vaapih264enc): use x264enc for idle previews.
+  // Both cameras run idle previews concurrently. The N97 cannot sustain two
+  // simultaneous vah264enc sessions — the second session's VA-API pool negotiation
+  // kills the first process. x264enc at ultrafast/720p/15fps uses ~5% CPU and
+  // lets both previews coexist without VA-API contention.
+  // Rockchip mpph264enc and Allwinner omxh264videoenc use x264enc for their own reasons
+  // (MPP is fine with two sessions but idle is low-priority; OMX has cold-start delays).
+  const idleEncArgs = idleEncoder === "mpph264enc"
+    ? ["videoconvert", "!", "video/x-raw,format=NV12", "!", "mpph264enc", "bps=2000000", "header-mode=each-idr", "gop=15", "!"]
+    : ["videoconvert", "!", "video/x-raw,format=I420", "!", "x264enc", "bitrate=2000", "speed-preset=ultrafast", "tune=zerolatency", "key-int-max=15", "!"];
 
   gstArgs.push(
     ...idleEncArgs,
