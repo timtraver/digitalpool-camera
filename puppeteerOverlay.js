@@ -345,9 +345,14 @@ class PuppeteerOverlay extends EventEmitter {
     }
     this._currentLoadedUrl = null;
 
-    // Safety: kill the process if close() didn't work
+    // Safety: kill the entire process group so Chrome's child processes
+    // (renderer, gpu-process, zygote, utility, crashpad) are also terminated.
+    // process.kill(-pid, signal) sends to the process GROUP (PGID = pid when
+    // Chrome is a process group leader, which it always is on Linux).
+    // Killing only the parent PID leaves children reparented to init as orphans.
     if (pid) {
-      try { process.kill(pid, "SIGKILL"); } catch (e) { /* already dead */ }
+      try { process.kill(-pid, "SIGKILL"); } catch (e) { /* not a group leader or already dead */ }
+      try { process.kill(pid,  "SIGKILL"); } catch (e) { /* already dead */ }
     }
   }
 

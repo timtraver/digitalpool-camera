@@ -10,6 +10,13 @@ WorkingDirectory=/home/radxa/digitalpool-camera
 ExecStart=/usr/local/bin/node server.js
 Restart=always
 RestartSec=5
+# Kill any surviving Chrome/Chromium child processes after Node.js exits.
+# Puppeteer launches Chrome as a subprocess; if Node is killed before its
+# SIGTERM handler completes, Chrome's renderer/gpu/zygote children can
+# survive as orphans and accumulate across restarts.
+# This runs after every stop/crash/restart — it is safe to run even when
+# no Chrome is present (pkill exits 1, which is suppressed by || true).
+ExecStopPost=/bin/bash -c 'pkill -SIGKILL -f "chromium-browser/chrome" 2>/dev/null || pkill -SIGKILL -f chromium 2>/dev/null || true'
 
 # Logging — view with: journalctl -u digitalpool-camera -f
 StandardOutput=journal

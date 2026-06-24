@@ -4362,6 +4362,13 @@ process.on("uncaughtException", (err) => {
 async function _shutdownPuppeteer() {
   if (puppeteerOverlay)  await puppeteerOverlay.stop();
   if (puppeteerOverlay2) await puppeteerOverlay2.stop();
+  // Nuclear fallback: kill any surviving Chrome/Chromium processes that were
+  // not cleaned up by _closeBrowser() (e.g. if the browser process group was
+  // not fully torn down). This prevents orphan accumulation across restarts.
+  try {
+    const { execSync } = require("child_process");
+    execSync('pkill -SIGKILL -f "chromium-browser/chrome" 2>/dev/null || pkill -SIGKILL -f chromium 2>/dev/null || true', { shell: true });
+  } catch (_) { /* pkill not found or no processes — ignore */ }
 }
 
 process.on("SIGINT", async () => {
