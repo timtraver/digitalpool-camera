@@ -2,35 +2,39 @@
 import subprocess, sys, os
 
 REPO = os.path.dirname(os.path.abspath(__file__))
+LOG  = os.path.join(REPO, "do_git_out.txt")
+_log = open(LOG, "w", buffering=1)
 
 def run(args, **kwargs):
     r = subprocess.run(args, cwd=REPO, capture_output=True, text=True, **kwargs)
-    print(f"$ {' '.join(args)}")
-    if r.stdout.strip():
-        print(r.stdout.strip())
-    if r.stderr.strip():
-        print(r.stderr.strip())
-    print(f"  -> rc={r.returncode}")
+    line = "$ " + " ".join(args) + "\n"
+    if r.stdout.strip(): line += r.stdout.strip() + "\n"
+    if r.stderr.strip(): line += r.stderr.strip() + "\n"
+    line += "  rc=" + str(r.returncode) + "\n"
+    _log.write(line); _log.flush()
     return r
 
 run(['git', 'status', '--short'])
 run(['git', 'log', '--oneline', '-3'])
 
-files = ['gst-overlay-pipeline.py', 'server.js', 'streamController.js']
+files = ['puppeteerOverlay.js', 'server.js', 'digitalpool-camera.service']
 run(['git', 'add'] + files)
 
 msg = (
-    "fix: vah264enc/vah265enc mapping + cairooverlay + race fixes\n\n"
-    "1. gst-overlay-pipeline.py: add vah264enc to H.264 encoder branch\n"
-    "   Without this, config 'vah264enc' fell through to software x264enc,\n"
-    "   causing 200%+ CPU per camera on Intel N97.\n"
-    "2. gst-overlay-pipeline.py: add vah264enc->vah265enc for H.265 branch.\n"
-    "3. gst-overlay-pipeline.py: replace gdkpixbufoverlay with cairooverlay.\n"
-    "   Ubuntu 24.04 gdkpixbufoverlay uses glycin/bwrap which requires D-Bus\n"
-    "   and fails in systemd service. cairooverlay + pycairo draws the PNG\n"
-    "   directly without any sandbox.\n"
-    "4. server.js: fuser -k device before stream start; isRestartInProgress\n"
-    "   guard in post-backoff idle preview restart to close spawn race."
+    "fix: kill Chrome process group on shutdown to prevent orphan accumulation\n\n"
+    "puppeteerOverlay.js _closeBrowser():\n"
+    "  Was: process.kill(pid, SIGKILL) - kills only the parent Chrome process.\n"
+    "  Chrome child processes (renderer, gpu-process, zygote, utility, crashpad)\n"
+    "  are separate PIDs and get reparented to init as orphans on every restart.\n"
+    "  Fix: process.kill(-pid, SIGKILL) sends SIGKILL to the entire process group.\n"
+    "  Chrome is always its own process group leader on Linux, so -pid == PGID.\n\n"
+    "server.js _shutdownPuppeteer():\n"
+    "  Add pkill -f chromium fallback after _closeBrowser() as belt-and-suspenders\n"
+    "  for any processes that survived the group kill (snap isolation, etc).\n\n"
+    "digitalpool-camera.service:\n"
+    "  Add ExecStopPost pkill - runs after every stop/crash/restart, even if Node\n"
+    "  exits before its SIGTERM handler fires. Guarantees zero Chrome orphans\n"
+    "  regardless of how the service terminates."
 )
 
 r = run(['git', 'commit', '-m', msg])
