@@ -200,7 +200,14 @@ function switchCamera(newIdx) {
   // Reload stream settings (protocol, bitrate, resolution, audio, flip, etc.)
   // from the server for the new camera. loadStreamConfig() reads activeCamIndex
   // so it must be called after the assignment above.
-  loadStreamConfig();
+  //
+  // If the audio device list was already loaded (user previously clicked 🔄),
+  // reload it for the new camera so the correct per-camera device is selected
+  // automatically — the user should never have to click 🔄 again just because
+  // they switched tabs.
+  loadStreamConfig().then(() => {
+    if (_audioDevicesLoaded) loadAudioDevices();
+  });
 
   // Refresh the connection info box for the correct camera's paths/ports
   // (loadStreamConfig also calls this after the fetch, but update immediately
@@ -862,6 +869,11 @@ const audioDeviceSelect      = document.getElementById("audioDeviceSelect");
 const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
 const audioOffsetRow         = document.getElementById("audioOffsetRow");
 const audioOffsetInput       = document.getElementById("audioOffset");
+
+// True once the user has clicked 🔄 at least once (audio device list was fetched).
+// Used by switchCamera() to auto-refresh the device list on tab switch so the
+// correct per-camera device is pre-selected without the user having to click 🔄 again.
+let _audioDevicesLoaded = false;
 
 // Video orientation flip checkboxes
 const flipHorizontalCheckbox = document.getElementById("flipHorizontal");
@@ -3329,10 +3341,26 @@ async function loadAudioDevices() {
       opt.textContent = name;
       audioDeviceSelect.appendChild(opt);
     });
-    // Pre-select: prefer what was saved on last load, then server current
+    // Pre-select priority:
+    //  1. The device saved in streamConfig for this camera (dataset.savedDevice,
+    //     updated by loadStreamConfig() on every camera tab switch).
+    //  2. The server's auto-detected current device (data.current) — used when
+    //     no device has been explicitly saved yet (empty audioDevice in config).
+    // If the saved device string isn't present in the populated list (e.g. it was
+    // saved on a different machine or the card number changed), fall back to
+    // data.current so the user always sees a valid, usable selection.
     const saved = audioDeviceSelect.dataset.savedDevice;
-    const sel = saved || data.current;
-    if (sel) audioDeviceSelect.value = sel;
+    const preferred = saved || data.current;
+    if (preferred) {
+      audioDeviceSelect.value = preferred;
+      // If the preferred value wasn't found in the list, fall back to data.current.
+      if (audioDeviceSelect.value !== preferred && data.current) {
+        audioDeviceSelect.value = data.current;
+      }
+    }
+    // Mark that devices have been loaded at least once so switchCamera() can
+    // auto-refresh the list (and selection) on subsequent tab switches.
+    _audioDevicesLoaded = true;
   } catch (e) {
     audioDeviceSelect.innerHTML = "<option value=''>Error — click 🔄 to retry</option>";
   }
@@ -3401,11 +3429,20 @@ async function loadStreamConfig() {
         audioSourceTypeSelect.value = data.config.audioSource || "video";
       }
 
-      // Store the saved audio device so the refresh button can pre-select it.
-      // We do NOT load audio devices automatically here — arecord can be slow
-      // and would block the page startup. The user clicks 🔄 when they need it.
-      if (data.config.audioDevice && audioDeviceSelect) {
-        audioDeviceSelect.dataset.savedDevice = data.config.audioDevice;
+      // Store the saved audio device so loadAudioDevices() can pre-select it.
+      // We do NOT trigger an arecord scan here — it can be slow and would block
+      // the page startup.  switchCamera() triggers loadAudioDevices() automatically
+      // once the user has loaded devices at least once (_audioDevicesLoaded flag).
+      if (audioDeviceSelect) {
+        const dev = data.config.audioDevice || "";
+        audioDeviceSelect.dataset.savedDevice = dev;
+        // If the dropdown is already populated (user previously clicked 🔄),
+        // immediately update the selected option so switching tabs gives instant
+        // visual feedback without waiting for the async loadAudioDevices() call.
+        if (_audioDevicesLoaded && dev && audioDeviceSelect.options.length > 0 &&
+            audioDeviceSelect.options[0].value) {
+          audioDeviceSelect.value = dev;
+        }
       }
 
       // Restore A/V sync offset (default 0).

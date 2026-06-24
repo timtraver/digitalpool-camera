@@ -318,12 +318,26 @@ def main():
     #   • Overlay path  → flip on BGRA  (we're converting to BGRA anyway)
     #   • No-overlay    → flip on I420  (minimal round-trip: NV12→I420→flip→NV12)
     if has_any_overlay:
-        # Pre-overlay NV12→BGRA: keep software videoconvert.
-        # cairooverlay must write into the buffer via Cairo, which requires
-        # writable system memory.  vapostproc may negotiate VA-API (GPU) memory
-        # for its output, which Cairo cannot address.  Software videoconvert
-        # always outputs system memory, so cairooverlay is guaranteed to work.
-        bgra_convert = '! videoconvert ! video/x-raw,format=BGRA '
+        # Pre-overlay NV12→BGRA colorspace conversion.
+        #
+        # For Intel VA-API encoders (vah264enc/vah265enc) we use vapostproc instead
+        # of software videoconvert.  On Intel N97 (and all Intel iGPU systems) VA-API
+        # uses unified / shared system memory — there is no discrete VRAM.  A VA-API
+        # buffer is a normal system memory allocation with VA surface metadata attached.
+        # GStreamer's gst_buffer_map(MAP_WRITE) returns a valid CPU pointer into that
+        # allocation, so cairooverlay can write into it via Cairo exactly as it would
+        # into a software-allocated buffer.
+        #
+        # On discrete GPUs (AMD, NVIDIA, or Intel Arc with dedicated VRAM) this would
+        # fail because VA-API buffers would live in VRAM.  This code path is only
+        # reached when encoder == vah264enc which implies Intel iGPU.
+        #
+        # Benefit: the NV12→BGRA conversion is offloaded to the Intel GPU video engine,
+        # saving ~480 MB/s of CPU memory bandwidth per stream at 1080p@60fps.
+        if encoder in ('vah264enc', 'vah265enc'):
+            bgra_convert = '! vapostproc ! video/x-raw,format=BGRA '
+        else:
+            bgra_convert = '! videoconvert ! video/x-raw,format=BGRA '
 
         # Post-overlay BGRA→NV12 (feeds the encoder):
         # For Intel VA-API encoders use vapostproc — it's in the same
