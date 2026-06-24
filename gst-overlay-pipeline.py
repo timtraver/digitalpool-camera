@@ -318,9 +318,28 @@ def main():
     #   • Overlay path  → flip on BGRA  (we're converting to BGRA anyway)
     #   • No-overlay    → flip on I420  (minimal round-trip: NV12→I420→flip→NV12)
     if has_any_overlay:
+        # Pre-overlay NV12→BGRA: keep software videoconvert.
+        # cairooverlay must write into the buffer via Cairo, which requires
+        # writable system memory.  vapostproc may negotiate VA-API (GPU) memory
+        # for its output, which Cairo cannot address.  Software videoconvert
+        # always outputs system memory, so cairooverlay is guaranteed to work.
+        bgra_convert = '! videoconvert ! video/x-raw,format=BGRA '
+
+        # Post-overlay BGRA→NV12 (feeds the encoder):
+        # For Intel VA-API encoders use vapostproc — it's in the same
+        # gstreamer1.0-plugins-bad 'va' plugin as vah264enc and guaranteed
+        # present.  vapostproc offloads the conversion to the GPU's fixed-function
+        # video engine and may keep the output in VA-API (GPU) memory so
+        # vah264enc reads directly without a system-memory download (zero-copy).
+        # For everything else keep software videoconvert.
+        if encoder in ('vah264enc', 'vah265enc'):
+            encode_convert = '! vapostproc ! video/x-raw,format=NV12 '
+        else:
+            encode_convert = '! videoconvert ! video/x-raw,format=NV12 '
+
         overlay_section = (
             f'{prescale}'
-            f'! videoconvert ! video/x-raw,format=BGRA '
+            f'{bgra_convert}'
             # Flip after BGRA conversion so videoflip always receives a format it
             # fully supports (BGRA).  Overlays drawn after the flip are correct
             # orientation because flip_str is empty when flip_method == 0.
@@ -329,7 +348,6 @@ def main():
             f'{text_overlay}'
             f'{timestamp_overlay}'
         )
-        encode_convert = f'! videoconvert ! video/x-raw,format=NV12 '
     else:
         overlay_section = ''
         encode_convert = ''
