@@ -3,7 +3,7 @@ const express = require("express");
 const http = require("http");
 const socketIO = require("socket.io");
 const session = require("express-session");
-const { spawn, exec } = require("child_process");
+const { spawn, exec, execSync } = require("child_process");
 const { promisify } = require("util");
 const execAsync = promisify(exec);
 const fsSync = require("fs");
@@ -3163,8 +3163,8 @@ async function startPersistentIdlePreview(camIdx = 1) {
     console.log(`⏳ [Cam${camIdx}] Idle preview backoff (streak=${failStreak}) — waiting ${backoffMs}ms...`);
     await new Promise((r) => setTimeout(r, backoffMs));
   }
-  if (sc.isStreaming) {
-    console.log(`⚠️  [Cam${camIdx}] Not starting idle preview — stream started during backoff`);
+  if (sc.isStreaming || isRestartInProgress[camIdx]) {
+    console.log(`⚠️  [Cam${camIdx}] Not starting idle preview — stream active or restart in progress`);
     return;
   }
 
@@ -4088,7 +4088,23 @@ async function _killIdlePreviewForCamera(camIdx) {
       dyingProcess.kill("SIGTERM");
       setTimeout(() => { try { dyingProcess.kill("SIGKILL"); } catch (_) {} }, 2000);
     });
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+
+  // Force-kill any orphan processes still holding the camera device.
+  // The tracked process reference can be null if the idle preview died on its own
+  // (e.g. VA-API contention, quick exit) but a stale gst-launch or python3 child
+  // still has the V4L2 fd open.  fuser -k ensures the device is free before GStreamer
+  // tries to open it, preventing the "Device or resource busy" VIDIOC_S_FMT error.
+  const activeSource = getActiveSource(camIdx);
+  if (activeSource.type === "usb") {
+    const dev = activeSource.device || (camIdx === 2 ? CAMERA_DEVICE_2 : CAMERA_DEVICE);
+    try {
+      execSync(`fuser -k "${dev}" 2>/dev/null || true`);
+      console.log(`🔓 [Cam${camIdx}] fuser -k ${dev} complete`);
+      // Brief wait for the kernel to fully release the V4L2 device fd
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    } catch (_) { /* fuser not installed or device already free — ignore */ }
   }
   console.log(`✅ [Cam${camIdx}] Idle preview killed — camera device free`);
 }
