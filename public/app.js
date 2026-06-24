@@ -889,10 +889,12 @@ let reloadCameraInput = null;
   const sourceTypeEl    = document.getElementById("cameraSourceType");
   const usbSection      = document.getElementById("cameraInputUsb");
   const rtspSection     = document.getElementById("cameraInputRtsp");
+  const rtmpSection     = document.getElementById("cameraInputRtmp");
   const ndiSection      = document.getElementById("cameraInputNdi");
   const deviceSelect    = document.getElementById("cameraUsbDevice");
   const refreshBtn      = document.getElementById("refreshCameraDevices");
   const rtspUrlEl       = document.getElementById("cameraRtspUrl");
+  const rtmpUrlEl       = document.getElementById("cameraRtmpUrl");
   const ndiNameEl       = document.getElementById("cameraNdiName");
   const ndiSearchBtn    = document.getElementById("ndiSearchBtn");
   const ndiSourceList   = document.getElementById("ndiSourceList");
@@ -905,7 +907,7 @@ let reloadCameraInput = null;
 
   // Tracks what the server considers the active source so we can dim the button
   // when the UI selection already matches it.
-  let activeSource = { type: "usb", device: "", rtspUrl: "", ndiName: "" };
+  let activeSource = { type: "usb", device: "", rtspUrl: "", rtmpUrl: "", ndiName: "" };
 
   function updateApplyButton() {
     if (!applyBtn) return;
@@ -914,6 +916,7 @@ let reloadCameraInput = null;
     if (matches) {
       if (type === "usb")  matches = (deviceSelect?.value || "") === activeSource.device;
       if (type === "rtsp") matches = (rtspUrlEl?.value.trim() || "") === (activeSource.rtspUrl || "");
+      if (type === "rtmp") matches = (rtmpUrlEl?.value.trim() || "") === (activeSource.rtmpUrl || "");
       if (type === "ndi")  matches = (ndiNameEl?.value.trim() || "") === (activeSource.ndiName || "");
     }
     applyBtn.disabled = matches;
@@ -951,8 +954,19 @@ let reloadCameraInput = null;
         sourceTypeEl.value = "rtsp";
         usbSection.style.display  = "none";
         rtspSection.style.display = "";
+        if (rtmpSection) rtmpSection.style.display = "none";
         if (ndiSection) ndiSection.style.display = "none";
-        activeSource = { type: "rtsp", device: "", rtspUrl: data.current.rtspUrl || "", ndiName: "" };
+        activeSource = { type: "rtsp", device: "", rtspUrl: data.current.rtspUrl || "", rtmpUrl: "", ndiName: "" };
+      }
+      // Pre-fill RTMP URL if currently active
+      if (data.current?.type === "rtmp" && rtmpUrlEl) {
+        rtmpUrlEl.value = data.current.rtmpUrl || "";
+        sourceTypeEl.value = "rtmp";
+        usbSection.style.display  = "none";
+        rtspSection.style.display = "none";
+        if (rtmpSection) rtmpSection.style.display = "";
+        if (ndiSection) ndiSection.style.display = "none";
+        activeSource = { type: "rtmp", device: "", rtspUrl: "", rtmpUrl: data.current.rtmpUrl || "", ndiName: "" };
       }
       // Pre-fill NDI source name if currently active
       if (data.current?.type === "ndi" && ndiNameEl) {
@@ -960,8 +974,9 @@ let reloadCameraInput = null;
         sourceTypeEl.value = "ndi";
         usbSection.style.display  = "none";
         rtspSection.style.display = "none";
+        if (rtmpSection) rtmpSection.style.display = "none";
         if (ndiSection) ndiSection.style.display = "";
-        activeSource = { type: "ndi", device: "", rtspUrl: "", ndiName: data.current.ndiName || "" };
+        activeSource = { type: "ndi", device: "", rtspUrl: "", rtmpUrl: "", ndiName: data.current.ndiName || "" };
       }
     } catch (e) {
       if (deviceSelect) deviceSelect.innerHTML = "<option value=''>Error loading devices</option>";
@@ -995,18 +1010,20 @@ let reloadCameraInput = null;
     }
   }
 
-  // Toggle USB / RTSP / NDI panels on source type change, and update audio device row.
+  // Toggle USB / RTSP / RTMP / NDI panels on source type change, and update audio device row.
   sourceTypeEl.addEventListener("change", () => {
     const type = sourceTypeEl.value;
-    usbSection.style.display              = type === "usb"  ? "" : "none";
-    rtspSection.style.display             = type === "rtsp" ? "" : "none";
-    if (ndiSection) ndiSection.style.display = type === "ndi"  ? "" : "none";
+    usbSection.style.display                 = type === "usb"  ? "" : "none";
+    rtspSection.style.display                = type === "rtsp" ? "" : "none";
+    if (rtmpSection) rtmpSection.style.display = type === "rtmp" ? "" : "none";
+    if (ndiSection)  ndiSection.style.display  = type === "ndi"  ? "" : "none";
     updateAudioDeviceRowVisibility();
     updateApplyButton();
   });
 
   if (deviceSelect) deviceSelect.addEventListener("change", updateApplyButton);
   if (rtspUrlEl)    rtspUrlEl.addEventListener("input",  updateApplyButton);
+  if (rtmpUrlEl)    rtmpUrlEl.addEventListener("input",  updateApplyButton);
   if (ndiNameEl)    ndiNameEl.addEventListener("input",  updateApplyButton);
 
   if (refreshBtn) refreshBtn.addEventListener("click", loadDevices);
@@ -1087,6 +1104,9 @@ let reloadCameraInput = null;
       } else if (type === "rtsp") {
         body.rtspUrl = rtspUrlEl?.value.trim() || "";
         if (!body.rtspUrl) { statusEl.textContent = "⚠️ Enter an RTSP URL first."; return; }
+      } else if (type === "rtmp") {
+        body.rtmpUrl = rtmpUrlEl?.value.trim() || "";
+        if (!body.rtmpUrl) { statusEl.textContent = "⚠️ Enter an RTMP URL first."; return; }
       } else if (type === "ndi") {
         body.ndiName = ndiNameEl?.value.trim() || "";
         if (!body.ndiName) { statusEl.textContent = "⚠️ Enter an NDI source name first."; return; }
@@ -1096,7 +1116,7 @@ let reloadCameraInput = null;
       if (isCurrentlyStreaming) {
         statusEl.style.color = "rgba(255,160,80,0.9)";
         statusEl.textContent = "Switching… stopping stream & reconnecting";
-      } else if (type === "rtsp" || type === "ndi") {
+      } else if (type === "rtsp" || type === "rtmp" || type === "ndi") {
         statusEl.textContent = "Connecting… (up to 12 s)";
       } else {
         statusEl.textContent = "Applying…";
@@ -3299,10 +3319,10 @@ function updateAudioDeviceRowVisibility() {
   const audioEnabled = audioEnabledCheckbox && audioEnabledCheckbox.checked;
   const audioSource  = audioSourceTypeSelect ? audioSourceTypeSelect.value : "video";
 
-  // "Audio From" selector only makes sense for RTSP and NDI sources, which carry
-  // embedded audio.  For USB the audio always comes from an ALSA device, so the
-  // "From video source" option would be misleading — hide the selector in that case.
-  const showAudioSourcePicker = audioEnabled && (inputType === "rtsp" || inputType === "ndi");
+  // "Audio From" selector only makes sense for RTSP, RTMP, and NDI sources, which
+  // carry embedded audio.  For USB the audio always comes from an ALSA device, so
+  // the "From video source" option would be misleading — hide the selector in that case.
+  const showAudioSourcePicker = audioEnabled && (inputType === "rtsp" || inputType === "rtmp" || inputType === "ndi");
   if (audioSourceRow) {
     audioSourceRow.style.display = showAudioSourcePicker ? "" : "none";
   }

@@ -83,9 +83,12 @@ def main():
     # H.265 is incompatible with RTMP (FLV container only supports H.264)
     requested_codec = sys.argv[21] if len(sys.argv) > 21 else "h264"
     codec = "h264" if protocol == "rtmp" else requested_codec
-    # Input source type and RTSP URL (optional — default to USB v4l2src)
-    input_type    = sys.argv[22] if len(sys.argv) > 22 else "usb"
-    input_rtsp_url = sys.argv[23] if len(sys.argv) > 23 else ""
+    # Input source type and stream URL (optional — default to USB v4l2src)
+    # arg 23 is the stream URL for both "rtsp" and "rtmp" input types.
+    input_type     = sys.argv[22] if len(sys.argv) > 22 else "usb"
+    input_stream_url = sys.argv[23] if len(sys.argv) > 23 else ""
+    input_rtsp_url = input_stream_url if input_type == "rtsp" else ""
+    input_rtmp_url = input_stream_url if input_type == "rtmp" else ""
     # NDI source name (arg 24, optional — only used when input_type == "ndi")
     input_ndi_name = sys.argv[24] if len(sys.argv) > 24 else ""
     # Video orientation (args 25-26, optional — default to no flip)
@@ -173,6 +176,13 @@ def main():
     if use_rtsp_audio:
         audio_device = ""  # treat as no-ALSA for output_sink selection below
 
+    # Detect RTMP audio passthrough sentinel — same mechanism as RTSP audio.
+    # rtmpsrc ! decodebin emits dynamic audio pads identical to rtspsrc ! decodebin,
+    # so we reuse the same pad-added handler (use_rtmp_audio follows use_rtsp_audio).
+    use_rtmp_audio = (audio_device == "rtmp")
+    if use_rtmp_audio:
+        audio_device = ""  # treat as no-ALSA for output_sink selection below
+
     # Detect NDI audio passthrough sentinel set by streamController.js.
     # When input_type is "ndi" and audioEnabled is true, Node.js passes "ndi"
     # as the audio_device arg.  ndisrcdemux exposes an "audio" src pad (dynamic,
@@ -239,7 +249,7 @@ def main():
             # wired to mux.audio in the pipeline string so flvmux always has audio
             # data flowing (silence until NDI audio arrives).  The pad-added
             # callback then mixes real NDI audio into the audiomixer.
-            # For RTSP audio: the pad-added callback requests mux.audio directly.
+            # For RTSP/RTMP audio: the pad-added callback requests mux.audio directly.
             output_sink = (
                 f'! video/x-h264,stream-format=avc,alignment=au '
                 f'! flvmux name=mux streamable=true '
@@ -248,7 +258,7 @@ def main():
             if use_ndi_audio:
                 audio_mux_target = 'mux.audio'  # static chain references it
             else:
-                audio_mux_target = None  # RTSP audio / video-only: pad-added or nothing
+                audio_mux_target = None  # RTSP/RTMP audio / video-only: pad-added or nothing
     else:
         print(f"❌ Unsupported protocol: {protocol}", file=sys.stderr)
         sys.exit(1)
@@ -419,6 +429,22 @@ def main():
             # latency that causes MediaMTX to drop the RTMP connection before the
             # first frame arrives.  The overlay/encode pipeline already contains a
             # videoscale to the correct output resolution.
+            f'! videorate ! video/x-raw,framerate={framerate}/1 '
+        )
+    elif input_type == "rtmp" and input_rtmp_url:
+        print(f"📡 Input source: RTMP → {input_rtmp_url}", file=sys.stderr)
+        # rtmpsrc pulls an RTMP/FLV stream; decodebin auto-selects a video decoder
+        # for the H.264 (or other) track.  Like rtspsrc, decodebin emits dynamic
+        # caps — videoconvert normalises them before videorate enforces the target fps.
+        #
+        # When use_rtmp_audio is True we name the decodebin "dec" so that the
+        # pad-added handler below can tap its audio pad at runtime.
+        dec_name = "name=dec " if use_rtmp_audio else ""
+        dec_ref  = "dec. "    if use_rtmp_audio else ""
+        source_str = (
+            f'rtmpsrc location={input_rtmp_url} '
+            f'! decodebin {dec_name}'
+            f'{dec_ref}! videoconvert '
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
         )
     elif capture_format == "yuyv":
@@ -746,6 +772,112 @@ def main():
             print("🔇 RTSP audio guard: pad-added handler installed on rtspsrc", file=sys.stderr)
         else:
             print("⚠️  RTSP audio guard: rtspsrc element not found in pipeline", file=sys.stderr)
+
+    # ── RTMP audio passthrough ─────────────────────────────────────────────────
+    # Mirrors the RTSP audio passthrough: rtmpsrc ! decodebin emits dynamic audio
+    # pads at PLAYING time.  We tap the audio pad and route it through:
+    #   audioconvert → audioresample → avenc_aac → aacparse → mux.audio
+    # If the RTMP stream has no audio track the callback never fires and the
+    # pipeline runs video-only — no error.
+    if use_rtmp_audio:
+        dec_element = pipeline.get_by_name("dec")
+        mux_element = pipeline.get_by_name("mux")
+
+        if dec_element and mux_element:
+            _rtmp_audio_linked = [False]
+
+            def on_rtmp_pad_added(element, pad, mux):
+                # Only handle audio pads — video is already wired in the string.
+                pad_caps = pad.get_current_caps() or pad.query_caps(None)
+                if not pad_caps:
+                    return
+                struct = pad_caps.get_structure(0)
+                if not struct or not struct.get_name().startswith("audio/"):
+                    return
+
+                if _rtmp_audio_linked[0]:
+                    print("🔊 RTMP audio pad fired again — already linked, skipping", file=sys.stderr)
+                    return
+                _rtmp_audio_linked[0] = True
+
+                print("🔊 RTMP audio pad detected — linking passthrough to mux", file=sys.stderr)
+
+                audioqueue  = Gst.ElementFactory.make("queue",         None)
+                audioconv   = Gst.ElementFactory.make("audioconvert",  None)
+                audiores    = Gst.ElementFactory.make("audioresample",  None)
+                aacenc      = Gst.ElementFactory.make("avenc_aac",     None)
+                aacparse_el = Gst.ElementFactory.make("aacparse",      None)
+
+                if not all([audioqueue, audioconv, audiores, aacenc, aacparse_el]):
+                    print("❌ Could not create RTMP audio passthrough elements", file=sys.stderr)
+                    return
+
+                aacenc.set_property("bitrate", 128000)
+
+                # Step 1: add all elements (stay in NULL state).
+                for elem in [audioqueue, audioconv, audiores, aacenc, aacparse_el]:
+                    pipeline.add(elem)
+
+                # Step 2: link fully so caps are known before state sync.
+                pad.link(audioqueue.get_static_pad("sink"))
+                audioqueue.link(audioconv)
+                audioconv.link(audiores)
+                audiores.link(aacenc)
+                aacenc.link(aacparse_el)
+
+                # Request the audio sink pad from the mux.
+                # flvmux (RTMP output) uses "audio"; mpegtsmux (SRT) uses "audio_%u".
+                mux_factory = mux.get_factory().get_name() if mux.get_factory() else ""
+                pad_name = "audio" if mux_factory == "flvmux" else "audio_%u"
+                mux_sink = mux.request_pad_simple(pad_name)
+                if mux_sink:
+                    aacparse_el.get_static_pad("src").link(mux_sink)
+                    print(f"🔊 RTMP audio linked to {mux_factory}.{pad_name}", file=sys.stderr)
+                else:
+                    print(f"⚠️  Could not get {mux_factory} audio request pad", file=sys.stderr)
+
+                # Step 3: sync state after full linking.
+                for elem in [audioqueue, audioconv, audiores, aacenc, aacparse_el]:
+                    elem.sync_state_with_parent()
+
+            dec_element.connect("pad-added", on_rtmp_pad_added, mux_element)
+            print("🔊 RTMP audio passthrough: pad-added handler installed", file=sys.stderr)
+        else:
+            print("⚠️  RTMP audio: could not find 'dec' or 'mux' element — audio disabled", file=sys.stderr)
+
+    # ── RTMP (input) audio-disabled guard ─────────────────────────────────────
+    # rtmpsrc ! decodebin may emit an audio pad even when we don't want it.
+    # An unlinked decodebin audio pad causes GST_FLOW_NOT_LINKED and pipeline
+    # teardown.  Install a DROP probe so those buffers are silently discarded.
+    if input_type == "rtmp" and not use_rtmp_audio:
+        dec_guard_el = pipeline.get_by_name("decodebin0")
+        if not dec_guard_el:
+            it = pipeline.iterate_elements()
+            while True:
+                res, el = it.next()
+                if res != Gst.IteratorResult.OK:
+                    break
+                if el.get_factory() and el.get_factory().get_name() == "decodebin":
+                    dec_guard_el = el
+                    break
+
+        if dec_guard_el:
+            def _on_rtmp_dec_pad_guard(element, pad):
+                pad_caps = pad.get_current_caps() or pad.query_caps(None)
+                if not pad_caps or pad_caps.get_size() == 0:
+                    return
+                struct = pad_caps.get_structure(0)
+                if struct and struct.get_name().startswith("audio/"):
+                    pad.add_probe(
+                        Gst.PadProbeType.BUFFER,
+                        lambda p, info: Gst.PadProbeReturn.DROP,
+                    )
+                    print("🔇 RTMP audio pad: DROP probe installed (audio not used)", file=sys.stderr)
+
+            dec_guard_el.connect("pad-added", _on_rtmp_dec_pad_guard)
+            print("🔇 RTMP audio guard: pad-added handler installed on decodebin", file=sys.stderr)
+        else:
+            print("⚠️  RTMP audio guard: decodebin element not found in pipeline", file=sys.stderr)
 
     # ── NDI audio passthrough ──────────────────────────────────────────────────
     # The static pipeline string contains:

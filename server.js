@@ -1458,9 +1458,10 @@ function loadCameraSource(idx = 1) {
     if (fsSync.existsSync(file)) {
       const saved = JSON.parse(fsSync.readFileSync(file, "utf8"));
       // Validate minimal shape before trusting it
-      if (saved && (saved.type === "usb" || saved.type === "rtsp" || saved.type === "ndi")) {
+      if (saved && (saved.type === "usb" || saved.type === "rtsp" || saved.type === "rtmp" || saved.type === "ndi")) {
         let detail = "";
         if (saved.type === "rtsp") detail = " → " + saved.rtspUrl;
+        else if (saved.type === "rtmp") detail = " → " + saved.rtmpUrl;
         else if (saved.type === "ndi") detail = " → " + (saved.ndiName || "(no name)");
         else detail = " → " + saved.device;
         console.log(`📷 Cam${idx}: Loaded camera source from file: ${saved.type}${detail}`);
@@ -1486,8 +1487,8 @@ function saveCameraSource(source, idx = 1) {
 // Initialised from disk so the chosen source survives restarts.
 const _savedSource  = loadCameraSource(1);
 const _savedSource2 = loadCameraSource(2);
-let activeCameraSource  = _savedSource  || { type: "usb", device: CAMERA_DEVICE,   rtspUrl: "", ndiName: "" };
-let activeCameraSource2 = _savedSource2 || { type: "usb", device: CAMERA_DEVICE_2, rtspUrl: "", ndiName: "" };
+let activeCameraSource  = _savedSource  || { type: "usb", device: CAMERA_DEVICE,   rtspUrl: "", rtmpUrl: "", ndiName: "" };
+let activeCameraSource2 = _savedSource2 || { type: "usb", device: CAMERA_DEVICE_2, rtspUrl: "", rtmpUrl: "", ndiName: "" };
 
 /** Return the active source object for camera index 1 or 2. */
 function getActiveSource(idx) { return idx === 2 ? activeCameraSource2 : activeCameraSource; }
@@ -1694,16 +1695,19 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
   const cam = getCam(camIdx);
   const sc  = getSC(camIdx);
   const defaultDevice = camIdx === 2 ? CAMERA_DEVICE_2 : CAMERA_DEVICE;
-  const { type, device, rtspUrl, ndiName } = req.body;
+  const { type, device, rtspUrl, rtmpUrl, ndiName } = req.body;
 
   // ── Validate inputs before touching any state ────────────────────────────
   if (type === "rtsp" && !rtspUrl) {
     return res.status(400).json({ success: false, error: "rtspUrl required" });
   }
+  if (type === "rtmp" && !rtmpUrl) {
+    return res.status(400).json({ success: false, error: "rtmpUrl required" });
+  }
   if (type === "ndi" && !ndiName) {
     return res.status(400).json({ success: false, error: "ndiName required" });
   }
-  if (type !== "usb" && type !== "rtsp" && type !== "ndi") {
+  if (type !== "usb" && type !== "rtsp" && type !== "rtmp" && type !== "ndi") {
     return res.status(400).json({ success: false, error: "Unknown source type" });
   }
 
@@ -1720,8 +1724,8 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     io.emit("streamStatus", { ...sc.getStatus(), status: "stopping", cameraIndex: camIdx });
     console.log(`📷 [Cam${camIdx}] Camera source switch: stopping active stream…`);
     await sc.stopStream();
-    // Allow extra time for the old device/RTSP/NDI session to fully release.
-    const stopDelay = (previousSource.type === "rtsp" || previousSource.type === "ndi") ? 2500 : 1000;
+    // Allow extra time for the old device/RTSP/RTMP/NDI session to fully release.
+    const stopDelay = (previousSource.type === "rtsp" || previousSource.type === "rtmp" || previousSource.type === "ndi") ? 2500 : 1000;
     await new Promise((r) => setTimeout(r, stopDelay));
   }
 
@@ -1746,11 +1750,14 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     if (camIdx === 2) cameraFormat2 = fmt; else cameraFormat = fmt;
     sc.captureFormat = fmt;
     console.log(`📹 [Cam${camIdx}] New USB camera: format=${fmt.toUpperCase()}, controls=${Object.keys(cam.discoveredControls || {}).join(", ")}`);
+  } else if (type === "rtmp") {
+    const newSource = { type: "rtmp", device: defaultDevice, rtspUrl: "", rtmpUrl, ndiName: "" };
+    if (camIdx === 2) activeCameraSource2 = newSource; else activeCameraSource = newSource;
   } else if (type === "ndi") {
-    const newSource = { type: "ndi", device: defaultDevice, rtspUrl: "", ndiName };
+    const newSource = { type: "ndi", device: defaultDevice, rtspUrl: "", rtmpUrl: "", ndiName };
     if (camIdx === 2) activeCameraSource2 = newSource; else activeCameraSource = newSource;
   } else {
-    const newSource = { type: "rtsp", device: defaultDevice, rtspUrl, ndiName: "" };
+    const newSource = { type: "rtsp", device: defaultDevice, rtspUrl, rtmpUrl: "", ndiName: "" };
     if (camIdx === 2) activeCameraSource2 = newSource; else activeCameraSource = newSource;
   }
   sc.setInputSource(getActiveSource(camIdx));
@@ -1762,9 +1769,9 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     console.error(`⚠️ [Cam${camIdx}] Failed to start idle preview after source change:`, e.message);
   }
 
-  // Give GStreamer time to negotiate: RTSP and NDI need up to 12 s; USB is fast.
+  // Give GStreamer time to negotiate: RTSP, RTMP, and NDI need up to 12 s; USB is fast.
   const previewPath = sc.previewPath.replace(/^\//, ""); // strip leading /
-  const timeoutMs = (type === "rtsp" || type === "ndi") ? 12000 : 5000;
+  const timeoutMs = (type === "rtsp" || type === "rtmp" || type === "ndi") ? 12000 : 5000;
   const ready = await waitForRtmpPublisher(previewPath, timeoutMs);
 
   if (!ready) {

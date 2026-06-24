@@ -144,6 +144,7 @@
                   <select id="cameraSourceType">
                     <option value="usb">USB Camera</option>
                     <option value="rtsp">RTSP Stream</option>
+                    <option value="rtmp">RTMP Stream</option>
                     <option value="ndi">NDI</option>
                   </select>
                 </div>
@@ -162,6 +163,16 @@
                   </div>
                   <p style="font-size:10px;color:rgba(255,255,255,0.4);margin:4px 0 0">
                     ℹ️ Camera controls (PTZ, image settings) are not available for RTSP sources.
+                  </p>
+                </div>
+                <div id="cameraInputRtmp" style="display:none">
+                  <div class="control-item" style="margin-top:6px">
+                    <label>URL</label>
+                    <input type="text" id="cameraRtmpUrl" placeholder="rtmp://192.168.1.x/live/stream"
+                      style="flex:1;padding:4px 6px;background:rgba(6,16,27,0.8);border:1px solid rgba(18,199,255,0.3);border-radius:4px;color:rgba(255,255,255,0.85);font-size:12px" />
+                  </div>
+                  <p style="font-size:10px;color:rgba(255,255,255,0.4);margin:4px 0 0">
+                    ℹ️ Camera controls (PTZ, image settings) are not available for RTMP sources.
                   </p>
                 </div>
                 <div id="cameraInputNdi" style="display:none">

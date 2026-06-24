@@ -73,7 +73,7 @@ class StreamController extends EventEmitter {
       : "/tmp/graphics-overlay.png";
 
     // Active input source — updated via setInputSource() when the user switches in the UI.
-    this.inputSource = { type: "usb", device: cameraDevice, rtspUrl: "" };
+    this.inputSource = { type: "usb", device: cameraDevice, rtspUrl: "", rtmpUrl: "", ndiName: "" };
     // Detected at startup by cameraController.detectCaptureFormat().
     // 'mjpeg' → image/jpeg ! jpegparse ! <decoder> (mppjpegdec on Rockchip, jpegdec elsewhere)
     // 'yuyv'  → video/x-raw,format=YUYV ! videoconvert (software convert, YUYV-only cameras)
@@ -160,6 +160,7 @@ class StreamController extends EventEmitter {
     }
     let sourceDetail = "";
     if (source.type === "rtsp") sourceDetail = " → " + source.rtspUrl;
+    else if (source.type === "rtmp") sourceDetail = " → " + source.rtmpUrl;
     else if (source.type === "ndi") sourceDetail = " → " + (source.ndiName || "(no name)");
     else sourceDetail = " → " + this.cameraDevice;
     console.log(`📷 StreamController input source updated: ${source.type}${sourceDetail}`);
@@ -508,6 +509,7 @@ class StreamController extends EventEmitter {
       if (
         this.streamConfig.audioEnabled &&
         this.inputSource.type !== "rtsp" &&
+        this.inputSource.type !== "rtmp" &&
         this.inputSource.type !== "ndi"
       ) {
         await new Promise((resolve) => {
@@ -595,7 +597,7 @@ class StreamController extends EventEmitter {
         // When audioSource === "video", RTSP/NDI sources carry embedded audio that
         // GStreamer handles internally; the ffmpeg ALSA hybrid is not needed.
         (this.streamConfig.audioSource === "external" ||
-          (this.inputSource.type !== "rtsp" && this.inputSource.type !== "ndi"));
+          (this.inputSource.type !== "rtsp" && this.inputSource.type !== "rtmp" && this.inputSource.type !== "ndi"));
 
       // Check if we're using the compositor helper script
       if (gstArgs.useCompositorScript) {
@@ -1493,9 +1495,11 @@ class StreamController extends EventEmitter {
           ? (this.streamConfig.audioDevice || "plughw:2,0")
           : (this.inputSource.type === "rtsp"
               ? "rtsp"
-              : this.inputSource.type === "ndi"
-                ? "ndi"
-                : (this.streamConfig.audioDevice || "plughw:2,0")))
+              : this.inputSource.type === "rtmp"
+                ? "rtmp"
+                : this.inputSource.type === "ndi"
+                  ? "ndi"
+                  : (this.streamConfig.audioDevice || "plughw:2,0")))
       : "";
 
     // H.265 is incompatible with RTMP (FLV container only supports H.264)
@@ -1524,10 +1528,10 @@ class StreamController extends EventEmitter {
       tsColor.toString(),
       tsBackground,
       scriptCodec,
-      // Input source type, RTSP URL, and NDI source name (args 22-24)
+      // Input source type, stream URL (RTSP or RTMP), and NDI source name (args 22-24)
       this.inputSource.type || "usb",
-      this.inputSource.rtspUrl || "",
-      this.inputSource.ndiName || "",   // arg 24 — empty for USB and RTSP sources
+      this.inputSource.rtspUrl || this.inputSource.rtmpUrl || "",  // arg 23 — URL for rtsp/rtmp
+      this.inputSource.ndiName || "",   // arg 24 — empty for USB, RTSP, and RTMP sources
       // Video orientation (args 25-26)
       (this.streamConfig.flipHorizontal || false).toString(),  // arg 25
       (this.streamConfig.flipVertical   || false).toString(),  // arg 26
@@ -1609,6 +1613,18 @@ class StreamController extends EventEmitter {
         "videorate",
         "!",
         `video/x-raw,framerate=${framerate}/1`,
+        "!",
+      ];
+    } else if (this.inputSource.type === "rtmp" && this.inputSource.rtmpUrl) {
+      // RTMP source: pull from an RTMP server, decode the FLV stream, normalise
+      // resolution/rate, then re-encode with overlays.
+      pipeline = [
+        "rtmpsrc", `location=${this.inputSource.rtmpUrl}`,
+        "!", "decodebin",
+        "!", "videoconvert",
+        "!", "videoscale",
+        "!", `video/x-raw,width=${width},height=${height}`,
+        "!", "videorate", "!", `video/x-raw,framerate=${framerate}/1`,
         "!",
       ];
     } else if (this.inputSource.type === "rtsp" && this.inputSource.rtspUrl) {
