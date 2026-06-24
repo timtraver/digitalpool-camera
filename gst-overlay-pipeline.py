@@ -14,6 +14,17 @@ gi.require_version('Gst', '1.0')
 gi.require_version('GLib', '2.0')
 from gi.repository import Gst, GLib
 
+# Cairo is needed for cairooverlay PNG rendering.
+# On Ubuntu 24.04, gdkpixbufoverlay uses the glycin sandboxed loader (bwrap)
+# which requires D-Bus and fails in systemd service environments.
+# pycairo bypasses the sandbox entirely — install with: apt-get install python3-cairo
+try:
+    import cairo as _cairo
+    _CAIRO_OK = True
+except ImportError:
+    _cairo = None
+    _CAIRO_OK = False
+
 Gst.init(None)
 
 # ── Force the global system clock to CLOCK_REALTIME immediately after init ──
@@ -276,11 +287,13 @@ def main():
         overlay_height = height
         prescale = ''
 
-    # Pre-compute the gdkpixbufoverlay fragment so it can be safely interpolated
-    # as a plain f-string variable inside pipeline_str (Python's implicit string
-    # concatenation does not support ternary expressions mid-tuple).
-    # Uses overlay_width/overlay_height (post-scale) so the PNG fills the frame.
+    # On Ubuntu 24.04, gdkpixbufoverlay uses the glycin sandboxed loader (bwrap)
+    # which requires D-Bus and fails in a systemd service.  Use cairooverlay
+    # instead — Cairo draws the PNG via a Python callback, bypassing the broken
+    # sandbox entirely.  Falls back to gdkpixbufoverlay only when pycairo is absent.
     png_overlay_element = (
+        f'! cairooverlay name=pngoverlay '
+        if has_png_overlay and _CAIRO_OK else
         f'! gdkpixbufoverlay name=overlay location={png_path} '
         f'overlay-width={overlay_width} overlay-height={overlay_height} '
         if has_png_overlay else ''
@@ -954,46 +967,86 @@ def main():
         # and provide-clock=false on v4l2src are sufficient in that case.
         print(f"🕒 Pipeline clock attached via set_clock() (clock-type={_system_clock.get_property('clock-type')}) [use_clock() unavailable]", file=sys.stderr)
 
-    overlay_element = pipeline.get_by_name("overlay")
+    # ── PNG overlay setup ────────────────────────────────────────────────────────
+    # Two paths depending on whether pycairo is available:
+    #   A) cairooverlay (preferred, Ubuntu 24.04 safe): draws PNG via Cairo callback.
+    #   B) gdkpixbufoverlay (legacy fallback): polls mtime and sets location property.
+    overlay_element = None  # kept for the overlay_msg line below
 
-    if has_png_overlay and not overlay_element:
-        print("❌ Could not find overlay element in pipeline", file=sys.stderr)
-        sys.exit(1)
+    if has_png_overlay and _CAIRO_OK:
+        # ── Path A: cairooverlay + Cairo draw callback ────────────────────────
+        pngoverlay_el = pipeline.get_by_name("pngoverlay")
+        if not pngoverlay_el:
+            print("❌ Could not find cairooverlay element 'pngoverlay' in pipeline", file=sys.stderr)
+            sys.exit(1)
 
-    # Track PNG file modification time for auto-reload (only when overlay is active)
-    last_mtime = 0
-    if has_png_overlay:
+        # Shared mutable state (Python list used so the nested functions can write).
+        # Assignment via list index is atomic under the GIL, which is sufficient:
+        # the GLib main loop thread writes, the GStreamer streaming thread reads.
+        _cairo_surface = [None]   # current cairo.ImageSurface for the PNG
+        _cairo_mtime   = [0]      # mtime of the PNG when it was last loaded
+
+        def _load_png_surface():
+            """Load (or reload) the PNG into a Cairo ImageSurface."""
+            try:
+                if not os.path.exists(png_path) or os.path.getsize(png_path) < 100:
+                    _cairo_surface[0] = None
+                    return
+                _cairo_surface[0] = _cairo.ImageSurface.create_from_png(png_path)
+                _cairo_mtime[0] = os.path.getmtime(png_path)
+                print(f"🔄 Cairo overlay PNG loaded: {png_path}", file=sys.stderr)
+            except Exception as exc:
+                print(f"⚠️  Cairo PNG load failed: {exc}", file=sys.stderr)
+                _cairo_surface[0] = None
+
+        _load_png_surface()  # pre-load at startup
+
+        def on_png_draw(overlay, cr, timestamp, duration):
+            """Draw the PNG surface on every frame (GStreamer streaming thread)."""
+            if _cairo_surface[0] is not None:
+                cr.set_source_surface(_cairo_surface[0], 0, 0)
+                cr.paint()
+
+        pngoverlay_el.connect("draw", on_png_draw)
+        overlay_element = pngoverlay_el  # so overlay_msg below is correct
+
+        def check_png_update():
+            """Poll PNG mtime every 2 s and reload when Puppeteer writes a new frame."""
+            try:
+                mtime = os.path.getmtime(png_path) if os.path.exists(png_path) else 0
+                if mtime != _cairo_mtime[0]:
+                    _load_png_surface()
+            except OSError:
+                pass
+            return True  # keep timer running
+
+        GLib.timeout_add(2000, check_png_update)
+
+    elif has_png_overlay:
+        # ── Path B: legacy gdkpixbufoverlay (pycairo not installed) ──────────
+        overlay_element = pipeline.get_by_name("overlay")
+        if not overlay_element:
+            print("❌ Could not find gdkpixbufoverlay element 'overlay' in pipeline", file=sys.stderr)
+            sys.exit(1)
+
+        last_mtime = 0
         try:
             last_mtime = os.path.getmtime(png_path)
         except OSError:
             pass
 
-    def check_png_update():
-        """Poll PNG file for changes and reload overlay when modified.
+        def check_png_update():
+            nonlocal last_mtime
+            try:
+                current_mtime = os.path.getmtime(png_path)
+                if current_mtime != last_mtime:
+                    last_mtime = current_mtime
+                    overlay_element.set_property("location", png_path)
+                    print(f"🔄 Overlay PNG reloaded (mtime changed)", file=sys.stderr)
+            except OSError:
+                pass
+            return True
 
-        gdkpixbufoverlay leaks the old GdkPixbuf on some GStreamer versions when
-        the 'location' property is changed while the pipeline is PLAYING.  To cap
-        leak rate we poll every 10 s (not 2 s), and we only set the property when
-        the file has actually changed — so a static overlay never triggers a reload.
-        """
-        nonlocal last_mtime
-        if not overlay_element:
-            return True  # No overlay element — nothing to update
-        try:
-            current_mtime = os.path.getmtime(png_path)
-            if current_mtime != last_mtime:
-                last_mtime = current_mtime
-                overlay_element.set_property("location", png_path)
-                print(f"🔄 Overlay PNG reloaded (mtime changed)", file=sys.stderr)
-        except OSError:
-            pass  # File doesn't exist yet or was briefly removed during atomic write
-        return True  # Keep the timer running
-
-    # Poll every 2 s — matches the Puppeteer screenshot interval so the pipeline
-    # picks up each new PNG within ~2 s of it being written.  gdkpixbufoverlay
-    # leaks the old GdkPixbuf on each reload, so we still gate the set_property
-    # call on an actual mtime change to avoid pointless reloads on static overlays.
-    if overlay_element:
         GLib.timeout_add(2000, check_png_update)
 
     # Handle pipeline messages
