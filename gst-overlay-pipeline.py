@@ -434,16 +434,23 @@ def main():
     elif input_type == "rtmp" and input_rtmp_url:
         print(f"📡 Input source: RTMP → {input_rtmp_url}", file=sys.stderr)
         # rtmpsrc pulls an RTMP/FLV stream; decodebin auto-selects a video decoder
-        # for the H.264 (or other) track.  Like rtspsrc, decodebin emits dynamic
-        # caps — videoconvert normalises them before videorate enforces the target fps.
+        # for the H.264 (or other) track.  decodebin emits dynamic caps —
+        # videoconvert normalises them before videorate enforces the target fps.
         #
-        # When use_rtmp_audio is True we name the decodebin "dec" so that the
-        # pad-added handler below can tap its audio pad at runtime.
-        dec_name = "name=dec " if use_rtmp_audio else ""
-        dec_ref  = "dec. "    if use_rtmp_audio else ""
+        # When NOT using embedded audio (use_rtmp_audio=False) we pass
+        # caps="video/x-raw" to decodebin so it only exposes a video src pad.
+        # Without this, decodebin also exposes a decoded audio src pad which is
+        # unlinked, causing GST_FLOW_NOT_LINKED and pipeline teardown.
+        #
+        # When use_rtmp_audio is True we need the audio pad to exist so the
+        # pad-added handler below can route it to the mux — so caps is left ANY.
+        # We also name the decodebin "dec" so the handler can find it by name.
+        caps_str  = "" if use_rtmp_audio else 'caps="video/x-raw" '
+        dec_name  = "name=dec " if use_rtmp_audio else ""
+        dec_ref   = "dec. "     if use_rtmp_audio else ""
         source_str = (
             f'rtmpsrc location={input_rtmp_url} '
-            f'! decodebin {dec_name}'
+            f'! decodebin {caps_str}{dec_name}'
             f'{dec_ref}! videoconvert '
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
         )
@@ -1176,7 +1183,6 @@ def main():
                     return
                 _cairo_surface[0] = _cairo.ImageSurface.create_from_png(png_path)
                 _cairo_mtime[0] = os.path.getmtime(png_path)
-                print(f"🔄 Cairo overlay PNG loaded: {png_path}", file=sys.stderr)
             except Exception as exc:
                 print(f"⚠️  Cairo PNG load failed: {exc}", file=sys.stderr)
                 _cairo_surface[0] = None

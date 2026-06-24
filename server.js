@@ -1819,6 +1819,8 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
       success: false,
       error: type === "rtsp"
         ? "RTSP source did not respond. Check the URL is reachable and try again."
+        : type === "rtmp"
+        ? "RTMP source did not respond. Check the URL is correct and the stream is live."
         : type === "ndi"
         ? "NDI source did not respond. Check the source name is correct and the NDI sender is active on the network."
         : "USB device did not start. Check the device path.",
@@ -2803,6 +2805,23 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
       "caps=video/x-raw",
       // videoconvert normalises the decoded caps (NV12, I420, BGR, etc.) to a
       // fixed raw format before videoscale and videorate.
+      "!", "videoconvert",
+      "!", "videoscale",
+      "!", "video/x-raw,width=1280,height=720",
+      "!", "videorate",
+      "!", "video/x-raw,framerate=15/1",
+      "!", "videoconvert",
+      "!",
+    ];
+  } else if (activeSource.type === "rtmp" && activeSource.rtmpUrl) {
+    console.log(`📡 [Cam${camIdx}] Building RTMP idle preview pipeline for ${activeSource.rtmpUrl}`);
+    gstArgs = [
+      // rtmpsrc pulls the RTMP/FLV stream; decodebin caps=video/x-raw restricts
+      // its src pads to video-only so the unlinked audio decoded pad never causes
+      // a NOT_LINKED fatal error.
+      "rtmpsrc", `location=${activeSource.rtmpUrl}`,
+      "!", "decodebin",
+      "caps=video/x-raw",
       "!", "videoconvert",
       "!", "videoscale",
       "!", "video/x-raw,width=1280,height=720",
@@ -4159,12 +4178,12 @@ async function _handleStreamStopped(camIdx) {
   // USB cameras need 3500ms: stopStream() calls _killCameraProcesses() ~2000ms after
   // the GStreamer close event fires _handleStreamStopped(). Without enough delay the
   // idle preview starts and is immediately killed by the cleanup sequence.
-  const releaseDelay = (activeSource.type === "rtsp" || activeSource.type === "ndi") ? 2500 : 3500;
+  const releaseDelay = (activeSource.type === "rtsp" || activeSource.type === "rtmp" || activeSource.type === "ndi") ? 2500 : 3500;
   console.log(`⏳ [Cam${camIdx}] Waiting ${releaseDelay}ms for source to release (${activeSource.type})...`);
   await new Promise((resolve) => setTimeout(resolve, releaseDelay));
   await startPersistentIdlePreview(camIdx);
 
-  const idleTimeoutMs = (activeSource.type === "rtsp" || activeSource.type === "ndi") ? 12000 : 5000;
+  const idleTimeoutMs = (activeSource.type === "rtsp" || activeSource.type === "rtmp" || activeSource.type === "ndi") ? 12000 : 5000;
   const idleReady = await waitForRtmpPublisher(previewPathName, idleTimeoutMs);
   if (!idleReady) {
     console.warn(`⚠️  [Cam${camIdx}] Idle preview RTMP publisher not ready after ${idleTimeoutMs / 1000}s — clients will retry`);

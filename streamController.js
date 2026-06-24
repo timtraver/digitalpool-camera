@@ -1618,9 +1618,12 @@ class StreamController extends EventEmitter {
     } else if (this.inputSource.type === "rtmp" && this.inputSource.rtmpUrl) {
       // RTMP source: pull from an RTMP server, decode the FLV stream, normalise
       // resolution/rate, then re-encode with overlays.
+      // caps=video/x-raw restricts decodebin to video-only src pads — prevents
+      // the unlinked decoded audio pad from returning NOT_LINKED and killing the pipeline.
       pipeline = [
         "rtmpsrc", `location=${this.inputSource.rtmpUrl}`,
         "!", "decodebin",
+        "caps=video/x-raw",
         "!", "videoconvert",
         "!", "videoscale",
         "!", `video/x-raw,width=${width},height=${height}`,
