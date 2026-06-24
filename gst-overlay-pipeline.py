@@ -452,6 +452,11 @@ def main():
             f'rtmpsrc location={input_rtmp_url} '
             f'! decodebin {caps_str}{dec_name}'
             f'{dec_ref}! videoconvert '
+            # Normalise to the configured output resolution so the overlay PNG
+            # (rendered at width×height) always fits the video canvas exactly.
+            # If the RTMP source already delivers at width×height, videoscale
+            # is a no-op (GStreamer skips the actual pixel scaling).
+            f'! videoscale ! video/x-raw,width={width},height={height} '
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
         )
     elif capture_format == "yuyv":
