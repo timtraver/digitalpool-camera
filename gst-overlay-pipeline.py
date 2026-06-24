@@ -293,14 +293,34 @@ def main():
         # Codec requirement: dimensions must be even
         overlay_width  = overlay_width  - (overlay_width  % 2)
         overlay_height = overlay_height - (overlay_height % 2)
-        prescale = (
-            f'! videoscale '
-            f'! video/x-raw,width={overlay_width},height={overlay_height} '
-        )
         print(f"📐 Overlays active — scaling {width}x{height} → {overlay_width}x{overlay_height} before compositing", file=sys.stderr)
     else:
         overlay_width  = width
         overlay_height = height
+
+    if has_any_overlay:
+        # Always normalise to overlay_width × overlay_height before compositing.
+        #
+        # This videoscale is critical for sources that don't guarantee their output
+        # resolution matches the configured stream resolution:
+        #   • RTSP: rtspsrc/decodebin deliver the camera's native resolution; no
+        #     caps constraint is placed on the source (adding one causes multi-second
+        #     startup latency and NOT_NEGOTIATED errors on some cameras).
+        #   • NDI: dynamic chain already scales to width×height, but a redundant
+        #     prescale here is a GStreamer no-op and causes no harm.
+        #   • USB: constrained at capture (image/jpeg,width=…,height=…); no-op here.
+        #   • RTMP: source_str already has videoscale; no-op here.
+        #
+        # When the source already delivers at overlay_width × overlay_height,
+        # GStreamer caps negotiation optimises the videoscale to a passthrough
+        # (no pixel work done).  When the source delivers at a different size
+        # (e.g. RTSP camera at 1280×720 with stream configured for 1920×1080),
+        # this scale corrects it so the 1920×1080 overlay PNG fits the frame.
+        prescale = (
+            f'! videoscale '
+            f'! video/x-raw,width={overlay_width},height={overlay_height} '
+        )
+    else:
         prescale = ''
 
     # On Ubuntu 24.04, gdkpixbufoverlay uses the glycin sandboxed loader (bwrap)
