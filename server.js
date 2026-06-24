@@ -2936,7 +2936,14 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
         `device=${device}`,
         "do-timestamp=true",
         "!",
-        `image/jpeg,width=${config.width || 1920},height=${config.height || 1080}`,
+        // Cap capture framerate to 15fps at the source so the camera driver
+        // delivers 15fps JPEG frames over USB.  Without this, v4l2src requests
+        // the camera's highest framerate (e.g. 60fps), jpegdec decodes every
+        // frame at full 1080p resolution, and videorate discards 45 of 60 frames
+        // — paying full CPU cost for frames we immediately throw away.
+        // Requesting 15/1 here cuts jpegdec work by 4x before any data enters
+        // the pipeline.
+        `image/jpeg,width=${config.width || 1920},height=${config.height || 1080},framerate=15/1`,
         "!",
         ...jpegParseArgs,
         jpegDec,               // Hardware (mppjpegdec) or software (jpegdec) JPEG decode
@@ -2945,7 +2952,7 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
         "!",
         "video/x-raw,width=1280,height=720",
         "!",
-        "videorate",           // 30fps → 15fps
+        "videorate",           // normalise to exactly 15fps (no-op if source already 15fps)
         "!",
         "video/x-raw,framerate=15/1",
         "!",
