@@ -1197,6 +1197,18 @@ def main():
         def on_png_draw(overlay, cr, timestamp, duration):
             """Draw the PNG surface on every frame (GStreamer streaming thread)."""
             if _cairo_surface[0] is not None:
+                png_w = _cairo_surface[0].get_width()
+                png_h = _cairo_surface[0].get_height()
+                # Scale the PNG to fit the video frame exactly.
+                # This is a no-op when dimensions already match (scale = 1.0),
+                # but corrects two common mismatches:
+                #   1. Puppeteer DPR > 1: screenshot is 2× or 3× larger than
+                #      the 1920×1080 viewport (e.g. 3840×2160 on HiDPI hosts).
+                #   2. Stream resolution ≠ 1920×1080: if the pipeline is
+                #      configured at 1280×720 the PNG must be downscaled to fit,
+                #      otherwise it overflows the frame and appears cropped/large.
+                if png_w != overlay_width or png_h != overlay_height:
+                    cr.scale(overlay_width / png_w, overlay_height / png_h)
                 cr.set_source_surface(_cairo_surface[0], 0, 0)
                 cr.paint()
 

@@ -319,7 +319,12 @@ class PuppeteerOverlay extends EventEmitter {
     });
 
     this._page = await this._browser.newPage();
-    await this._page.setViewport({ width: this.width, height: this.height });
+    // deviceScaleFactor: 1 is required — without it Chromium may auto-detect
+    // the system DPI and apply a DPR > 1 (common on HiDPI / ARM64 hosts with
+    // high-density display configs), producing a screenshot at 2× or 3× the
+    // viewport size.  A 3840×2160 PNG painted onto a 1920×1080 video frame
+    // would appear 2× too large and overflow the frame.
+    await this._page.setViewport({ width: this.width, height: this.height, deviceScaleFactor: 1 });
     this._currentLoadedUrl = null; // Track what URL is loaded
     console.log("  ✅ Chromium browser ready");
   }
