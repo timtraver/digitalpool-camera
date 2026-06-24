@@ -229,17 +229,19 @@ class StreamController extends EventEmitter {
    * active encoder family.
    *
    * Rockchip (mpph264enc / mpph265enc) → mppjpegdec (MPP hardware JPEG decode)
-   * Everything else (Intel vaapih264enc, NVIDIA, x264enc) → jpegdec (software)
-   *
-   * On Intel N97, the CPU is fast enough for software JPEG decode at 1080p@30fps,
-   * and using jpegdec avoids an additional dependency on vaapijpegdec.
+   * Intel VA-API (vah264enc / vah265enc) → vajpegdec (Intel VA-API hardware JPEG decode)
+   *   Same gstreamer1.0-plugins-bad va plugin as vah264enc; no jpegparse needed.
+   *   Hardware decode cuts CPU by ~4x vs software jpegdec at 1080p@60fps.
+   * Everything else (vaapih264enc legacy, x264enc, NVIDIA) → jpegdec (software)
    *
    * @param {string} [encoder] - encoder name; falls back to this.streamConfig.encoder
    * @returns {string} GStreamer element name
    */
   _getJpegDecoder(encoder) {
     const enc = encoder || this.streamConfig.encoder || "mpph264enc";
-    return enc.startsWith("mpp") ? "mppjpegdec" : "jpegdec";
+    if (enc.startsWith("mpp")) return "mppjpegdec";
+    if (enc === "vah264enc" || enc === "vah265enc") return "vajpegdec";
+    return "jpegdec";
   }
 
   /**

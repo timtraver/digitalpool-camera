@@ -99,9 +99,15 @@ def main():
     # Passed from streamController.js so this script can select the matching JPEG decoder and
     # H.264/H.265 encoder without any platform-detection logic here.
     encoder = sys.argv[29] if len(sys.argv) > 29 else "mpph264enc"
-    # JPEG decoder: Rockchip MPP hardware (mppjpegdec) for mpp* encoders, software jpegdec for
-    # Intel VA-API (vaapih264enc) and software (x264enc) encoders.
-    jpeg_decoder = 'mppjpegdec' if encoder.startswith('mpp') else 'jpegdec'
+    # JPEG decoder selected to match the encoder family:
+    #   mppjpegdec  : Rockchip MPP hardware (mpp* encoders) — requires jpegparse upstream
+    #   vajpegdec   : Intel VA-API hardware (vah264enc / vah265enc, Ubuntu 24.04 va plugin)
+    #                 Same gstreamer1.0-plugins-bad va plugin as vah264enc; no jpegparse needed.
+    #                 Hardware JPEG decode cuts CPU by ~4x vs software jpegdec at 1080p@60fps.
+    #   jpegdec     : software fallback (vaapih264enc legacy, x264enc, anything else)
+    jpeg_decoder = ('mppjpegdec' if encoder.startswith('mpp')
+                    else 'vajpegdec' if encoder in ('vah264enc', 'vah265enc')
+                    else 'jpegdec')
 
     # GStreamer videoflip method:
     #   0 = identity (none), 2 = rotate-180, 4 = horizontal-flip, 5 = vertical-flip
