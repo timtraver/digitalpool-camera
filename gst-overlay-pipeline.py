@@ -301,22 +301,25 @@ def main():
     if has_any_overlay:
         # Always normalise to overlay_width × overlay_height before compositing.
         #
-        # This videoscale is critical for sources that don't guarantee their output
-        # resolution matches the configured stream resolution:
-        #   • RTSP: rtspsrc/decodebin deliver the camera's native resolution; no
-        #     caps constraint is placed on the source (adding one causes multi-second
-        #     startup latency and NOT_NEGOTIATED errors on some cameras).
-        #   • NDI: dynamic chain already scales to width×height, but a redundant
-        #     prescale here is a GStreamer no-op and causes no harm.
-        #   • USB: constrained at capture (image/jpeg,width=…,height=…); no-op here.
-        #   • RTMP: source_str already has videoscale; no-op here.
+        # IMPORTANT: videoconvert MUST come before videoscale.
         #
-        # When the source already delivers at overlay_width × overlay_height,
-        # GStreamer caps negotiation optimises the videoscale to a passthrough
-        # (no pixel work done).  When the source delivers at a different size
-        # (e.g. RTSP camera at 1280×720 with stream configured for 1920×1080),
-        # this scale corrects it so the 1920×1080 overlay PNG fits the frame.
+        # On Rockchip, mppjpegdec outputs NV12 in hardware (RGA-backed) memory
+        # buffers.  GStreamer's software videoscale cannot negotiate these buffers
+        # and silently falls back to the tee/downstream preferred resolution
+        # (1280×720 from the preview branch), ignoring the caps constraint.
+        # Converting to I420 first moves the frame into system memory in a planar
+        # format that all GStreamer elements — including videoscale — handle
+        # uniformly on every platform.
+        #
+        # Sources and whether videoscale is a real operation or a no-op:
+        #   • USB (MJPEG): constrained at capture; videoscale is a no-op but the
+        #     videoconvert brings the frame out of hw-memory so caps are enforced.
+        #   • RTSP: delivers the camera's native resolution; videoscale scales it
+        #     up or down to overlay_width × overlay_height.
+        #   • RTMP: source_str already has videoscale; second scale is a no-op.
+        #   • NDI: dynamic chain already scales to width×height; no-op here.
         prescale = (
+            f'! videoconvert ! video/x-raw,format=I420 '
             f'! videoscale '
             f'! video/x-raw,width={overlay_width},height={overlay_height} '
         )
