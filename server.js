@@ -3084,10 +3084,13 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
   // start a new WebRTC session mid-stream without waiting for the next keyframe.
   // async=false on rtmpsink lets the pipeline reach PLAYING before RTMP connects.
   const idleEncoder = config.encoder || "mpph264enc";
+  // Idle preview runs alone (no main stream competing for VA-API), so hardware encoders
+  // are safe here without contention.
   // omxh264videoenc (Allwinner OMX) has a multi-second cold-start delay that causes
-  // librtmp to drop the RTMP connection before the first frame arrives.  Fall back to
-  // x264enc for the idle preview only — the main stream still uses hardware encoding.
-  const idleEncArgs = idleEncoder === "vaapih264enc"
+  // librtmp to drop the RTMP connection before the first frame arrives — fall back to x264enc.
+  const idleEncArgs = idleEncoder === "vah264enc"
+    ? ["videoconvert", "!", "video/x-raw,format=NV12", "!", "vah264enc", "bitrate=2000", "key-int-max=15", "!"]
+    : idleEncoder === "vaapih264enc"
     ? ["videoconvert", "!", "vaapih264enc", "bitrate=2000", "keyframe-period=15", "!"]
     : idleEncoder === "x264enc" || idleEncoder === "omxh264videoenc"
     ? ["videoconvert", "!", "video/x-raw,format=I420", "!", "x264enc", "bitrate=2000", "speed-preset=ultrafast", "tune=zerolatency", "key-int-max=15", "!"]
@@ -4199,7 +4202,10 @@ async function _handleStreamStopped(camIdx) {
   }
 
   console.log(`📹 [Cam${camIdx}] Stream stopped — restarting persistent idle preview...`);
-  const releaseDelay = (activeSource.type === "rtsp" || activeSource.type === "ndi") ? 2500 : 1000;
+  // USB cameras need 3500ms: stopStream() calls _killCameraProcesses() ~2000ms after
+  // the GStreamer close event fires _handleStreamStopped(). Without enough delay the
+  // idle preview starts and is immediately killed by the cleanup sequence.
+  const releaseDelay = (activeSource.type === "rtsp" || activeSource.type === "ndi") ? 2500 : 3500;
   console.log(`⏳ [Cam${camIdx}] Waiting ${releaseDelay}ms for source to release (${activeSource.type})...`);
   await new Promise((resolve) => setTimeout(resolve, releaseDelay));
   await startPersistentIdlePreview(camIdx);

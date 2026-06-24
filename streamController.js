@@ -918,7 +918,7 @@ class StreamController extends EventEmitter {
           // scheduler can preempt ffmpeg's ALSA capture thread long enough to cause
           // a buffer underrun → audible choppiness that worsens over many hours.
           // nice -n -5 keeps ffmpeg competitive without requiring root/SCHED_FIFO.
-          this.ffmpegProcess = spawn("nice", ["-n", "-5", "ffmpeg", ...ffmpegArgs], {
+          this.ffmpegProcess = spawn("ffmpeg", ffmpegArgs, {
             stdio: ["pipe", "pipe", "pipe"],
           });
 
@@ -971,7 +971,7 @@ class StreamController extends EventEmitter {
                 const retryArgs = [...silentAudioArgs, ...ffmpegVideoArgs, ...ffmpegOutputArgs];
                 console.log("🔄 Retrying ffmpeg with silent audio:", retryArgs.join(" "));
 
-                this.ffmpegProcess = spawn("nice", ["-n", "-5", "ffmpeg", ...retryArgs], { stdio: ["pipe", "pipe", "pipe"] });
+                this.ffmpegProcess = spawn("ffmpeg", retryArgs, { stdio: ["pipe", "pipe", "pipe"] });
                 gstStdout.pipe(this.ffmpegProcess.stdin);
 
                 let retryStderrBuf = "";
@@ -1867,8 +1867,25 @@ class StreamController extends EventEmitter {
           "!",
         );
       }
+    } else if (encoder === "vah264enc") {
+      // Intel VA-API H.264 encoder — modern VA plugin (gstreamer1.0-plugins-bad, Ubuntu 22+).
+      // Requires NV12 input; videoconvert handles the I420→NV12 conversion from jpegdec.
+      // bitrate in kbps, key-int-max sets IDR interval.
+      const bitrate_kbps = Math.round(bitrate / 1000);
+      pipeline.push(
+        "videoconvert", "!", "video/x-raw,format=NV12", "!",
+        "vah264enc",
+        `bitrate=${bitrate_kbps}`,
+        "key-int-max=15",
+        "!",
+        "video/x-h264,stream-format=byte-stream",
+        "!",
+        "h264parse",
+        `config-interval=${protocol === "rtmp" && this.streamConfig.audioEnabled ? "0" : "-1"}`,
+        "!",
+      );
     } else if (encoder === "vaapih264enc") {
-      // Intel VA-API H.264 hardware encoder (N97, other x86 with Intel iGPU)
+      // Intel VA-API H.264 hardware encoder — legacy gst-vaapi plugin.
       // vaapih264enc accepts most raw formats via VA-API; videoconvert normalises.
       // bitrate is in kbps (not bps like mpph264enc).
       const bitrate_kbps = Math.round(bitrate / 1000);
@@ -2106,43 +2123,45 @@ class StreamController extends EventEmitter {
     }
 
     // Branch 2b: Preview stream — H.264 push to MediaMTX for WebRTC admin preview.
-    // Taps raw video (before H.264 encoding) from tee t, scales to 720p/15fps with the
-    // hardware MPP encoder, and pushes to rtmp://localhost:1935/preview.
-    // MediaMTX serves WebRTC via WHEP at http://localhost:8889/preview — the Node.js
-    // server proxies it at /api/whep/preview so the admin browser fetches it over port 3000.
+    // Taps raw video from tee t, scales to 720p/15fps, and pushes to rtmp://localhost:1935/preview.
+    //
+    // IMPORTANT: videoscale MUST come before the queue.
+    // vah264enc/vaapih264enc propagate their VA-API surface pool upstream through the tee.
+    // A queue before videoscale holds up to 10 full-res 1080p VA-API surfaces, exhausting
+    // the pool — the main encoder then encodes from corrupted/recycled surfaces.
+    // Scaling first creates a 720p system-memory buffer and immediately releases the VA surface.
+    //
+    // Preview encoder: always x264enc for VA-API main encoders (vah264enc / vaapih264enc).
+    // Two concurrent VA-API sessions share the v4l2src buffer pool; the preview branch's
+    // pool re-negotiation (720p vs 1080p) races with the main encoder and corrupts the main
+    // stream AND spikes CPU ~30% extra on the N97. x264enc at ultrafast/720p/15fps uses
+    // ~5-8% CPU and eliminates contention. Rockchip mpph264enc has no shared VA-API pool
+    // and keeps hardware encoding for the preview.
     pipeline.push(
       "t.",
       "!",
-      "queue",
-      "max-size-buffers=10",
-      "leaky=downstream",
-      "!",
-      "videoscale",
+      "videoscale",                      // scale BEFORE queue — releases VA surface immediately
       "!",
       "video/x-raw,width=1280,height=720",
+      "!",
+      "queue",
+      "max-size-buffers=4",              // 720p system-memory frames, cheap to buffer
+      "leaky=downstream",
       "!",
       "videorate",
       "!",
       "video/x-raw,framerate=15/1",
       "!",
-      // Preview encoder — matches the main encoder family so all hardware paths work.
-      // Rockchip: mpph264enc (requires NV12 input)
-      // Intel VA-API: vaapih264enc (accepts any raw format; bitrate in kbps)
-      // Software / other: x264enc
-      ...(encoder === "vaapih264enc"
+      // Rockchip MPP: keep hardware encoding (no VA-API contention).
+      // All VA-API variants + software: use x264enc to avoid pool contention.
+      ...(encoder === "mpph264enc"
         ? [
-            "videoconvert", "!",
-            "vaapih264enc", "bitrate=2500", "keyframe-period=15", "!",
-          ]
-        : encoder === "x264enc"
-        ? [
-            "videoconvert", "!", "video/x-raw,format=I420", "!",
-            "x264enc", "bitrate=2500", "speed-preset=ultrafast", "tune=zerolatency", "key-int-max=15", "!",
+            "videoconvert", "!", "video/x-raw,format=NV12", "!",
+            "mpph264enc", "bps=2500000", "header-mode=each-idr", "gop=30", "!",
           ]
         : [
-            // Default: Rockchip mpph264enc (also used as preview encoder for nvv4l2h264enc fallback)
-            "videoconvert", "!", "video/x-raw,format=NV12", "!",
-            "mpph264enc", "bps=2500000", "header-mode=each-idr", "gop=15", "!",
+            "videoconvert", "!", "video/x-raw,format=I420", "!",
+            "x264enc", "bitrate=2500", "speed-preset=ultrafast", "tune=zerolatency", "key-int-max=30", "!",
           ]
       ),
       "h264parse",
@@ -2344,45 +2363,57 @@ class StreamController extends EventEmitter {
             message: "Rockchip MPP hardware encoder available",
           });
         } else {
-          // Try vaapih264enc (Intel VA-API hardware encoder — N97, other x86 iGPU)
-          const testVaapi = spawn("gst-inspect-1.0", ["vaapih264enc"]);
-          testVaapi.on("close", (vaapiCode) => {
-            if (vaapiCode === 0) {
+          // Try vah264enc first (Intel VA-API — modern plugin, gstreamer1.0-plugins-bad, Ubuntu 22+)
+          const testVa = spawn("gst-inspect-1.0", ["vah264enc"]);
+          testVa.on("close", (vaCode) => {
+            if (vaCode === 0) {
               resolve({
                 success: true,
-                encoder: "vaapih264enc",
-                message: "Intel VA-API hardware encoder available",
+                encoder: "vah264enc",
+                message: "Intel VA-API hardware encoder available (vah264enc)",
               });
-            } else {
-              // Try nvv4l2h264enc (Jetson)
-              const testNv = spawn("gst-inspect-1.0", ["nvv4l2h264enc"]);
-              testNv.on("close", (nvCode) => {
-                if (nvCode === 0) {
-                  resolve({
-                    success: true,
-                    encoder: "nvv4l2h264enc",
-                    message: "NVIDIA hardware encoder available",
-                  });
-                } else {
-                  // Try x264enc (software fallback)
-                  const testX264 = spawn("gst-inspect-1.0", ["x264enc"]);
-                  testX264.on("close", (x264Code) => {
-                    if (x264Code === 0) {
-                      resolve({
-                        success: true,
-                        encoder: "x264enc",
-                        message: "x264 software encoder available",
-                      });
-                    } else {
-                      resolve({
-                        success: false,
-                        error: "No encoder found (tried mpph264enc, vaapih264enc, nvv4l2h264enc, x264enc)",
-                      });
-                    }
-                  });
-                }
-              });
+              return;
             }
+            // Try vaapih264enc (legacy gst-vaapi plugin fallback)
+            const testVaapi = spawn("gst-inspect-1.0", ["vaapih264enc"]);
+            testVaapi.on("close", (vaapiCode) => {
+              if (vaapiCode === 0) {
+                resolve({
+                  success: true,
+                  encoder: "vaapih264enc",
+                  message: "Intel VA-API hardware encoder available (vaapih264enc)",
+                });
+              } else {
+                // Try nvv4l2h264enc (Jetson)
+                const testNv = spawn("gst-inspect-1.0", ["nvv4l2h264enc"]);
+                testNv.on("close", (nvCode) => {
+                  if (nvCode === 0) {
+                    resolve({
+                      success: true,
+                      encoder: "nvv4l2h264enc",
+                      message: "NVIDIA hardware encoder available",
+                    });
+                  } else {
+                    // Try x264enc (software fallback)
+                    const testX264 = spawn("gst-inspect-1.0", ["x264enc"]);
+                    testX264.on("close", (x264Code) => {
+                      if (x264Code === 0) {
+                        resolve({
+                          success: true,
+                          encoder: "x264enc",
+                          message: "x264 software encoder available",
+                        });
+                      } else {
+                        resolve({
+                          success: false,
+                          error: "No encoder found (tried mpph264enc, vah264enc, vaapih264enc, nvv4l2h264enc, x264enc)",
+                        });
+                      }
+                    });
+                  }
+                });
+              }
+            });
           });
         }
       });
