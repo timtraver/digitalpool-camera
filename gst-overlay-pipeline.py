@@ -428,7 +428,14 @@ def main():
         print(f"📹 Input source: USB v4l2src (MJPEG) → {camera_device} [{jpeg_decoder}]", file=sys.stderr)
         source_str = (
             f'v4l2src device={camera_device} do-timestamp=true '
-            f'! image/jpeg,width={width},height={height} '
+            # Cap capture framerate at the source so the camera driver delivers
+            # only {framerate} JPEG frames/sec over USB.  Without this, v4l2src
+            # requests the camera's highest rate (e.g. 60fps), the JPEG decoder
+            # decodes every frame, and videorate throws the excess away — paying
+            # full decode + bandwidth cost for frames we never use.
+            # Requesting framerate={framerate}/1 in the source caps cuts decode
+            # work proportionally (e.g. 30fps → half the work vs 60fps).
+            f'! image/jpeg,width={width},height={height},framerate={framerate}/1 '
             f'! {parse_str}{jpeg_decoder} '
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
         )
