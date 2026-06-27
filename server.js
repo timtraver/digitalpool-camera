@@ -1005,14 +1005,51 @@ app.post("/api/reboot", requireAdmin, async (req, res) => {
   }, 800);
 });
 
-// API endpoint to pull latest code and restart the service (dpadmin only)
-// The server calls process.exit(0) after responding; systemd Restart=always brings it back.
-app.post("/api/update", requireAdmin, async (req, res) => {
+// API endpoint to list recent commits from origin (dpadmin only).
+// Fetches from origin first so the list always includes commits not yet on the device.
+app.get("/api/commits", requireAdmin, async (req, res) => {
   if (req.session?.user?.username !== "dpadmin")
     return res.status(403).json({ success: false, error: "Access denied" });
   try {
-    const { stdout, stderr } = await execAsync("git pull", { cwd: __dirname });
+    // Fetch latest refs so we can see commits ahead of the local checkout.
+    await execAsync("git fetch origin", { cwd: __dirname });
+    // Format: <hash>|<date>|<subject>
+    const { stdout } = await execAsync(
+      'git log origin/main --oneline --format="%H|%cd|%s" --date=format:"%Y-%m-%d %H:%M" -n 30',
+      { cwd: __dirname }
+    );
+    // Also get the currently checked-out commit so the UI can highlight it.
+    const { stdout: headOut } = await execAsync("git rev-parse HEAD", { cwd: __dirname });
+    const currentHash = headOut.trim();
+    const commits = stdout.trim().split("\n").filter(Boolean).map((line) => {
+      const [hash, date, ...subjectParts] = line.split("|");
+      return { hash: hash.trim(), date: date.trim(), subject: subjectParts.join("|").trim() };
+    });
+    res.json({ success: true, commits, current: currentHash });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// API endpoint to deploy a specific commit or pull latest (dpadmin only).
+// Body: { commit: "<full-hash>" }  — omit or pass "latest" to update to origin/main HEAD.
+// Uses git reset --hard so the working tree always matches the target exactly.
+app.post("/api/update", requireAdmin, async (req, res) => {
+  if (req.session?.user?.username !== "dpadmin")
+    return res.status(403).json({ success: false, error: "Access denied" });
+
+  const requestedCommit = (req.body?.commit || "latest").trim();
+  // Validate: must be "latest" or a hex git hash (7–40 chars)
+  if (requestedCommit !== "latest" && !/^[0-9a-f]{7,40}$/i.test(requestedCommit))
+    return res.status(400).json({ success: false, error: "Invalid commit hash" });
+
+  try {
+    // Always fetch first so we have all remote refs/objects.
+    await execAsync("git fetch origin", { cwd: __dirname });
+    const target = requestedCommit === "latest" ? "origin/main" : requestedCommit;
+    const { stdout, stderr } = await execAsync(`git reset --hard ${target}`, { cwd: __dirname });
     const output = (stdout || "").trim() || (stderr || "").trim() || "No output";
+    console.log(`🔄 Deploying ${target}: ${output}`);
     res.json({ success: true, output });
   } catch (e) {
     return res.status(500).json({ success: false, error: e.message });

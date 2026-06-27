@@ -4103,60 +4103,22 @@ loadDeviceIp();
     document.getElementById("updateSoftwareBtn")?.closest("div")?.remove();
   }
 
-  document.getElementById("updateSoftwareBtn")?.addEventListener("click", async () => {
-    const btn    = document.getElementById("updateSoftwareBtn");
+  // Shared helper: POST /api/update, poll until server comes back, then reload.
+  async function runUpdate(commit = "latest", labelForConfirm = "latest") {
     const msg    = document.getElementById("updateSoftwareMsg");
     const output = document.getElementById("updateSoftwareOutput");
 
-    if (!confirm("This will pull the latest code and restart the camera service. Continue?")) return;
+    if (!confirm(`This will deploy version "${labelForConfirm}" and restart the camera service. Continue?`)) return false;
 
-    btn.disabled = true;
-    btn.textContent = "⏳ Updating…";
     msg.textContent = "";
     output.style.display = "none";
 
-    try {
-      const r = await fetch("/api/update", { method: "POST" });
-      const d = await r.json();
-
-      if (!d.success) {
-        msg.textContent = `❌ ${d.error}`;
-        msg.style.color = "#f87171";
-        btn.disabled = false;
-        btn.textContent = "⬆️ Check & Update Software";
-        return;
-      }
-
-      // Show git output
-      output.textContent = d.output;
-      output.style.display = "block";
-      msg.textContent = "🔄 Restarting service…";
-      msg.style.color = "#facc15";
-
-      // Poll until the server comes back, then reload
+    const pollUntilBack = () => {
       const poll = async () => {
         try {
           const pr = await fetch("/api/status");
           if (pr.ok) {
-            msg.textContent = "✅ Update complete — reloading…";
-            msg.style.color = "#4ade80";
-            setTimeout(() => window.location.reload(), 1500);
-            return;
-          }
-        } catch { /* server still restarting */ }
-        setTimeout(poll, 2000);
-      };
-      setTimeout(poll, 3000); // give systemd a moment to restart
-
-    } catch (e) {
-      // If the request itself fails the server already restarted — just poll
-      msg.textContent = "🔄 Restarting service…";
-      msg.style.color = "#facc15";
-      const poll = async () => {
-        try {
-          const pr = await fetch("/api/status");
-          if (pr.ok) {
-            msg.textContent = "✅ Update complete — reloading…";
+            msg.textContent = "✅ Deploy complete — reloading…";
             msg.style.color = "#4ade80";
             setTimeout(() => window.location.reload(), 1500);
             return;
@@ -4165,6 +4127,103 @@ loadDeviceIp();
         setTimeout(poll, 2000);
       };
       setTimeout(poll, 3000);
+    };
+
+    try {
+      const r = await fetch("/api/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commit }),
+      });
+      const d = await r.json();
+
+      if (!d.success) {
+        msg.textContent = `❌ ${d.error}`;
+        msg.style.color = "#f87171";
+        return false;
+      }
+
+      output.textContent = d.output;
+      output.style.display = "block";
+      msg.textContent = "🔄 Restarting service…";
+      msg.style.color = "#facc15";
+      pollUntilBack();
+    } catch {
+      // Server already restarted before it could respond — just poll
+      msg.textContent = "🔄 Restarting service…";
+      msg.style.color = "#facc15";
+      pollUntilBack();
+    }
+    return true;
+  }
+
+  document.getElementById("updateSoftwareBtn")?.addEventListener("click", async () => {
+    const btn = document.getElementById("updateSoftwareBtn");
+    btn.disabled = true;
+    btn.textContent = "⏳ Updating…";
+    const ok = await runUpdate("latest", "latest (origin/main)");
+    if (!ok) {
+      btn.disabled = false;
+      btn.textContent = "⬆️ Update to Latest";
+    }
+  });
+
+  // ── Load version history ──────────────────────────────────────
+  document.getElementById("loadCommitsBtn")?.addEventListener("click", async () => {
+    const btn     = document.getElementById("loadCommitsBtn");
+    const section = document.getElementById("commitListSection");
+    const select  = document.getElementById("commitSelect");
+    const msg     = document.getElementById("updateSoftwareMsg");
+
+    btn.disabled = true;
+    btn.textContent = "⏳ Loading…";
+    msg.textContent = "";
+
+    try {
+      const r = await fetch("/api/commits");
+      const d = await r.json();
+
+      if (!d.success) {
+        msg.textContent = `❌ ${d.error}`;
+        msg.style.color = "#f87171";
+        btn.disabled = false;
+        btn.textContent = "📋 Load Version History";
+        return;
+      }
+
+      select.innerHTML = "";
+      d.commits.forEach(({ hash, date, subject }) => {
+        const opt = document.createElement("option");
+        opt.value = hash;
+        const isCurrent = hash === d.current;
+        opt.textContent = `${hash.slice(0, 8)}  ${date}  ${subject}${isCurrent ? "  ◀ current" : ""}`;
+        if (isCurrent) opt.style.color = "#4ade80";
+        select.appendChild(opt);
+      });
+
+      section.style.display = "block";
+      btn.textContent = "🔄 Refresh Version History";
+    } catch (e) {
+      msg.textContent = `❌ ${e.message}`;
+      msg.style.color = "#f87171";
+      btn.textContent = "📋 Load Version History";
+    }
+    btn.disabled = false;
+  });
+
+  document.getElementById("deployCommitBtn")?.addEventListener("click", async () => {
+    const btn    = document.getElementById("deployCommitBtn");
+    const select = document.getElementById("commitSelect");
+    const hash   = select?.value;
+    if (!hash) return;
+
+    const label = select.options[select.selectedIndex]?.textContent || hash.slice(0, 8);
+    btn.disabled = true;
+    btn.textContent = "⏳ Deploying…";
+    const ok = await runUpdate(hash, label);
+    if (!ok) {
+      btn.disabled = false;
+      btn.textContent = "🚀 Deploy Selected Version";
     }
   });
 

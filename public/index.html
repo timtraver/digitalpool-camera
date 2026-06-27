@@ -920,10 +920,15 @@
                     <span class="wifi-label">Camera Control</span>
                     <span class="wifi-value" id="softwareVersion">—</span>
                   </div>
-                  <div style="margin-top:10px">
-                    <button class="btn-wifi-action" id="updateSoftwareBtn">⬆️ Check &amp; Update Software</button>
+                  <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
+                    <button class="btn-wifi-action" id="updateSoftwareBtn">⬆️ Update to Latest</button>
+                    <button class="btn-wifi-action" id="loadCommitsBtn" style="background:rgba(99,102,241,0.2);border-color:rgba(99,102,241,0.5)">📋 Load Version History</button>
+                    <div id="commitListSection" style="display:none">
+                      <select id="commitSelect" style="width:100%;background:rgba(0,0,0,0.4);color:#e2e8f0;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:6px 8px;font-size:11px;margin-bottom:6px"></select>
+                      <button class="btn-wifi-action" id="deployCommitBtn" style="background:rgba(245,158,11,0.2);border-color:rgba(245,158,11,0.5)">🚀 Deploy Selected Version</button>
+                    </div>
                     <div class="wifi-msg" id="updateSoftwareMsg"></div>
-                    <pre id="updateSoftwareOutput" style="display:none;margin-top:8px;font-size:11px;color:rgba(255,255,255,0.6);white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,0.3);padding:8px;border-radius:6px;"></pre>
+                    <pre id="updateSoftwareOutput" style="display:none;margin-top:4px;font-size:11px;color:rgba(255,255,255,0.6);white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,0.3);padding:8px;border-radius:6px;"></pre>
                   </div>
                 </div>
               </details>
