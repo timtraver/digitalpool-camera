@@ -4446,9 +4446,9 @@ loadDeviceIp();
       const currentName  = document.getElementById("regStatusName")?.textContent  || "";
       const currentEmail = document.getElementById("regStatusEmail")?.textContent || "";
       if (!confirm(
-        `Register this device as a brand-new NetBird peer?\n\n` +
-        `This clears the existing identity — the old peer will become stale and a new IP will be assigned.\n\n` +
-        `Use this after cloning an SD card to a new unit.`
+        `De-register this device?\n\n` +
+        `This removes it from the VPN and clears its registration. ` +
+        `You will need to re-register before streaming can resume.`
       )) return;
 
       const msg = document.getElementById("remoteMsg");
