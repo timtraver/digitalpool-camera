@@ -714,9 +714,10 @@ app.post("/api/setup/register", requireAdmin, express.json(), async (req, res) =
   cfg.ownerEmail = ownerEmail.trim().toLowerCase();
   saveRemoteConfig(cfg);
 
-  let upCmd = `sudo netbird up --hostname=${name}`;
+  let upCmd = `sudo /usr/bin/netbird up --hostname=${name}`;
   if (managementUrl) upCmd += ` --management-url=${managementUrl}`;
   upCmd += ` --setup-key=${setupKey}`;
+  if (cfg.sshEnabled) upCmd += ` --allow-server-ssh --enable-ssh-root`;
 
   try {
     await execAsync(upCmd, { timeout: 30000 });
@@ -797,9 +798,11 @@ app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) =>
     // --hostname sets the display name in the NetBird dashboard.
     // Omit --timeout so the command doesn't exit early on a fresh state wipe —
     // the daemon will keep trying in the background and we poll for Connected below.
-    let upCmd = `sudo netbird up --hostname=${name}`;
-    if (managementUrl) upCmd += ` --management-url=${managementUrl}`;
-    if (setupKey)      upCmd += ` --setup-key=${setupKey}`;
+    const latestCfg2 = loadRemoteConfig();
+    let upCmd = `sudo /usr/bin/netbird up --hostname=${name}`;
+    if (managementUrl)       upCmd += ` --management-url=${managementUrl}`;
+    if (setupKey)            upCmd += ` --setup-key=${setupKey}`;
+    if (latestCfg2.sshEnabled) upCmd += ` --allow-server-ssh --enable-ssh-root`;
 
     try {
       await execAsync(upCmd, { timeout: 30000 });
@@ -955,13 +958,29 @@ async function tryUnitCmd(cmd) {
 }
 
 app.post("/api/remote/ssh/enable", requireAdmin, async (req, res) => {
-  // Enable socket first (it's the listener on modern Ubuntu); then service as
-  // a fallback for installs without socket activation.
+  // 1. Enable the SSH daemon (socket activation + service fallback)
   const sock = await tryUnitCmd("sudo /usr/bin/systemctl enable --now ssh.socket");
   const svc  = await tryUnitCmd("sudo /usr/bin/systemctl enable --now ssh");
   if (!sock.ok && !svc.ok) {
     return res.status(500).json({ error: sock.error || svc.error || "Failed to enable SSH" });
   }
+
+  // 2. Restart NetBird with --allow-server-ssh --enable-ssh-root so the VPN
+  //    daemon opens its SSH listener and configures the firewall to allow it.
+  //    The device is already registered so no setup-key is needed — the daemon
+  //    reads its identity from /var/lib/netbird/.
+  try {
+    await execAsync("sudo /usr/bin/netbird down").catch(() => {});
+    await new Promise(r => setTimeout(r, 1500));
+    await execAsync(
+      "sudo /usr/bin/netbird up --allow-server-ssh --enable-ssh-root",
+      { timeout: 30000 }
+    ).catch(e => console.warn("netbird up (ssh-enable) warning:", e.stderr || e.message));
+  } catch (e) {
+    console.warn("NetBird restart (ssh-enable) failed:", e.message);
+    // Non-fatal — SSH daemon is up; VPN SSH access may not work until restarted
+  }
+
   const cfg = loadRemoteConfig();
   cfg.sshEnabled = true;
   saveRemoteConfig(cfg);
@@ -969,13 +988,27 @@ app.post("/api/remote/ssh/enable", requireAdmin, async (req, res) => {
 });
 
 app.post("/api/remote/ssh/disable", requireAdmin, async (req, res) => {
-  // Disable the socket first to stop accepting new connections immediately,
-  // then disable the service.  Existing sessions stay open by design.
+  // 1. Disable the SSH daemon — socket first to close the listener immediately,
+  //    then service.  Existing sessions stay open by design.
   const sock = await tryUnitCmd("sudo /usr/bin/systemctl disable --now ssh.socket");
   const svc  = await tryUnitCmd("sudo /usr/bin/systemctl disable --now ssh");
   if (!sock.ok && !svc.ok) {
     return res.status(500).json({ error: sock.error || svc.error || "Failed to disable SSH" });
   }
+
+  // 2. Restart NetBird without the SSH flags so it removes its internal SSH
+  //    listener and reverts the firewall rules.
+  try {
+    await execAsync("sudo /usr/bin/netbird down").catch(() => {});
+    await new Promise(r => setTimeout(r, 1500));
+    await execAsync(
+      "sudo /usr/bin/netbird up",
+      { timeout: 30000 }
+    ).catch(e => console.warn("netbird up (ssh-disable) warning:", e.stderr || e.message));
+  } catch (e) {
+    console.warn("NetBird restart (ssh-disable) failed:", e.message);
+  }
+
   const cfg = loadRemoteConfig();
   cfg.sshEnabled = false;
   saveRemoteConfig(cfg);
@@ -1000,10 +1033,12 @@ app.put("/api/remote/name", requireAdmin, express.json(), async (req, res) => {
     if (connected) {
       const managementUrl = process.env.NETBIRD_MANAGEMENT_URL || "";
       const setupKey      = process.env.NETBIRD_SETUP_KEY || "";
-      await execAsync("sudo netbird down").catch(() => {});
-      let upCmd = `sudo netbird up --hostname=${name}`;
-      if (managementUrl) upCmd += ` --management-url=${managementUrl}`;
-      if (setupKey)      upCmd += ` --setup-key=${setupKey}`;
+      const renameCfg = loadRemoteConfig();
+      await execAsync("sudo /usr/bin/netbird down").catch(() => {});
+      let upCmd = `sudo /usr/bin/netbird up --hostname=${name}`;
+      if (managementUrl)       upCmd += ` --management-url=${managementUrl}`;
+      if (setupKey)            upCmd += ` --setup-key=${setupKey}`;
+      if (renameCfg.sshEnabled) upCmd += ` --allow-server-ssh --enable-ssh-root`;
       await execAsync(upCmd, { timeout: 30000 }).catch((e) => {
         console.warn("netbird up (rename) warning:", e.stderr || e.message);
       });
