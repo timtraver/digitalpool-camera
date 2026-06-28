@@ -634,14 +634,22 @@ async function netbirdGetStatus() {
   const { stdout } = await execAsync("netbird status --json 2>/dev/null");
   const nb = JSON.parse(stdout);
   const lp = nb.localPeerState || {};
-  // Field name varies across netbird versions: try all known variants
-  const rawIp = lp.netbirdIp || lp.IP || lp.ip || null;
+
+  // Field name varies across netbird versions — try all known variants
+  let rawIp = lp.netbirdIp || lp.IP || lp.ip || null;
+
+  // Fallback: some netbird versions (0.73.x on Linux) return localPeerState: {}
+  // even when fully connected.  Parse the human-readable text output instead.
+  if (!rawIp) {
+    try {
+      const { stdout: txt } = await execAsync("netbird status 2>/dev/null");
+      const m = txt.match(/NetBird IP:\s*([\d.]+(?:\/\d+)?)/);
+      if (m) rawIp = m[1];
+    } catch { /* ignore */ }
+  }
+
   const ip = rawIp ? rawIp.split("/")[0] : null;
   const connected = nb.daemonStatus === "Connected" || nb.status === "Connected";
-  // Debug: log localPeerState when daemon is Connected but we have no IP yet
-  if (connected && !ip) {
-    console.log("🔍 netbirdGetStatus: Connected but no IP — localPeerState:", JSON.stringify(lp));
-  }
   return { ip, connected, raw: nb };
 }
 
