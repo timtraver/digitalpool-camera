@@ -633,9 +633,15 @@ function requireRegistered(req, res, next) {
 async function netbirdGetStatus() {
   const { stdout } = await execAsync("netbird status --json 2>/dev/null");
   const nb = JSON.parse(stdout);
-  const rawIp = nb.localPeerState?.netbirdIp || nb.localPeerState?.IP || null;
+  const lp = nb.localPeerState || {};
+  // Field name varies across netbird versions: try all known variants
+  const rawIp = lp.netbirdIp || lp.IP || lp.ip || null;
   const ip = rawIp ? rawIp.split("/")[0] : null;
   const connected = nb.daemonStatus === "Connected" || nb.status === "Connected";
+  // Debug: log localPeerState when daemon is Connected but we have no IP yet
+  if (connected && !ip) {
+    console.log("🔍 netbirdGetStatus: Connected but no IP — localPeerState:", JSON.stringify(lp));
+  }
   return { ip, connected, raw: nb };
 }
 
@@ -710,21 +716,24 @@ app.post("/api/setup/register", requireAdmin, express.json(), async (req, res) =
     console.warn("netbird up (register) warning:", e.stderr || e.message);
   }
 
-  // Poll until Connected (up to 30 s)
+  // Poll until Connected + IP assigned (up to 90 s).
+  // netbird up returns quickly (queues in background); IP assignment from the
+  // management server typically takes 5–20 s on a fresh registration.
   let ip = "";
-  const deadline = Date.now() + 30000;
+  const deadline = Date.now() + 90000;
   while (Date.now() < deadline) {
     try {
       const st = await netbirdGetStatus();
       if (st.connected && st.ip) { ip = st.ip; break; }
-      console.log(`⏳ Registration: NetBird status ${st.raw?.daemonStatus || "unknown"} — waiting…`);
-    } catch { /* not ready */ }
-    await new Promise(r => setTimeout(r, 2000));
+      const remaining = Math.round((deadline - Date.now()) / 1000);
+      console.log(`⏳ Registration: status=${st.raw?.daemonStatus || "unknown"} ip=${st.ip || "none"} (${remaining}s left)`);
+    } catch { /* daemon not ready yet */ }
+    await new Promise(r => setTimeout(r, 3000));
   }
 
   if (!ip) {
     return res.status(500).json({
-      error: "NetBird registered but did not reach Connected state within 30 s. Check service logs.",
+      error: "NetBird registered but did not receive an IP within 90 s. Check service logs.",
     });
   }
 
@@ -792,9 +801,9 @@ app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) =>
       console.warn("netbird up warning:", e.stderr || e.message);
     }
 
-    // Poll netbird status until daemonStatus === "Connected" (up to 30 s).
+    // Poll netbird status until daemonStatus === "Connected" + IP assigned (up to 90 s).
     let ip = "";
-    const deadline = Date.now() + 30000;
+    const deadline = Date.now() + 90000;
     while (Date.now() < deadline) {
       try {
         const st = await netbirdGetStatus();
@@ -802,9 +811,10 @@ app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) =>
           ip = st.ip;
           break;
         }
-        console.log(`⏳ NetBird status: ${st.raw?.daemonStatus || st.raw?.status || "unknown"} — waiting…`);
+        const remaining = Math.round((deadline - Date.now()) / 1000);
+        console.log(`⏳ NetBird status: ${st.raw?.daemonStatus || st.raw?.status || "unknown"} ip=${st.ip || "none"} (${remaining}s left)`);
       } catch { /* status not ready yet */ }
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 3000));
     }
 
     if (ip) {
