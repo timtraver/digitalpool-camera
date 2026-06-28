@@ -4344,19 +4344,21 @@ loadDeviceIp();
 
   // ── Device Registration ──────────────────────────────────────
   async function initRegistration() {
-    const formArea    = document.getElementById("regFormArea");
-    const statusArea  = document.getElementById("regStatusArea");
-    const nameInput   = document.getElementById("regDeviceName");
-    const emailInput  = document.getElementById("regOwnerEmail");
-    const noInternet  = document.getElementById("regNoInternet");
-    const registerBtn = document.getElementById("registerDeviceBtn");
-    const regMsg      = document.getElementById("regMsg");
+    const noInternetArea = document.getElementById("regNoInternetArea");
+    const formArea       = document.getElementById("regFormArea");
+    const statusArea     = document.getElementById("regStatusArea");
+    const nameInput      = document.getElementById("regDeviceName");
+    const emailInput     = document.getElementById("regOwnerEmail");
+    const registerBtn    = document.getElementById("registerDeviceBtn");
+    const regMsg         = document.getElementById("regMsg");
+    const regCheckMsg    = document.getElementById("regCheckMsg");
     const regStatusName  = document.getElementById("regStatusName");
     const regStatusEmail = document.getElementById("regStatusEmail");
     const regStatusDate  = document.getElementById("regStatusDate");
     const regStatusIp    = document.getElementById("regStatusIp");
     const regBadge       = document.getElementById("regRequiredBadge");
     const regDetails     = document.getElementById("registrationDetails");
+    let   noInternetPoll = null;  // interval handle for auto-retry
 
     function showRegMsg(text, isError = false) {
       if (!regMsg) return;
@@ -4367,32 +4369,52 @@ loadDeviceIp();
 
     function showRegistered(data) {
       deviceRegistered = true;
-      if (formArea)   formArea.style.display   = "none";
-      if (statusArea) statusArea.style.display  = "";
-      if (regStatusName)  regStatusName.textContent  = data.deviceName  || "—";
-      if (regStatusEmail) regStatusEmail.textContent = data.ownerEmail   || "—";
-      if (regStatusDate && data.registeredAt) {
+      clearInterval(noInternetPoll);
+      if (noInternetArea) noInternetArea.style.display = "none";
+      if (formArea)       formArea.style.display       = "none";
+      if (statusArea)     statusArea.style.display     = "";
+      if (regStatusName)  regStatusName.textContent    = data.deviceName  || "—";
+      if (regStatusEmail) regStatusEmail.textContent   = data.ownerEmail  || "—";
+      if (regStatusDate && data.registeredAt)
         regStatusDate.textContent = new Date(data.registeredAt).toLocaleDateString();
-      }
       if (regStatusIp) regStatusIp.textContent = data.netbirdIp || data.ip || "—";
-      // Hide the header warning badge
       if (regBadge) regBadge.style.display = "none";
-      // Unlock start button if stream is currently idle
       if (startStreamBtn && startStreamBtn.disabled) startStreamBtn.disabled = false;
     }
 
     function showUnregistered(hasInternet) {
       deviceRegistered = false;
-      if (formArea)   formArea.style.display   = "";
-      if (statusArea) statusArea.style.display  = "none";
-      if (noInternet) noInternet.style.display  = hasInternet ? "none" : "";
-      if (registerBtn) registerBtn.disabled     = !hasInternet;
-      // Show warning badge in Admin Settings header
-      if (regBadge) regBadge.style.display = "";
-      // Auto-open the registration section so user sees it immediately
+      if (statusArea) statusArea.style.display = "none";
+      if (regBadge)   regBadge.style.display   = "";
       if (regDetails && !regDetails.open) regDetails.open = true;
-      // Lock start button
       if (startStreamBtn) startStreamBtn.disabled = true;
+
+      if (hasInternet) {
+        // Internet available — show the registration form
+        clearInterval(noInternetPoll);
+        if (noInternetArea) noInternetArea.style.display = "none";
+        if (formArea)       formArea.style.display       = "";
+      } else {
+        // No internet — hide the form, show the blocker
+        if (formArea)       formArea.style.display       = "none";
+        if (noInternetArea) noInternetArea.style.display = "";
+        // Auto-poll every 15 s so the section unlocks as soon as network comes up
+        if (!noInternetPoll) {
+          noInternetPoll = setInterval(async () => {
+            try {
+              const r = await fetch("/api/setup/status");
+              const d = await r.json();
+              if (d.registered) {
+                clearInterval(noInternetPoll); noInternetPoll = null;
+                showRegistered(d);
+              } else if (d.hasInternet) {
+                clearInterval(noInternetPoll); noInternetPoll = null;
+                showUnregistered(true);
+              }
+            } catch { /* ignore — keep polling */ }
+          }, 15000);
+        }
+      }
     }
 
     // Fetch current registration state
@@ -4410,6 +4432,48 @@ loadDeviceIp();
     } catch {
       showUnregistered(false);
     }
+
+    // "Go to Network Settings" — open the Network accordion and scroll to it
+    document.getElementById("regGoToNetworkBtn")?.addEventListener("click", () => {
+      const networkDetails = document.querySelector(".admin-collapsible[data-section='network'], #networkDetails, details.admin-collapsible");
+      // Find the Network Settings <details> by looking for its summary text
+      const allDetails = document.querySelectorAll("details.admin-collapsible");
+      for (const d of allDetails) {
+        const summary = d.querySelector("summary");
+        if (summary && summary.textContent.toLowerCase().includes("network")) {
+          d.open = true;
+          d.scrollIntoView({ behavior: "smooth", block: "start" });
+          return;
+        }
+      }
+      // Fallback: just open the admin settings card if it's collapsed
+      const adminBody = document.getElementById("adminSettingsBody");
+      if (adminBody && adminBody.style.display === "none") {
+        document.getElementById("adminSettingsToggle")?.click();
+      }
+    });
+
+    // "Check Again" — re-probe internet and update the UI
+    document.getElementById("regCheckAgainBtn")?.addEventListener("click", async () => {
+      const btn = document.getElementById("regCheckAgainBtn");
+      if (btn) btn.disabled = true;
+      if (regCheckMsg) { regCheckMsg.textContent = "⏳ Checking…"; regCheckMsg.style.color = ""; }
+      try {
+        const r = await fetch("/api/setup/status");
+        const d = await r.json();
+        if (d.registered) {
+          showRegistered(d);
+        } else if (d.hasInternet) {
+          showUnregistered(true);
+        } else {
+          if (regCheckMsg) { regCheckMsg.textContent = "Still no internet connection."; regCheckMsg.style.color = "#f87171"; }
+        }
+      } catch {
+        if (regCheckMsg) { regCheckMsg.textContent = "Could not reach server."; regCheckMsg.style.color = "#f87171"; }
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
 
     // Register button
     registerBtn?.addEventListener("click", async () => {

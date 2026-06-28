@@ -834,8 +834,28 @@
                 <summary class="admin-section-title">📡 Device Registration</summary>
                 <div class="admin-collapsible-body">
 
-                  <!-- Unregistered: show form -->
-                  <div id="regFormArea">
+                  <!-- No internet blocker (shown instead of form when offline) -->
+                  <div id="regNoInternetArea" style="display:none">
+                    <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:6px;padding:12px 12px 10px;margin-bottom:10px">
+                      <div style="color:rgba(239,68,68,0.95);font-size:13px;font-weight:600;margin-bottom:4px">🔴 No Internet Connection</div>
+                      <div style="color:rgba(255,255,255,0.6);font-size:11px;line-height:1.5">
+                        Registration requires an internet connection to reach the DigitalPool VPN.<br>
+                        Configure WiFi or connect an Ethernet cable, then click <strong>Check Again</strong>.
+                      </div>
+                    </div>
+                    <div style="display:flex;gap:8px;margin-top:4px">
+                      <button class="btn-wifi-action" id="regGoToNetworkBtn" style="flex:1;font-size:11px">
+                        📶 Go to Network Settings
+                      </button>
+                      <button class="btn-wifi-action" id="regCheckAgainBtn" style="flex:1;font-size:11px">
+                        🔄 Check Again
+                      </button>
+                    </div>
+                    <div class="wifi-msg" id="regCheckMsg" style="margin-top:6px"></div>
+                  </div>
+
+                  <!-- Unregistered: show form (only when internet is available) -->
+                  <div id="regFormArea" style="display:none">
                     <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.35);border-radius:6px;padding:8px 10px;margin-bottom:10px">
                       <span style="color:rgba(245,158,11,0.95);font-size:12px;font-weight:600">⚠️ Not registered — streaming is disabled until registration is complete</span>
                     </div>
@@ -849,9 +869,6 @@
                       <label style="margin-top:10px">Owner Email</label>
                       <input type="email" id="regOwnerEmail" placeholder="owner@example.com"
                              autocomplete="email" style="font-size:12px" />
-                      <div id="regNoInternet" style="display:none;color:rgba(239,68,68,0.85);font-size:11px;margin-top:2px">
-                        ⚠️ No internet connection detected. Connect to WiFi or Ethernet first.
-                      </div>
                       <button class="btn-wifi-action" id="registerDeviceBtn" style="width:100%;margin-top:10px">
                         🔗 Register Device
                       </button>
