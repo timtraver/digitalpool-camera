@@ -4354,6 +4354,9 @@ loadDeviceIp();
     const regStatusName  = document.getElementById("regStatusName");
     const regStatusEmail = document.getElementById("regStatusEmail");
     const regStatusDate  = document.getElementById("regStatusDate");
+    const regStatusIp    = document.getElementById("regStatusIp");
+    const regBadge       = document.getElementById("regRequiredBadge");
+    const regDetails     = document.getElementById("registrationDetails");
 
     function showRegMsg(text, isError = false) {
       if (!regMsg) return;
@@ -4371,6 +4374,9 @@ loadDeviceIp();
       if (regStatusDate && data.registeredAt) {
         regStatusDate.textContent = new Date(data.registeredAt).toLocaleDateString();
       }
+      if (regStatusIp) regStatusIp.textContent = data.netbirdIp || data.ip || "—";
+      // Hide the header warning badge
+      if (regBadge) regBadge.style.display = "none";
       // Unlock start button if stream is currently idle
       if (startStreamBtn && startStreamBtn.disabled) startStreamBtn.disabled = false;
     }
@@ -4381,6 +4387,10 @@ loadDeviceIp();
       if (statusArea) statusArea.style.display  = "none";
       if (noInternet) noInternet.style.display  = hasInternet ? "none" : "";
       if (registerBtn) registerBtn.disabled     = !hasInternet;
+      // Show warning badge in Admin Settings header
+      if (regBadge) regBadge.style.display = "";
+      // Auto-open the registration section so user sees it immediately
+      if (regDetails && !regDetails.open) regDetails.open = true;
       // Lock start button
       if (startStreamBtn) startStreamBtn.disabled = true;
     }
@@ -4484,52 +4494,29 @@ loadDeviceIp();
 
   // ── Remote Access (NetBird) — connection status panel ────────
   function initRemoteAccess() {
-    const enableBtn  = document.getElementById("remoteEnableBtn");
-    const disableBtn = document.getElementById("remoteDisableBtn");
     const statusDot  = document.getElementById("remoteStatusDot");
     const statusText = document.getElementById("remoteStatusText");
     const ipRow      = document.getElementById("remoteIpRow");
     const ipValue    = document.getElementById("remoteIpValue");
-    const msg        = document.getElementById("remoteMsg");
-    const urlRow     = document.getElementById("remoteUrlRow");
-    const urlValue   = document.getElementById("remoteUrlValue");
 
-    function showMsg(el, text, isError = false) {
-      if (!el) return;
-      el.textContent = text;
-      el.style.color = isError ? "#f87171" : "#4ade80";
-      setTimeout(() => { el.textContent = ""; }, 5000);
-    }
-
-    function setConnected(ip, deviceName) {
-      statusDot.className    = "remote-status-dot remote-dot-on";
-      statusText.textContent = "Connected";
-      ipRow.style.display    = "flex";
-      ipValue.textContent    = ip;
-      enableBtn.style.display  = "none";
-      disableBtn.style.display = "";
-      if (urlRow && urlValue && deviceName) {
-        const url = `https://cameras.digitalpool.com/camera/${deviceName}`;
-        urlValue.textContent = url;
-        urlValue.href        = url;
-        urlRow.style.display = "flex";
-      }
+    function setConnected(ip) {
+      if (statusDot)  statusDot.className    = "remote-status-dot remote-dot-on";
+      if (statusText) statusText.textContent = "Connected to DigitalPool VPN";
+      if (ipRow)      ipRow.style.display    = "flex";
+      if (ipValue)    ipValue.textContent    = ip;
     }
 
     function setDisconnected() {
-      statusDot.className    = "remote-status-dot remote-dot-off";
-      statusText.textContent = "Not connected";
-      ipRow.style.display    = "none";
-      if (urlRow) urlRow.style.display = "none";
-      enableBtn.style.display  = "";
-      disableBtn.style.display = "none";
+      if (statusDot)  statusDot.className    = "remote-status-dot remote-dot-off";
+      if (statusText) statusText.textContent = "Not connected";
+      if (ipRow)      ipRow.style.display    = "none";
     }
 
     async function refreshStatus() {
       try {
         const r = await fetch("/api/remote/status");
         const d = await r.json();
-        if (d.enabled && d.ip) setConnected(d.ip, d.deviceName);
+        if (d.enabled && d.ip) setConnected(d.ip);
         else setDisconnected();
       } catch { setDisconnected(); }
     }
@@ -4537,35 +4524,6 @@ loadDeviceIp();
     window.refreshNetbirdStatus = refreshStatus;
 
     refreshStatus();
-
-    enableBtn?.addEventListener("click", async () => {
-      const cfg = await fetch("/api/setup/status").then(r => r.json()).catch(() => ({}));
-      const name = cfg.deviceName || "digitalpool-camera";
-      showMsg(msg, "⏳ Connecting…");
-      enableBtn.disabled = true;
-      try {
-        const r = await fetch("/api/remote/enable", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ deviceName: name }),
-        });
-        const d = await r.json();
-        if (d.success) { showMsg(msg, `✅ Connected — ${d.ip}`); setConnected(d.ip, d.deviceName); }
-        else showMsg(msg, `❌ ${d.error}`, true);
-      } catch (e) { showMsg(msg, `❌ ${e.message}`, true); }
-      finally { enableBtn.disabled = false; }
-    });
-
-    disableBtn?.addEventListener("click", async () => {
-      showMsg(msg, "⏳ Disconnecting…");
-      disableBtn.disabled = true;
-      try {
-        const r = await fetch("/api/remote/disable", { method: "POST" });
-        const d = await r.json();
-        if (d.success) { showMsg(msg, "✅ Remote access disabled"); setDisconnected(); }
-        else showMsg(msg, `❌ ${d.error}`, true);
-      } catch (e) { showMsg(msg, `❌ ${e.message}`, true); }
-      finally { disableBtn.disabled = false; }
-    });
   }
 
   // ── NetBird SSH (dpadmin only) ───────────────────────────────
