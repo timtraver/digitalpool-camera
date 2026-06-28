@@ -484,11 +484,60 @@ function loadRemoteConfig() {
     if (fsSync.existsSync(REMOTE_CONFIG_FILE))
       return JSON.parse(fsSync.readFileSync(REMOTE_CONFIG_FILE, "utf8"));
   } catch (e) { /* ignore */ }
-  return { deviceName: "", enabled: false };
+  return { deviceName: "", enabled: false, registered: false, ownerEmail: "", registeredAt: null };
 }
 
 function saveRemoteConfig(cfg) {
   fsSync.writeFileSync(REMOTE_CONFIG_FILE, JSON.stringify(cfg, null, 2));
+}
+
+// ── Registration helpers ─────────────────────────────────────────────────────
+
+/**
+ * Returns true when the device has been registered (netbird up succeeded with
+ * a name + email stored).  Backwards-compat: devices already deployed that have
+ * a deviceName but no `registered` field are treated as registered so existing
+ * deployments are not broken.
+ */
+function isRegistered() {
+  const cfg = loadRemoteConfig();
+  if (cfg.registered === true) return true;
+  if (cfg.registered === undefined && cfg.deviceName) return true;
+  return false;
+}
+
+/**
+ * Probe whether the device has an outbound internet connection by attempting a
+ * HEAD request to the NetBird management URL (or vpn.digitalpool.com as the
+ * default).  Resolves to true/false within 5 s.
+ */
+function checkInternet() {
+  return new Promise((resolve) => {
+    const raw = (process.env.NETBIRD_MANAGEMENT_URL || "https://vpn.digitalpool.com")
+      .replace(/\/$/, "");
+    const mod = raw.startsWith("https") ? require("https") : require("http");
+    try {
+      const req = mod.request(raw, { method: "HEAD", timeout: 5000 }, () => {
+        resolve(true);
+      });
+      req.on("error", () => resolve(false));
+      req.on("timeout", () => { req.destroy(); resolve(false); });
+      req.end();
+    } catch { resolve(false); }
+  });
+}
+
+/**
+ * Middleware — rejects stream-start requests when the device has not been
+ * registered yet.  dpadmin bypasses the gate for support access.
+ */
+function requireRegistered(req, res, next) {
+  if (req.session?.user?.username === "dpadmin") return next();
+  if (isRegistered()) return next();
+  return res.status(403).json({
+    error: "Device not registered. Complete registration in Admin Settings first.",
+    registrationRequired: true,
+  });
 }
 
 /**
@@ -516,6 +565,89 @@ app.get("/api/remote/status", requireAdmin, async (req, res) => {
     // netbird not installed or daemon not running yet
     res.json({ enabled: false, ip: null, deviceName: cfg.deviceName, backendState: "Stopped" });
   }
+});
+
+// ── Device registration ──────────────────────────────────────────────────────
+
+// GET /api/setup/status — UI polls this to decide what to show
+app.get("/api/setup/status", requireAdmin, async (req, res) => {
+  const cfg = loadRemoteConfig();
+  const registered = isRegistered();
+  // Skip slow internet probe when already registered — device clearly has connectivity
+  const hasInternet = registered ? true : await checkInternet();
+  let netbirdIp = null;
+  try {
+    const st = await netbirdGetStatus();
+    netbirdIp = st.ip || null;
+  } catch { /* netbird not running */ }
+  res.json({
+    registered,
+    hasInternet,
+    deviceName:   cfg.deviceName   || "",
+    ownerEmail:   cfg.ownerEmail   || "",
+    registeredAt: cfg.registeredAt || null,
+    netbirdIp,
+  });
+});
+
+// POST /api/setup/register — first-time registration (name + email → netbird up)
+app.post("/api/setup/register", requireAdmin, express.json(), async (req, res) => {
+  const { deviceName, ownerEmail } = req.body || {};
+  if (!deviceName || !ownerEmail)
+    return res.status(400).json({ error: "Device name and owner email are required" });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail))
+    return res.status(400).json({ error: "Invalid email address" });
+
+  const name = deviceName.trim().toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  if (!name) return res.status(400).json({ error: "Invalid device name" });
+
+  const setupKey      = process.env.NETBIRD_SETUP_KEY || "";
+  const managementUrl = (process.env.NETBIRD_MANAGEMENT_URL || "").replace(/\/$/, "");
+  if (!setupKey)
+    return res.status(500).json({ error: "NETBIRD_SETUP_KEY is not configured on this device" });
+
+  // Persist name + email immediately so they survive a crash mid-registration
+  const cfg = loadRemoteConfig();
+  cfg.deviceName = name;
+  cfg.ownerEmail = ownerEmail.trim().toLowerCase();
+  saveRemoteConfig(cfg);
+
+  let upCmd = `sudo netbird up --hostname=${name}`;
+  if (managementUrl) upCmd += ` --management-url=${managementUrl}`;
+  upCmd += ` --setup-key=${setupKey}`;
+
+  try {
+    await execAsync(upCmd, { timeout: 30000 });
+  } catch (e) {
+    console.warn("netbird up (register) warning:", e.stderr || e.message);
+  }
+
+  // Poll until Connected (up to 30 s)
+  let ip = "";
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    try {
+      const st = await netbirdGetStatus();
+      if (st.connected && st.ip) { ip = st.ip; break; }
+      console.log(`⏳ Registration: NetBird status ${st.raw?.daemonStatus || "unknown"} — waiting…`);
+    } catch { /* not ready */ }
+    await new Promise(r => setTimeout(r, 2000));
+  }
+
+  if (!ip) {
+    return res.status(500).json({
+      error: "NetBird registered but did not reach Connected state within 30 s. Check service logs.",
+    });
+  }
+
+  cfg.registered   = true;
+  cfg.registeredAt = new Date().toISOString();
+  saveRemoteConfig(cfg);
+  console.log(`✅ Device registered: ${name} / ${cfg.ownerEmail} — NetBird IP ${ip}`);
+  res.json({ success: true, ip, deviceName: name, ownerEmail: cfg.ownerEmail });
 });
 
 app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) => {
@@ -591,6 +723,13 @@ app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) =>
     }
 
     if (ip) {
+      // Mark device as registered whenever enable succeeds (covers re-enable path)
+      const latestCfg = loadRemoteConfig();
+      if (!latestCfg.registered) {
+        latestCfg.registered   = true;
+        latestCfg.registeredAt = latestCfg.registeredAt || new Date().toISOString();
+        saveRemoteConfig(latestCfg);
+      }
       res.json({ success: true, ip, deviceName: name, reregistered: force });
     } else {
       res.status(500).json({ error: "NetBird registered but did not reach Connected state within 30 s. Check service logs." });
@@ -1951,8 +2090,8 @@ app.get("/api/stream/status", (req, res) => {
   res.json(getSC(camIdx).getStatus());
 });
 
-// Start stream
-app.post("/api/stream/start", async (req, res) => {
+// Start stream — blocked until device is registered
+app.post("/api/stream/start", requireRegistered, async (req, res) => {
   const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
   const config = req.body;
   const result = await getSC(camIdx).startStream(config);
@@ -3489,6 +3628,14 @@ io.on("connection", (socket) => {
   // All streaming events accept an optional `cameraIndex` (1 or 2) in the payload.
 
   socket.on("startStream", async (config) => {
+    // Registration gate — dpadmin bypasses for support access
+    if (!isRegistered() && socket.request.session?.user?.username !== "dpadmin") {
+      socket.emit("streamResult", {
+        success: false,
+        error: "Device not registered. Complete registration in Admin Settings first.",
+      });
+      return;
+    }
     const camIdx = parseInt(config?.cameraIndex) === 2 ? 2 : 1;
     const sc = getSC(camIdx);
     // Guard: prevent the idle preview's 'close' event from auto-restarting a new
@@ -3522,6 +3669,14 @@ io.on("connection", (socket) => {
 
   // Atomic restart: stop → start without showing the idle preview in between.
   socket.on("restartStream", async (config) => {
+    // Registration gate — dpadmin bypasses for support access
+    if (!isRegistered() && socket.request.session?.user?.username !== "dpadmin") {
+      socket.emit("streamResult", {
+        success: false,
+        error: "Device not registered. Complete registration in Admin Settings first.",
+      });
+      return;
+    }
     const camIdx = parseInt(config?.cameraIndex) === 2 ? 2 : 1;
     const sc = getSC(camIdx);
     console.log(`🔄 [Cam${camIdx}] Restarting stream...`);

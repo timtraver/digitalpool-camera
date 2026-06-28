@@ -832,17 +832,55 @@
               <details class="admin-collapsible">
                 <summary class="admin-section-title">🌐 Remote Access</summary>
                 <div class="admin-collapsible-body">
-                  <div class="wifi-form">
-                    <label>Device Name</label>
-                    <div style="display:flex;gap:6px;align-items:center">
-                      <input type="text" id="remoteDeviceName" placeholder="e.g. venue-chicago-table1"
-                             autocomplete="off" style="flex:1;font-size:12px" />
-                      <button class="btn-wifi-action" id="saveDeviceNameBtn" style="white-space:nowrap">💾 Save</button>
+
+                  <!-- ── Registration block ── -->
+                  <!-- Unregistered: show form -->
+                  <div id="regFormArea">
+                    <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.35);border-radius:6px;padding:8px 10px;margin-bottom:10px">
+                      <span style="color:rgba(245,158,11,0.95);font-size:12px;font-weight:600">⚠️ Device not registered — streaming is disabled</span>
                     </div>
-                    <small style="color:rgba(255,255,255,0.4);font-size:10px">
-                      Lowercase letters, numbers and hyphens only. Appears in your NetBird device list.
-                    </small>
+                    <div class="wifi-form">
+                      <label>Device Name</label>
+                      <input type="text" id="regDeviceName" placeholder="e.g. venue-chicago-cam1"
+                             autocomplete="off" style="font-size:12px" />
+                      <small style="color:rgba(255,255,255,0.4);font-size:10px;margin-top:-10px;display:block">
+                        Lowercase letters, numbers and hyphens only. Used as the NetBird hostname.
+                      </small>
+                      <label style="margin-top:10px">Owner Email</label>
+                      <input type="email" id="regOwnerEmail" placeholder="owner@example.com"
+                             autocomplete="email" style="font-size:12px" />
+                      <div id="regNoInternet" style="display:none;color:rgba(239,68,68,0.85);font-size:11px;margin-top:2px">
+                        ⚠️ No internet connection detected. Connect to WiFi or Ethernet first.
+                      </div>
+                      <button class="btn-wifi-action" id="registerDeviceBtn" style="width:100%;margin-top:10px">
+                        🔗 Register Device
+                      </button>
+                      <div class="wifi-msg" id="regMsg"></div>
+                    </div>
                   </div>
+
+                  <!-- Registered: show status -->
+                  <div id="regStatusArea" style="display:none">
+                    <div style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.35);border-radius:6px;padding:8px 10px;margin-bottom:8px">
+                      <span style="color:rgba(34,197,94,0.95);font-size:12px;font-weight:600">✅ Device Registered</span>
+                    </div>
+                    <div class="wifi-info-row">
+                      <span class="wifi-label">Device</span>
+                      <span class="wifi-value" id="regStatusName">—</span>
+                    </div>
+                    <div class="wifi-info-row">
+                      <span class="wifi-label">Owner</span>
+                      <span class="wifi-value" id="regStatusEmail">—</span>
+                    </div>
+                    <div class="wifi-info-row">
+                      <span class="wifi-label">Since</span>
+                      <span class="wifi-value" id="regStatusDate">—</span>
+                    </div>
+                  </div>
+
+                  <div style="border-top:1px solid rgba(255,255,255,0.08);margin:12px 0"></div>
+
+                  <!-- ── NetBird connection status + controls ── -->
                   <div class="remote-status-row" id="remoteStatusRow">
                     <div class="remote-status-dot" id="remoteStatusDot"></div>
                     <span id="remoteStatusText">Checking…</span>
@@ -865,7 +903,7 @@
                     </button>
                   </div>
                   <small style="color:rgba(255,255,255,0.35);font-size:10px;display:block;margin-top:3px">
-                    Use "New Device" when this SD card was copied from another unit — clears the old identity so NetBird assigns a fresh IP.
+                    Use "Register as New Device" when this SD card was copied from another unit — clears the old NetBird identity and lets you update the owner details.
                   </small>
                   <div class="wifi-msg" id="remoteMsg"></div>
 
@@ -888,6 +926,7 @@
                     </small>
                     <div class="wifi-msg" id="remoteSshMsg"></div>
                   </div>
+
                 </div>
               </details>
             </div>

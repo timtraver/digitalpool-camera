@@ -2,6 +2,11 @@ console.log("=".repeat(60));
 console.log("🎬 DIGITALPOOL CAMERA APP.JS STARTING");
 console.log("=".repeat(60));
 
+// ── Device registration state ─────────────────────────────────────────────────
+// Set to true once /api/setup/status confirms the device is registered.
+// The stream start button is kept disabled until this is true.
+let deviceRegistered = false;
+
 // ── Global 401 interceptor ────────────────────────────────────────────────────
 // Wraps window.fetch so that ANY API response with HTTP 401 (session expired /
 // server restarted) immediately redirects to the login page instead of leaving
@@ -1654,7 +1659,8 @@ socket.on("streamStatus", (status) => {
     }, 2000); // 2 s grace period for GStreamer + MediaMTX to start publishing
   } else {
     // Change Restart button back to Start button
-    startStreamBtn.disabled = false;
+    // Registration gate: keep disabled if device not yet registered
+    startStreamBtn.disabled = !deviceRegistered;
     startBtnIcon.textContent = "▶";
     startBtnText.textContent = "Start";
     startStreamBtn.classList.remove("btn-restart");
@@ -3978,6 +3984,7 @@ loadDeviceIp();
 
     const remoteSec = document.getElementById("remoteAccessSection");
     if (remoteSec) remoteSec.style.display = "block";
+    await initRegistration();   // sets deviceRegistered + gates start button
     initRemoteAccess();
     initRemoteSsh();
   }
@@ -4335,17 +4342,151 @@ loadDeviceIp();
     }
   });
 
-  // ── Remote Access (NetBird) ──────────────────────────────────
+  // ── Device Registration ──────────────────────────────────────
+  async function initRegistration() {
+    const formArea    = document.getElementById("regFormArea");
+    const statusArea  = document.getElementById("regStatusArea");
+    const nameInput   = document.getElementById("regDeviceName");
+    const emailInput  = document.getElementById("regOwnerEmail");
+    const noInternet  = document.getElementById("regNoInternet");
+    const registerBtn = document.getElementById("registerDeviceBtn");
+    const regMsg      = document.getElementById("regMsg");
+    const regStatusName  = document.getElementById("regStatusName");
+    const regStatusEmail = document.getElementById("regStatusEmail");
+    const regStatusDate  = document.getElementById("regStatusDate");
+
+    function showRegMsg(text, isError = false) {
+      if (!regMsg) return;
+      regMsg.textContent = text;
+      regMsg.style.color = isError ? "#f87171" : "#4ade80";
+      if (!isError) setTimeout(() => { regMsg.textContent = ""; }, 6000);
+    }
+
+    function showRegistered(data) {
+      deviceRegistered = true;
+      if (formArea)   formArea.style.display   = "none";
+      if (statusArea) statusArea.style.display  = "";
+      if (regStatusName)  regStatusName.textContent  = data.deviceName  || "—";
+      if (regStatusEmail) regStatusEmail.textContent = data.ownerEmail   || "—";
+      if (regStatusDate && data.registeredAt) {
+        regStatusDate.textContent = new Date(data.registeredAt).toLocaleDateString();
+      }
+      // Unlock start button if stream is currently idle
+      if (startStreamBtn && startStreamBtn.disabled) startStreamBtn.disabled = false;
+    }
+
+    function showUnregistered(hasInternet) {
+      deviceRegistered = false;
+      if (formArea)   formArea.style.display   = "";
+      if (statusArea) statusArea.style.display  = "none";
+      if (noInternet) noInternet.style.display  = hasInternet ? "none" : "";
+      if (registerBtn) registerBtn.disabled     = !hasInternet;
+      // Lock start button
+      if (startStreamBtn) startStreamBtn.disabled = true;
+    }
+
+    // Fetch current registration state
+    try {
+      const r = await fetch("/api/setup/status");
+      const d = await r.json();
+      if (d.registered) {
+        showRegistered(d);
+        // Pre-fill name input for re-register flow
+        if (nameInput  && d.deviceName)  nameInput.value  = d.deviceName;
+        if (emailInput && d.ownerEmail)  emailInput.value = d.ownerEmail;
+      } else {
+        showUnregistered(d.hasInternet);
+      }
+    } catch {
+      showUnregistered(false);
+    }
+
+    // Register button
+    registerBtn?.addEventListener("click", async () => {
+      const name  = nameInput?.value.trim();
+      const email = emailInput?.value.trim();
+      if (!name)  { showRegMsg("❌ Device name is required", true); return; }
+      if (!email) { showRegMsg("❌ Owner email is required", true); return; }
+      showRegMsg("⏳ Registering… this may take up to 30 s");
+      registerBtn.disabled = true;
+      try {
+        const r = await fetch("/api/setup/register", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceName: name, ownerEmail: email }),
+        });
+        const d = await r.json();
+        if (d.success) {
+          showRegMsg(`✅ Registered — NetBird IP: ${d.ip}`);
+          showRegistered(d);
+          // Also refresh NetBird connection status in the lower panel
+          refreshNetbirdStatus?.();
+        } else {
+          showRegMsg(`❌ ${d.error}`, true);
+          registerBtn.disabled = false;
+        }
+      } catch (e) {
+        showRegMsg(`❌ ${e.message}`, true);
+        registerBtn.disabled = false;
+      }
+    });
+
+    // Re-register button: wipe identity, show the form again with existing values
+    const reregBtn = document.getElementById("remoteReregisterBtn");
+    reregBtn?.addEventListener("click", async () => {
+      const currentName  = document.getElementById("regStatusName")?.textContent  || "";
+      const currentEmail = document.getElementById("regStatusEmail")?.textContent || "";
+      if (!confirm(
+        `Register this device as a brand-new NetBird peer?\n\n` +
+        `This clears the existing identity — the old peer will become stale and a new IP will be assigned.\n\n` +
+        `Use this after cloning an SD card to a new unit.`
+      )) return;
+
+      const msg = document.getElementById("remoteMsg");
+      const showMsg = (t, isError = false) => {
+        if (!msg) return;
+        msg.textContent = t;
+        msg.style.color = isError ? "#f87171" : "#4ade80";
+      };
+
+      showMsg("⏳ Clearing identity…");
+      reregBtn.disabled = true;
+
+      try {
+        // Wipe netbird identity via force re-register (no name needed — we clear state)
+        const r = await fetch("/api/remote/enable", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceName: currentName || "digitalpool-camera", force: true }),
+        });
+        const d = await r.json();
+        if (d.success) {
+          showMsg("✅ Identity cleared — update the details below and re-register.");
+        } else {
+          showMsg(`❌ ${d.error}`, true);
+        }
+      } catch (e) { showMsg(`❌ ${e.message}`, true); }
+
+      // Show the registration form again with existing values pre-filled
+      deviceRegistered = false;
+      if (startStreamBtn) startStreamBtn.disabled = true;
+      if (formArea)   formArea.style.display  = "";
+      if (statusArea) statusArea.style.display = "none";
+      if (nameInput  && currentName)  nameInput.value  = currentName;
+      if (emailInput && currentEmail) emailInput.value = currentEmail;
+      reregBtn.disabled = false;
+    });
+  }
+
+  // ── Remote Access (NetBird) — connection status panel ────────
   function initRemoteAccess() {
-    const nameInput   = document.getElementById("remoteDeviceName");
-    const saveNameBtn = document.getElementById("saveDeviceNameBtn");
-    const enableBtn   = document.getElementById("remoteEnableBtn");
-    const disableBtn  = document.getElementById("remoteDisableBtn");
-    const statusDot   = document.getElementById("remoteStatusDot");
-    const statusText  = document.getElementById("remoteStatusText");
-    const ipRow       = document.getElementById("remoteIpRow");
-    const ipValue     = document.getElementById("remoteIpValue");
-    const msg         = document.getElementById("remoteMsg");
+    const enableBtn  = document.getElementById("remoteEnableBtn");
+    const disableBtn = document.getElementById("remoteDisableBtn");
+    const statusDot  = document.getElementById("remoteStatusDot");
+    const statusText = document.getElementById("remoteStatusText");
+    const ipRow      = document.getElementById("remoteIpRow");
+    const ipValue    = document.getElementById("remoteIpValue");
+    const msg        = document.getElementById("remoteMsg");
+    const urlRow     = document.getElementById("remoteUrlRow");
+    const urlValue   = document.getElementById("remoteUrlValue");
 
     function showMsg(el, text, isError = false) {
       if (!el) return;
@@ -4354,9 +4495,6 @@ loadDeviceIp();
       setTimeout(() => { el.textContent = ""; }, 5000);
     }
 
-    const urlRow   = document.getElementById("remoteUrlRow");
-    const urlValue = document.getElementById("remoteUrlValue");
-
     function setConnected(ip, deviceName) {
       statusDot.className    = "remote-status-dot remote-dot-on";
       statusText.textContent = "Connected";
@@ -4364,7 +4502,6 @@ loadDeviceIp();
       ipValue.textContent    = ip;
       enableBtn.style.display  = "none";
       disableBtn.style.display = "";
-      if (deviceName && nameInput) nameInput.value = deviceName;
       if (urlRow && urlValue && deviceName) {
         const url = `https://cameras.digitalpool.com/camera/${deviceName}`;
         urlValue.textContent = url;
@@ -4373,14 +4510,13 @@ loadDeviceIp();
       }
     }
 
-    function setDisconnected(deviceName) {
+    function setDisconnected() {
       statusDot.className    = "remote-status-dot remote-dot-off";
       statusText.textContent = "Not connected";
       ipRow.style.display    = "none";
       if (urlRow) urlRow.style.display = "none";
       enableBtn.style.display  = "";
       disableBtn.style.display = "none";
-      if (deviceName && nameInput && !nameInput.value) nameInput.value = deviceName;
     }
 
     async function refreshStatus() {
@@ -4388,45 +4524,27 @@ loadDeviceIp();
         const r = await fetch("/api/remote/status");
         const d = await r.json();
         if (d.enabled && d.ip) setConnected(d.ip, d.deviceName);
-        else setDisconnected(d.deviceName);
-      } catch { setDisconnected(""); }
+        else setDisconnected();
+      } catch { setDisconnected(); }
     }
+    // Expose so initRegistration can trigger a refresh after registering
+    window.refreshNetbirdStatus = refreshStatus;
 
     refreshStatus();
 
-    saveNameBtn?.addEventListener("click", async () => {
-      const name = nameInput?.value.trim();
-      if (!name) { showMsg(msg, "❌ Device name is required", true); return; }
-      try {
-        const r = await fetch("/api/remote/name", {
-          method: "PUT", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ deviceName: name }),
-        });
-        const d = await r.json();
-        if (d.success) showMsg(msg, `✅ Name saved as "${d.deviceName}"`);
-        else showMsg(msg, `❌ ${d.error}`, true);
-      } catch (e) { showMsg(msg, `❌ ${e.message}`, true); }
-    });
-
     enableBtn?.addEventListener("click", async () => {
-      const name = nameInput?.value.trim();
-      if (!name) { showMsg(msg, "❌ Enter a device name first", true); return; }
+      const cfg = await fetch("/api/setup/status").then(r => r.json()).catch(() => ({}));
+      const name = cfg.deviceName || "digitalpool-camera";
       showMsg(msg, "⏳ Connecting…");
       enableBtn.disabled = true;
-      // Clear any previous auth prompt
-      document.getElementById("remoteAuthPrompt")?.remove();
       try {
         const r = await fetch("/api/remote/enable", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ deviceName: name }),
         });
         const d = await r.json();
-        if (d.success) {
-          showMsg(msg, `✅ Connected — ${d.ip}`);
-          setConnected(d.ip, d.deviceName);
-        } else {
-          showMsg(msg, `❌ ${d.error}`, true);
-        }
+        if (d.success) { showMsg(msg, `✅ Connected — ${d.ip}`); setConnected(d.ip, d.deviceName); }
+        else showMsg(msg, `❌ ${d.error}`, true);
       } catch (e) { showMsg(msg, `❌ ${e.message}`, true); }
       finally { enableBtn.disabled = false; }
     });
@@ -4437,36 +4555,10 @@ loadDeviceIp();
       try {
         const r = await fetch("/api/remote/disable", { method: "POST" });
         const d = await r.json();
-        if (d.success) { showMsg(msg, "✅ Remote access disabled"); setDisconnected(""); }
+        if (d.success) { showMsg(msg, "✅ Remote access disabled"); setDisconnected(); }
         else showMsg(msg, `❌ ${d.error}`, true);
       } catch (e) { showMsg(msg, `❌ ${e.message}`, true); }
       finally { disableBtn.disabled = false; }
-    });
-
-    // "Register as New Device" — used after cloning an SD card to a new unit.
-    // Sends force:true which makes the server wipe /var/lib/netbird/ before
-    // re-running netbird up, so NetBird assigns a completely fresh peer and IP.
-    const reregBtn = document.getElementById("remoteReregisterBtn");
-    reregBtn?.addEventListener("click", async () => {
-      const name = nameInput?.value.trim();
-      if (!name) { showMsg(msg, "❌ Enter a device name first", true); return; }
-      if (!confirm(`Register "${name}" as a brand-new device?\n\nThis will clear the existing NetBird identity — the old peer entry will become stale and a new IP will be assigned.\n\nOnly do this on a freshly cloned SD card, not on the original device.`)) return;
-      showMsg(msg, "⏳ Clearing identity and re-registering…");
-      reregBtn.disabled = true;
-      try {
-        const r = await fetch("/api/remote/enable", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ deviceName: name, force: true }),
-        });
-        const d = await r.json();
-        if (d.success) {
-          showMsg(msg, `✅ Registered as new device — IP: ${d.ip}`);
-          setConnected(d.ip, d.deviceName);
-        } else {
-          showMsg(msg, `❌ ${d.error}`, true);
-        }
-      } catch (e) { showMsg(msg, `❌ ${e.message}`, true); }
-      finally { reregBtn.disabled = false; }
     });
   }
 
