@@ -4448,24 +4448,30 @@ loadDeviceIp();
         msg.style.color = isError ? "#f87171" : "#4ade80";
       };
 
-      showMsg("⏳ Clearing identity…");
+      showMsg("⏳ Removing peer from NetBird server and wiping local identity…");
       reregBtn.disabled = true;
 
       try {
-        // Wipe netbird identity via force re-register (no name needed — we clear state)
-        const r = await fetch("/api/remote/enable", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ deviceName: currentName || "digitalpool-camera", force: true }),
-        });
+        // /api/remote/wipe: deletes the peer from the NetBird server (if
+        // NETBIRD_API_TOKEN is set) AND wipes /var/lib/netbird/ locally.
+        // It does NOT run netbird up — that is handled by /api/setup/register
+        // when the user submits the form below.
+        const r = await fetch("/api/remote/wipe", { method: "POST" });
         const d = await r.json();
         if (d.success) {
-          showMsg("✅ Identity cleared — update the details below and re-register.");
+          showMsg("✅ Old peer removed. Enter new details below and click Register.");
         } else {
-          showMsg(`❌ ${d.error}`, true);
+          showMsg(`❌ Wipe failed: ${d.error}`, true);
+          reregBtn.disabled = false;
+          return;
         }
-      } catch (e) { showMsg(`❌ ${e.message}`, true); }
+      } catch (e) {
+        showMsg(`❌ ${e.message}`, true);
+        reregBtn.disabled = false;
+        return;
+      }
 
-      // Show the registration form again with existing values pre-filled
+      // Show the registration form with existing values pre-filled
       deviceRegistered = false;
       if (startStreamBtn) startStreamBtn.disabled = true;
       if (formArea)   formArea.style.display  = "";

@@ -491,6 +491,91 @@ function saveRemoteConfig(cfg) {
   fsSync.writeFileSync(REMOTE_CONFIG_FILE, JSON.stringify(cfg, null, 2));
 }
 
+// ── NetBird Management API helpers ───────────────────────────────────────────
+
+/**
+ * Make a request to the NetBird Management REST API.
+ * Requires NETBIRD_API_TOKEN in .env (personal access token from vpn.digitalpool.com).
+ */
+function netbirdApiRequest(method, apiPath, body = null) {
+  const token   = process.env.NETBIRD_API_TOKEN || "";
+  if (!token) return Promise.reject(new Error("NETBIRD_API_TOKEN is not configured"));
+
+  const baseUrl = (process.env.NETBIRD_MANAGEMENT_URL || "https://vpn.digitalpool.com").replace(/\/$/, "");
+  const fullUrl = `${baseUrl}/api${apiPath}`;
+  const urlObj  = new URL(fullUrl);
+  const mod     = fullUrl.startsWith("https") ? require("https") : require("http");
+  const reqBody = body ? JSON.stringify(body) : null;
+
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: urlObj.hostname,
+      port:     urlObj.port || (fullUrl.startsWith("https") ? 443 : 80),
+      path:     urlObj.pathname + urlObj.search,
+      method,
+      headers: {
+        Authorization: `Token ${token}`,
+        Accept:        "application/json",
+        ...(reqBody ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(reqBody) } : {}),
+      },
+      timeout: 10000,
+    };
+    const req = mod.request(options, (res) => {
+      let data = "";
+      res.on("data", chunk => { data += chunk; });
+      res.on("end", () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          try { resolve(data ? JSON.parse(data) : {}); } catch { resolve({}); }
+        } else {
+          reject(new Error(`NetBird API ${method} ${apiPath} → HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
+        }
+      });
+    });
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("NetBird API request timed out")); });
+    if (reqBody) req.write(reqBody);
+    req.end();
+  });
+}
+
+/**
+ * Find this device's peer record on the NetBird server (by matching the local
+ * NetBird IP) and delete it.  Logs a warning and resolves null if the peer
+ * cannot be found or the API token is not configured — the local wipe can still
+ * proceed in that case.
+ */
+async function netbirdDeleteCurrentPeer() {
+  let localIp;
+  try {
+    const st = await netbirdGetStatus();
+    localIp = st.ip; // e.g. "100.64.0.10"
+  } catch {
+    console.warn("⚠️ netbirdDeleteCurrentPeer: could not get local status — skipping server-side delete");
+    return null;
+  }
+
+  if (!localIp) {
+    console.warn("⚠️ netbirdDeleteCurrentPeer: NetBird not connected — skipping server-side delete");
+    return null;
+  }
+
+  const peers = await netbirdApiRequest("GET", "/peers");
+  // The API returns IP in CIDR form (e.g. "100.64.0.10/16") — strip the prefix for comparison
+  const peer = Array.isArray(peers)
+    ? peers.find(p => (p.ip || "").split("/")[0] === localIp)
+    : null;
+
+  if (!peer) {
+    console.warn(`⚠️ netbirdDeleteCurrentPeer: no peer with IP ${localIp} found on server`);
+    return null;
+  }
+
+  console.log(`🗑️ Deleting NetBird peer: ${peer.name} (id: ${peer.id}, ip: ${localIp})`);
+  await netbirdApiRequest("DELETE", `/peers/${peer.id}`);
+  console.log("✅ Peer deleted from NetBird server");
+  return peer.id;
+}
+
 // ── Registration helpers ─────────────────────────────────────────────────────
 
 /**
@@ -748,6 +833,53 @@ app.post("/api/remote/disable", requireAdmin, async (req, res) => {
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/remote/wipe — delete this peer from the NetBird server AND wipe
+// local identity, but do NOT run netbird up.  The UI then shows the registration
+// form so the user can submit fresh details via /api/setup/register.
+app.post("/api/remote/wipe", requireAdmin, async (req, res) => {
+  const log = [];
+  try {
+    // 1. Delete from NetBird server (best-effort — needs NETBIRD_API_TOKEN)
+    try {
+      const deleted = await netbirdDeleteCurrentPeer();
+      log.push(deleted
+        ? `✅ Peer deleted from NetBird server (id: ${deleted})`
+        : "⚠️ Peer not found on server — may already be gone");
+    } catch (e) {
+      // Missing token or API error — warn but continue with local wipe
+      log.push(`⚠️ Server-side delete skipped: ${e.message}`);
+      console.warn("netbirdDeleteCurrentPeer:", e.message);
+    }
+
+    // 2. Stop daemon, clear local identity
+    log.push("🔄 Stopping netbird daemon…");
+    await execAsync("sudo /usr/bin/systemctl stop netbird").catch(() => {});
+    await new Promise(r => setTimeout(r, 1000));
+
+    log.push("🔄 Clearing local node state…");
+    await execAsync("sudo rm -rf /var/lib/netbird/").catch(e => {
+      throw new Error(`rm -rf /var/lib/netbird/ failed: ${e.stderr || e.message}`);
+    });
+
+    log.push("🔄 Starting fresh daemon…");
+    await execAsync("sudo /usr/bin/systemctl start netbird").catch(() => {});
+    await new Promise(r => setTimeout(r, 1500));
+
+    // 3. Clear registered state — keep name + email for pre-fill
+    const cfg = loadRemoteConfig();
+    cfg.registered   = false;
+    cfg.registeredAt = null;
+    saveRemoteConfig(cfg);
+
+    log.push("✅ Wipe complete — ready for re-registration");
+    console.log(log.join("\n"));
+    res.json({ success: true, deviceName: cfg.deviceName, ownerEmail: cfg.ownerEmail, log });
+  } catch (e) {
+    console.error("❌ /api/remote/wipe error:", e.message);
+    res.status(500).json({ error: e.message, log });
   }
 });
 
