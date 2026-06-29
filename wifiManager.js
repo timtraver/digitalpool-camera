@@ -543,10 +543,22 @@ class WifiManager extends EventEmitter {
     // Always use the client (USB dongle) interface when available
     const iface = this.clientIface || this.wifiIface;
     console.log(`📡 Connecting to: ${ssid} on ${iface}`);
-    const pw = password ? `password "${password}"` : '';
-    const r = await this._run(
-      `nmcli device wifi connect "${ssid}" ${pw} ifname ${iface}`
+
+    // Use connection add + up with explicit security properties.
+    // nmcli device wifi connect doesn't support property overrides and triggers
+    // "property is missing" on drivers (e.g. AIC8800) that don't expose security
+    // capabilities during scan. Creating the profile explicitly avoids this.
+    await this._run(`nmcli connection delete "${ssid}" 2>/dev/null`);
+    const secArgs = password
+      ? `-- 802-11-wireless-security.key-mgmt wpa-psk 802-11-wireless-security.psk "${password}"`
+      : '';
+    const addR = await this._run(
+      `nmcli connection add type wifi ssid "${ssid}" ifname "${iface}" con-name "${ssid}" autoconnect yes ${secArgs}`
     );
+    let r = addR.ok
+      ? await this._run(`nmcli connection up "${ssid}" ifname "${iface}"`)
+      : addR;
+
     if (r.ok) {
       console.log(`✅ Connected to ${ssid} on ${iface}`);
       // Re-assert AP after client association (some drivers briefly drop it)
