@@ -58,18 +58,56 @@ class WifiManager extends EventEmitter {
   }
 
   /**
-   * Find the second WiFi interface — used as a dedicated client adapter
-   * (e.g. USB WiFi6 dongle) while the first interface runs the AP / hotspot.
+   * Find the client WiFi interface — the adapter that is NOT running the AP.
+   *
+   * Strategy:
+   *  1. `iw dev` lists every phy/interface with its current mode (AP / managed).
+   *     Any interface in "managed" mode that isn't the AP iface is a client candidate.
+   *  2. If iw is unavailable, fall back to nmcli's device list and pick any
+   *     wifi device that differs from this.wifiIface.
+   *
    * Returns null when only one WiFi adapter is present.
    */
   async _findClientIface() {
-    const r = await this._run(
-      "nmcli -t -f DEVICE,TYPE device | grep ':wifi' | awk -F: '{print $1}'"
+    // --- Strategy 1: iw dev (most reliable — shows actual hardware mode) ---
+    const iw = await this._run("iw dev 2>/dev/null");
+    if (iw.ok && iw.out) {
+      let currentIface = null;
+      const managed = [];
+      for (const line of iw.out.split('\n')) {
+        const ifaceMatch = line.match(/^\s+Interface\s+(\S+)/);
+        if (ifaceMatch) { currentIface = ifaceMatch[1]; continue; }
+        const typeMatch = line.match(/^\s+type\s+(\S+)/);
+        if (typeMatch && currentIface) {
+          if (typeMatch[1] === 'managed' && currentIface !== this.wifiIface) {
+            managed.push(currentIface);
+          }
+          currentIface = null;
+        }
+      }
+      if (managed.length > 0) {
+        console.log(`📡 WiFi client adapter found via iw dev: ${managed[0]}`);
+        return managed[0];
+      }
+    }
+
+    // --- Strategy 2: nmcli device list ---
+    const nm = await this._run(
+      "nmcli -t -f DEVICE,TYPE device status 2>/dev/null"
     );
-    if (!r.ok || !r.out) return null;
-    const ifaces = r.out.split('\n').map(s => s.trim()).filter(Boolean);
-    // The client interface is any wifi interface that is NOT the AP interface
-    return ifaces.find(i => i !== this.wifiIface) || null;
+    if (nm.ok && nm.out) {
+      const ifaces = nm.out.split('\n')
+        .filter(l => l.includes(':wifi'))
+        .map(l => l.split(':')[0].trim())
+        .filter(i => i && i !== this.wifiIface);
+      if (ifaces.length > 0) {
+        console.log(`📡 WiFi client adapter found via nmcli: ${ifaces[0]}`);
+        return ifaces[0];
+      }
+    }
+
+    console.log('📡 No second WiFi adapter found (only one interface present)');
+    return null;
   }
 
   async _profileExists() {
@@ -539,6 +577,11 @@ class WifiManager extends EventEmitter {
    * Returns { available, iface, state, ssid, ip }.
    */
   async getClientWifiStatus() {
+    // Re-detect on every call if not found at startup — handles dongles plugged
+    // in after boot or interfaces that weren't ready when startMonitor() ran.
+    if (!this.clientIface) {
+      this.clientIface = await this._findClientIface();
+    }
     const iface = this.clientIface;
     if (!iface) return { available: false, reason: 'No USB WiFi adapter detected' };
 
