@@ -713,31 +713,23 @@
                   </details>
                 </div>
 
-                <!-- Network / Ethernet status -->
+                <!-- Network / Internet Connection -->
                 <div class="wifi-card">
-                  <h4>🔌 Network Connection</h4>
-                  <p class="wifi-hint">
-                    The WiFi adapter is dedicated to the admin hotspot and cannot
-                    simultaneously join another WiFi network (hardware limitation of the
-                    RTL8812BU chip). Use the device's <strong>Ethernet port</strong> for
-                    venue/internet connectivity and camera streaming.
-                  </p>
+                  <h4>🌐 Internet Connection</h4>
 
+                  <!-- Ethernet -->
+                  <div style="font-size:10px;font-weight:600;color:rgba(255,255,255,0.45);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:5px">Ethernet</div>
                   <div class="wifi-info-row">
-                    <span class="wifi-label">Ethernet</span>
+                    <span class="wifi-label">Status</span>
                     <span class="wifi-value" id="ethernetStatus">Checking…</span>
                   </div>
                   <div class="wifi-info-row">
-                    <span class="wifi-label">Ethernet IP</span>
+                    <span class="wifi-label">IP Address</span>
                     <span class="wifi-value" id="ethernetIp">—</span>
                   </div>
-                  <div class="wifi-info-row">
-                    <span class="wifi-label">All IPs</span>
-                    <span class="wifi-value" id="allIps" style="font-size:10px;line-height:1.6">—</span>
-                  </div>
 
-                  <!-- Edit Ethernet IP config -->
-                  <details class="wifi-edit-details">
+                  <!-- Configure Ethernet IP -->
+                  <details class="wifi-edit-details" style="margin-top:4px">
                     <summary>⚙️ Configure Ethernet IP</summary>
                     <div class="wifi-form">
                       <label>Mode</label>
@@ -749,7 +741,6 @@
                           <input type="radio" name="ethMode" id="ethModeStatic" value="static" /> Static IP
                         </label>
                       </div>
-
                       <div id="ethStaticFields" style="display:none;flex-direction:column;gap:6px;">
                         <label>IP Address</label>
                         <input type="text" id="ethIp" placeholder="192.168.1.100" autocomplete="off" />
@@ -760,7 +751,6 @@
                         <label>DNS Server <small>(optional, e.g. 8.8.8.8)</small></label>
                         <input type="text" id="ethDns" placeholder="8.8.8.8" autocomplete="off" />
                       </div>
-
                       <p class="wifi-hint" style="margin:8px 0 4px;color:#f59e0b">
                         ⚠️ Changing IP settings will disconnect Ethernet browser tabs. Reconnect using the new IP or via the WiFi hotspot.
                       </p>
@@ -768,6 +758,63 @@
                       <div class="wifi-msg" id="ethConfigMsg"></div>
                     </div>
                   </details>
+
+                  <!-- WiFi Client (USB dongle) -->
+                  <div style="border-top:1px solid rgba(255,255,255,0.08);margin-top:12px;padding-top:10px">
+                    <div style="font-size:10px;font-weight:600;color:rgba(255,255,255,0.45);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:5px">WiFi</div>
+
+                    <!-- No adapter detected -->
+                    <div id="wifiClientUnavailable" style="display:none">
+                      <p class="wifi-hint" style="margin:0;color:rgba(255,255,255,0.35)">USB WiFi adapter not detected. Plug in the dongle and reload.</p>
+                    </div>
+
+                    <!-- Adapter present -->
+                    <div id="wifiClientAvailable" style="display:none">
+                      <div class="wifi-info-row">
+                        <span class="wifi-label">Status</span>
+                        <span class="wifi-value" id="wifiClientStatus">Checking…</span>
+                      </div>
+                      <div class="wifi-info-row" id="wifiClientSsidRow" style="display:none">
+                        <span class="wifi-label">Network</span>
+                        <span class="wifi-value" id="wifiClientSsid">—</span>
+                      </div>
+                      <div class="wifi-info-row" id="wifiClientIpRow" style="display:none">
+                        <span class="wifi-label">IP Address</span>
+                        <span class="wifi-value" id="wifiClientIp">—</span>
+                      </div>
+
+                      <!-- Connect -->
+                      <details class="wifi-edit-details" id="wifiConnectDetails" style="margin-top:6px">
+                        <summary>📶 Connect to WiFi Network</summary>
+                        <div style="margin-top:8px">
+                          <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
+                            <select id="wifiNetworkSelect"
+                              style="flex:1;background:rgba(0,0,0,0.4);color:#e2e8f0;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:5px 8px;font-size:11px">
+                              <option value="">— Select network —</option>
+                            </select>
+                            <button class="btn-icon-small" id="wifiScanBtn" title="Scan for networks">🔍</button>
+                          </div>
+                          <div id="wifiPasswordRow" style="display:none" class="wifi-form">
+                            <label style="margin-top:0">Password</label>
+                            <input type="password" id="wifiPassword" placeholder="WiFi password" autocomplete="off" style="font-size:12px" />
+                          </div>
+                          <div style="display:flex;gap:8px;margin-top:8px">
+                            <button class="btn-wifi-action" id="wifiConnectBtn" style="flex:1">🔗 Connect</button>
+                            <button class="btn-wifi-action btn-remote-disable" id="wifiDisconnectBtn" style="display:none;flex:1">✕ Disconnect</button>
+                          </div>
+                          <div class="wifi-msg" id="wifiClientMsg"></div>
+                        </div>
+                      </details>
+                    </div>
+                  </div>
+
+                  <!-- All IPs summary -->
+                  <div style="border-top:1px solid rgba(255,255,255,0.08);margin-top:10px;padding-top:8px">
+                    <div class="wifi-info-row">
+                      <span class="wifi-label">All IPs</span>
+                      <span class="wifi-value" id="allIps" style="font-size:10px;line-height:1.6">—</span>
+                    </div>
+                  </div>
                 </div>
               </div><!-- /.wifi-grid -->
           </div><!-- /.wifi-panel-body / settings-card-body -->

@@ -1552,6 +1552,16 @@ app.get("/api/wifi/status", async (req, res) => {
   }
 });
 
+// Get client WiFi (USB dongle) status only
+app.get("/api/wifi/client/status", requireAdmin, async (req, res) => {
+  try {
+    const status = await wifiManager.getClientWifiStatus();
+    res.json({ success: true, ...status });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
 // Scan for nearby WiFi networks
 app.get("/api/wifi/networks", async (req, res) => {
   try {

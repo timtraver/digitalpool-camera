@@ -3773,6 +3773,142 @@ loadDeviceIp();
     }
   }
 
+  // ── WiFi client (USB dongle) status + scan/connect ──────────
+  const wifiUnavail    = document.getElementById("wifiClientUnavailable");
+  const wifiAvail      = document.getElementById("wifiClientAvailable");
+  const wifiStatusEl   = document.getElementById("wifiClientStatus");
+  const wifiSsidRow    = document.getElementById("wifiClientSsidRow");
+  const wifiSsidEl     = document.getElementById("wifiClientSsid");
+  const wifiIpRow      = document.getElementById("wifiClientIpRow");
+  const wifiIpEl       = document.getElementById("wifiClientIp");
+  const wifiDisconnBtn = document.getElementById("wifiDisconnectBtn");
+  const wifiConnectDetails = document.getElementById("wifiConnectDetails");
+
+  function showWifiMsg(text, isError = false) {
+    const el = document.getElementById("wifiClientMsg");
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = isError ? "#f87171" : "#4ade80";
+    if (!isError) setTimeout(() => { el.textContent = ""; }, 5000);
+  }
+
+  async function loadWifiClientStatus() {
+    try {
+      const r = await fetch("/api/wifi/client/status");
+      const d = await r.json();
+      if (!d.success || !d.available) {
+        if (wifiUnavail) wifiUnavail.style.display = "";
+        if (wifiAvail)   wifiAvail.style.display   = "none";
+        return;
+      }
+      if (wifiUnavail) wifiUnavail.style.display = "none";
+      if (wifiAvail)   wifiAvail.style.display   = "";
+
+      const connected = d.state === "connected";
+      if (wifiStatusEl) {
+        wifiStatusEl.textContent = connected ? "🟢 Connected" : "⚪ Not connected";
+        wifiStatusEl.style.color = connected ? "#4ade80" : "rgba(255,255,255,0.5)";
+      }
+      if (wifiSsidRow) wifiSsidRow.style.display = connected ? "flex" : "none";
+      if (wifiSsidEl)  wifiSsidEl.textContent    = d.ssid || "—";
+      if (wifiIpRow)   wifiIpRow.style.display   = (connected && d.ip) ? "flex" : "none";
+      if (wifiIpEl)    wifiIpEl.textContent       = d.ip || "—";
+      if (wifiDisconnBtn) wifiDisconnBtn.style.display = connected ? "" : "none";
+    } catch (e) {
+      console.warn("WiFi client status fetch failed:", e.message);
+    }
+  }
+
+  // Scan button — populate the dropdown
+  document.getElementById("wifiScanBtn")?.addEventListener("click", async () => {
+    const btn    = document.getElementById("wifiScanBtn");
+    const select = document.getElementById("wifiNetworkSelect");
+    if (!select) return;
+    btn.disabled = true;
+    btn.textContent = "⏳";
+    select.innerHTML = '<option value="">Scanning…</option>';
+    try {
+      const r = await fetch("/api/wifi/networks");
+      const d = await r.json();
+      select.innerHTML = '<option value="">— Select network —</option>';
+      if (d.success && d.networks?.length) {
+        d.networks.forEach(n => {
+          const opt = document.createElement("option");
+          opt.value = n.ssid;
+          const bars = n.signal >= 75 ? "▂▄▆█" : n.signal >= 50 ? "▂▄▆_" : n.signal >= 25 ? "▂▄__" : "▂___";
+          const lock = n.security ? " 🔒" : "";
+          opt.textContent = `${n.ssid}  ${bars}${lock}`;
+          opt.dataset.security = n.security || "";
+          select.appendChild(opt);
+        });
+      } else {
+        select.innerHTML = '<option value="">No networks found</option>';
+      }
+    } catch (e) {
+      select.innerHTML = '<option value="">Scan failed</option>';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "🔍";
+    }
+  });
+
+  // Show/hide password field based on selected network's security
+  document.getElementById("wifiNetworkSelect")?.addEventListener("change", function () {
+    const opt = this.options[this.selectedIndex];
+    const hasSecurity = opt?.dataset.security && opt.dataset.security !== "";
+    const pwRow = document.getElementById("wifiPasswordRow");
+    if (pwRow) pwRow.style.display = (hasSecurity && this.value) ? "" : "none";
+  });
+
+  // Connect button
+  document.getElementById("wifiConnectBtn")?.addEventListener("click", async () => {
+    const ssid = document.getElementById("wifiNetworkSelect")?.value;
+    const pw   = document.getElementById("wifiPassword")?.value.trim();
+    if (!ssid) { showWifiMsg("Select a network first", true); return; }
+    showWifiMsg("⏳ Connecting…");
+    const btn = document.getElementById("wifiConnectBtn");
+    btn.disabled = true;
+    try {
+      const r = await fetch("/api/wifi/connect", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ssid, password: pw || undefined }),
+      });
+      const d = await r.json();
+      if (d.success) {
+        showWifiMsg(`✅ Connected to ${ssid}`);
+        if (wifiConnectDetails) wifiConnectDetails.open = false;
+        await loadWifiClientStatus();
+      } else {
+        showWifiMsg(`❌ ${d.error || "Connection failed"}`, true);
+      }
+    } catch (e) {
+      showWifiMsg(`❌ ${e.message}`, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // Disconnect button
+  document.getElementById("wifiDisconnectBtn")?.addEventListener("click", async () => {
+    showWifiMsg("⏳ Disconnecting…");
+    const btn = document.getElementById("wifiDisconnectBtn");
+    btn.disabled = true;
+    try {
+      const r = await fetch("/api/wifi/disconnect", { method: "POST" });
+      const d = await r.json();
+      if (d.success) {
+        showWifiMsg("✅ Disconnected");
+        await loadWifiClientStatus();
+      } else {
+        showWifiMsg(`❌ ${d.error}`, true);
+      }
+    } catch (e) {
+      showWifiMsg(`❌ ${e.message}`, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   // ── save AP config ──────────────────────────────────────────
   document.getElementById("saveApConfig")?.addEventListener("click", async () => {
     const ssid = document.getElementById("newApSsid").value.trim();
@@ -3920,9 +4056,11 @@ loadDeviceIp();
   loadWifiStatus();
   loadNetworkStatus();
   loadEthernetConfig();
-  // Refresh both every 30 s
-  setInterval(loadWifiStatus,    30_000);
-  setInterval(loadNetworkStatus, 30_000);
+  loadWifiClientStatus();
+  // Refresh every 30 s
+  setInterval(loadWifiStatus,       30_000);
+  setInterval(loadNetworkStatus,    30_000);
+  setInterval(loadWifiClientStatus, 30_000);
 
 })();
 

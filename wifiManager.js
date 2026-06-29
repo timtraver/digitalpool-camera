@@ -32,7 +32,8 @@ class WifiManager extends EventEmitter {
     this.apPassword  = options.apPassword || DEFAULT_AP_PASSWORD;
     this.apIp        = options.apIp       || DEFAULT_AP_IP;
     this.apRunning   = false;
-    this.wifiIface   = null;
+    this.wifiIface   = null;  // AP / hotspot interface (onboard chip)
+    this.clientIface = null;  // Client WiFi interface (USB dongle)
     this._monitor    = null;
   }
 
@@ -48,12 +49,27 @@ class WifiManager extends EventEmitter {
   }
 
   async _findWifiIface() {
-    // Ask NM first
+    // Ask NM first — returns the first wifi device found
     let r = await this._run("nmcli -t -f DEVICE,TYPE device | grep ':wifi' | head -1 | cut -d: -f1");
     if (r.ok && r.out) return r.out;
     // Fallback: first wl* interface from ip link
     r = await this._run("ip link show | grep -Eo 'wl[^:]+' | head -1");
     return r.ok ? r.out : null;
+  }
+
+  /**
+   * Find the second WiFi interface — used as a dedicated client adapter
+   * (e.g. USB WiFi6 dongle) while the first interface runs the AP / hotspot.
+   * Returns null when only one WiFi adapter is present.
+   */
+  async _findClientIface() {
+    const r = await this._run(
+      "nmcli -t -f DEVICE,TYPE device | grep ':wifi' | awk -F: '{print $1}'"
+    );
+    if (!r.ok || !r.out) return null;
+    const ifaces = r.out.split('\n').map(s => s.trim()).filter(Boolean);
+    // The client interface is any wifi interface that is NOT the AP interface
+    return ifaces.find(i => i !== this.wifiIface) || null;
   }
 
   async _profileExists() {
@@ -104,6 +120,11 @@ class WifiManager extends EventEmitter {
     if (!this.wifiIface) {
       console.warn('⚠️  WiFi Manager: no wireless interface found — API will be limited');
       return false;
+    }
+    // Detect the USB dongle (second WiFi adapter) for client operations
+    this.clientIface = await this._findClientIface();
+    if (this.clientIface) {
+      console.log(`📡 WiFi Manager: client adapter detected — ${this.clientIface}`);
     }
 
     // Read the SSID from the NM profile so getStatus() is accurate.
@@ -412,31 +433,32 @@ class WifiManager extends EventEmitter {
    */
   async scanNetworks() {
     await this._ensureIface();
-    const apActive = await this._isAPActive();
 
-    if (!apActive) {
-      // Managed/idle mode — we can request a fresh scan
-      console.log('📡 Scanning for networks (active rescan)...');
-      await this._run(`nmcli device wifi rescan ifname ${this.wifiIface} 2>/dev/null`);
+    // Prefer the dedicated client adapter for scanning — it supports active
+    // rescans without disrupting the AP.  Fall back to the AP interface
+    // (cached results only, since active rescan on an AP interface fails).
+    const scanIface = this.clientIface || this.wifiIface;
+    const canRescan = !!this.clientIface; // active rescan safe on managed iface
+
+    if (canRescan) {
+      console.log(`📡 Scanning for networks on client adapter ${scanIface}...`);
+      await this._run(`nmcli device wifi rescan ifname ${scanIface} 2>/dev/null`);
       await new Promise(r => setTimeout(r, 2500));
     } else {
-      // AP mode — active rescan on this interface would fail/hang.
-      // Use NM's background-cached results; no wait needed.
-      console.log('📡 Scanning for networks (cached, AP is active)...');
+      console.log('📡 Scanning for networks (cached, AP is active on only adapter)...');
     }
 
-    // Try NM cached list first (no ifname so NM searches all managed ifaces)
-    const rescanFlag = apActive ? '--rescan no' : '';
+    const rescanFlag = canRescan ? '' : '--rescan no';
+    const ifaceFlag  = `ifname ${scanIface}`;
     let r = await this._run(
-      `nmcli -t -f SSID,SIGNAL,SECURITY,ACTIVE device wifi list ${rescanFlag} 2>/dev/null`
+      `nmcli -t --escape no -f SSID,SIGNAL,SECURITY,ACTIVE device wifi list ${ifaceFlag} ${rescanFlag} 2>/dev/null`
     );
 
-    // Fallback: iw scan (works on many drivers even in AP mode via passive scan)
+    // Fallback: iw scan
     if (!r.ok || !r.out.trim()) {
       console.log('📡 NM cache empty, trying iw scan fallback...');
-      const iw = await this._run(`iw dev ${this.wifiIface} scan 2>/dev/null`);
+      const iw = await this._run(`iw dev ${scanIface} scan 2>/dev/null`);
       if (iw.ok && iw.out) {
-        // Parse iw scan output into the same shape
         const results = [];
         const seen = new Set();
         for (const line of iw.out.split('\n')) {
@@ -454,14 +476,17 @@ class WifiManager extends EventEmitter {
       return [];
     }
 
-    // Parse nmcli -t output
-    if (!r2.ok) return [];
+    // Parse nmcli -t output.  Fields: SSID:SIGNAL:SECURITY:ACTIVE
+    // SSID may contain colons so split from the right.
     const seen = new Set();
-    return r2.out.split('\n')
+    return r.out.split('\n')
       .map(line => {
         const parts = line.split(':');
         if (parts.length < 4) return null;
-        const [ssid, signal, security, active] = parts;
+        const active   = parts.pop();
+        const security = parts.pop();
+        const signal   = parts.pop();
+        const ssid     = parts.join(':').trim(); // rejoin in case SSID contained ':'
         if (!ssid || ssid === '--' || ssid === this.apSsid) return null;
         if (seen.has(ssid)) return null;
         seen.add(ssid);
@@ -472,22 +497,25 @@ class WifiManager extends EventEmitter {
   }
 
   /**
-   * Connect to a WiFi network as a client. The AP continues running.
+   * Connect to a WiFi network as a client using the dedicated client adapter.
+   * The AP continues running on the hotspot interface.
    */
   async connectToNetwork(ssid, password) {
     await this._ensureIface();
-    console.log(`📡 Connecting to: ${ssid}`);
+    // Always use the client (USB dongle) interface when available
+    const iface = this.clientIface || this.wifiIface;
+    console.log(`📡 Connecting to: ${ssid} on ${iface}`);
     const pw = password ? `password "${password}"` : '';
     const r = await this._run(
-      `nmcli device wifi connect "${ssid}" ${pw} ifname ${this.wifiIface}`
+      `nmcli device wifi connect "${ssid}" ${pw} ifname ${iface}`
     );
     if (r.ok) {
-      console.log(`✅ Connected to ${ssid}`);
+      console.log(`✅ Connected to ${ssid} on ${iface}`);
       // Re-assert AP after client association (some drivers briefly drop it)
-      setTimeout(() => this._startAP(), 5000);
+      if (!this.clientIface) setTimeout(() => this._startAP(), 5000);
       return { success: true, message: `Connected to ${ssid}` };
     }
-    console.error(`❌ Connect failed:`, r.err);
+    console.error(`❌ Connect failed on ${iface}:`, r.err);
     return { success: false, error: r.err };
   }
 
@@ -495,10 +523,48 @@ class WifiManager extends EventEmitter {
    * Disconnect from the current client WiFi network.
    */
   async disconnectFromNetwork() {
+    // Prefer disconnecting the client interface directly
+    if (this.clientIface) {
+      const r = await this._run(`nmcli device disconnect "${this.clientIface}" 2>/dev/null`);
+      return r.ok ? { success: true } : { success: false, error: r.err };
+    }
     const current = await this._currentClientConnection();
     if (!current) return { success: false, error: 'Not connected to any network' };
     const r = await this._run(`nmcli connection down "${current}"`);
     return r.ok ? { success: true } : { success: false, error: r.err };
+  }
+
+  /**
+   * Return the current state of the WiFi client adapter (USB dongle).
+   * Returns { available, iface, state, ssid, ip }.
+   */
+  async getClientWifiStatus() {
+    const iface = this.clientIface;
+    if (!iface) return { available: false, reason: 'No USB WiFi adapter detected' };
+
+    const stateR = await this._run(
+      `nmcli -t -f GENERAL.STATE,GENERAL.CONNECTION device show "${iface}" 2>/dev/null`
+    );
+    let state = 'disconnected', ssid = null;
+    if (stateR.ok) {
+      const stateMatch = stateR.out.match(/GENERAL\.STATE:(\d+)/);
+      const connMatch  = stateR.out.match(/GENERAL\.CONNECTION:(.*)/);
+      if (stateMatch && parseInt(stateMatch[1]) >= 100) state = 'connected';
+      if (connMatch && connMatch[1].trim() !== '--') ssid = connMatch[1].trim();
+    }
+
+    let ip = null;
+    if (state === 'connected') {
+      const ipR = await this._run(
+        `nmcli -t -f IP4.ADDRESS device show "${iface}" 2>/dev/null`
+      );
+      if (ipR.ok) {
+        const m = ipR.out.match(/IP4\.ADDRESS\[1\]:(.*)/);
+        if (m) ip = m[1].trim().split('/')[0];
+      }
+    }
+
+    return { available: true, iface, state, ssid, ip };
   }
 
   async _currentClientConnection() {
@@ -528,20 +594,22 @@ class WifiManager extends EventEmitter {
    * Return the full current status (AP + client WiFi + IP info).
    */
   async getStatus() {
-    const [apActive, current] = await Promise.all([
+    const [apActive, current, clientStatus] = await Promise.all([
       this._isAPActive(),
       this._currentClientConnection(),
+      this.getClientWifiStatus(),
     ]);
     this.apRunning = apActive;
     const port = process.env.PORT || 3000;
     return {
-      apRunning:      apActive,
-      apSsid:         this.apSsid,
-      apPassword:     this.apPassword,
-      apIp:           this.apIp,
-      apAdminUrl:     `http://${this.apIp}:${port}`,
-      wifiInterface:  this.wifiIface,
+      apRunning:        apActive,
+      apSsid:           this.apSsid,
+      apPassword:       this.apPassword,
+      apIp:             this.apIp,
+      apAdminUrl:       `http://${this.apIp}:${port}`,
+      wifiInterface:    this.wifiIface,
       connectedNetwork: current || null,
+      client:           clientStatus,
     };
   }
 }
