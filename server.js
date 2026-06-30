@@ -1526,20 +1526,44 @@ app.post("/api/timezone", requireAdmin, express.json(), async (req, res) => {
 });
 
 // API endpoint to get device IP addresses
-app.get("/api/network", (req, res) => {
-  const interfaces = os.networkInterfaces();
+app.get("/api/network", async (req, res) => {
   const addresses = [];
-  for (const [name, nets] of Object.entries(interfaces)) {
-    for (const net of nets) {
-      // Skip loopback, internal, and link-local (169.254.x.x) addresses.
-      // Link-local addresses are auto-assigned by the OS when DHCP hasn't
-      // responded yet — they are not routable and should not be shown as IPs.
-      if (!net.internal && net.family === "IPv4" && !net.address.startsWith("169.254.")) {
-        addresses.push({ interface: name, address: net.address });
+  try {
+    // Use `ip -4 -o addr show scope global` and exclude secondary addresses.
+    // os.networkInterfaces() returns both primary and secondary DHCP leases
+    // with no flag to distinguish them — `ip addr` marks secondary addresses
+    // explicitly so we can filter them out.
+    const { stdout } = await execAsync("ip -4 -o addr show scope global 2>/dev/null");
+    for (const line of stdout.split("\n")) {
+      if (!line.trim() || line.includes(" secondary ")) continue;
+      // line format: "3: enp2s0    inet 192.168.1.170/24 brd ... scope global ..."
+      const m = line.match(/^\d+:\s+(\S+)\s+inet\s+([0-9.]+)/);
+      if (!m) continue;
+      const [, iface, address] = m;
+      if (address.startsWith("169.254.")) continue; // skip link-local
+      addresses.push({ interface: iface, address });
+    }
+  } catch (_) {
+    // Fallback to os.networkInterfaces() if ip command unavailable
+    for (const [name, nets] of Object.entries(os.networkInterfaces())) {
+      for (const net of nets) {
+        if (!net.internal && net.family === "IPv4" && !net.address.startsWith("169.254.")) {
+          addresses.push({ interface: name, address: net.address });
+        }
       }
     }
   }
-  res.json({ success: true, addresses });
+
+  // Determine which interface holds the default route
+  let defaultIface = null;
+  try {
+    const { stdout } = await execAsync("ip route show default 2>/dev/null");
+    const m = stdout.match(/dev\s+(\S+)/);
+    if (m) defaultIface = m[1];
+  } catch (_) {}
+
+  const tagged = addresses.map(a => ({ ...a, primary: a.interface === defaultIface }));
+  res.json({ success: true, addresses: tagged, defaultIface });
 });
 
 // ============ WIFI / HOTSPOT API ENDPOINTS ============

@@ -3678,10 +3678,12 @@ async function loadDeviceIp() {
     const response = await fetch("/api/network");
     const data = await response.json();
     if (data.success && data.addresses.length > 0) {
-      // Priority: 1) Ethernet (eth* / en*), 2) any non-AP address, 3) first address
-      const eth   = data.addresses.find(a => /^e(th|n)/.test(a.interface));
-      const nonAp = data.addresses.find(a => a.address !== AP_IP);
-      deviceLocalIP = (eth || nonAp || data.addresses[0]).address;
+      // Priority: 1) Primary ethernet (default-route iface), 2) any ethernet,
+      // 3) any non-AP address, 4) first address
+      const ethAddrs  = data.addresses.filter(a => /^e(th|n)/.test(a.interface));
+      const primaryEth = ethAddrs.find(a => a.primary) || ethAddrs[0];
+      const nonAp     = data.addresses.find(a => a.address !== AP_IP);
+      deviceLocalIP   = (primaryEth || nonAp || data.addresses[0]).address;
     }
     // Refresh connection info box with resolved IP
     updateConnectionInfo(streamProtocol.value, deviceLocalIP);
@@ -3761,16 +3763,18 @@ loadDeviceIp();
       const d = await r.json();
       if (!d.success) return;
 
-      // Separate Ethernet from WiFi addresses
-      const ethAddrs  = d.addresses.filter(a => /^e(th|n)/.test(a.interface));
+      // All ethernet addresses (eth*, en*), filtered by primary default-route
+      // interface when multiple ethernet ports exist (e.g. dual-NIC N97).
+      const ethAddrs = d.addresses.filter(a => /^e(th|n)/.test(a.interface));
+      const primaryEth = ethAddrs.find(a => a.primary) || ethAddrs[0] || null;
       const allNonAp  = d.addresses.filter(a => a.interface !== 'lo');
 
-      const ethEl  = document.getElementById("ethernetStatus");
+      const ethEl   = document.getElementById("ethernetStatus");
       const ethIpEl = document.getElementById("ethernetIp");
-      const allEl  = document.getElementById("allIps");
+      const allEl   = document.getElementById("allIps");
 
       if (ethEl) {
-        if (ethAddrs.length) {
+        if (primaryEth) {
           ethEl.textContent = "🟢 Connected";
           ethEl.style.color = "#4ade80";
         } else {
@@ -3779,7 +3783,7 @@ loadDeviceIp();
         }
       }
       if (ethIpEl) {
-        ethIpEl.textContent = ethAddrs.length ? ethAddrs.map(a => a.address).join(', ') : '—';
+        ethIpEl.textContent = primaryEth ? primaryEth.address : '—';
       }
       if (allEl) {
         allEl.textContent = allNonAp.map(a => `${a.interface}: ${a.address}`).join('\n') || '—';
