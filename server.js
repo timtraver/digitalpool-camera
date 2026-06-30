@@ -3737,12 +3737,28 @@ io.on("connection", (socket) => {
     if (hwControls.pan_absolute)  ptzRanges.pan_absolute  = { min: hwControls.pan_absolute.min,  max: hwControls.pan_absolute.max,  step: hwControls.pan_absolute.step  };
     if (hwControls.tilt_absolute) ptzRanges.tilt_absolute = { min: hwControls.tilt_absolute.min, max: hwControls.tilt_absolute.max, step: hwControls.tilt_absolute.step };
 
+    // Determine whether the camera hardware is actually present so the UI can
+    // show "No Camera" instead of "Connected" when no device is plugged in.
+    const activeSource = getActiveSource(camIdx);
+    let cameraPresent = false;
+    if (activeSource.type === "usb") {
+      const dev = activeSource.device || (camIdx === 2 ? CAMERA_DEVICE_2 : CAMERA_DEVICE);
+      cameraPresent = fsSync.existsSync(dev);
+    } else if (activeSource.type === "rtsp") {
+      cameraPresent = !!(activeSource.rtspUrl);
+    } else if (activeSource.type === "rtmp") {
+      cameraPresent = !!(activeSource.rtmpUrl);
+    } else if (activeSource.type === "ndi") {
+      cameraPresent = !!(activeSource.ndiName);
+    }
+
     socket.emit("cameraConfig", {
       cameraIndex: camIdx,
       success: true,
       config: cam.config,
       supportedControls: Object.keys(hwControls),
       ptzRanges,
+      cameraPresent,
     });
   });
 

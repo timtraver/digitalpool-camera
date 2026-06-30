@@ -193,6 +193,10 @@ function switchCamera(newIdx) {
     tab.classList.toggle("active", parseInt(tab.dataset.cam) === activeCamIndex);
   });
 
+  // Reset the camera-presence badge while we wait for the new camera's config
+  statusElement.textContent = "…";
+  statusElement.className = "status status-disconnected";
+
   // Re-request configs for the newly-selected camera
   socket.emit("getCameraConfig",      { cameraIndex: activeCamIndex });
   socket.emit("getStartupPosition",   { cameraIndex: activeCamIndex });
@@ -291,6 +295,20 @@ function showControlError(control, message) {
 socket.on("cameraConfig", (data) => {
   // Ignore updates for the non-active camera
   if (data.cameraIndex && data.cameraIndex !== activeCamIndex) return;
+
+  // Update the camera-hardware presence badge.  This is separate from the
+  // WebSocket connection state — a connected socket doesn't mean a camera is
+  // plugged in, especially for Camera 2 on single-camera setups.
+  if ("cameraPresent" in data) {
+    if (data.cameraPresent) {
+      statusElement.textContent = "Connected";
+      statusElement.className = "status status-connected";
+    } else {
+      statusElement.textContent = "No Camera";
+      statusElement.className = "status status-disconnected";
+    }
+  }
+
   if (data.success && data.config) {
     console.log(`📸 [Cam${data.cameraIndex || 1}] Received camera configuration:`, data.config);
     loadCameraConfigToUI(data.config);
