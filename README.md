@@ -157,8 +157,8 @@ ssh dp@<device-ip>
 ```bash
 sudo apt update && sudo apt full-upgrade -y
 
-# Network diagnostic tools (ifconfig, ping, netstat, etc.), WiFi tools, and vi editor
-sudo apt install -y net-tools iputils-ping iproute2 netcat-openbsd vim iw wireless-tools
+# Network diagnostic tools (ifconfig, ping, netstat, etc.), WiFi tools, firewall, and vi editor
+sudo apt install -y net-tools iputils-ping iproute2 netcat-openbsd vim iw wireless-tools iptables ufw
 
 sudo reboot
 ```
@@ -1594,7 +1594,7 @@ sudo tee /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
 dp ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /etc/NetworkManager/dnsmasq-shared.d
 dp ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/NetworkManager/dnsmasq-shared.d/captive-portal.conf
 dp ALL=(ALL) NOPASSWD: /usr/bin/systemctl reload NetworkManager
-dp ALL=(ALL) NOPASSWD: /usr/sbin/iptables -t nat *
+dp ALL=(ALL) NOPASSWD: /usr/bin/iptables -t nat *
 # v4l2-ctl — camera format queries, PTZ controls, and image controls
 dp ALL=(ALL) NOPASSWD: /usr/bin/v4l2-ctl *
 EOF
@@ -1652,7 +1652,7 @@ Three `sudo` commands are needed. Add them to the existing sudoers file created 
 ```bash
 sudo tee -a /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
 dp ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/netplan/99-digitalpool-ethernet.yaml
-dp ALL=(ALL) NOPASSWD: /usr/sbin/netplan apply
+dp ALL=(ALL) NOPASSWD: /usr/bin/netplan apply
 dp ALL=(ALL) NOPASSWD: /usr/bin/timedatectl set-timezone *
 dp ALL=(ALL) NOPASSWD: /usr/sbin/reboot
 EOF
