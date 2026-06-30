@@ -268,14 +268,15 @@ sudo journalctl --disk-usage
 
 #### Verify logrotate is running
 
-Ubuntu 24.04 Server runs logrotate via **cron** (`/etc/cron.daily/logrotate`), not a systemd timer. Confirm it is in place:
+Ubuntu 24.04 Server (minimized install) does not include logrotate by default. Install it:
 
 ```bash
-ls /etc/cron.daily/logrotate    # should show the file
+sudo apt install -y logrotate
+ls /etc/cron.daily/logrotate    # should now show the file
 sudo systemctl status cron      # cron must be active (running)
 ```
 
-If cron is active and the file exists, logrotate is working — nothing further needed.
+Ubuntu 24.04 Server runs logrotate via **cron** (`/etc/cron.daily/logrotate`), not a systemd timer. If cron is active and the file exists, logrotate is working — nothing further needed.
 
 Logrotate handles `/var/log/syslog`, `/var/log/kern.log`, `/var/log/auth.log`, and other traditional log files automatically. You can force a rotation immediately to test:
 
