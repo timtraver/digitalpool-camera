@@ -4078,6 +4078,16 @@ loadDeviceIp();
   setInterval(loadNetworkStatus,    30_000);
   setInterval(loadWifiClientStatus, 30_000);
 
+  // Manual refresh button
+  document.getElementById("networkRefreshBtn")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = "⏳";
+    await Promise.all([loadNetworkStatus(), loadWifiStatus(), loadWifiClientStatus()]);
+    btn.textContent = "✅";
+    setTimeout(() => { btn.textContent = "🔄"; btn.disabled = false; }, 1200);
+  });
+
 })();
 
 // ═══════════════════════════════════════════════════════════════

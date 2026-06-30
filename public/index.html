@@ -524,7 +524,7 @@
 
             <!-- Connection info — shown for RTSP and SRT server modes -->
             <div id="connectionInfoBox" class="connection-info-box">
-              <div class="connection-info-label">📡 Connect clients to:</div>
+              <div class="connection-info-label">📡 Connect Local Clients To:</div>
               <div class="connection-info-url-row">
                 <code id="connectionUrl" class="connection-info-url">rtsp://…</code>
                 <button id="copyConnectionUrl" class="btn-copy-url" title="Copy URL">📋</button>
@@ -715,7 +715,10 @@
 
                 <!-- Network / Internet Connection -->
                 <div class="wifi-card">
-                  <h4>🌐 Internet Connection</h4>
+                  <h4 style="display:flex;align-items:center;justify-content:space-between;">
+                    <span>🌐 Internet Connection</span>
+                    <button id="networkRefreshBtn" class="btn-icon-small" title="Refresh connection status" style="font-size:13px;padding:2px 7px;">🔄</button>
+                  </h4>
 
                   <!-- Ethernet -->
                   <div style="font-size:10px;font-weight:600;color:rgba(255,255,255,0.45);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:5px">Ethernet</div>
