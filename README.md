@@ -142,7 +142,7 @@ Every file read on a standard Linux mount triggers an `atime` (access time) writ
 **Edit `/etc/fstab`:**
 
 ```bash
-sudo nano /etc/fstab
+sudo vi /etc/fstab
 ```
 
 Your current entries will look something like:
@@ -185,7 +185,7 @@ Ubuntu's `unattended-upgrades` package runs nightly package upgrades automatical
 By default `needrestart` is set to **automatic** mode (`a`), meaning it restarts any affected service without prompting. Change it to **interactive** mode (`i`) so it only acts when a human is sitting at a terminal:
 
 ```bash
-sudo nano /etc/needrestart/needrestart.conf
+sudo vi /etc/needrestart/needrestart.conf
 ```
 
 Find the line:
