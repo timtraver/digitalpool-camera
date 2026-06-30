@@ -297,10 +297,12 @@ Run `diskcheck` any time to see root volume free space and journal size together
 
 ### 1h. Add swap space
 
-These boards have **no swap by default**. The camera service, GStreamer pipeline, and ffmpeg together can peak at 2–3 GB under load. Without swap, the OOM killer will silently terminate processes and make the device appear unresponsive. A 2 GB swap file gives the OS room to page out cold memory rather than killing services.
+Ubuntu Server installs with **no swap by default**. The camera service, GStreamer pipeline, and ffmpeg together can peak at 2–3 GB under load. Without swap, the OOM killer will silently terminate processes and make the device appear unresponsive.
+
+**GMKtec G5 N97 (16 GB RAM, NVMe storage) — use 4 GB swap:**
 
 ```bash
-sudo fallocate -l 2G /swapfile
+sudo fallocate -l 4G /swapfile
 sudo chmod 600 /swapfile
 sudo mkswap /swapfile
 sudo swapon /swapfile
@@ -309,6 +311,18 @@ sudo swapon /swapfile
 echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
 # Verify
+free -h
+```
+
+**Rockchip SBCs (microSD, limited RAM) — use 2 GB swap:**
+
+```bash
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 free -h
 ```
 
