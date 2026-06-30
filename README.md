@@ -1,6 +1,8 @@
 # Digital Pool Camera Control
 
-A Node.js web service for **Rockchip RK3588-family SBCs** (Orange Pi 5, Radxa Rock 5C, and similar boards) that turns a USB PTZ camera into a professional live-streaming camera for pool/billiards match production. It streams H.264 video with hardware acceleration via the Rockchip MPP encoder, supports SRT, RTMP, and RTSP output, composites transparent PNG overlays (scoreboards, logos, timestamps) directly into the GStreamer pipeline, and hosts a WiFi access-point hotspot so the control interface is always reachable from a tablet or phone without any external network.
+A Node.js web service for **Intel Lake N97 mini-PCs** (GMKtec G5, and similar N97/N100 boxes) and **Rockchip RK3588-family SBCs** (Orange Pi 5, Radxa Rock 5C) that turns a USB PTZ camera into a professional live-streaming camera for pool/billiards match production. It streams H.264 video with hardware acceleration, supports SRT, RTMP, and RTSP output, composites transparent PNG overlays (scoreboards, logos, timestamps) directly into the GStreamer pipeline, and hosts a WiFi access-point hotspot so the control interface is always reachable from a tablet or phone without any external network.
+
+> **Primary target hardware:** Intel Lake N97 mini-PC running standard **Ubuntu Server 24.04**, with a UGREEN CM762 (AIC8800D80) USB WiFi 6 dongle for client WiFi connectivity alongside the onboard hotspot.
 
 ---
 
@@ -25,60 +27,111 @@ A Node.js web service for **Rockchip RK3588-family SBCs** (Orange Pi 5, Radxa Ro
 
 ## Hardware Requirements
 
-- **SBC**: Any Rockchip RK3588-family board running Joshua-Riek Ubuntu 24.04:
-  - **Orange Pi 5** (RK3588) — tested with 8 GB RAM
-  - **Radxa Rock 5C** (RK3588S2) — tested with Joshua-Riek Ubuntu 24.04 Noble
-  - Other RK3588/RK3588S/RK3588S2 boards supported by the [Joshua-Riek ubuntu-rockchip](https://github.com/Joshua-Riek/ubuntu-rockchip) project should also work
+### Intel Lake N97 (primary target)
+- **SoC**: Intel Alder Lake-N N97 — quad-core (4P+0E), 3.6 GHz boost, 6W TDP, Intel UHD Graphics (24 EU), integrated WiFi 5 (Intel AX101)
+- **Mini-PC**: GMKtec G5 or any Intel N97/N100 mini-PC running Ubuntu Server 24.04
 - **Camera**: USB PTZ camera with V4L2/UVC support (tested: OBSBOT Tiny 2 Lite)
+- **USB WiFi 6 dongle**: UGREEN CM762 (AIC8800D80 chipset) — used for client WiFi; onboard Intel WiFi runs the hotspot
+- **Storage**: internal NVMe or eMMC (no microSD)
+- **Optional**: USB microphone or camera with built-in mic (ALSA device for audio)
+
+### Rockchip RK3588 (also supported)
+- **SBC**: Orange Pi 5 (RK3588) or Radxa Rock 5C (RK3588S2) running Joshua-Riek Ubuntu 24.04
 - **USB WiFi adapter**: Any Linux-supported adapter capable of AP+STA concurrent mode (for hotspot)
 - **Storage**: ≥32 GB microSD card or eMMC
-- **Optional**: USB microphone or camera with built-in mic (ALSA device for audio)
 
 ---
 
-## 1. Flash the OS — Joshua-Riek Ubuntu 24.04 Rockchip
+## 1. Install the OS
 
-Use the pre-built Ubuntu 24.04 (Noble) image from the [Joshua-Riek ubuntu-rockchip](https://github.com/Joshua-Riek/ubuntu-rockchip) project.
+### 1a-N97. Intel Lake N97 — Ubuntu Server 24.04 (standard amd64)
 
-> **Note:** Although the project also publishes 22.04 images, the actively maintained and recommended release is **Ubuntu 24.04 Noble**. The Rockchip-specific packages (MPP encoder, GStreamer plugin, firmware) in the PPAs target Noble.
+Download the official **Ubuntu Server 24.04 LTS** ISO for **x86_64 (amd64)** — the N97 is an Intel x86_64 chip, not ARM:
 
-### 1a. Download the image
+```
+ubuntu-24.04.x-live-server-amd64.iso
+```
 
-Go to the [Releases page](https://github.com/Joshua-Riek/ubuntu-rockchip/releases) and download the latest **Ubuntu 24.04** server or desktop image for your board. Example filenames:
+Download from [ubuntu.com/download/server](https://ubuntu.com/download/server) or directly:
+
+```bash
+wget https://releases.ubuntu.com/24.04/ubuntu-24.04.2-live-server-amd64.iso
+```
+
+> Check [releases.ubuntu.com/24.04](https://releases.ubuntu.com/24.04/) for the latest point release (e.g. `24.04.2`).
+
+Flash the ISO to a USB drive using [Balena Etcher](https://etcher.balena.io/) or:
+
+```bash
+sudo dd if=ubuntu-24.04.2-live-server-amd64.iso of=/dev/sdX bs=4M status=progress conv=fsync
+```
+
+Replace `/dev/sdX` with your USB drive device. Boot the N97 box from the USB drive (press F7 or Del at POST to choose boot device).
+
+During the installer:
+- Choose **Ubuntu Server (minimized)** — no desktop needed
+- Set hostname to something like `digitalpoolg5`
+- **Create user `dp`** with password `digitalpool42` (the service runs as this user)
+- Enable **OpenSSH server** so you can manage the box remotely
+- Let the installer format the internal NVMe/eMMC drive
+
+After install, boot in and confirm you can SSH in:
+
+```bash
+ssh dp@<device-ip>
+```
+
+> **Why `dp`?** All service files, sudoers rules, and polkit policies in this repo use the `dp` user. Using a different username requires updating those files manually.
+
+### 1a-RK. Rockchip RK3588 — Joshua-Riek Ubuntu 24.04
+
+Go to the [Releases page](https://github.com/Joshua-Riek/ubuntu-rockchip/releases) and download the latest **Ubuntu 24.04** server image for your board:
 
 ```
 ubuntu-24.04.x-preinstalled-server-arm64-orangepi-5.img.xz    # Orange Pi 5
 ubuntu-24.04.x-preinstalled-server-arm64-rock-5c.img.xz        # Radxa Rock 5C
 ```
 
-> Alternatively, the Rock 5C images are mirrored at [joshua-riek.github.io/ubuntu-rockchip-download/boards/rock-5c.html](https://joshua-riek.github.io/ubuntu-rockchip-download/boards/rock-5c.html).
-
-### 1b. Flash to microSD / eMMC
+Flash with Balena Etcher or:
 
 ```bash
-# On your workstation (Linux/macOS):
 xzcat ubuntu-24.04.x-preinstalled-server-arm64-orangepi-5.img.xz | \
   sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
-Replace `/dev/sdX` with your actual target device (`/dev/sda`, `/dev/mmcblk0`, etc.).
-Alternatively use [Balena Etcher](https://etcher.balena.io/) (GUI, cross-platform).
+### 1b. First boot (Rockchip only — skip for N97 where installer already ran)
 
-### 1c. First boot
-
-Insert the card, power on, and log in with the default credentials:
+Log in with the default credentials:
 
 ```
 username: ubuntu
 password: ubuntu
 ```
 
-You will be prompted to change the password on first login.
+You will be prompted to change the password on first login. After changing it, create the `dp` user that the service runs as:
 
-### 1d. Update the system
+```bash
+# Create the dp user with the correct password
+sudo adduser --gecos "" dp
+# When prompted for password, enter: digitalpool42
+
+# Give dp sudo rights
+sudo usermod -aG sudo dp
+
+# Switch to dp for all remaining setup steps
+sudo su - dp
+```
+
+### 1c. First boot (both platforms)
+
+### 1d. Update the system and install base network tools
 
 ```bash
 sudo apt update && sudo apt full-upgrade -y
+
+# Network diagnostic tools (ifconfig, ping, netstat, etc.)
+sudo apt install -y net-tools iputils-ping iproute2 netcat-openbsd
+
 sudo reboot
 ```
 
@@ -316,7 +369,7 @@ systemd-analyze critical-chain digitalpool-hotspot.service
 
 ## 2. Install System Dependencies
 
-All commands run as the `ubuntu` user (use `sudo` where required).
+All commands run as the `dp` user (use `sudo` where required). Make sure you are logged in as `dp` before running any of these steps.
 
 ### 2a. Core build tools and utilities
 
@@ -331,19 +384,65 @@ sudo apt install -y \
   gir1.2-gstreamer-1.0 gir1.2-glib-2.0
 ```
 
-### 2a.2. Add `ubuntu` to the `video` and `audio` groups
+### 2a.2. Add `dp` to the `video`, `audio`, and `render` groups
 
-The service runs as the `ubuntu` user and needs direct access to both the camera device (`/dev/video*`) and the ALSA audio devices (`/dev/snd/*`). These device nodes are owned by the `video` and `audio` groups respectively — without membership the camera is invisible to GStreamer and all ALSA card enumeration silently fails (even `arecord -l` returns "no soundcards found").
+The service runs as the `dp` user and needs direct access to the camera device (`/dev/video*`), the ALSA audio devices (`/dev/snd/*`), and the Intel GPU render node (`/dev/dri/renderD128`) for VA-API hardware encoding.
 
 ```bash
-sudo usermod -aG video ubuntu
-sudo usermod -aG audio ubuntu
+sudo usermod -aG video,audio,render dp
 
-# Verify both groups appear:
-groups ubuntu
+# Verify all groups appear:
+groups dp
 ```
 
-> **This takes effect for new login sessions and for systemd services started after the change.** If you are currently SSH'd in as `ubuntu`, either log out and back in or run `newgrp audio` (and `newgrp video` in separate shells) to activate the groups in the current shell without a full logout.
+> **This takes effect for new login sessions.** Log out and back in (or `newgrp video`) to activate in the current shell.
+
+### 2a.3. UGREEN CM762 (AIC8800D80) USB WiFi 6 driver — Intel N97 only
+
+The UGREEN CM762 USB WiFi 6 dongle uses the **AIC8800D80** chipset, which requires an out-of-tree driver. Install it now so the module loads automatically on every boot.
+
+```bash
+# Build prerequisites
+sudo apt install -y build-essential git linux-headers-$(uname -r)
+
+# Clone the driver source (tested on Ubuntu with kernel 6.x / 7.x)
+git clone https://github.com/BLUEMOON233/AIC8800-Linux-Driver.git
+cd AIC8800-Linux-Driver/drivers/aic8800
+
+# Patch for kernel 6.4+ (in_irq() was removed — replaced by in_hardirq())
+sed -i 's/in_irq()/in_hardirq()/g' aic8800_fdrv/rwnx_rx.c
+
+# Build and install
+sudo make
+sudo make install
+
+# Load the modules immediately (plug in the dongle first if not already)
+sudo modprobe aic_load_fw
+sudo modprobe aic8800_fdrv
+
+# Make the modules load automatically on every boot
+echo "aic_load_fw" | sudo tee -a /etc/modules
+echo "aic8800_fdrv" | sudo tee -a /etc/modules
+
+# Verify — should show wlx... interface in managed mode alongside the AP interface
+iw dev
+```
+
+Expected output after loading:
+```
+phy#1
+    Interface wlx6c1ff78a8a52
+        type managed          ← USB dongle (client WiFi)
+phy#0
+    Interface wlp1s0
+        type AP               ← onboard chip (hotspot)
+```
+
+> If `lsusb` shows the dongle as `a69c:5723 aicsemi Aic MSC` (mass storage mode), install `usb-modeswitch` first:
+> ```bash
+> sudo apt install -y usb-modeswitch usb-modeswitch-data
+> ```
+> Unplug and replug the dongle — it should switch to `a69c:8d80 aicsemi AIC Wlan` mode, then the driver can attach.
 
 ### 2b. GStreamer 1.0 — full plugin stack
 
@@ -560,10 +659,17 @@ sudo apt install -y \
 MediaMTX provides the RTSP endpoint (`rtsp://<ip>:8554/live`) and HLS endpoint (`http://<ip>:8888/live`). The app pushes to it internally when the **RTSP** protocol is selected.
 
 ```bash
-# Download the latest arm64 release (check https://github.com/bluenviron/mediamtx/releases for newer versions)
+# Download the latest release — choose the correct architecture:
 MEDIAMTX_VER="v1.18.0"
-wget https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VER}/mediamtx_${MEDIAMTX_VER}_linux_arm64.tar.gz
-tar -xzf mediamtx_${MEDIAMTX_VER}_linux_arm64.tar.gz
+
+# Intel x86_64 (N97, N100, and other x86 mini-PCs):
+wget https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VER}/mediamtx_${MEDIAMTX_VER}_linux_amd64.tar.gz
+tar -xzf mediamtx_${MEDIAMTX_VER}_linux_amd64.tar.gz
+
+# Rockchip ARM64 (Orange Pi 5, Radxa Rock 5C):
+# wget https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VER}/mediamtx_${MEDIAMTX_VER}_linux_arm64.tar.gz
+# tar -xzf mediamtx_${MEDIAMTX_VER}_linux_arm64.tar.gz
+
 sudo mv mediamtx /usr/local/bin/
 sudo mv mediamtx.yml /etc/mediamtx.yml
 ```
@@ -830,7 +936,7 @@ sudo ufw reload
 
 ### 2m. NetBird (Remote Access)
 
-NetBird is required for the **Remote Access** toggle in Admin Settings. The app calls `sudo netbird up` / `sudo netbird down` on behalf of the `ubuntu` user, so both the binary and the sudo permissions must be in place before enabling it.
+NetBird is required for the **Remote Access** toggle in Admin Settings. The app calls `sudo netbird up` / `sudo netbird down` on behalf of the `dp` user, so both the binary and the sudo permissions must be in place before enabling it.
 
 NetBird creates a WireGuard-based mesh VPN that connects the camera device to your management network regardless of its location — no port forwarding or public IP required.
 
@@ -851,16 +957,16 @@ sudo systemctl status netbird   # must show "active (running)"
 
 #### Grant sudo permissions
 
-The app runs several netbird commands with `sudo` as the `ubuntu` user. Add them to the existing sudoers file (created in Section 7c — if you haven't done Section 7 yet, come back and append these lines then):
+The app runs several netbird commands with `sudo` as the `dp` user. Add them to the existing sudoers file (created in Section 7c — if you haven't done Section 7 yet, come back and append these lines then):
 
 ```bash
 sudo tee -a /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
 # NetBird — remote access control via the Admin Settings UI
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/netbird up *
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/netbird down
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop netbird
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl start netbird
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/rm -rf /var/lib/netbird/
+dp ALL=(ALL) NOPASSWD: /usr/bin/netbird up *
+dp ALL=(ALL) NOPASSWD: /usr/bin/netbird down
+dp ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop netbird
+dp ALL=(ALL) NOPASSWD: /usr/bin/systemctl start netbird
+dp ALL=(ALL) NOPASSWD: /usr/bin/rm -rf /var/lib/netbird/
 EOF
 
 sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
@@ -869,18 +975,18 @@ sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
 > **If the sudoers file does not exist yet** (Section 7c not done), create it now with just the netbird entries and append the rest later:
 > ```bash
 > sudo tee /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
-> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/netbird up *
-> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/netbird down
-> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop netbird
-> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl start netbird
-> ubuntu ALL=(ALL) NOPASSWD: /usr/bin/rm -rf /var/lib/netbird/
+> dp ALL=(ALL) NOPASSWD: /usr/bin/netbird up *
+> dp ALL=(ALL) NOPASSWD: /usr/bin/netbird down
+> dp ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop netbird
+> dp ALL=(ALL) NOPASSWD: /usr/bin/systemctl start netbird
+> dp ALL=(ALL) NOPASSWD: /usr/bin/rm -rf /var/lib/netbird/
 > EOF
 > sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
 > ```
 
 #### Configure NetBird credentials in `.env`
 
-Add the NetBird variables to `/home/ubuntu/digitalpool-camera/.env`:
+Add the NetBird variables to `/home/dp/digitalpool-camera/.env`:
 
 ```bash
 # NetBird management server URL (omit for NetBird cloud; set for self-hosted)
@@ -904,7 +1010,7 @@ Remote access can then be toggled on/off from **Admin Settings → Remote Access
 
 ## 3. Install Node.js via nvm
 
-The systemd service file runs Node.js installed through **nvm** (Node Version Manager) as the `ubuntu` user.
+The systemd service file runs Node.js installed through **nvm** (Node Version Manager) as the `dp` user.
 
 ```bash
 # Install nvm
@@ -942,7 +1048,7 @@ Whenever you upgrade Node via nvm (`nvm install 26` etc.) re-run the `ln -sf` co
 ## 4. Clone the Repository and Install Node Dependencies
 
 ```bash
-cd /home/ubuntu
+cd /home/dp
 git clone https://github.com/timtraver/digitalpool-camera.git
 cd digitalpool-camera
 
@@ -957,7 +1063,7 @@ npm install
 The three core environment variables (`NODE_ENV`, `PORT`, `CAMERA_DEVICE`) are already hard-coded as `Environment=` lines inside `digitalpool-camera.service`, so the `.env` file is optional for a default setup. Create it if you want to **override** any of those values without editing the service file, or to add additional variables used by the app at startup:
 
 ```bash
-cat > /home/ubuntu/digitalpool-camera/.env << 'EOF'
+cat > /home/dp/digitalpool-camera/.env << 'EOF'
 NODE_ENV=production
 PORT=3000
 CAMERA_DEVICE=/dev/video0
@@ -974,7 +1080,7 @@ The admin preview uses WebRTC (WHEP protocol). For WebRTC to work from every net
 
 ```bash
 # Install the script
-sudo cp ~/digitalpool-camera/mediamtx-update-hosts.sh /usr/local/bin/
+sudo cp /home/dp/digitalpool-camera/mediamtx-update-hosts.sh /usr/local/bin/
 sudo chmod +x /usr/local/bin/mediamtx-update-hosts.sh
 
 # Hook it into the mediamtx systemd service as a pre-start step
@@ -1017,8 +1123,8 @@ After this, every time the hotspot (or any other interface) comes up — includi
 
 ```bash
 # Install the timer units (files are included in the repo)
-sudo cp ~/digitalpool-camera/mediamtx-update-hosts.service \
-        ~/digitalpool-camera/mediamtx-update-hosts.timer \
+sudo cp /home/dp/digitalpool-camera/mediamtx-update-hosts.service \
+        /home/dp/digitalpool-camera/mediamtx-update-hosts.timer \
         /etc/systemd/system/
 
 sudo systemctl daemon-reload
@@ -1043,7 +1149,7 @@ The repo ships a systemd drop-in (`mediamtx-network-override.conf`) that removes
 
 ```bash
 sudo mkdir -p /etc/systemd/system/mediamtx.service.d
-sudo cp ~/digitalpool-camera/mediamtx-network-override.conf \
+sudo cp /home/dp/digitalpool-camera/mediamtx-network-override.conf \
         /etc/systemd/system/mediamtx.service.d/network-override.conf
 
 sudo systemctl daemon-reload
@@ -1065,7 +1171,7 @@ Now that the repo is cloned, confirm the NDI runtime library loads correctly:
 
 ```bash
 # Run the discovery script (3 s timeout):
-python3 /home/ubuntu/digitalpool-camera/ndi-discover.py 3000
+python3 /home/dp/digitalpool-camera/ndi-discover.py 3000
 # Expected output:
 #   []                          — library loaded fine; no NDI sources on the network yet
 #   [{"name": "...", ...}]      — library loaded and NDI senders are visible
@@ -1133,7 +1239,7 @@ If it prints "not found", go back and run the `ln -sf` commands at the end of St
 **Install and start the service:**
 
 ```bash
-sudo cp /home/ubuntu/digitalpool-camera/digitalpool-camera.service \
+sudo cp /home/dp/digitalpool-camera/digitalpool-camera.service \
         /etc/systemd/system/
 
 sudo systemctl daemon-reload
@@ -1176,12 +1282,12 @@ The repository includes `network-watchdog.sh`, `network-watchdog.service`, and `
 
 ```bash
 # Copy the watchdog script
-sudo cp /home/ubuntu/digitalpool-camera/network-watchdog.sh /usr/local/bin/
+sudo cp /home/dp/digitalpool-camera/network-watchdog.sh /usr/local/bin/
 sudo chmod +x /usr/local/bin/network-watchdog.sh
 
 # Install the systemd units
-sudo cp /home/ubuntu/digitalpool-camera/network-watchdog.service \
-        /home/ubuntu/digitalpool-camera/network-watchdog.timer \
+sudo cp /home/dp/digitalpool-camera/network-watchdog.service \
+        /home/dp/digitalpool-camera/network-watchdog.timer \
         /etc/systemd/system/
 
 sudo systemctl daemon-reload
@@ -1219,10 +1325,10 @@ The repository includes `monitor-camera.sh` which runs every 5 minutes and appen
 
 ```bash
 # Install the flight recorder
-sudo cp /home/ubuntu/digitalpool-camera/monitor-camera.sh /usr/local/bin/
+sudo cp /home/dp/digitalpool-camera/monitor-camera.sh /usr/local/bin/
 sudo chmod +x /usr/local/bin/monitor-camera.sh
-sudo cp /home/ubuntu/digitalpool-camera/monitor-camera.service \
-        /home/ubuntu/digitalpool-camera/monitor-camera.timer \
+sudo cp /home/dp/digitalpool-camera/monitor-camera.service \
+        /home/dp/digitalpool-camera/monitor-camera.timer \
         /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now monitor-camera.timer
@@ -1260,7 +1366,7 @@ Sample output every 5 minutes:
 
 ## 7. WiFi Access Point (Hotspot)
 
-The app creates and manages a WiFi AP named **DigitalPool-Camera** using NetworkManager (`nmcli`). Because the service runs as the `ubuntu` user (not root), a **polkit rule** is required to grant it permission to add and activate NetworkManager connections. Without this the AP will silently fail with "Insufficient privileges".
+The app creates and manages a WiFi AP named **DigitalPool-Camera** using NetworkManager (`nmcli`). Because the service runs as the `dp` user (not root), a **polkit rule** is required to grant it permission to add and activate NetworkManager connections. Without this the AP will silently fail with "Insufficient privileges".
 
 ### 7a. Grant NetworkManager permissions via polkit
 
@@ -1268,7 +1374,7 @@ The app creates and manages a WiFi AP named **DigitalPool-Camera** using Network
 sudo tee /etc/polkit-1/rules.d/50-digitalpool-networkmanager.rules > /dev/null << 'EOF'
 polkit.addRule(function(action, subject) {
     if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0 &&
-        subject.user === "ubuntu") {
+        subject.user === "dp") {
         return polkit.Result.YES;
     }
 });
@@ -1418,12 +1524,12 @@ The app sets up the iptables rules automatically at startup — both need `sudo`
 ```bash
 sudo tee /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
 # Allow the digitalpool-camera service to set up captive portal rules
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /etc/NetworkManager/dnsmasq-shared.d
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/NetworkManager/dnsmasq-shared.d/captive-portal.conf
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl reload NetworkManager
-ubuntu ALL=(ALL) NOPASSWD: /usr/sbin/iptables -t nat *
+dp ALL=(ALL) NOPASSWD: /usr/bin/mkdir -p /etc/NetworkManager/dnsmasq-shared.d
+dp ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/NetworkManager/dnsmasq-shared.d/captive-portal.conf
+dp ALL=(ALL) NOPASSWD: /usr/bin/systemctl reload NetworkManager
+dp ALL=(ALL) NOPASSWD: /usr/sbin/iptables -t nat *
 # v4l2-ctl — camera format queries, PTZ controls, and image controls
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/v4l2-ctl *
+dp ALL=(ALL) NOPASSWD: /usr/bin/v4l2-ctl *
 EOF
 
 # Validate syntax before applying
@@ -1443,7 +1549,7 @@ sudo openssl req -x509 -newkey rsa:2048 \
 Then deploy and restart:
 
 ```bash
-cd ~/digitalpool-camera && git pull
+cd /home/dp/digitalpool-camera && git pull
 sudo systemctl restart digitalpool-camera
 sudo journalctl -u digitalpool-camera -f
 ```
@@ -1478,10 +1584,10 @@ Three `sudo` commands are needed. Add them to the existing sudoers file created 
 
 ```bash
 sudo tee -a /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/netplan/99-digitalpool-ethernet.yaml
-ubuntu ALL=(ALL) NOPASSWD: /usr/sbin/netplan apply
-ubuntu ALL=(ALL) NOPASSWD: /usr/bin/timedatectl set-timezone *
-ubuntu ALL=(ALL) NOPASSWD: /usr/sbin/reboot
+dp ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/netplan/99-digitalpool-ethernet.yaml
+dp ALL=(ALL) NOPASSWD: /usr/sbin/netplan apply
+dp ALL=(ALL) NOPASSWD: /usr/bin/timedatectl set-timezone *
+dp ALL=(ALL) NOPASSWD: /usr/sbin/reboot
 EOF
 
 # Validate before applying
@@ -1537,10 +1643,10 @@ If no such line exists, the chip only supports one mode at a time — the hotspo
 ### Install the hotspot script and service
 
 ```bash
-sudo cp ~/digitalpool-camera/dp-hotspot.sh /usr/local/sbin/dp-hotspot.sh
+sudo cp /home/dp/digitalpool-camera/dp-hotspot.sh /usr/local/sbin/dp-hotspot.sh
 sudo chmod +x /usr/local/sbin/dp-hotspot.sh
 
-sudo cp ~/digitalpool-camera/digitalpool-hotspot.service /etc/systemd/system/
+sudo cp /home/dp/digitalpool-camera/digitalpool-hotspot.service /etc/systemd/system/
 
 sudo systemctl daemon-reload
 sudo systemctl enable digitalpool-hotspot.service
@@ -1581,7 +1687,7 @@ The udev rule (`99-digitalpool-hotspot.rules`) fires the hotspot service the ins
 For **built-in WiFi chips** the udev rule is optional — the chip is present before NetworkManager starts, so the regular `After=NetworkManager.service` ordering in the systemd unit is sufficient. Installing the rule on a built-in-chip machine is harmless (it just starts an already-enabled service redundantly).
 
 ```bash
-sudo cp ~/digitalpool-camera/99-digitalpool-hotspot.rules /etc/udev/rules.d/
+sudo cp /home/dp/digitalpool-camera/99-digitalpool-hotspot.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules
 ```
 
@@ -1818,12 +1924,12 @@ digitalpool-camera/
 v4l2-ctl --list-devices
 ls -l /dev/video*
 
-# Add the ubuntu user to the video group if needed:
-sudo usermod -aG video ubuntu
+# Add the dp user to the video group if needed:
+sudo usermod -aG video dp
 newgrp video   # or log out and back in
 
-# Add the ubuntu user to the audio group (required for camera mic / ALSA access):
-sudo usermod -aG audio ubuntu
+# Add the dp user to the audio group (required for camera mic / ALSA access):
+sudo usermod -aG audio dp
 sudo systemctl restart digitalpool-camera   # picks up the new group immediately
 ```
 
@@ -1879,14 +1985,14 @@ Ensure the Python script (`gst-overlay-pipeline.py`) is being used rather than t
 
 ### OBS connects to RTSP but "no stream is available on path 'live'"
 
-MediaMTX is running but nothing is pushing video to it. The most common cause is the `ubuntu` user lacking permission to open the ALSA audio device, which causes the ffmpeg audio process to crash before it ever reaches MediaMTX.
+MediaMTX is running but nothing is pushing video to it. The most common cause is the `dp` user lacking permission to open the ALSA audio device, which causes the ffmpeg audio process to crash before it ever reaches MediaMTX.
 
 ```bash
 # Confirm the audio card is present (should list capture devices)
 cat /proc/asound/cards
 
-# If arecord -l shows nothing for the ubuntu user, the audio group is missing:
-sudo usermod -aG audio ubuntu
+# If arecord -l shows nothing for the dp user, the audio group is missing:
+sudo usermod -aG audio dp
 sudo systemctl restart digitalpool-camera
 
 # Also confirm the audio device in Admin Settings uses plughw: (not hw:)
@@ -1900,10 +2006,9 @@ sudo ss -tnp | grep 1935
 ### Permission denied on camera device
 
 ```bash
-sudo usermod -aG video ubuntu
-sudo usermod -aG audio ubuntu
+sudo usermod -aG video,audio,render dp
 # Verify:
-groups ubuntu
+groups dp
 ```
 
 ### RTSP source — stream fails immediately or "Could not write to resource"
@@ -1942,7 +2047,7 @@ sudo cp /path/to/libndi.so.6 /usr/local/lib/
 sudo ldconfig
 
 # Run the discovery script directly (3 s timeout for quick test):
-python3 /home/ubuntu/digitalpool-camera/ndi-discover.py 3000
+python3 /home/dp/digitalpool-camera/ndi-discover.py 3000
 # [] means no sources visible — confirm sender is on the same subnet
 # {"error": "Cannot load NDI library"} means libndi.so.6 is missing/wrong path
 ```
@@ -2058,7 +2163,7 @@ Use this section when deploying the latest code to an existing unit, or when set
 ### 16a. Quick code update (every deployment)
 
 ```bash
-cd ~/digitalpool-camera
+cd /home/dp/digitalpool-camera
 git pull
 npm install          # picks up any new npm dependencies
 sudo systemctl restart digitalpool-camera
@@ -2078,7 +2183,7 @@ Run each block below **once** on any appliance that hasn't had it set up yet.  T
 Required for the live WebRTC admin preview to work over LAN, NetBird, and the hotspot simultaneously.
 
 ```bash
-sudo cp ~/digitalpool-camera/mediamtx-update-hosts.sh /usr/local/bin/
+sudo cp /home/dp/digitalpool-camera/mediamtx-update-hosts.sh /usr/local/bin/
 sudo chmod +x /usr/local/bin/mediamtx-update-hosts.sh
 
 sudo mkdir -p /etc/systemd/system/mediamtx.service.d
@@ -2152,8 +2257,8 @@ NetBird is not managed by NetworkManager, so the dispatcher above won't fire whe
 systemctl list-timers mediamtx-update-hosts.timer 2>/dev/null
 
 # If missing, install and enable it:
-sudo cp ~/digitalpool-camera/mediamtx-update-hosts.service \
-        ~/digitalpool-camera/mediamtx-update-hosts.timer \
+sudo cp /home/dp/digitalpool-camera/mediamtx-update-hosts.service \
+        /home/dp/digitalpool-camera/mediamtx-update-hosts.timer \
         /etc/systemd/system/
 
 sudo systemctl daemon-reload

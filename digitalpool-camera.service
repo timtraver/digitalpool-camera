@@ -5,8 +5,8 @@ Wants=sound.target NetworkManager.service mediamtx.service
 
 [Service]
 Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/digitalpool-camera
+User=dp
+WorkingDirectory=/home/dp/digitalpool-camera
 ExecStart=/usr/local/bin/node server.js
 Restart=always
 RestartSec=5
