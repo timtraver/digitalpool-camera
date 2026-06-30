@@ -129,11 +129,22 @@ sudo su - dp
 ```bash
 sudo apt update && sudo apt full-upgrade -y
 
-# Network diagnostic tools (ifconfig, ping, netstat, etc.) and vi editor
-sudo apt install -y net-tools iputils-ping iproute2 netcat-openbsd vim
+# Network diagnostic tools (ifconfig, ping, netstat, etc.), WiFi tools, and vi editor
+sudo apt install -y net-tools iputils-ping iproute2 netcat-openbsd vim iw wireless-tools
 
 sudo reboot
 ```
+
+### 1d.1. Make sudo last the entire session
+
+By default `sudo` times out after 15 minutes, requiring you to re-enter your password repeatedly during a long setup. Set the timeout to `-1` (never expires until logout) for the `dp` user:
+
+```bash
+echo 'Defaults:dp timestamp_timeout=-1' | sudo tee /etc/sudoers.d/dp-notimeout
+sudo visudo -c -f /etc/sudoers.d/dp-notimeout   # validate syntax
+```
+
+> This only suppresses the re-prompt — you still enter your password once per login session. It does **not** grant passwordless sudo. To revert, `sudo rm /etc/sudoers.d/dp-notimeout`.
 
 ### 1e. Reduce microSD card wear — disable atime
 
@@ -531,9 +542,15 @@ sudo apt install -y \
 
 #### 2c-ii. Intel x86 (GMKtec G5 N97, and other Intel iGPU machines)
 
-The VA-API plugin (`gstreamer1.0-vaapi`) provides Intel integrated GPU hardware encoding and decoding via the kernel's VA-API interface. It supplies:
-- **Encoders:** `vaapih264enc`, `vaapih265enc`
-- **Decoders:** `vaapidecodebin`, `vaapih264dec`, `vaapih265dec`, `vaapijpegdec`
+Ubuntu 24.04 ships GStreamer 1.24, which replaced the old `vaapi` plugin with a new `va` plugin. Element names changed:
+
+| Old (GStreamer ≤1.22) | New (GStreamer 1.24 / Ubuntu 24.04) |
+|---|---|
+| `vaapih264enc` | `vah264enc` |
+| `vaapih265enc` | `vah265enc` |
+| `vaapidecodebin` | `vah264dec`, `vah265dec` |
+
+Install the driver and plugin:
 
 ```bash
 sudo apt install -y \
@@ -542,29 +559,32 @@ sudo apt install -y \
   vainfo
 ```
 
-> **Note:** `intel-media-va-driver-non-free` is the iHD driver required for Gen 9+ Intel GPUs (Braswell, Apollo Lake, Jasper Lake, Alder Lake-N, and newer). The N97 is Alder Lake-N so this is the correct driver. If it is not in your apt sources, try `intel-media-va-driver` (the open-source variant) instead.
+> **Note:** `intel-media-va-driver-non-free` is the iHD driver required for Alder Lake-N (N97) and all Gen 9+ Intel GPUs. If it is not found in your apt sources, try `intel-media-va-driver` (the open-source variant) instead.
 
 Verify the VA-API driver and GStreamer plugin are working:
 
 ```bash
-# Confirm VA-API sees the GPU
-vainfo
+# Confirm VA-API sees the GPU (use --display drm on headless/no-X11 servers)
+sudo vainfo --display drm --device /dev/dri/renderD128
 
-# Confirm GStreamer can use the hardware encoders
-gst-inspect-1.0 vaapih264enc   # H.264 hardware encoder
-gst-inspect-1.0 vaapih265enc   # H.265 hardware encoder
+# Confirm GStreamer can use the hardware encoders (Ubuntu 24.04 element names)
+gst-inspect-1.0 vah264enc    # H.264 hardware encoder
+gst-inspect-1.0 vah265enc    # H.265 hardware encoder
+
+# List all VA elements GStreamer found (useful for troubleshooting)
+gst-inspect-1.0 | grep -i va
 ```
 
 > **If `vainfo` shows no supported profiles** the driver is not loaded. Check that your user is in the `video` and `render` groups:
 > ```bash
-> sudo usermod -aG video,render $USER
+> sudo usermod -aG video,render dp
 > # Log out and back in, then retry vainfo
 > ```
 >
-> **If `gst-inspect-1.0 vaapih264enc` fails** after installing the package, clear the GStreamer plugin cache and try again:
+> **If `vah264enc` is missing** after installing the package, clear the GStreamer plugin cache and try again:
 > ```bash
 > rm -f ~/.cache/gstreamer-1.0/registry.x86_64.bin
-> gst-inspect-1.0 vaapih264enc
+> gst-inspect-1.0 vah264enc
 > ```
 
 The service auto-detects which encoder is available at startup — no manual configuration is needed after installation.
