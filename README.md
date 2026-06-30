@@ -257,22 +257,25 @@ sudo journalctl --vacuum-time=1week
 Confirm the new limits are active:
 
 ```bash
-journalctl --disk-usage
+sudo journalctl --disk-usage
 ```
+
+> **"not seeing messages from other users and the system"** — this means your user isn't in the `adm` or `systemd-journal` group yet. Fix it once:
+> ```bash
+> sudo usermod -aG adm dp
+> # Log out and back in, then journalctl works without sudo
+> ```
 
 #### Verify logrotate is running
 
-Ubuntu 24.04 runs logrotate via a systemd timer (not cron). Confirm it is enabled:
+Ubuntu 24.04 Server runs logrotate via **cron** (`/etc/cron.daily/logrotate`), not a systemd timer. Confirm it is in place:
 
 ```bash
-sudo systemctl status logrotate.timer
+ls /etc/cron.daily/logrotate    # should show the file
+sudo systemctl status cron      # cron must be active (running)
 ```
 
-If it is not active, enable it:
-
-```bash
-sudo systemctl enable --now logrotate.timer
-```
+If cron is active and the file exists, logrotate is working — nothing further needed.
 
 Logrotate handles `/var/log/syslog`, `/var/log/kern.log`, `/var/log/auth.log`, and other traditional log files automatically. You can force a rotation immediately to test:
 
