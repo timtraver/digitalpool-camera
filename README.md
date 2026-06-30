@@ -676,33 +676,44 @@ sudo apt install -y tzdata
 
 ### 2h. ImageMagick + wkhtmltoimage (local HTML scoreboard overlay)
 
-**Ubuntu 20.04 (Focal):**
-```bash
-sudo apt install -y imagemagick wkhtmltopdf
-```
+**Ubuntu 24.04 (Noble — Intel N97):**
 
-**Ubuntu 22.04+ (Jammy and newer — including Intel x86 installs):**
-
-`wkhtmltopdf` was removed from Ubuntu 22.04's official repositories. Install ImageMagick via apt and download the `wkhtmltopdf` `.deb` directly from the project's GitHub releases:
+Ubuntu 24.04 has `wkhtmltopdf` in the `universe` repo but it is built against unpatched Qt and does not support headless rendering correctly. Use the community-maintained patched build instead — it is distributed as a standalone binary (not a `.deb`):
 
 ```bash
 sudo apt install -y imagemagick
 
-# Download the pre-built .deb for Ubuntu 22.04 x86_64
+# Download the patched Qt binary for Ubuntu 24.04 Noble amd64
+wget https://github.com/newinnovations/wkhtml-packaging/releases/latest/download/wkhtmltopdf_0.12.6.1-noble_amd64
+
+# Install as a standalone binary
+chmod +x wkhtmltopdf_0.12.6.1-noble_amd64
+sudo mv wkhtmltopdf_0.12.6.1-noble_amd64 /usr/local/bin/wkhtmltopdf
+
+# wkhtmltoimage is the same binary — create a symlink
+sudo ln -sf /usr/local/bin/wkhtmltopdf /usr/local/bin/wkhtmltoimage
+```
+
+**Ubuntu 22.04 (Jammy):**
+
+```bash
+sudo apt install -y imagemagick
+
 wget https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.jammy_amd64.deb
-
-# Install it (pulls in any missing dependencies automatically)
 sudo apt install -y ./wkhtmltox_0.12.6.1-3.jammy_amd64.deb
-
-# Clean up the downloaded file
 rm wkhtmltox_0.12.6.1-3.jammy_amd64.deb
+```
+
+**Ubuntu 20.04 (Focal):**
+```bash
+sudo apt install -y imagemagick wkhtmltopdf
 ```
 
 > **Verify:**
 > ```bash
 > wkhtmltoimage --version
 > ```
-> You should see `wkhtmltoimage 0.12.6.1 (with patched qt)`. The "with patched qt" part is important — the unpatched build from some mirrors does not support headless rendering correctly.
+> You should see `wkhtmltoimage 0.12.6.1 (with patched qt)`. The "with patched qt" part is important — the unpatched build does not support headless rendering correctly.
 
 ### 2i. Chromium browser (Puppeteer headless — remote URL overlay)
 
@@ -1003,77 +1014,24 @@ sudo ufw reload
 
 ---
 
-### 2m. NetBird (Remote Access)
+### 2m. NetBird (Remote Access) — binary install only
 
-NetBird is required for the **Remote Access** toggle in Admin Settings. The app calls `sudo netbird up` / `sudo netbird down` on behalf of the `dp` user, so both the binary and the sudo permissions must be in place before enabling it.
-
-NetBird creates a WireGuard-based mesh VPN that connects the camera device to your management network regardless of its location — no port forwarding or public IP required.
-
-#### Install NetBird
+NetBird is required for the **Remote Access** toggle in Admin Settings. Install the binary now — the sudoers rules and `.env` configuration are done in **Section 4b** after the repository is cloned.
 
 ```bash
 curl -fsSL https://pkgs.netbird.io/install.sh | sh
 ```
 
-This installs the `netbird` binary and enables the `netbird` daemon as a systemd service. Verify:
+Verify:
 
 ```bash
 netbird version
 sudo systemctl status netbird   # must show "active (running)"
 ```
 
-> **Do not run `netbird up` manually.** The Admin Settings UI handles authentication and registration. Running it manually first can leave stale state that confuses the force re-register flow.
+> **Do not run `netbird up` manually.** The Admin Settings UI handles authentication and registration. Running it manually first can leave stale state that confuses the registration flow.
 
-#### Grant sudo permissions
-
-The app runs several netbird commands with `sudo` as the `dp` user. Add them to the existing sudoers file (created in Section 7c — if you haven't done Section 7 yet, come back and append these lines then):
-
-```bash
-sudo tee -a /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
-# NetBird — remote access control via the Admin Settings UI
-dp ALL=(ALL) NOPASSWD: /usr/bin/netbird up *
-dp ALL=(ALL) NOPASSWD: /usr/bin/netbird down
-dp ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop netbird
-dp ALL=(ALL) NOPASSWD: /usr/bin/systemctl start netbird
-dp ALL=(ALL) NOPASSWD: /usr/bin/rm -rf /var/lib/netbird/
-EOF
-
-sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
-```
-
-> **If the sudoers file does not exist yet** (Section 7c not done), create it now with just the netbird entries and append the rest later:
-> ```bash
-> sudo tee /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
-> dp ALL=(ALL) NOPASSWD: /usr/bin/netbird up *
-> dp ALL=(ALL) NOPASSWD: /usr/bin/netbird down
-> dp ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop netbird
-> dp ALL=(ALL) NOPASSWD: /usr/bin/systemctl start netbird
-> dp ALL=(ALL) NOPASSWD: /usr/bin/rm -rf /var/lib/netbird/
-> EOF
-> sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
-> ```
-
-#### Configure NetBird credentials in `.env`
-
-Add the NetBird variables to `/home/dp/digitalpool-camera/.env`:
-
-```bash
-# NetBird management server URL (omit for NetBird cloud; set for self-hosted)
-NETBIRD_MANAGEMENT_URL=https://api.netbird.io
-
-# Setup key — generate in the NetBird Dashboard under Setup Keys:
-#   https://app.netbird.io/setup-keys  (cloud)
-#   https://your-netbird-server/setup-keys  (self-hosted)
-NETBIRD_SETUP_KEY=your-setup-key-here
-```
-
-After editing `.env`, restart the service to pick up the new values:
-
-```bash
-sudo systemctl restart digitalpool-camera
-```
-
-Remote access can then be toggled on/off from **Admin Settings → Remote Access** in the web UI.
+Continue to Section 3 — the NetBird sudoers and `.env` setup picks up in Section 4b after the repo is cloned.
 
 ---
 
@@ -1143,7 +1101,47 @@ Adjust `CAMERA_DEVICE` if your camera appears on a different node (check with `v
 
 > **Note:** Values set in `.env` take effect when `server.js` reads them at startup via `dotenv`. The `Environment=` lines in the service file are the authoritative defaults; `.env` overrides them for the Node.js process only (child processes like GStreamer are not affected by `.env`).
 
-### 4b. MediaMTX — WebRTC ICE host update script
+### 4b. NetBird — sudoers and `.env` configuration
+
+Now that the repo is cloned and `.env` exists, complete the NetBird setup from Section 2m.
+
+**Grant sudo permissions:**
+
+```bash
+sudo tee /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
+# NetBird — remote access control via the Admin Settings UI
+dp ALL=(ALL) NOPASSWD: /usr/bin/netbird up *
+dp ALL=(ALL) NOPASSWD: /usr/bin/netbird down
+dp ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop netbird
+dp ALL=(ALL) NOPASSWD: /usr/bin/systemctl start netbird
+dp ALL=(ALL) NOPASSWD: /usr/bin/rm -rf /var/lib/netbird/
+EOF
+
+sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
+```
+
+**Add NetBird credentials to `.env`:**
+
+```bash
+cat >> /home/dp/digitalpool-camera/.env << 'EOF'
+
+# NetBird management server URL (omit for NetBird cloud; set for self-hosted)
+NETBIRD_MANAGEMENT_URL=https://api.netbird.io
+
+# Setup key — generate in the NetBird Dashboard under Setup Keys:
+#   https://app.netbird.io/setup-keys  (cloud)
+#   https://your-netbird-server/setup-keys  (self-hosted)
+NETBIRD_SETUP_KEY=your-setup-key-here
+EOF
+```
+
+Edit `.env` and replace `your-setup-key-here` with your actual setup key.
+
+> Remote access can be toggled on/off from **Admin Settings → Remote Access** in the web UI after the service is running.
+
+---
+
+### 4c. MediaMTX — WebRTC ICE host update script
 
 The admin preview uses WebRTC (WHEP protocol). For WebRTC to work from every network interface — LAN, NetBird, and the WiFi hotspot — MediaMTX must include each interface's IP address in its SDP ICE candidates. The `mediamtx-update-hosts.sh` script (included in the repo) detects all current non-loopback IPv4 addresses at startup and injects them into `webrtcAdditionalHosts` in `/etc/mediamtx.yml`.
 
@@ -1207,7 +1205,7 @@ MediaMTX **hot-reloads** its config file whenever it changes, so the updated `we
 
 **Why you can't preset a CIDR range (e.g. all `100.x.x.x`):** `webrtcAdditionalHosts` takes a list of specific IP addresses — not subnets. ICE candidates must be actual reachable addresses the device currently holds. The periodic timer achieves the same result: any IP the device acquires (NetBird, hotspot, LAN) is picked up automatically within one timer cycle.
 
-### 4b.3. MediaMTX network override — allow start without ethernet
+### 4c.3. MediaMTX network override — allow start without ethernet
 
 By default MediaMTX's systemd service depends on `network-online.target`, which requires a "connected" interface to be available before MediaMTX can start. Without an ethernet cable this target never fires, so MediaMTX never starts — and the WebRTC admin preview therefore fails even over the WiFi hotspot.
 
@@ -1323,7 +1321,7 @@ sudo systemctl status digitalpool-camera
 sudo journalctl -u digitalpool-camera -f
 ```
 
-> The service is declared `Wants=mediamtx.service` — it will start MediaMTX as a soft dependency. If MediaMTX fails to start the camera service still comes up (allowing the admin UI to be reached over the hotspot). Install the MediaMTX network override (Section 4b.3) to ensure MediaMTX itself starts reliably without ethernet.
+> The service is declared `Wants=mediamtx.service` — it will start MediaMTX as a soft dependency. If MediaMTX fails to start the camera service still comes up (allowing the admin UI to be reached over the hotspot). Install the MediaMTX network override (Section 4c.3) to ensure MediaMTX itself starts reliably without ethernet.
 
 ---
 
