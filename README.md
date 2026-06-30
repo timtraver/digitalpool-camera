@@ -307,12 +307,13 @@ sudo journalctl --disk-usage
 
 #### Verify logrotate is running
 
-Ubuntu 24.04 Server (minimized install) does not include logrotate by default. Install it:
+Ubuntu 24.04 Server (minimized install) does not include logrotate or cron by default. Install both:
 
 ```bash
-sudo apt install -y logrotate
-ls /etc/cron.daily/logrotate    # should now show the file
-sudo systemctl status cron      # cron must be active (running)
+sudo apt install -y logrotate cron
+sudo systemctl enable --now cron
+sudo systemctl status cron      # should show active (running)
+ls /etc/cron.daily/logrotate    # should show the file
 ```
 
 Ubuntu 24.04 Server runs logrotate via **cron** (`/etc/cron.daily/logrotate`), not a systemd timer. If cron is active and the file exists, logrotate is working — nothing further needed.
@@ -393,11 +394,11 @@ sudo systemctl mask systemd-networkd-wait-online.service
 
 This service waits for `systemd-networkd` to report that a "required" interface (normally ethernet) is fully configured. Masking it causes `network-online.target` to complete immediately — ethernet still comes up normally via NetworkManager, it just no longer holds up the entire boot sequence.
 
-> **Note:** `NetworkManager-wait-online.service` (a different service) should also be disabled. Check and disable it if it is enabled:
+> **Note:** On Ubuntu 24.04 Server (which uses `systemd-networkd`, not NetworkManager), `NetworkManager-wait-online.service` will not exist — that is normal. If you are on a desktop or a system with NetworkManager installed, also run:
 > ```bash
-> systemctl is-enabled NetworkManager-wait-online.service
-> # If it prints "enabled", disable it:
-> sudo systemctl disable NetworkManager-wait-online.service
+> systemctl is-enabled NetworkManager-wait-online.service 2>/dev/null && \
+>   sudo systemctl disable NetworkManager-wait-online.service
+> # Prints nothing and does nothing if the service doesn't exist — that's fine
 > ```
 
 **Disable cloud-init:**
@@ -593,26 +594,28 @@ Verify the VA-API driver and GStreamer plugin are working:
 
 ```bash
 # Confirm VA-API sees the GPU (use --display drm on headless/no-X11 servers)
-sudo vainfo --display drm --device /dev/dri/renderD128
+vainfo --display drm --device /dev/dri/renderD128
 
-# Confirm GStreamer can use the hardware encoders (Ubuntu 24.04 element names)
-gst-inspect-1.0 vah264enc    # H.264 hardware encoder
-gst-inspect-1.0 vah265enc    # H.265 hardware encoder
-
-# List all VA elements GStreamer found (useful for troubleshooting)
-gst-inspect-1.0 | grep -i va
+# List all VA elements GStreamer found
+gst-inspect-1.0 | grep -iE "vah26|vaapi"
 ```
 
-> **If `vainfo` shows no supported profiles** the driver is not loaded. Check that your user is in the `video` and `render` groups:
-> ```bash
-> sudo usermod -aG video,render dp
-> # Log out and back in, then retry vainfo
-> ```
+Expected output includes both plugin sets:
+```
+va:  vah264enc: VA-API H.264 Encoder in Intel(R) Gen Graphics
+va:  vah264lpenc: VA-API H.264 Low Power Encoder in Intel(R) Gen Graphics
+va:  vah265enc: VA-API H.265 Encoder in Intel(R) Gen Graphics
+vaapi:  vaapih264enc: VA-API H264 encoder
+vaapi:  vaapih265enc: VA-API H265 encoder
+...
+```
+
+> **If `vainfo` fails with "Failed to open the given device"** — you did not log out and back in after Section 2a.2 added the `render` group. Log out, SSH back in, and retry.
 >
-> **If `vah264enc` is missing** after installing the package, clear the GStreamer plugin cache and try again:
+> **If `vah264enc` is missing** after logging back in — the GStreamer plugin cache was built before render group access was granted. Clear it:
 > ```bash
 > rm -f ~/.cache/gstreamer-1.0/registry.x86_64.bin
-> gst-inspect-1.0 vah264enc
+> gst-inspect-1.0 | grep -iE "vah26|vaapi"
 > ```
 
 The service auto-detects which encoder is available at startup — no manual configuration is needed after installation.
