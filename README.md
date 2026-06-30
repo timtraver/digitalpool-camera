@@ -129,8 +129,8 @@ sudo su - dp
 ```bash
 sudo apt update && sudo apt full-upgrade -y
 
-# Network diagnostic tools (ifconfig, ping, netstat, etc.)
-sudo apt install -y net-tools iputils-ping iproute2 netcat-openbsd
+# Network diagnostic tools (ifconfig, ping, netstat, etc.) and vi editor
+sudo apt install -y net-tools iputils-ping iproute2 netcat-openbsd vim
 
 sudo reboot
 ```
