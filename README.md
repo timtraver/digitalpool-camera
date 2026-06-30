@@ -124,6 +124,34 @@ sudo su - dp
 
 ### 1c. First boot (both platforms)
 
+Set up SSH key authentication so you can log in without a password. On your **local machine** (Mac/Linux), copy your public key:
+
+```bash
+# On your LOCAL machine — get your public key
+cat ~/.ssh/id_rsa.pub
+# or if using ed25519:
+cat ~/.ssh/id_ed25519.pub
+```
+
+Then on the **device**, create the authorized_keys file as the `dp` user:
+
+```bash
+# On the device, as dp
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+vi ~/.ssh/authorized_keys
+# Paste your public key on a single line, save and quit (:wq)
+chmod 600 ~/.ssh/authorized_keys
+```
+
+Verify SSH key login works before continuing — open a **new terminal** on your local machine and test:
+
+```bash
+ssh dp@<device-ip>
+```
+
+> If SSH key login works, you can optionally disable password authentication later via `/etc/ssh/sshd_config` (`PasswordAuthentication no`). For now, leave it enabled during setup.
+
 ### 1d. Update the system and install base network tools
 
 ```bash
