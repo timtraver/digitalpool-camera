@@ -1531,8 +1531,10 @@ app.get("/api/network", (req, res) => {
   const addresses = [];
   for (const [name, nets] of Object.entries(interfaces)) {
     for (const net of nets) {
-      // Skip loopback and internal addresses
-      if (!net.internal && net.family === "IPv4") {
+      // Skip loopback, internal, and link-local (169.254.x.x) addresses.
+      // Link-local addresses are auto-assigned by the OS when DHCP hasn't
+      // responded yet — they are not routable and should not be shown as IPs.
+      if (!net.internal && net.family === "IPv4" && !net.address.startsWith("169.254.")) {
         addresses.push({ interface: name, address: net.address });
       }
     }
