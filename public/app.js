@@ -1332,21 +1332,37 @@ function updateConnectionInfo(protocol, ip) {
 // Copy connection URL to clipboard
 if (copyConnectionUrlBtn) {
   copyConnectionUrlBtn.addEventListener("click", () => {
-    const url = connectionUrlEl ? connectionUrlEl.textContent : "";
-    navigator.clipboard.writeText(url).then(() => {
-      copyConnectionUrlBtn.textContent = "✅";
+    const url = connectionUrlEl ? connectionUrlEl.textContent.trim() : "";
+    if (!url) return;
+
+    const showFeedback = (ok) => {
+      copyConnectionUrlBtn.textContent = ok ? "✅ Copied!" : "❌ Failed";
       setTimeout(() => { copyConnectionUrlBtn.textContent = "📋"; }, 1500);
-    }).catch(() => {
-      // Fallback
-      const ta = document.createElement("textarea");
-      ta.value = url;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      document.body.removeChild(ta);
-      copyConnectionUrlBtn.textContent = "✅";
-      setTimeout(() => { copyConnectionUrlBtn.textContent = "📋"; }, 1500);
-    });
+    };
+
+    const execFallback = () => {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = url;
+        ta.style.cssText = "position:fixed;opacity:0;pointer-events:none;";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        showFeedback(ok);
+      } catch (e) {
+        showFeedback(false);
+      }
+    };
+
+    // navigator.clipboard requires a secure context (HTTPS/localhost).
+    // The admin UI is served over HTTP so fall back to execCommand directly.
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(url).then(() => showFeedback(true)).catch(execFallback);
+    } else {
+      execFallback();
+    }
   });
 }
 
