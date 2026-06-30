@@ -70,8 +70,8 @@ Replace `/dev/sdX` with your USB drive device. Boot the N97 box from the USB dri
 
 During the installer:
 - Choose **Ubuntu Server (minimized)** — no desktop needed
-- Set hostname to something like `digitalpoolg5`
-- **Create user `dp`** with password `digitalpool42` (the service runs as this user)
+- Set hostname to something like `dp-stream-1`
+- **Create user `dp`** with password `XXXXXXXXXX` (the service runs as this user)
 - Enable **OpenSSH server** so you can manage the box remotely
 - Let the installer format the internal NVMe/eMMC drive
 
@@ -113,7 +113,7 @@ You will be prompted to change the password on first login. After changing it, c
 ```bash
 # Create the dp user with the correct password
 sudo adduser --gecos "" dp
-# When prompted for password, enter: digitalpool42
+# When prompted for password, enter: <the password>
 
 # Give dp sudo rights
 sudo usermod -aG sudo dp

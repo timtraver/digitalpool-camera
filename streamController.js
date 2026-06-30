@@ -810,12 +810,17 @@ class StreamController extends EventEmitter {
           //     filter_units strips them so the annexb→mp4 BSF only sees the IDR NALU;
           //     the sequence header is written once at startup from the MPEG-TS PMT
           //     extradata and DTS always strictly advances.
-          //     SRT does not use this filter — inline SPS/PPS help OBS resync mid-stream.
+          //     SRT does not use filter_units — inline SPS/PPS help OBS resync mid-stream.
+          //     SRT does use setts to suppress the "Non-monotonic DTS" warnings that the
+          //     mpegts muxer emits when burst-read frames all receive the same av_gettime()
+          //     millisecond.  mpegts auto-bumps duplicate DTS by 1 tick rather than dropping
+          //     the frame, so the stream still works — but the journal fills with noise.
           //
-          //  2. setts — enforce strict DTS monotonicity for FLV without fixed-rate assumptions.
+          //  2. setts — enforce strict DTS monotonicity without fixed-rate assumptions.
           //     -use_wallclock_as_timestamps 1 stamps every packet with av_gettime().
           //     A single pipe read() often returns a burst of N frames — all getting the
-          //     SAME millisecond timestamp → duplicate DTS → MediaMTX drops the connection.
+          //     SAME millisecond timestamp → duplicate DTS → MediaMTX drops the connection
+          //     (RTMP) or mpegts warns (SRT).
           //     The formula max(DTS, PREV_OUTDTS+100) bumps any duplicate by 100 ticks
           //     (~1.1 ms at 90 kHz).  This is NOT a continuous accumulator: as soon as the
           //     next non-duplicate frame arrives its av_gettime() value resets the baseline,
@@ -828,6 +833,11 @@ class StreamController extends EventEmitter {
           ...(protocol === "rtmp" || protocol === "rtsp"
             ? ["-bsf:v",
                "filter_units=remove_types=7-8,setts=" +
+               "dts=(DTS+PREV_OUTDTS+100+abs(DTS-PREV_OUTDTS-100))/2:" +
+               "pts=(PTS+PREV_OUTPTS+100+abs(PTS-PREV_OUTPTS-100))/2"]
+            : protocol === "srt"
+            ? ["-bsf:v",
+               "setts=" +
                "dts=(DTS+PREV_OUTDTS+100+abs(DTS-PREV_OUTDTS-100))/2:" +
                "pts=(PTS+PREV_OUTPTS+100+abs(PTS-PREV_OUTPTS-100))/2"]
             : []),

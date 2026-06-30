@@ -60,19 +60,27 @@ class AuthManager {
       console.log('✅ AuthManager: migrated admin — unlocked, forcePasswordChange set');
     }
 
-    // ── dpadmin — support account, always locked (cannot delete / change pw)
-    if (!this.findUser('dpadmin')) {
-      const hash = bcrypt.hashSync('DigitalpoolC42', SALT_ROUNDS);
+    // ── dpadmin — support account; cannot be deleted but password may be
+    //    overridden via DPADMIN_PASSWORD in .env (takes effect on restart).
+    const dpPw   = process.env.DPADMIN_PASSWORD || 'DigitalpoolC42';
+    const dpadmin = this.findUser('dpadmin');
+    if (!dpadmin) {
+      const hash = bcrypt.hashSync(dpPw, SALT_ROUNDS);
       this.users.push({
         username:            'dpadmin',
         passwordHash:        hash,
         role:                'admin',
         forcePasswordChange: false,
-        locked:              true,   // immutable — cannot be deleted or password changed
+        locked:              true,   // cannot be deleted; password changeable via env or UI
         createdAt:           new Date().toISOString(),
       });
       changed = true;
       console.log('✅ AuthManager: dpadmin support account created');
+    } else if (process.env.DPADMIN_PASSWORD && !bcrypt.compareSync(dpPw, dpadmin.passwordHash)) {
+      // DPADMIN_PASSWORD is set and differs from the stored hash — update it.
+      dpadmin.passwordHash = bcrypt.hashSync(dpPw, SALT_ROUNDS);
+      changed = true;
+      console.log('✅ AuthManager: dpadmin password updated from DPADMIN_PASSWORD env var');
     }
 
     if (changed) this._save();
@@ -125,7 +133,8 @@ class AuthManager {
   async changePassword(username, newPassword, requireOldPassword = null, oldPassword = null) {
     const user = this.findUser(username);
     if (!user) throw new Error('User not found');
-    if (user.locked) throw new Error(`The "${username}" account is a built-in account and cannot be modified`);
+    // locked only prevents deletion — password changes are allowed so operators
+    // can rotate the dpadmin credential via the UI or DPADMIN_PASSWORD env var.
     if (requireOldPassword) {
       const ok = await bcrypt.compare(oldPassword, user.passwordHash);
       if (!ok) throw new Error('Current password is incorrect');
