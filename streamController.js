@@ -196,7 +196,6 @@ class StreamController extends EventEmitter {
    *
    * Rockchip RK3588      → mpph264enc      (Rockchip MPP GStreamer plugin)
    * Intel N97 / iGPU    → vaapih264enc    (gstreamer1.0-vaapi)
-   * NVIDIA Jetson        → nvv4l2h264enc
    * Software             → x264enc
    */
   async _autoDetectEncoder() {
@@ -233,7 +232,7 @@ class StreamController extends EventEmitter {
    * Intel VA-API (vah264enc / vah265enc) → vajpegdec (Intel VA-API hardware JPEG decode)
    *   Same gstreamer1.0-plugins-bad va plugin as vah264enc; no jpegparse needed.
    *   Hardware decode cuts CPU by ~4x vs software jpegdec at 1080p@60fps.
-   * Everything else (vaapih264enc legacy, x264enc, NVIDIA) → jpegdec (software)
+   * Everything else (vaapih264enc legacy, x264enc) → jpegdec (software)
    *
    * @param {string} [encoder] - encoder name; falls back to this.streamConfig.encoder
    * @returns {string} GStreamer element name
@@ -2000,27 +1999,6 @@ class StreamController extends EventEmitter {
         `config-interval=${protocol === "rtmp" && this.streamConfig.audioEnabled ? "0" : "-1"}`,
         "!",
       );
-    } else if (encoder === "nvv4l2h264enc") {
-      // NVIDIA V4L2 encoder (Jetson)
-      pipeline.push(
-        "nvvidconv",
-        "!",
-        "video/x-raw(memory:NVMM)",
-        "!",
-        "nvv4l2h264enc",
-        `bitrate=${bitrate}`,
-        "preset-level=1",
-        "profile=0",
-        "iframeinterval=15",
-        "insert-sps-pps=true",
-        "maxperf-enable=true",
-        "!",
-        "video/x-h264,stream-format=byte-stream",
-        "!",
-        "h264parse",
-        `config-interval=${protocol === "rtmp" && this.streamConfig.audioEnabled ? "0" : "-1"}`,
-        "!",
-      );
     }
 
     // Add another tee after encoding to split H.264 for output and preview
@@ -2430,31 +2408,19 @@ class StreamController extends EventEmitter {
                   message: "Intel VA-API hardware encoder available (vaapih264enc)",
                 });
               } else {
-                // Try nvv4l2h264enc (Jetson)
-                const testNv = spawn("gst-inspect-1.0", ["nvv4l2h264enc"]);
-                testNv.on("close", (nvCode) => {
-                  if (nvCode === 0) {
+                // Try x264enc (software fallback)
+                const testX264 = spawn("gst-inspect-1.0", ["x264enc"]);
+                testX264.on("close", (x264Code) => {
+                  if (x264Code === 0) {
                     resolve({
                       success: true,
-                      encoder: "nvv4l2h264enc",
-                      message: "NVIDIA hardware encoder available",
+                      encoder: "x264enc",
+                      message: "x264 software encoder available",
                     });
                   } else {
-                    // Try x264enc (software fallback)
-                    const testX264 = spawn("gst-inspect-1.0", ["x264enc"]);
-                    testX264.on("close", (x264Code) => {
-                      if (x264Code === 0) {
-                        resolve({
-                          success: true,
-                          encoder: "x264enc",
-                          message: "x264 software encoder available",
-                        });
-                      } else {
-                        resolve({
-                          success: false,
-                          error: "No encoder found (tried mpph264enc, vah264enc, vaapih264enc, nvv4l2h264enc, x264enc)",
-                        });
-                      }
+                    resolve({
+                      success: false,
+                      error: "No encoder found (tried mpph264enc, vah264enc, vaapih264enc, x264enc)",
                     });
                   }
                 });

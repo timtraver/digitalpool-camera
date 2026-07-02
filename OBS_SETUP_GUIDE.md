@@ -1,11 +1,11 @@
-# OBS Setup Guide for Jetson Camera Stream
+# OBS Setup Guide for Camera Stream
 
 ## Overview
-This guide explains how to receive the RTMP stream from your Jetson device on your Mac at `rtmp://192.168.1.66:8890`.
+This guide explains how to receive the RTMP stream from your device on your Mac at `rtmp://192.168.1.66:8890`.
 
 ## Prerequisites
 - OBS Studio installed on your Mac
-- Jetson device streaming to `rtmp://192.168.1.66:8890`
+- Device streaming to `rtmp://192.168.1.66:8890`
 - Both devices on the same network
 
 ## Option 1: Using nginx-rtmp (Recommended)
@@ -46,7 +46,7 @@ rtmp {
             live on;
             record off;
             
-            # Allow publishing from Jetson
+            # Allow publishing from the device
             allow publish all;
             
             # Allow playing from localhost (OBS)
@@ -89,7 +89,7 @@ nginx -c /usr/local/etc/nginx/nginx.conf
 1. Open OBS Studio
 2. In the "Sources" panel, click the "+" button
 3. Select "Media Source"
-4. Name it "Jetson Camera"
+4. Name it "Camera"
 5. Configure:
    - **Uncheck** "Local File"
    - **Input**: `rtmp://localhost:8890/live/stream`
@@ -98,9 +98,9 @@ nginx -c /usr/local/etc/nginx/nginx.conf
    - **Reconnect Delay**: 2 seconds
 6. Click OK
 
-### Step 5: Start Streaming from Jetson
+### Step 5: Start Streaming from the device
 
-1. Open the web interface at `http://<jetson-ip>:3000`
+1. Open the web interface at `http://<device-ip>:3000`
 2. Configure stream settings:
    - **Protocol**: RTMP
    - **Destination**: `rtmp://192.168.1.66:8890/live/stream`
@@ -132,18 +132,18 @@ Then use the same OBS configuration as above.
 ### Stream not appearing in OBS
 1. Check nginx is running: `ps aux | grep nginx`
 2. Check port 8890 is listening: `lsof -i :8890`
-3. Check Jetson can reach your Mac: `ping 192.168.1.66` (from Jetson)
+3. Check device can reach your Mac: `ping 192.168.1.66` (from the device)
 4. Check firewall settings on Mac (System Preferences → Security & Privacy → Firewall)
 
 ### High latency
 1. Reduce "Network Buffering" in OBS Media Source settings
-2. Use lower bitrate on Jetson (e.g., 2-3 Mbps instead of 5 Mbps)
+2. Use lower bitrate on the device (e.g., 2-3 Mbps instead of 5 Mbps)
 3. Consider using SRT protocol instead of RTMP for lower latency
 
 ### Stream keeps disconnecting
 1. Increase "Network Buffering" in OBS
 2. Check network stability
-3. Reduce resolution or framerate on Jetson
+3. Reduce resolution or framerate on the device
 
 ## Viewing Stream Stats
 
