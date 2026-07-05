@@ -1053,6 +1053,32 @@
               </details>
             </div>
 
+            <!-- System Image (golden clone) — dpadmin only -->
+            <div class="admin-section" id="systemImageSection" style="display:none">
+              <details class="admin-collapsible">
+                <summary class="admin-section-title">💾 System Image</summary>
+                <div class="admin-collapsible-body">
+                  <p style="font-size:11px;color:rgba(255,255,255,0.6);margin:0 0 10px">
+                    Download a complete image of this device. Flash it onto a new device from
+                    a bootable recovery USB (see SYSTEM_IMAGE.md); the new device sanitises
+                    itself into a unique unit on first boot.
+                  </p>
+                  <div class="wifi-info-row">
+                    <span class="wifi-label">Platform</span>
+                    <span class="wifi-value" id="sysImageArch">—</span>
+                  </div>
+                  <div class="wifi-info-row">
+                    <span class="wifi-label">Used (approx. image size)</span>
+                    <span class="wifi-value" id="sysImageUsed">—</span>
+                  </div>
+                  <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
+                    <button class="btn-wifi-action" id="createImageBtn" style="background:rgba(16,185,129,0.2);border-color:rgba(16,185,129,0.5)">💾 Create &amp; Download Image</button>
+                    <div class="wifi-msg" id="createImageMsg"></div>
+                  </div>
+                </div>
+              </details>
+            </div>
+
           </div><!-- /.adminSettingsBody -->
 
         </div><!-- /.control-panel -->
@@ -1086,6 +1112,6 @@
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-    <script src="app.js?v=10"></script>
+    <script src="app.js?v=11"></script>
   </body>
 </html>

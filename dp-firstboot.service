@@ -1,0 +1,18 @@
+[Unit]
+Description=DigitalPool Camera first-boot sanitiser (runs once after cloning)
+# Run before the app and networking settle, but after basic filesystems/dbus.
+DefaultDependencies=yes
+After=systemd-machine-id-commit.service network-pre.target
+Before=digitalpool-camera.service netbird.service
+# Only meaningful while the pending flag exists (dp-restore.sh creates it).
+ConditionPathExists=/var/lib/dp-image/firstboot-pending
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /home/dp/digitalpool-camera/dp-firstboot.sh
+RemainAfterExit=no
+# dp-firstboot.sh disables this unit and reboots itself on success.
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

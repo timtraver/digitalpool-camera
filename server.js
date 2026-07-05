@@ -1329,6 +1329,94 @@ app.post("/api/reboot", requireAdmin, async (req, res) => {
   }, 800);
 });
 
+// ── System image (golden clone) API — dpadmin only ────────────────────────────
+// Captures a filesystem-level image of this running device and streams it as a
+// single downloadable file (see dp-create-image.sh).  The image is flashed onto
+// a new device from a bootable recovery USB with dp-restore.sh, then sanitised
+// into a unique unit on first boot by dp-firstboot.sh.  See SYSTEM_IMAGE.md.
+//
+// Requires a NOPASSWD sudoers entry (see SYSTEM_IMAGE.md):
+//   dp ALL=(root) NOPASSWD: /usr/bin/bash /home/dp/digitalpool-camera/dp-create-image.sh *
+const IMAGE_SCRIPT = path.join(__dirname, "dp-create-image.sh");
+
+// Non-destructive: report arch/disk/size so the UI can preview before download.
+app.get("/api/system/image/info", requireAdmin, async (req, res) => {
+  if (req.session?.user?.username !== "dpadmin")
+    return res.status(403).json({ success: false, error: "Access denied" });
+  try {
+    const val = async (cmd) => (await execAsync(cmd).catch(() => ({ stdout: "" }))).stdout.trim();
+    const arch     = await val("uname -m");
+    const rootSrc  = await val("findmnt -no SOURCE /");
+    const pkname   = await val("lsblk -no PKNAME " + (rootSrc || "/dev/null") + " | head -n1");
+    const disk     = pkname ? "/dev/" + pkname : "";
+    const usedB    = parseInt(await val("df -B1 --output=used / | tail -n1"), 10) || 0;
+    const diskB    = disk ? parseInt(await val("blockdev --getsize64 " + disk), 10) || 0 : 0;
+    const hasTools = !!(await val("command -v zstd")) && !!(await val("command -v sfdisk"));
+    const scriptOk = fsSync.existsSync(IMAGE_SCRIPT);
+    res.json({
+      success: true, arch, disk, diskBytes: diskB, usedBytes: usedB,
+      ready: hasTools && scriptOk && !!disk,
+      missing: [ !hasTools && "zstd/sfdisk", !scriptOk && "dp-create-image.sh", !disk && "root disk" ].filter(Boolean),
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Streams the image to the client.  Quiesces the media pipeline first so the
+// captured filesystem is as consistent as possible for a live capture.
+app.get("/api/system/image/download", requireAdmin, async (req, res) => {
+  if (req.session?.user?.username !== "dpadmin")
+    return res.status(403).json({ success: false, error: "Access denied" });
+  if (!fsSync.existsSync(IMAGE_SCRIPT))
+    return res.status(500).json({ success: false, error: "dp-create-image.sh not found" });
+
+  // Quiesce: stop any active streams so tar sees a settled filesystem.
+  try { await streamController.stopStream(); }  catch { /* not streaming */ }
+  try { await streamController2.stopStream(); } catch { /* not streaming */ }
+  await execAsync("sync").catch(() => {});
+
+  let appVersion = "unknown";
+  try { appVersion = JSON.parse(fsSync.readFileSync(path.join(__dirname, "package.json"), "utf8")).version || "unknown"; } catch { /* ignore */ }
+  const created = new Date().toISOString();
+  const arch = (await execAsync("uname -m").catch(() => ({ stdout: "unknown" }))).stdout.trim() || "unknown";
+  const host = os.hostname().replace(/[^a-zA-Z0-9_-]/g, "");
+  const stamp = created.replace(/[:T]/g, "").slice(0, 13); // YYYYMMDDHHMM
+  const filename = `dp-image-${host}-${arch}-${stamp}.tar.zst`;
+
+  // No Content-Length — the compressed size is unknown until the stream ends,
+  // so the browser shows an indeterminate download.  Disable socket timeouts;
+  // capturing a full rootfs can take many minutes.
+  req.setTimeout(0); res.setTimeout(0);
+  res.setHeader("Content-Type", "application/zstd");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.setHeader("Cache-Control", "no-store");
+
+  console.log(`💾 System image capture started → ${filename}`);
+  const child = spawn("sudo", ["/usr/bin/bash", IMAGE_SCRIPT,
+    "--created", created, "--app-version", appVersion], { stdio: ["ignore", "pipe", "pipe"] });
+
+  child.stdout.pipe(res);
+  child.stderr.on("data", (d) => process.stderr.write(`[dp-create-image] ${d}`));
+  child.on("error", (err) => {
+    console.error("💾 image capture spawn error:", err.message);
+    if (!res.headersSent) res.status(500).json({ success: false, error: err.message });
+    else res.destroy();
+  });
+  child.on("close", (code) => {
+    console.log(`💾 System image capture finished (exit ${code})`);
+    res.end();
+  });
+  // If the client aborts the download, stop the capture so we don't keep tarring.
+  res.on("close", () => {
+    if (child.exitCode === null) {
+      console.log("💾 image download aborted by client — killing capture");
+      child.kill("SIGKILL");
+      execAsync("sudo pkill -f dp-create-image.sh").catch(() => {});
+    }
+  });
+});
+
 // API endpoint to list recent commits from origin (dpadmin only).
 // Fetches from origin first so the list always includes commits not yet on the device.
 app.get("/api/commits", requireAdmin, async (req, res) => {

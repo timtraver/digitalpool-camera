@@ -4291,6 +4291,62 @@ loadDeviceIp();
     setTimeout(poll, 15000);
   });
 
+  // ── System Image / golden clone (dpadmin only) ───────────────
+  if (currentUser.username === "dpadmin") {
+    const imgSec = document.getElementById("systemImageSection");
+    if (imgSec) imgSec.style.display = "block";
+
+    const fmtGB = (b) => (b > 0 ? (b / 1e9).toFixed(1) + " GB" : "—");
+    // Populate the platform / size preview.
+    fetch("/api/system/image/info").then(r => r.json()).then((d) => {
+      if (!d || !d.success) return;
+      const archEl = document.getElementById("sysImageArch");
+      const usedEl = document.getElementById("sysImageUsed");
+      if (archEl) archEl.textContent = (d.arch || "unknown") + (d.disk ? "  (" + d.disk + ")" : "");
+      if (usedEl) usedEl.textContent = fmtGB(d.usedBytes);
+      const btn = document.getElementById("createImageBtn");
+      const msg = document.getElementById("createImageMsg");
+      if (!d.ready && btn) {
+        btn.disabled = true;
+        if (msg) { msg.textContent = "⚠️ Not ready: missing " + (d.missing || []).join(", "); msg.style.color = "#facc15"; }
+      }
+    }).catch(() => { /* device may not support it (e.g. dev machine) */ });
+
+    document.getElementById("createImageBtn")?.addEventListener("click", () => {
+      const btn = document.getElementById("createImageBtn");
+      const msg = document.getElementById("createImageMsg");
+      if (!confirm(
+        "Create a full system image?\n\n" +
+        "• Any active stream will be STOPPED.\n" +
+        "• Capture runs while you download and can take several minutes.\n" +
+        "• Keep this tab open until the download finishes.\n\n" +
+        "Continue?"
+      )) return;
+
+      msg.textContent = "💾 Capturing… the download will begin shortly and may take several minutes. Keep this tab open.";
+      msg.style.color = "#facc15";
+      btn.disabled = true;
+      btn.textContent = "⏳ Capturing…";
+
+      // Trigger the browser download without navigating away from the page.
+      const a = document.createElement("a");
+      a.href = "/api/system/image/download";
+      a.download = "";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      // We can't observe the streamed download's completion from here, so
+      // re-enable the button after a grace period for a second attempt.
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.textContent = "💾 Create & Download Image";
+        msg.textContent = "If the download finished, the image is in your browser's Downloads. Streams were stopped — restart streaming when ready.";
+        msg.style.color = "rgba(255,255,255,0.6)";
+      }, 20000);
+    });
+  }
+
   // ── Software update (dpadmin only) ───────────────────────────
   if (currentUser.username !== "dpadmin") {
     document.getElementById("updateSoftwareBtn")?.closest("div")?.remove();
