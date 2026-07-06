@@ -1092,6 +1092,33 @@ app.post("/api/remote/disable", requireAdmin, async (req, res) => {
 app.post("/api/remote/wipe", requireAdmin, async (req, res) => {
   const log = [];
   try {
+    // 0. Remove the device record from DigitalPool via the cloud function
+    //    (identity-based deregister — no password).  Best-effort: a failure here
+    //    must not block the local + NetBird de-registration.  Done first, while
+    //    the stored identifiers are still available.
+    const cfg0 = loadRemoteConfig();
+    if (cfg0.deviceId || cfg0.macAddress || cfg0.netbirdIp) {
+      try {
+        const dereg = await callDigitalPoolRegister({
+          action:     "deregister",
+          email:      cfg0.ownerEmail || "",
+          deviceName: getDeviceName(),
+          macAddress: cfg0.macAddress || getPrimaryMac(),
+          netbirdIp:  cfg0.netbirdIp  || "",
+          venueId:    cfg0.venueId    || "",
+          deviceId:   cfg0.deviceId   || "",
+        });
+        if (dereg.statusCode >= 400 || dereg.body?.ok === false) {
+          log.push(`⚠️ DigitalPool deregister returned HTTP ${dereg.statusCode}: ${dereg.body?.error || "error"} — continuing local wipe`);
+        } else {
+          log.push("✅ Device removed from DigitalPool");
+        }
+      } catch (e) {
+        log.push(`⚠️ DigitalPool deregister failed: ${e.message} — continuing local wipe`);
+        console.warn("DigitalPool deregister:", e.message);
+      }
+    }
+
     // 1. Delete from NetBird server (best-effort — needs NETBIRD_API_TOKEN)
     try {
       const deleted = await netbirdDeleteCurrentPeer();
@@ -1118,10 +1145,15 @@ app.post("/api/remote/wipe", requireAdmin, async (req, res) => {
     await execAsync("sudo /usr/bin/systemctl start netbird").catch(() => {});
     await new Promise(r => setTimeout(r, 1500));
 
-    // 3. Clear registered state — keep name + email for pre-fill
+    // 3. Clear registered state + venue association (the device no longer exists
+    //    on DigitalPool).  Keep name/email/MAC for pre-fill and identity.
     const cfg = loadRemoteConfig();
     cfg.registered   = false;
     cfg.registeredAt = null;
+    cfg.venueId      = "";
+    cfg.venueName    = "";
+    cfg.venueSlug    = "";
+    cfg.deviceId     = "";
     saveRemoteConfig(cfg);
 
     log.push("✅ Wipe complete — ready for re-registration");

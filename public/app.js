@@ -4744,6 +4744,7 @@ loadDeviceIp();
     const regOpenBtn     = document.getElementById("regOpenModalBtn");
     const unregPrompt    = document.getElementById("regUnregisteredPrompt");
     const registeredExtras = document.getElementById("regRegisteredExtras");
+    const registeredBadge  = document.getElementById("regRegisteredBadge");
     let   noInternetPoll = null;  // interval handle for auto-retry
 
     // Relocate the registration process UI (offline blocker + credential/venue
@@ -4770,6 +4771,7 @@ loadDeviceIp();
       closeRegModal();
       if (unregPrompt)      unregPrompt.style.display      = "none";
       if (registeredExtras) registeredExtras.style.display = "";
+      if (registeredBadge)  registeredBadge.style.display  = "";
       if (noInternetArea)   noInternetArea.style.display   = "none";
       if (formArea)         formArea.style.display         = "none";
       if (statusArea)       statusArea.style.display       = "";
@@ -4803,6 +4805,7 @@ loadDeviceIp();
       deviceRegistered = false;
       if (statusArea)       statusArea.style.display       = "none";
       if (registeredExtras) registeredExtras.style.display = "none"; // hide status + De-Register
+      if (registeredBadge)  registeredBadge.style.display  = "none"; // hide "✓ Registered" tag
       if (unregPrompt)      unregPrompt.style.display       = "";   // sidebar prompt + Register button
       if (regBadge)         regBadge.style.display          = "";
       if (startStreamBtn) startStreamBtn.disabled = true;
@@ -5071,6 +5074,7 @@ loadDeviceIp();
       if (startStreamBtn) startStreamBtn.disabled = true;
       if (unregPrompt)      unregPrompt.style.display      = "";
       if (registeredExtras) registeredExtras.style.display = "none";
+      if (registeredBadge)  registeredBadge.style.display  = "none";
       if (statusArea)       statusArea.style.display       = "none";
       if (regBadge)         regBadge.style.display         = "";
       if (noInternetArea)   noInternetArea.style.display   = "none";
