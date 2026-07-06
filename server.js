@@ -1346,9 +1346,12 @@ app.get("/api/system/image/info", requireAdmin, async (req, res) => {
   try {
     const val = async (cmd) => (await execAsync(cmd).catch(() => ({ stdout: "" }))).stdout.trim();
     const arch     = await val("uname -m");
-    const rootSrc  = await val("findmnt -no SOURCE /");
-    const pkname   = await val("lsblk -no PKNAME " + (rootSrc || "/dev/null") + " | head -n1");
-    const disk     = pkname ? "/dev/" + pkname : "";
+    const rootSrc  = await val("findmnt -no SOURCE / | head -n1");
+    // Walk the block-device stack to the whole disk. Works for plain partitions
+    // (nvme0n1p2→nvme0n1) AND device-mapper/LVM roots (ubuntu--vg-ubuntu--lv→sda),
+    // where PKNAME returns nothing.
+    const base     = rootSrc ? await val("lsblk -nso NAME " + rootSrc + " | tail -n1") : "";
+    const disk     = base ? "/dev/" + base : "";
     const usedB    = parseInt(await val("df -B1 --output=used / | tail -n1"), 10) || 0;
     const diskB    = disk ? parseInt(await val("blockdev --getsize64 " + disk), 10) || 0 : 0;
     const hasTools = !!(await val("command -v zstd")) && !!(await val("command -v sfdisk"));

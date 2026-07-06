@@ -52,10 +52,14 @@ command -v zstd    >/dev/null || fatal "zstd not installed (apt install zstd)"
 command -v sfdisk  >/dev/null || fatal "sfdisk not installed (apt install util-linux)"
 
 # ── Discover the disk layout we're capturing ───────────────────────────────────
-ROOT_SRC="$(findmnt -no SOURCE /)"                 # e.g. /dev/nvme0n1p2 or /dev/sda2
+ROOT_SRC="$(findmnt -no SOURCE / | head -n1)"      # e.g. /dev/nvme0n1p2 or /dev/mapper/ubuntu--vg-ubuntu--lv
+ROOT_SRC="${ROOT_SRC%%[*}"                          # strip any btrfs subvol suffix like [/@]
 [[ -n "$ROOT_SRC" ]] || fatal "cannot determine root device"
-DISK="/dev/$(lsblk -no PKNAME "$ROOT_SRC" | head -n1)"   # parent disk, e.g. /dev/nvme0n1
-[[ -b "$DISK" ]] || fatal "computed disk '$DISK' is not a block device"
+# Walk the block-device stack down to the whole disk. Handles plain partitions
+# (nvme0n1p2→nvme0n1) and LVM/device-mapper roots (…-lv→sda3→sda), where PKNAME
+# returns nothing.
+DISK="/dev/$(lsblk -nso NAME "$ROOT_SRC" | tail -n1)"
+[[ -b "$DISK" ]] || fatal "computed disk '$DISK' is not a block device (root src: $ROOT_SRC)"
 
 ARCH="$(uname -m)"
 KERNEL="$(uname -r)"
@@ -90,13 +94,28 @@ dd if="$DISK" of="$META_DIR/bootgap.img" bs="$SECTOR_SIZE" count="$FIRST_START" 
 zstd -q -f --rm -19 "$META_DIR/bootgap.img" -o "$META_DIR/bootgap.img.zst"
 log "Captured bootgap (${FIRST_START} sectors)"
 
-# ── Enumerate mounts and classify each partition ───────────────────────────────
-# We build the manifest's partition array here, tarring every non-root OS mount
-# that sits on its own filesystem into mounts/<name>.tar.zst.
-ROOT_FSTYPE="$(findmnt -no FSTYPE /)"
-ROOT_UUID="$(blkid -s UUID -o value "$ROOT_SRC" || true)"
+# ── Detect an LVM root ──────────────────────────────────────────────────────────
+# Ubuntu Server's default guided layout puts / on an ext4 LV inside a VG on a PV
+# partition (e.g. ubuntu-vg/ubuntu-lv on sda3).  We capture the VG/LV names + which
+# partition is the PV so dp-restore.sh can rebuild the LVM stack, then preserve the
+# LV's filesystem UUID so fstab/GRUB resolve unchanged.
+ROOT_FSTYPE="$(findmnt -no FSTYPE / | head -n1)"
+ROOT_UUID="$(blkid -s UUID -o value "$ROOT_SRC" 2>/dev/null || true)"
+part_num() { echo "$1" | grep -oE '[0-9]+$' || echo 0; }   # sda3→3, nvme0n1p3→3
 
-# JSON assembly helpers (avoid jq dependency).
+IS_LVM=false; LVM_VG=""; LVM_LV=""; LVM_PV=""
+if [[ "$(lsblk -no TYPE "$ROOT_SRC" 2>/dev/null | head -n1)" == "lvm" ]]; then
+    command -v lvs >/dev/null || fatal "root is on LVM but lvm2 tools are missing"
+    IS_LVM=true
+    LVM_VG="$(lvs --noheadings -o vg_name "$ROOT_SRC" 2>/dev/null | tr -d ' ')"
+    LVM_LV="$(lvs --noheadings -o lv_name "$ROOT_SRC" 2>/dev/null | tr -d ' ')"
+    LVM_PV="$(pvs --noheadings -o pv_name,vg_name 2>/dev/null | awk -v vg="$LVM_VG" '$2==vg{print $1; exit}')"
+    [[ -n "$LVM_VG" && -n "$LVM_LV" && -n "$LVM_PV" ]] \
+        || fatal "LVM root but could not resolve VG/LV/PV (vg='$LVM_VG' lv='$LVM_LV' pv='$LVM_PV')"
+    log "LVM root: VG=$LVM_VG  LV=$LVM_LV  PV=$LVM_PV"
+fi
+
+# JSON assembly helper for the partitions[] array (avoid a jq dependency).
 json_parts=""
 add_part() { # num mountpoint fstype uuid label role tar
     local entry
@@ -105,41 +124,48 @@ add_part() { # num mountpoint fstype uuid label role tar
     if [[ -z "$json_parts" ]]; then json_parts="$entry"; else json_parts="$json_parts,$entry"; fi
 }
 
-# Root partition — its content IS the outer download, so tar="(self)".
-ROOT_NUM="$(echo "$ROOT_SRC" | grep -oE '[0-9]+$' || echo 0)"
-add_part "$ROOT_NUM" "/" "$ROOT_FSTYPE" "$ROOT_UUID" "$(blkid -s LABEL -o value "$ROOT_SRC" || true)" "root" "(self)"
+# ── Enumerate every partition on the disk, classify + archive mounted ones ──────
+# Iterate the disk's real partitions (TYPE=part) — this catches unmounted PVs that
+# `findmnt` would miss.  For non-LVM installs the root partition (mountpoint /) is
+# archived as the outer download ("(self)"); an LVM root is handled via the lvm{}
+# block below and does not appear as a partition here.
+while read -r PNAME PTYPE PFSTYPE; do
+    [[ "$PTYPE" == "part" ]] || continue
+    PDEV="/dev/$PNAME"
+    NUM="$(part_num "$PNAME")"
+    UUID="$(blkid -s UUID -o value "$PDEV" 2>/dev/null || true)"
+    LABEL="$(blkid -s LABEL -o value "$PDEV" 2>/dev/null || true)"
+    MP="$(findmnt -no TARGET "$PDEV" 2>/dev/null | head -n1)"
+    tarf=""; role="unused"
+    if   [[ "$PFSTYPE" == "LVM2_member" ]];              then role="lvm-pv"
+    elif [[ "$MP" == "/" ]];                             then role="root"; tarf="(self)"
+    elif [[ "$MP" == "/boot/efi" || "$PFSTYPE" == "vfat" ]]; then role="esp"
+    elif [[ "$MP" == "/boot" ]];                         then role="boot"
+    elif [[ -n "$MP" ]];                                 then role="other"
+    fi
+    if [[ "$role" == "esp" || "$role" == "boot" || "$role" == "other" ]]; then
+        safe="$(echo "$MP" | sed 's#^/##; s#/#_#g')"; [[ -z "$safe" ]] && safe="mount"
+        tarf="mounts/${safe}.tar.zst"
+        log "Archiving $MP ($PFSTYPE) -> $tarf"
+        tar --numeric-owner --xattrs --acls -p -S \
+            --warning=no-file-changed --ignore-failed-read \
+            -C "$MP" -cf - . \
+            | zstd -q -T0 -3 -o "$META_DIR/$tarf"
+    fi
+    add_part "$NUM" "$MP" "$PFSTYPE" "$UUID" "$LABEL" "$role" "$tarf"
+done < <(lsblk -rno NAME,TYPE,FSTYPE "$DISK")
 
-# Every other mount whose backing device is a partition of the SAME disk and
-# whose mountpoint is a real OS path (not pseudo/removable) gets its own tar.
-while read -r MP SRC FSTYPE; do
-    [[ -z "$MP" || "$MP" == "/" ]] && continue
-    # only partitions of the disk we're imaging
-    case "$SRC" in
-        "$DISK"*) : ;;
-        *) continue ;;
-    esac
-    # skip pseudo / removable-ish mountpoints
-    case "$MP" in
-        /proc*|/sys*|/dev*|/run*|/tmp*|/mnt*|/media*|/snap*) continue ;;
-    esac
-    local_num="$(echo "$SRC" | grep -oE '[0-9]+$' || echo 0)"
-    uuid="$(blkid -s UUID -o value "$SRC" || true)"
-    label="$(blkid -s LABEL -o value "$SRC" || true)"
-    role="other"; [[ "$MP" == "/boot/efi" || "$FSTYPE" == "vfat" ]] && role="esp"
-    [[ "$MP" == "/boot" ]] && role="boot"
-    safe="$(echo "$MP" | sed 's#^/##; s#/#_#g')"; [[ -z "$safe" ]] && safe="mount"
-    log "Archiving mount $MP ($FSTYPE) -> mounts/${safe}.tar.zst"
-    tar --numeric-owner --xattrs --acls -p -S \
-        --warning=no-file-changed --ignore-failed-read \
-        -C "$MP" -cf - . \
-        | zstd -q -T0 -3 -o "$META_DIR/mounts/${safe}.tar.zst"
-    add_part "$local_num" "$MP" "$FSTYPE" "$uuid" "$label" "$role" "mounts/${safe}.tar.zst"
-done < <(findmnt -rn -o TARGET,SOURCE,FSTYPE)
+# Optional lvm{} block (present only for an LVM root).
+LVM_JSON="null"
+if $IS_LVM; then
+    LVM_JSON="$(printf '{"vg":"%s","lv":"%s","pv_part_num":%s,"root_fstype":"%s","root_fs_uuid":"%s","root_tar":"(self)"}' \
+        "$LVM_VG" "$LVM_LV" "$(part_num "$LVM_PV")" "$ROOT_FSTYPE" "$ROOT_UUID")"
+fi
 
 # 3. Manifest
 cat > "$META_DIR/manifest.json" <<EOF
 {
-  "version": 1,
+  "version": 2,
   "created": "${CREATED}",
   "app_version": "${APP_VERSION}",
   "arch": "${ARCH}",
@@ -153,6 +179,7 @@ cat > "$META_DIR/manifest.json" <<EOF
     "first_part_start_sector": ${FIRST_START}
   },
   "bootgap": { "file": "bootgap.img.zst", "sectors": ${FIRST_START} },
+  "lvm": ${LVM_JSON},
   "partitions": [ ${json_parts} ]
 }
 EOF

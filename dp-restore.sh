@@ -126,14 +126,26 @@ sgdisk -e "$TARGET" >/dev/null 2>&1 || sgdisk --move-second-header "$TARGET" >/d
 partprobe "$TARGET" 2>/dev/null || true
 info "Partition table restored"
 
-# ── 4. Grow the root partition to fill a larger disk ────────────────────────────
-# Determine root partition number + whether it is the last partition.
-ROOT_NUM="$(mj '[p["num"] for p in d["partitions"] if p["role"]=="root"][0]')"
-MAX_NUM="$(mj 'max(p["num"] for p in d["partitions"])')"
+# ── 4. LVM info + grow the last partition to fill a larger disk ─────────────────
 PART_LINES='"\n".join("%s|%s|%s|%s|%s|%s|%s"%(p["num"],p["mountpoint"],p["fstype"],p["uuid"],p.get("label",""),p["role"],p["tar"]) for p in d["partitions"])'
-if [[ -n "$GROWPART" && "$ROOT_NUM" == "$MAX_NUM" && $TGT_BYTES -gt $SRC_DISK_BYTES ]]; then
-    step "Growing root partition ${ROOT_NUM} to fill the disk"
-    "$GROWPART" "$TARGET" "$ROOT_NUM" >/dev/null 2>&1 && info "Root partition grown" || warn "growpart skipped (no free space or unsupported)"
+MAX_NUM="$(mj 'max(p["num"] for p in d["partitions"])')"
+IS_LVM="$(mj 'bool(d.get("lvm"))')"    # "True" when root lives on LVM
+if [[ "$IS_LVM" == "True" ]]; then
+    LVM_VG="$(mj 'd["lvm"]["vg"]')"
+    LVM_LV="$(mj 'd["lvm"]["lv"]')"
+    LVM_PV_NUM="$(mj 'd["lvm"]["pv_part_num"]')"
+    LVM_ROOT_UUID="$(mj 'd["lvm"]["root_fs_uuid"]')"
+    for t in pvcreate vgcreate lvcreate; do command -v "$t" >/dev/null || fatal "root is on LVM but '$t' is missing (apt install lvm2)"; done
+    info "LVM root: ${LVM_VG}/${LVM_LV} on partition ${LVM_PV_NUM}"
+else
+    ROOT_NUM="$(mj '[p["num"] for p in d["partitions"] if p["role"]=="root"][0]')"
+fi
+
+# Grow the LAST partition (root for plain installs, the LVM PV for LVM installs)
+# to consume the extra space on a larger target disk.
+if [[ -n "$GROWPART" && $TGT_BYTES -gt $SRC_DISK_BYTES ]]; then
+    step "Growing partition ${MAX_NUM} to fill the disk"
+    "$GROWPART" "$TARGET" "$MAX_NUM" >/dev/null 2>&1 && info "Partition ${MAX_NUM} grown" || warn "growpart skipped (no free space or unsupported)"
     partprobe "$TARGET" 2>/dev/null || true
 fi
 
@@ -144,6 +156,8 @@ mkdir -p "$ROOTMNT"
 # Iterate partitions: num|mountpoint|fstype|uuid|label|role|tar
 while IFS='|' read -r NUM MP FSTYPE UUID LABEL ROLE TARF; do
     [[ -z "$NUM" ]] && continue
+    # LVM PVs are (re)built below; unused partitions have no filesystem.
+    [[ "$ROLE" == "lvm-pv" || "$ROLE" == "unused" ]] && continue
     DEV="$(partdev "$TARGET" "$NUM")"
     [[ -b "$DEV" ]] || fatal "expected partition $DEV not present after partitioning"
     case "$FSTYPE" in
@@ -162,9 +176,29 @@ while IFS='|' read -r NUM MP FSTYPE UUID LABEL ROLE TARF; do
     info "mkfs ${FSTYPE} ${DEV} (uuid ${UUID})"
 done < <(mj "$PART_LINES")
 
+# ── 5b. Rebuild the LVM stack (LVM installs only) ───────────────────────────────
+# Recreate PV → VG → LV with the SAME vg/lv names (so GRUB's /dev/mapper path and
+# initramfs activation resolve), then mkfs the LV with the preserved root UUID.
+if [[ "$IS_LVM" == "True" ]]; then
+    step "Rebuilding LVM stack (${LVM_VG}/${LVM_LV})"
+    PVDEV="$(partdev "$TARGET" "$LVM_PV_NUM")"
+    [[ -b "$PVDEV" ]] || fatal "PV partition $PVDEV missing after partitioning"
+    vgchange -an "$LVM_VG" 2>/dev/null || true
+    wipefs -a "$PVDEV" >/dev/null 2>&1 || true
+    pvcreate -ff -y "$PVDEV" >/dev/null || fatal "pvcreate on $PVDEV failed"
+    vgcreate "$LVM_VG" "$PVDEV" >/dev/null || fatal "vgcreate $LVM_VG failed (is that VG name already active in this recovery env?)"
+    lvcreate -y -l 100%FREE -n "$LVM_LV" "$LVM_VG" >/dev/null || fatal "lvcreate $LVM_LV failed"
+    vgchange -ay "$LVM_VG" >/dev/null 2>&1 || true
+    ROOT_DEV="/dev/${LVM_VG}/${LVM_LV}"
+    [[ -b "$ROOT_DEV" ]] || fatal "LV device $ROOT_DEV did not appear"
+    mkfs.ext4 -F -q -U "$LVM_ROOT_UUID" "$ROOT_DEV"
+    info "LV ${ROOT_DEV} formatted (uuid ${LVM_ROOT_UUID})"
+else
+    ROOT_DEV="$(partdev "$TARGET" "$ROOT_NUM")"
+fi
+
 # ── 6. Extract the root filesystem ──────────────────────────────────────────────
 step "Extracting root filesystem (this is the long part)"
-ROOT_DEV="$(partdev "$TARGET" "$ROOT_NUM")"
 mount "$ROOT_DEV" "$ROOTMNT" || fatal "cannot mount root $ROOT_DEV"
 zstd -dc "$IMG" | tar -x --numeric-owner --xattrs --acls -p -S -C "$ROOTMNT" \
     || fatal "root extraction failed"
@@ -173,7 +207,8 @@ info "Root filesystem extracted"
 # ── 7. Extract the other filesystems (ESP, /boot, …) onto their mounts ──────────
 step "Extracting boot / EFI filesystems"
 while IFS='|' read -r NUM MP FSTYPE UUID LABEL ROLE TARF; do
-    [[ -z "$NUM" || "$ROLE" == "root" || "$TARF" == "(self)" ]] && continue
+    [[ -z "$NUM" || "$ROLE" == "root" || "$ROLE" == "lvm-pv" || "$ROLE" == "unused" ]] && continue
+    [[ -z "$TARF" || "$TARF" == "(self)" ]] && continue
     DEV="$(partdev "$TARGET" "$NUM")"
     DEST="${ROOTMNT}${MP}"
     mkdir -p "$DEST"

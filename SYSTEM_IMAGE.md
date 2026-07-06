@@ -27,8 +27,10 @@ is preserved on restore, so `fstab` / GRUB / extlinux keep working untouched.
 - **Target disk ≥ source disk.** The partition table is replicated, so the target
   must be the same size or larger. Larger disks get the root partition grown to
   fill the extra space automatically.
-- **No LUKS / full-disk encryption.** This flow assumes a plain GPT layout
-  (Ubuntu Server default): ext4 root, plus a vfat ESP on x86.
+- **No LUKS / full-disk encryption.** GPT is assumed. Both a plain ext4-on-partition
+  root and Ubuntu Server's default **LVM** root (ext4 LV in `ubuntu-vg` on a PV
+  partition, with a separate `/boot` and vfat ESP) are supported — the restore
+  rebuilds the PV→VG→LV stack and preserves the LV's filesystem UUID.
 
 ## Parts (all live at the repo root, deployed to `/home/dp/digitalpool-camera`)
 
@@ -73,9 +75,15 @@ the recovery environment can read them (a second USB stick is simplest).
 Required tools in the recovery environment:
 
 ```bash
-sudo apt install -y zstd gdisk cloud-guest-utils dosfstools util-linux python3
-# provides: zstd, sgdisk, growpart, mkfs.vfat, sfdisk/mkfs.ext4/partprobe/blkid/lsblk, python3
+sudo apt install -y zstd gdisk cloud-guest-utils dosfstools util-linux python3 lvm2
+# provides: zstd, sgdisk, growpart, mkfs.vfat, sfdisk/mkfs.ext4/partprobe/blkid/lsblk,
+#           python3, and pvcreate/vgcreate/lvcreate (needed for LVM-root images)
 ```
+
+> **LVM caveat:** the restore recreates the VG by its original name (e.g.
+> `ubuntu-vg`). A "Try Ubuntu" live session runs from the ISO (not LVM), so there
+> is no name clash. Just don't run `dp-restore.sh` from an environment that already
+> has an active VG of the same name.
 
 ### x86_64 (Intel N97)
 1. Write an **Ubuntu Server/Desktop 24.04 live ISO** to a USB stick (Rufus / `dd` /
