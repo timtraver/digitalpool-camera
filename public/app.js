@@ -4720,6 +4720,7 @@ loadDeviceIp();
     const nameInput      = document.getElementById("regDeviceName");
     const emailInput     = document.getElementById("regOwnerEmail");
     const passwordInput  = document.getElementById("regOwnerPassword");
+    const passwordToggle = document.getElementById("regPasswordToggle");
     const registerBtn    = document.getElementById("registerDeviceBtn");
     const venueArea      = document.getElementById("regVenueArea");
     const venueSelect    = document.getElementById("regVenueSelect");
@@ -4873,6 +4874,17 @@ loadDeviceIp();
     // Close controls: ✕ button and clicking the dimmed backdrop.
     regModalClose?.addEventListener("click", closeRegModal);
     regModal?.addEventListener("click", (e) => { if (e.target === regModal) closeRegModal(); });
+
+    // Show/hide the password (eye icon inside the field).
+    passwordToggle?.addEventListener("click", () => {
+      if (!passwordInput) return;
+      const hidden = passwordInput.type === "password";
+      passwordInput.type = hidden ? "text" : "password";
+      passwordToggle.textContent = hidden ? "🙈" : "👁";
+      const label = hidden ? "Hide password" : "Show password";
+      passwordToggle.title = label;
+      passwordToggle.setAttribute("aria-label", label);
+    });
 
     // "Go to Network Settings" — close the modal (so the sidebar is reachable),
     // then open the Network accordion and scroll to it.
