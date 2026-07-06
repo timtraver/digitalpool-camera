@@ -4709,13 +4709,22 @@ loadDeviceIp();
     const statusArea     = document.getElementById("regStatusArea");
     const nameInput      = document.getElementById("regDeviceName");
     const emailInput     = document.getElementById("regOwnerEmail");
+    const passwordInput  = document.getElementById("regOwnerPassword");
     const registerBtn    = document.getElementById("registerDeviceBtn");
+    const venueArea      = document.getElementById("regVenueArea");
+    const venueSelect    = document.getElementById("regVenueSelect");
+    const venueConfirmBtn= document.getElementById("regVenueConfirmBtn");
+    const noVenueArea    = document.getElementById("regNoVenueArea");
     const regMsg         = document.getElementById("regMsg");
     const regCheckMsg    = document.getElementById("regCheckMsg");
     const regStatusName  = document.getElementById("regStatusName");
     const regStatusEmail = document.getElementById("regStatusEmail");
+    const regStatusVenue = document.getElementById("regStatusVenue");
     const regStatusDate  = document.getElementById("regStatusDate");
     const regStatusIp    = document.getElementById("regStatusIp");
+    // DigitalPool credentials held in memory only for the multi-step venue flow;
+    // never persisted anywhere.
+    let pendingEmail = "", pendingPassword = "";
     const regBadge       = document.getElementById("regRequiredBadge");
     const regDetails     = document.getElementById("registrationDetails");
     let   noInternetPoll = null;  // interval handle for auto-retry
@@ -4735,6 +4744,7 @@ loadDeviceIp();
       if (statusArea)     statusArea.style.display     = "";
       if (regStatusName)  regStatusName.textContent    = data.deviceName  || "—";
       if (regStatusEmail) regStatusEmail.textContent   = data.ownerEmail  || "—";
+      if (regStatusVenue) regStatusVenue.textContent   = data.venueName   || "—";
       if (regStatusDate && data.registeredAt)
         regStatusDate.textContent = new Date(data.registeredAt).toLocaleDateString();
       if (regStatusIp) regStatusIp.textContent = data.netbirdIp || data.ip || "—";
@@ -4835,31 +4845,95 @@ loadDeviceIp();
       }
     });
 
-    // Register button
+    function hideVenueSteps() {
+      if (venueArea)   venueArea.style.display   = "none";
+      if (noVenueArea) noVenueArea.style.display = "none";
+    }
+
+    // Interpret a response from /api/setup/register or /api/setup/register/venue.
+    function handleRegResponse(d) {
+      if (d.success) {
+        pendingPassword = "";
+        if (passwordInput) passwordInput.value = "";
+        hideVenueSteps();
+        showRegMsg(`✅ Registered — NetBird IP: ${d.ip}`);
+        showRegistered(d);
+        refreshNetbirdStatus?.();
+        return;
+      }
+      if (d.needVenue) {
+        hideVenueSteps();
+        if (noVenueArea) noVenueArea.style.display = "";
+        showRegMsg("⚠️ Your DigitalPool account has no venue yet.", true);
+        registerBtn.disabled = false;
+        return;
+      }
+      if (d.chooseVenue && Array.isArray(d.venues)) {
+        if (venueSelect) {
+          venueSelect.innerHTML = "";
+          for (const v of d.venues) {
+            const opt = document.createElement("option");
+            opt.value = v.id;
+            opt.textContent = v.name || v.id;
+            venueSelect.appendChild(opt);
+          }
+        }
+        if (noVenueArea) noVenueArea.style.display = "none";
+        if (venueArea)   venueArea.style.display   = "";
+        showRegMsg("Select which venue this camera belongs to, then Confirm.");
+        registerBtn.disabled = false;
+        return;
+      }
+      // Error
+      showRegMsg(`❌ ${d.error || "Registration failed"}`, true);
+      registerBtn.disabled = false;
+    }
+
+    // Register button — step 1 (verify credentials, list venues)
     registerBtn?.addEventListener("click", async () => {
-      const email = emailInput?.value.trim();
-      if (!email) { showRegMsg("❌ Owner email is required", true); return; }
-      showRegMsg("⏳ Registering… this may take up to 30 s");
+      const email    = emailInput?.value.trim();
+      const password = passwordInput?.value || "";
+      if (!email)    { showRegMsg("❌ DigitalPool email is required", true); return; }
+      if (!password) { showRegMsg("❌ DigitalPool password is required", true); return; }
+      pendingEmail = email; pendingPassword = password;
+      hideVenueSteps();
+      showRegMsg("⏳ Registering… this may take up to 60 s");
       registerBtn.disabled = true;
       try {
-        // Device name is fixed to the hostname server-side — only the owner email is sent.
         const r = await fetch("/api/setup/register", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ownerEmail: email }),
+          body: JSON.stringify({ email, password }),
         });
         const d = await r.json();
-        if (d.success) {
-          showRegMsg(`✅ Registered — NetBird IP: ${d.ip}`);
-          showRegistered(d);
-          // Also refresh NetBird connection status in the lower panel
-          refreshNetbirdStatus?.();
-        } else {
-          showRegMsg(`❌ ${d.error}`, true);
-          registerBtn.disabled = false;
-        }
+        handleRegResponse(d);
       } catch (e) {
         showRegMsg(`❌ ${e.message}`, true);
         registerBtn.disabled = false;
+      }
+    });
+
+    // Confirm Venue button — step 2 (assign the picked venue)
+    venueConfirmBtn?.addEventListener("click", async () => {
+      const venueId = venueSelect?.value;
+      if (!venueId) { showRegMsg("❌ Select a venue", true); return; }
+      if (!pendingEmail || !pendingPassword) {
+        showRegMsg("❌ Session expired — enter your credentials and click Register again.", true);
+        hideVenueSteps();
+        return;
+      }
+      venueConfirmBtn.disabled = true;
+      showRegMsg("⏳ Attaching this camera to the venue…");
+      try {
+        const r = await fetch("/api/setup/register/venue", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: pendingEmail, password: pendingPassword, venueId }),
+        });
+        const d = await r.json();
+        handleRegResponse(d);
+      } catch (e) {
+        showRegMsg(`❌ ${e.message}`, true);
+      } finally {
+        venueConfirmBtn.disabled = false;
       }
     });
 

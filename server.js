@@ -506,6 +506,127 @@ function getDeviceName() {
     .replace(/^-|-$/g, "") || "digitalpool-camera";
 }
 
+/**
+ * POST a registration payload to the DigitalPool Firebase Cloud Function.
+ * The function authenticates the operator's DigitalPool account server-side,
+ * verifies venue ownership, records the device + its NetBird IP, and returns
+ * the account's venue(s).  No Firebase API keys or SDK live on the device — the
+ * only thing sent is the operator's email + password over HTTPS, and only during
+ * registration (never persisted).
+ *
+ * Resolves to { statusCode, body }.  `body` is the parsed JSON response.
+ */
+function callDigitalPoolRegister(payload) {
+  const base = (process.env.DIGITALPOOL_FUNCTIONS_URL
+    || "https://us-central1-digital-pool.cloudfunctions.net").replace(/\/$/, "");
+  const fn      = process.env.DIGITALPOOL_REGISTER_FUNCTION || "registerCameraDevice";
+  const fullUrl = `${base}/${fn}`;
+  const urlObj  = new URL(fullUrl);
+  const mod     = fullUrl.startsWith("https") ? require("https") : require("http");
+  const reqBody = JSON.stringify(payload);
+
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: urlObj.hostname,
+      port:     urlObj.port || (fullUrl.startsWith("https") ? 443 : 80),
+      path:     urlObj.pathname + urlObj.search,
+      method:   "POST",
+      headers: {
+        "Content-Type":   "application/json",
+        Accept:           "application/json",
+        "Content-Length": Buffer.byteLength(reqBody),
+      },
+      timeout: 20000,
+    };
+    const req = mod.request(options, (res) => {
+      let data = "";
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => {
+        let body = {};
+        try { body = data ? JSON.parse(data) : {}; } catch { body = { raw: data }; }
+        resolve({ statusCode: res.statusCode, body });
+      });
+    });
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("DigitalPool registration request timed out")); });
+    req.write(reqBody);
+    req.end();
+  });
+}
+
+/**
+ * Bring NetBird up with this device's hostname and poll until it has an IP.
+ * Returns the assigned NetBird IP ("" if none within the deadline).
+ */
+async function ensureNetbirdUp() {
+  const name          = getDeviceName();
+  const setupKey      = process.env.NETBIRD_SETUP_KEY || "";
+  const managementUrl = (process.env.NETBIRD_MANAGEMENT_URL || "").replace(/\/$/, "");
+  if (!setupKey) throw new Error("NETBIRD_SETUP_KEY is not configured on this device");
+
+  const cfg   = loadRemoteConfig();
+  let upCmd   = `sudo /usr/bin/netbird up --hostname=${name}`;
+  if (managementUrl) upCmd += ` --management-url=${managementUrl}`;
+  upCmd += ` --setup-key=${setupKey}`;
+  if (cfg.sshEnabled) upCmd += ` --allow-server-ssh --enable-ssh-root`;
+
+  try {
+    await execAsync(upCmd, { timeout: 30000 });
+  } catch (e) {
+    console.warn("netbird up (register) warning:", e.stderr || e.message);
+  }
+
+  // netbird up returns quickly (queues in background); IP assignment from the
+  // management server typically takes 5–20 s on a fresh registration.
+  let ip = "";
+  const deadline = Date.now() + 90000;
+  while (Date.now() < deadline) {
+    try {
+      const st = await netbirdGetStatus();
+      if (st.connected && st.ip) { ip = st.ip; break; }
+      const remaining = Math.round((deadline - Date.now()) / 1000);
+      console.log(`⏳ Registration: status=${st.raw?.daemonStatus || "unknown"} ip=${st.ip || "none"} (${remaining}s left)`);
+    } catch { /* daemon not ready yet */ }
+    await new Promise(r => setTimeout(r, 3000));
+  }
+  return ip;
+}
+
+/**
+ * Call the cloud function's `assign` action and, on success, persist the device
+ * as registered (venue id/name, device id, NetBird IP).  Sends the HTTP response.
+ * The password is used only for this call and never written to disk.
+ */
+async function finalizeRegistration(res, { email, password, venueId, deviceName, ip }) {
+  let assign;
+  try {
+    assign = await callDigitalPoolRegister({ action: "assign", email, password, venueId, deviceName, netbirdIp: ip });
+  } catch (e) {
+    return res.status(502).json({ error: `Could not reach DigitalPool registration service: ${e.message}` });
+  }
+
+  if (assign.statusCode === 401 || assign.body?.ok === false)
+    return res.status(401).json({ error: assign.body?.error || "DigitalPool rejected the registration" });
+  if (assign.statusCode >= 400)
+    return res.status(502).json({ error: assign.body?.error || `Registration service error (HTTP ${assign.statusCode})` });
+
+  const cfg = loadRemoteConfig();
+  cfg.deviceName   = deviceName;
+  cfg.ownerEmail   = email;
+  cfg.netbirdIp    = ip;
+  cfg.venueId      = assign.body?.venueId   || venueId;
+  cfg.venueName    = assign.body?.venueName || "";
+  cfg.deviceId     = assign.body?.deviceId  || "";
+  cfg.registered   = true;
+  cfg.registeredAt = new Date().toISOString();
+  saveRemoteConfig(cfg);
+  console.log(`✅ Device registered: ${deviceName} / ${email} → venue ${cfg.venueName || cfg.venueId} — NetBird IP ${ip}`);
+  return res.json({
+    success: true, ip, deviceName, ownerEmail: email,
+    venueId: cfg.venueId, venueName: cfg.venueName, deviceId: cfg.deviceId,
+  });
+}
+
 // ── NetBird Management API helpers ───────────────────────────────────────────
 
 /**
@@ -698,71 +819,103 @@ app.get("/api/setup/status", requireAdmin, async (req, res) => {
     hasInternet,
     deviceName:   getDeviceName(),
     ownerEmail:   cfg.ownerEmail   || "",
+    venueName:    cfg.venueName    || "",
+    venueId:      cfg.venueId      || "",
     registeredAt: cfg.registeredAt || null,
     netbirdIp,
   });
 });
 
-// POST /api/setup/register — first-time registration (name + email → netbird up)
+// POST /api/setup/register — step 1 of registration.
+// Body: { email, password } (DigitalPool account credentials).
+// Brings NetBird up to obtain this device's VPN IP, then verifies the account
+// and lists its venues via the DigitalPool cloud function.  Outcomes:
+//   • one venue (or one already assigned) → auto-assigns + finalizes (success)
+//   • multiple venues → { chooseVenue: true, venues } (client shows a picker)
+//   • no venue        → { needVenue: true }
+// Per design: NetBird stays up even if verification fails (the peer is kept).
+// The password is used only for the cloud-function calls and is never persisted.
 app.post("/api/setup/register", requireAdmin, express.json(), async (req, res) => {
-  const { ownerEmail } = req.body || {};
-  if (!ownerEmail)
-    return res.status(400).json({ error: "Owner email is required" });
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail))
+  const email    = (req.body?.email || req.body?.ownerEmail || "").trim().toLowerCase();
+  const password = req.body?.password || "";
+  if (!email || !password)
+    return res.status(400).json({ error: "DigitalPool email and password are required" });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
     return res.status(400).json({ error: "Invalid email address" });
 
-  // The device name is not user-settable — it is permanently the system hostname
-  // (dp-stream-<last 4 of MAC>) assigned at flash/reset time.
-  const name = getDeviceName();
+  const deviceName = getDeviceName();
 
-  const setupKey      = process.env.NETBIRD_SETUP_KEY || "";
-  const managementUrl = (process.env.NETBIRD_MANAGEMENT_URL || "").replace(/\/$/, "");
-  if (!setupKey)
-    return res.status(500).json({ error: "NETBIRD_SETUP_KEY is not configured on this device" });
-
-  // Persist name + email immediately so they survive a crash mid-registration
-  const cfg = loadRemoteConfig();
-  cfg.deviceName = name;
-  cfg.ownerEmail = ownerEmail.trim().toLowerCase();
-  saveRemoteConfig(cfg);
-
-  let upCmd = `sudo /usr/bin/netbird up --hostname=${name}`;
-  if (managementUrl) upCmd += ` --management-url=${managementUrl}`;
-  upCmd += ` --setup-key=${setupKey}`;
-  if (cfg.sshEnabled) upCmd += ` --allow-server-ssh --enable-ssh-root`;
-
+  // 1. Join the VPN first so we have an IP to report to DigitalPool.
+  let ip;
   try {
-    await execAsync(upCmd, { timeout: 30000 });
+    ip = await ensureNetbirdUp();
   } catch (e) {
-    console.warn("netbird up (register) warning:", e.stderr || e.message);
+    return res.status(500).json({ error: e.message });
   }
+  if (!ip)
+    return res.status(500).json({ error: "NetBird did not receive an IP within 90 s. Check service logs." });
 
-  // Poll until Connected + IP assigned (up to 90 s).
-  // netbird up returns quickly (queues in background); IP assignment from the
-  // management server typically takes 5–20 s on a fresh registration.
-  let ip = "";
-  const deadline = Date.now() + 90000;
-  while (Date.now() < deadline) {
-    try {
-      const st = await netbirdGetStatus();
-      if (st.connected && st.ip) { ip = st.ip; break; }
-      const remaining = Math.round((deadline - Date.now()) / 1000);
-      console.log(`⏳ Registration: status=${st.raw?.daemonStatus || "unknown"} ip=${st.ip || "none"} (${remaining}s left)`);
-    } catch { /* daemon not ready yet */ }
-    await new Promise(r => setTimeout(r, 3000));
-  }
-
-  if (!ip) {
-    return res.status(500).json({
-      error: "NetBird registered but did not receive an IP within 90 s. Check service logs.",
-    });
-  }
-
-  cfg.registered   = true;
-  cfg.registeredAt = new Date().toISOString();
+  // Persist name + email + IP immediately (never the password) so they survive a
+  // crash mid-registration.  `registered` stays false until a venue is assigned.
+  const cfg = loadRemoteConfig();
+  cfg.deviceName = deviceName;
+  cfg.ownerEmail = email;
+  cfg.netbirdIp  = ip;
   saveRemoteConfig(cfg);
-  console.log(`✅ Device registered: ${name} / ${cfg.ownerEmail} — NetBird IP ${ip}`);
-  res.json({ success: true, ip, deviceName: name, ownerEmail: cfg.ownerEmail });
+
+  // 2. Verify credentials + fetch venues.
+  let verify;
+  try {
+    verify = await callDigitalPoolRegister({ action: "verify", email, password, deviceName, netbirdIp: ip });
+  } catch (e) {
+    return res.status(502).json({ error: `Could not reach DigitalPool registration service: ${e.message}` });
+  }
+
+  if (verify.statusCode === 401 || verify.body?.ok === false)
+    return res.status(401).json({ error: verify.body?.error || "Invalid DigitalPool credentials" });
+  if (verify.statusCode >= 400)
+    return res.status(502).json({ error: verify.body?.error || `Registration service error (HTTP ${verify.statusCode})` });
+
+  const venues          = Array.isArray(verify.body?.venues) ? verify.body.venues : [];
+  const assignedVenueId = verify.body?.assignedVenueId || null;
+
+  if (venues.length === 0)
+    return res.json({ needVenue: true, ip });
+
+  // Auto-select when there's exactly one venue, or one already assigned to this device.
+  let venueId = null;
+  if (assignedVenueId)        venueId = assignedVenueId;
+  else if (venues.length === 1) venueId = venues[0].id;
+
+  if (!venueId)
+    return res.json({ chooseVenue: true, venues, ip });
+
+  // 3. Assign + finalize.
+  return finalizeRegistration(res, { email, password, venueId, deviceName, ip });
+});
+
+// POST /api/setup/register/venue — step 2, called when the operator picks a venue.
+// Body: { email, password, venueId }.  NetBird is already up from step 1.
+app.post("/api/setup/register/venue", requireAdmin, express.json(), async (req, res) => {
+  const email    = (req.body?.email || "").trim().toLowerCase();
+  const password = req.body?.password || "";
+  const venueId  = req.body?.venueId  || "";
+  if (!email || !password || !venueId)
+    return res.status(400).json({ error: "Email, password and venue are required" });
+
+  const deviceName = getDeviceName();
+
+  // NetBird should already be up from step 1 — fetch the current IP; bring it up
+  // again only as a fallback (e.g. daemon restarted between steps).
+  let ip = "";
+  try { const st = await netbirdGetStatus(); ip = st.ip || ""; } catch { /* not running */ }
+  if (!ip) {
+    try { ip = await ensureNetbirdUp(); } catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+  if (!ip)
+    return res.status(500).json({ error: "NetBird IP unavailable — restart registration." });
+
+  return finalizeRegistration(res, { email, password, venueId, deviceName, ip });
 });
 
 app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) => {
@@ -837,13 +990,12 @@ app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) =>
     }
 
     if (ip) {
-      // Mark device as registered whenever enable succeeds (covers re-enable path)
+      // NOTE: enabling the VPN does NOT mark the device registered.  Registration
+      // is a separate step that must go through the DigitalPool cloud function
+      // (/api/setup/register) so the account is verified and a venue is assigned.
       const latestCfg = loadRemoteConfig();
-      if (!latestCfg.registered) {
-        latestCfg.registered   = true;
-        latestCfg.registeredAt = latestCfg.registeredAt || new Date().toISOString();
-        saveRemoteConfig(latestCfg);
-      }
+      latestCfg.netbirdIp = ip;
+      saveRemoteConfig(latestCfg);
       res.json({ success: true, ip, deviceName: name, reregistered: force });
     } else {
       res.status(500).json({ error: "NetBird registered but did not reach Connected state within 30 s. Check service logs." });

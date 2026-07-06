@@ -916,13 +916,45 @@
                       <small style="color:rgba(255,255,255,0.4);font-size:10px;margin-top:2px;display:block">
                         Fixed to this unit's hostname — assigned at setup and not editable.
                       </small>
-                      <label style="margin-top:10px">Owner Email</label>
-                      <input type="email" id="regOwnerEmail" placeholder="owner@example.com"
+                      <label style="margin-top:10px">DigitalPool Account Email</label>
+                      <input type="email" id="regOwnerEmail" placeholder="you@example.com"
                              autocomplete="email" style="font-size:12px" />
+                      <label style="margin-top:10px">DigitalPool Password</label>
+                      <input type="password" id="regOwnerPassword" placeholder="••••••••"
+                             autocomplete="current-password" style="font-size:12px" />
+                      <small style="color:rgba(255,255,255,0.4);font-size:10px;margin-top:2px;display:block">
+                        Your DigitalPool account credentials — used once to register this camera to your venue. Never stored on this device.
+                      </small>
                       <button class="btn-wifi-action" id="registerDeviceBtn" style="width:100%;margin-top:10px">
                         🔗 Register Device
                       </button>
                       <div class="wifi-msg" id="regMsg"></div>
+
+                      <!-- Venue picker — shown when the account has more than one venue -->
+                      <div id="regVenueArea" style="display:none;margin-top:10px">
+                        <label>Select Venue</label>
+                        <select id="regVenueSelect" style="font-size:12px;width:100%;padding:6px 8px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#fff"></select>
+                        <small style="color:rgba(255,255,255,0.4);font-size:10px;margin-top:2px;display:block">
+                          Choose which venue this camera belongs to.
+                        </small>
+                        <button class="btn-wifi-action" id="regVenueConfirmBtn" style="width:100%;margin-top:8px">
+                          ✅ Confirm Venue
+                        </button>
+                      </div>
+
+                      <!-- No venue — the account owns none yet -->
+                      <div id="regNoVenueArea" style="display:none;margin-top:10px;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.35);border-radius:6px;padding:8px 10px">
+                        <div style="color:rgba(245,158,11,0.95);font-size:12px;font-weight:600;margin-bottom:6px">
+                          ⚠️ Your DigitalPool account has no venue yet.
+                        </div>
+                        <div style="color:rgba(255,255,255,0.6);font-size:11px;margin-bottom:8px">
+                          Create a venue in your DigitalPool account, then click Register again to attach this camera to it.
+                        </div>
+                        <a href="https://digitalpool.com" target="_blank" rel="noopener"
+                           class="btn-wifi-action" style="display:inline-block;text-decoration:none;font-size:11px">
+                          🌐 Open DigitalPool
+                        </a>
+                      </div>
                     </div>
                   </div>
 
@@ -938,6 +970,10 @@
                     <div class="wifi-info-row">
                       <span class="wifi-label">Owner</span>
                       <span class="wifi-value" id="regStatusEmail">—</span>
+                    </div>
+                    <div class="wifi-info-row">
+                      <span class="wifi-label">Venue</span>
+                      <span class="wifi-value" id="regStatusVenue">—</span>
                     </div>
                     <div class="wifi-info-row">
                       <span class="wifi-label">Since</span>
