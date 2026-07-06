@@ -1071,9 +1071,19 @@
                     <span class="wifi-label">Used (approx. image size)</span>
                     <span class="wifi-value" id="sysImageUsed">—</span>
                   </div>
+                  <div class="wifi-info-row">
+                    <span class="wifi-label">Free space</span>
+                    <span class="wifi-value" id="sysImageFree">—</span>
+                  </div>
                   <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
-                    <button class="btn-wifi-action" id="createImageBtn" style="background:rgba(16,185,129,0.2);border-color:rgba(16,185,129,0.5)">💾 Create &amp; Download Image</button>
+                    <button class="btn-wifi-action" id="createImageBtn" style="background:rgba(16,185,129,0.2);border-color:rgba(16,185,129,0.5)">💾 Create Image</button>
                     <div class="wifi-msg" id="createImageMsg"></div>
+                  </div>
+                  <div style="margin-top:14px">
+                    <div class="wifi-label" style="margin-bottom:6px">Saved images</div>
+                    <div id="sysImageList" style="display:flex;flex-direction:column;gap:6px">
+                      <div style="font-size:11px;color:rgba(255,255,255,0.4)">—</div>
+                    </div>
                   </div>
                 </div>
               </details>
@@ -1112,6 +1122,6 @@
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-    <script src="app.js?v=12"></script>
+    <script src="app.js?v=13"></script>
   </body>
 </html>

@@ -4297,53 +4297,136 @@ loadDeviceIp();
     if (imgSec) imgSec.style.display = "block";
 
     const fmtGB = (b) => (b > 0 ? (b / 1e9).toFixed(1) + " GB" : "—");
-    // Populate the platform / size preview.
+    const createBtn = () => document.getElementById("createImageBtn");
+    const createMsg = () => document.getElementById("createImageMsg");
+    let imagePoll = null;
+
+    // Platform / space preview + readiness gate.
     fetch("/api/system/image/info").then(r => r.json()).then((d) => {
       if (!d || !d.success) return;
       const archEl = document.getElementById("sysImageArch");
       const usedEl = document.getElementById("sysImageUsed");
+      const freeEl = document.getElementById("sysImageFree");
       if (archEl) archEl.textContent = (d.arch || "unknown") + (d.disk ? "  (" + d.disk + ")" : "");
       if (usedEl) usedEl.textContent = fmtGB(d.usedBytes);
-      const btn = document.getElementById("createImageBtn");
-      const msg = document.getElementById("createImageMsg");
-      if (!d.ready && btn) {
-        btn.disabled = true;
-        if (msg) { msg.textContent = "⚠️ Not ready: missing " + (d.missing || []).join(", "); msg.style.color = "#facc15"; }
+      if (freeEl) freeEl.textContent = fmtGB(d.freeBytes);
+      if (!d.ready && createBtn()) {
+        createBtn().disabled = true;
+        createMsg().textContent = "⚠️ Not ready: missing " + (d.missing || []).join(", ");
+        createMsg().style.color = "#facc15";
       }
     }).catch(() => { /* device may not support it (e.g. dev machine) */ });
 
-    document.getElementById("createImageBtn")?.addEventListener("click", () => {
-      const btn = document.getElementById("createImageBtn");
-      const msg = document.getElementById("createImageMsg");
+    // Render the saved-images list.
+    async function refreshImageList() {
+      const listEl = document.getElementById("sysImageList");
+      if (!listEl) return;
+      let data;
+      try { data = await (await fetch("/api/system/image/list")).json(); } catch { return; }
+      if (!data || !data.success) return;
+
+      // Reflect an in-progress capture in the button/message even across reloads.
+      const job = data.job;
+      if (job && job.running) {
+        startProgressPolling();
+      } else if (job && job.error) {
+        createMsg().textContent = "⚠️ Last capture failed: " + job.error;
+        createMsg().style.color = "#f87171";
+      }
+
+      if (!data.images.length) {
+        listEl.innerHTML = '<div style="font-size:11px;color:rgba(255,255,255,0.4)">No images yet.</div>';
+        return;
+      }
+      listEl.innerHTML = "";
+      data.images.forEach((img) => {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;align-items:center;gap:8px;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 8px";
+        const info = document.createElement("div");
+        info.style.cssText = "flex:1;min-width:0";
+        const when = new Date(img.mtime).toLocaleString();
+        info.innerHTML =
+          '<div style="font-size:11px;color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + img.name + '</div>' +
+          '<div style="font-size:10px;color:rgba(255,255,255,0.5)">' + fmtGB(img.bytes) + ' · ' + when + (img.partial ? ' · ⏳ capturing…' : '') + '</div>';
+        row.appendChild(info);
+
+        if (!img.partial) {
+          const dl = document.createElement("a");
+          dl.href = "/api/system/image/file/" + encodeURIComponent(img.name);
+          dl.textContent = "⬇︎";
+          dl.title = "Download";
+          dl.setAttribute("download", "");
+          dl.style.cssText = "text-decoration:none;font-size:14px;padding:2px 8px;border:1px solid rgba(16,185,129,0.5);border-radius:5px;color:#4ade80";
+          row.appendChild(dl);
+
+          const del = document.createElement("button");
+          del.textContent = "🗑";
+          del.title = "Delete";
+          del.style.cssText = "font-size:13px;padding:2px 8px;border:1px solid rgba(220,38,38,0.5);border-radius:5px;background:rgba(220,38,38,0.15);color:#fca5a5;cursor:pointer";
+          del.addEventListener("click", async () => {
+            if (!confirm("Delete " + img.name + "?")) return;
+            del.disabled = true;
+            try {
+              const r = await fetch("/api/system/image/file/" + encodeURIComponent(img.name), { method: "DELETE" });
+              if (!r.ok) { const e = await r.json().catch(() => ({})); alert("Delete failed: " + (e.error || r.status)); }
+            } catch (e) { alert("Delete failed: " + e.message); }
+            refreshImageList();
+          });
+          row.appendChild(del);
+        }
+        listEl.appendChild(row);
+      });
+    }
+
+    // While a capture runs, poll the growing file size and update the message.
+    function startProgressPolling() {
+      const btn = createBtn(), msg = createMsg();
+      if (btn) { btn.disabled = true; btn.textContent = "⏳ Capturing…"; }
+      if (imagePoll) return;
+      imagePoll = setInterval(async () => {
+        let data;
+        try { data = await (await fetch("/api/system/image/list")).json(); } catch { return; }
+        const job = data && data.job;
+        if (job && job.running) {
+          if (msg) { msg.textContent = "💾 Capturing… " + fmtGB(job.bytes) + " written so far. This runs on the device — you can leave this page."; msg.style.color = "#facc15"; }
+        } else {
+          clearInterval(imagePoll); imagePoll = null;
+          if (btn) { btn.disabled = false; btn.textContent = "💾 Create Image"; }
+          if (msg) {
+            if (job && job.error) { msg.textContent = "⚠️ Capture failed: " + job.error; msg.style.color = "#f87171"; }
+            else { msg.textContent = "✅ Image ready — download it from the list below."; msg.style.color = "#4ade80"; }
+          }
+          refreshImageList();
+        }
+      }, 2000);
+    }
+
+    createBtn()?.addEventListener("click", async () => {
       if (!confirm(
         "Create a full system image?\n\n" +
         "• Any active stream will be STOPPED.\n" +
-        "• Capture runs while you download and can take several minutes.\n" +
-        "• Keep this tab open until the download finishes.\n\n" +
+        "• The image is saved on the device (a few minutes), then you download it from the list.\n\n" +
         "Continue?"
       )) return;
-
-      msg.textContent = "💾 Capturing… the download will begin shortly and may take several minutes. Keep this tab open.";
-      msg.style.color = "#facc15";
-      btn.disabled = true;
-      btn.textContent = "⏳ Capturing…";
-
-      // Navigate the tab to the download URL. Because the response is a
-      // Content-Disposition attachment the browser downloads it in place without
-      // leaving the page — and a direct navigation is less likely to trip
-      // Chrome's "insecure download blocked" heuristic than a programmatic
-      // anchor click that follows a confirm() dialog.
-      window.location.href = "/api/system/image/download";
-
-      // We can't observe the streamed download's completion from here, so
-      // re-enable the button after a grace period for a second attempt.
-      setTimeout(() => {
-        btn.disabled = false;
-        btn.textContent = "💾 Create & Download Image";
-        msg.textContent = "If the download finished, the image is in your browser's Downloads. Streams were stopped — restart streaming when ready.";
-        msg.style.color = "rgba(255,255,255,0.6)";
-      }, 20000);
+      createBtn().disabled = true;
+      createBtn().textContent = "⏳ Starting…";
+      createMsg().textContent = "";
+      try {
+        const r = await fetch("/api/system/image/create", { method: "POST" });
+        const d = await r.json();
+        if (!r.ok || !d.success) {
+          createBtn().disabled = false; createBtn().textContent = "💾 Create Image";
+          createMsg().textContent = "⚠️ " + (d.error || ("HTTP " + r.status)); createMsg().style.color = "#f87171";
+          return;
+        }
+        startProgressPolling();
+      } catch (e) {
+        createBtn().disabled = false; createBtn().textContent = "💾 Create Image";
+        createMsg().textContent = "⚠️ " + e.message; createMsg().style.color = "#f87171";
+      }
     });
+
+    refreshImageList();
   }
 
   // ── Software update (dpadmin only) ───────────────────────────

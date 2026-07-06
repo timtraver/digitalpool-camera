@@ -1330,19 +1330,34 @@ app.post("/api/reboot", requireAdmin, async (req, res) => {
 });
 
 // ── System image (golden clone) API — dpadmin only ────────────────────────────
-// Captures a filesystem-level image of this running device and streams it as a
-// single downloadable file (see dp-create-image.sh).  The image is flashed onto
-// a new device from a bootable recovery USB with dp-restore.sh, then sanitised
-// into a unique unit on first boot by dp-firstboot.sh.  See SYSTEM_IMAGE.md.
+// Captures a filesystem-level image of this device to a FILE on disk (see
+// dp-create-image.sh), which is then downloaded (resumable) and managed from the
+// UI. Flash onto a new device from a recovery USB with dp-restore.sh; sanitised
+// on first boot by dp-firstboot.sh. See SYSTEM_IMAGE.md.
 //
-// Requires a NOPASSWD sudoers entry (see SYSTEM_IMAGE.md):
+// Requires NOPASSWD sudoers (see SYSTEM_IMAGE.md):
 //   dp ALL=(root) NOPASSWD: /usr/bin/bash /home/dp/digitalpool-camera/dp-create-image.sh *
 const IMAGE_SCRIPT = path.join(__dirname, "dp-create-image.sh");
+// MUST match the --exclude in dp-create-image.sh so captures don't tar in old images.
+const IMAGES_DIR   = "/home/dp/system-images";
 
-// Non-destructive: report arch/disk/size so the UI can preview before download.
+// In-memory state of the current/last capture job (only one runs at a time).
+let imageJob = null; // { filename, path, startedAt, running, error, exitCode }
+
+function isDpAdmin(req, res) {
+  if (req.session?.user?.username !== "dpadmin") { res.status(403).json({ success: false, error: "Access denied" }); return false; }
+  return true;
+}
+// Guard against path traversal: only our own image filenames are addressable.
+function safeImageName(name) {
+  return typeof name === "string" && !name.includes("..") &&
+    /^dp-image-[A-Za-z0-9._-]+\.tar\.zst$/.test(name);
+}
+function imageFileSize(p) { try { return fsSync.statSync(p).size; } catch { return 0; } }
+
+// Non-destructive: arch/disk/used/free so the UI can preview + gate.
 app.get("/api/system/image/info", requireAdmin, async (req, res) => {
-  if (req.session?.user?.username !== "dpadmin")
-    return res.status(403).json({ success: false, error: "Access denied" });
+  if (!isDpAdmin(req, res)) return;
   try {
     const val = async (cmd) => (await execAsync(cmd).catch(() => ({ stdout: "" }))).stdout.trim();
     const arch     = await val("uname -m");
@@ -1354,10 +1369,11 @@ app.get("/api/system/image/info", requireAdmin, async (req, res) => {
     const disk     = base ? "/dev/" + base : "";
     const usedB    = parseInt(await val("df -B1 --output=used / | tail -n1"), 10) || 0;
     const diskB    = disk ? parseInt(await val("blockdev --getsize64 " + disk), 10) || 0 : 0;
+    const freeB    = parseInt(await val("df -B1 --output=avail / | tail -n1"), 10) || 0;
     const hasTools = !!(await val("command -v zstd")) && !!(await val("command -v sfdisk"));
     const scriptOk = fsSync.existsSync(IMAGE_SCRIPT);
     res.json({
-      success: true, arch, disk, diskBytes: diskB, usedBytes: usedB,
+      success: true, arch, disk, diskBytes: diskB, usedBytes: usedB, freeBytes: freeB,
       ready: hasTools && scriptOk && !!disk,
       missing: [ !hasTools && "zstd/sfdisk", !scriptOk && "dp-create-image.sh", !disk && "root disk" ].filter(Boolean),
     });
@@ -1366,15 +1382,51 @@ app.get("/api/system/image/info", requireAdmin, async (req, res) => {
   }
 });
 
-// Streams the image to the client.  Quiesces the media pipeline first so the
-// captured filesystem is as consistent as possible for a live capture.
-app.get("/api/system/image/download", requireAdmin, async (req, res) => {
-  if (req.session?.user?.username !== "dpadmin")
-    return res.status(403).json({ success: false, error: "Access denied" });
+// List saved images + the state of any in-progress capture.
+app.get("/api/system/image/list", requireAdmin, (req, res) => {
+  if (!isDpAdmin(req, res)) return;
+  let images = [];
+  try {
+    if (fsSync.existsSync(IMAGES_DIR)) {
+      images = fsSync.readdirSync(IMAGES_DIR)
+        .filter((f) => f.endsWith(".tar.zst"))
+        .map((f) => ({
+          name: f,
+          bytes: imageFileSize(path.join(IMAGES_DIR, f)),
+          mtime: fsSync.statSync(path.join(IMAGES_DIR, f)).mtimeMs,
+          partial: !!(imageJob && imageJob.running && imageJob.filename === f),
+        }))
+        .sort((a, b) => b.mtime - a.mtime);
+    }
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message });
+  }
+  res.json({
+    success: true, images,
+    job: imageJob ? {
+      filename: imageJob.filename, running: imageJob.running,
+      startedAt: imageJob.startedAt, error: imageJob.error || null,
+      bytes: imageFileSize(imageJob.path),
+    } : null,
+  });
+});
+
+// Start a capture to a file (async job). Returns immediately; poll /list for progress.
+app.post("/api/system/image/create", requireAdmin, async (req, res) => {
+  if (!isDpAdmin(req, res)) return;
+  if (imageJob && imageJob.running)
+    return res.status(409).json({ success: false, error: "A capture is already running" });
   if (!fsSync.existsSync(IMAGE_SCRIPT))
     return res.status(500).json({ success: false, error: "dp-create-image.sh not found" });
+  try { fsSync.mkdirSync(IMAGES_DIR, { recursive: true }); }
+  catch (e) { return res.status(500).json({ success: false, error: "cannot create " + IMAGES_DIR + ": " + e.message }); }
+  // Rough free-space guard.
+  try {
+    const avail = parseInt((await execAsync("df -B1 --output=avail / | tail -n1")).stdout.trim(), 10) || 0;
+    if (avail < 4e9) return res.status(400).json({ success: false, error: "Not enough free space (need >4 GB free on /)" });
+  } catch { /* ignore */ }
 
-  // Quiesce: stop any active streams so tar sees a settled filesystem.
+  // Quiesce active streams so tar sees a settled filesystem.
   try { await streamController.stopStream(); }  catch { /* not streaming */ }
   try { await streamController2.stopStream(); } catch { /* not streaming */ }
   await execAsync("sync").catch(() => {});
@@ -1386,49 +1438,61 @@ app.get("/api/system/image/download", requireAdmin, async (req, res) => {
   const host = os.hostname().replace(/[^a-zA-Z0-9_-]/g, "");
   const stamp = created.slice(0, 16).replace(/[-:]/g, "").replace("T", "-"); // YYYYMMDD-HHMM
   const filename = `dp-image-${host}-${arch}-${stamp}.tar.zst`;
+  const outPath = path.join(IMAGES_DIR, filename);
 
-  // No Content-Length — the compressed size is unknown until the stream ends,
-  // so the browser shows an indeterminate download.  Disable socket timeouts;
-  // capturing a full rootfs can take many minutes.
-  req.setTimeout(0); res.setTimeout(0);
-  // octet-stream forces a plain download in every browser (avoids type-based
-  // handling); attachment names the file.
-  res.setHeader("Content-Type", "application/octet-stream");
-  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-  res.setHeader("Cache-Control", "no-store");
-  // Flush the 200 + headers to the client IMMEDIATELY so the browser commits to
-  // the download up front, rather than sitting header-less through the ~1s
-  // metadata phase (which writes only to stderr) and possibly giving up.
-  res.flushHeaders();
-
-  console.log(`💾 System image capture started → ${filename}`);
+  const out = fsSync.createWriteStream(outPath);
+  console.log(`💾 System image capture started → ${outPath}`);
   const child = spawn("sudo", ["/usr/bin/bash", IMAGE_SCRIPT,
     "--created", created, "--app-version", appVersion], { stdio: ["ignore", "pipe", "pipe"] });
-
-  let captureDone = false;
-  child.stdout.pipe(res);
+  imageJob = { filename, path: outPath, startedAt: Date.now(), running: true, error: null, exitCode: null };
+  child.stdout.pipe(out);
   child.stderr.on("data", (d) => process.stderr.write(`[dp-create-image] ${d}`));
   child.on("error", (err) => {
-    console.error("💾 image capture spawn error:", err.message);
-    if (!res.headersSent) res.status(500).json({ success: false, error: err.message });
-    else res.destroy();
+    console.error("💾 capture spawn error:", err.message);
+    imageJob.running = false; imageJob.error = err.message;
+    out.destroy(); try { fsSync.unlinkSync(outPath); } catch { /* ignore */ }
+    io.emit("systemImageJob", { running: false, filename, error: err.message });
   });
   child.on("close", (code) => {
-    // tar exits 1 when files changed during a live read — that's expected and the
-    // archive is still complete, so treat any exit as "capture finished".
-    captureDone = true;
-    console.log(`💾 System image capture finished (exit ${code})`);
-    res.end();
+    out.end(() => {
+      imageJob.running = false; imageJob.exitCode = code;
+      // tar exits 1 when files changed during the live read — archive is still valid.
+      if (code !== 0 && code !== 1) {
+        imageJob.error = `capture failed (exit ${code})`;
+        try { fsSync.unlinkSync(outPath); } catch { /* ignore */ }
+        console.error(`💾 capture failed (exit ${code}) — removed partial ${filename}`);
+      } else {
+        console.log(`💾 System image capture finished (exit ${code}) → ${outPath} (${imageFileSize(outPath)} bytes)`);
+      }
+      io.emit("systemImageJob", { running: false, filename, error: imageJob.error || null });
+    });
   });
-  // Only a genuine early close (client aborted before the stream finished) should
-  // kill the capture. If the child already finished, res 'close' is normal.
-  res.on("close", () => {
-    if (!captureDone && child.exitCode === null && !res.writableEnded) {
-      console.log("💾 image download aborted by client — killing capture");
-      child.kill("SIGKILL");
-      execAsync("sudo pkill -f dp-create-image.sh").catch(() => {});
-    }
-  });
+  res.json({ success: true, filename });
+});
+
+// Download a saved image. res.download() sets Content-Length + supports Range, so
+// the browser shows real progress and can RESUME an interrupted download.
+app.get("/api/system/image/file/:name", requireAdmin, (req, res) => {
+  if (!isDpAdmin(req, res)) return;
+  const name = req.params.name;
+  if (!safeImageName(name)) return res.status(400).json({ success: false, error: "bad image name" });
+  const p = path.join(IMAGES_DIR, name);
+  if (!fsSync.existsSync(p)) return res.status(404).json({ success: false, error: "not found" });
+  if (imageJob && imageJob.running && imageJob.filename === name)
+    return res.status(409).json({ success: false, error: "image is still being captured" });
+  res.download(p, name);
+});
+
+// Delete a saved image.
+app.delete("/api/system/image/file/:name", requireAdmin, (req, res) => {
+  if (!isDpAdmin(req, res)) return;
+  const name = req.params.name;
+  if (!safeImageName(name)) return res.status(400).json({ success: false, error: "bad image name" });
+  if (imageJob && imageJob.running && imageJob.filename === name)
+    return res.status(409).json({ success: false, error: "cannot delete an image while it is being captured" });
+  try { fsSync.unlinkSync(path.join(IMAGES_DIR, name)); }
+  catch (e) { return res.status(500).json({ success: false, error: e.message }); }
+  res.json({ success: true });
 });
 
 // API endpoint to list recent commits from origin (dpadmin only).

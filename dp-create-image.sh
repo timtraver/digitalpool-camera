@@ -205,5 +205,6 @@ exec tar --numeric-owner --xattrs --acls -p -S --one-file-system \
     --exclude='./home/dp/.cache/gstreamer-1.0/*' \
     --exclude='./home/dp/.cache/chromium/*' \
     --exclude='./root/.cache/*' \
+    --exclude='./home/dp/system-images' \
     -I 'zstd -T0 -3' \
     -C / -cf - .

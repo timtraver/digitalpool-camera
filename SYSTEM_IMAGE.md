@@ -57,28 +57,27 @@ Install the capture prerequisites (present on most installs already):
 sudo apt install -y zstd util-linux   # zstd, sfdisk, blockdev, findmnt, lsblk, blkid
 ```
 
-Only the **dpadmin** user sees the "💾 System Image" section (Admin Settings).
-Clicking **Create & Download Image**:
-1. stops any active stream and `sync`s,
-2. streams `dp-image-<host>-<arch>-<timestamp>.tar.zst` to the browser.
+Only the **dpadmin** user sees the "💾 System Image" section (Admin Settings). The
+flow is **capture-to-file, then download** (not a live stream — that proved fragile
+for a multi-GB file):
 
-The download size is unknown up front (streamed), so the browser shows an
-indeterminate progress bar. Keep the tab open until it finishes. Because streams
-are stopped, restart streaming afterward (or reboot).
+1. **Create Image** — stops any active stream, `sync`s, and captures
+   `dp-image-<host>-<arch>-<timestamp>.tar.zst` to **`/home/dp/system-images/`** on
+   the device. The button shows live progress (bytes written); the capture runs on
+   the device, so you can leave the page.
+2. **Saved images** list — each finished image has a **⬇︎ download** and **🗑 delete**.
+   The download is a normal static file, so it has a real size/progress bar and is
+   **resumable** if the connection drops.
 
-**Download from a real browser, not the captive-portal popup.** The image is
-8–15 GB, so:
-- Use a **laptop/desktop browser** (a tablet/phone will struggle with a file this
-  large), opened directly at `http://192.168.50.1:3000` — *not* the "sign in to
-  WiFi" captive-portal mini-window, which can't handle large downloads and returns
-  a 0-byte file.
-- If the browser warns about an "insecure download," choose **Keep** — it's a
-  `.tar.zst` from your own device over HTTP, not a threat. (Prefer the plain
-  `http://…:3000` origin over the self-signed `https` captive portal to avoid the
-  warning entirely.)
-- Even better for a file this size: skip the browser and plug the destination USB
-  into the device — but that path isn't built yet (browser download is the current
-  mechanism).
+> The images directory is **excluded from the capture** (see the `--exclude` in
+> `dp-create-image.sh`) so old images are never tarred into a new one. Delete images
+> you no longer need — each is 8–15 GB.
+
+**Downloading:** use a **laptop/desktop** browser (not a tablet) at
+`http://192.168.50.1:3000` — *not* the "sign in to WiFi" captive-portal popup. Over
+plain HTTP, Chrome may still show "insecure download blocked" for a file this size;
+if so, use **Firefox**, which downloads from the HTTP origin without complaint. The
+resumable static download is far more reliable than the old live stream either way.
 
 ## 2. Build the recovery USB (one-time, per architecture)
 
