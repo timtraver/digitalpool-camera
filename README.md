@@ -502,6 +502,75 @@ phy#0
 > ```
 > Unplug and replug the dongle — it should switch to `a69c:8d80 aicsemi AIC Wlan` mode, then the driver can attach.
 
+#### ⚠️ 2a.3.1. Keep the driver working across kernel updates
+
+> **The plain `make install` above builds the module ONLY for the currently
+> running kernel.** When `apt upgrade` installs a new kernel and you reboot, there
+> is no `aic8800_fdrv` module for the new kernel — so **the UGREEN dongle silently
+> disappears** (the onboard hotspot still works because its driver is in-kernel).
+> This is the single most common way a field device loses client WiFi.
+
+**Recovery if it already happened** (you rebooted into a new kernel and the dongle is gone):
+
+1. *Fastest:* reboot and in **GRUB → Advanced options for Ubuntu**, pick the previous
+   kernel — the dongle works again there immediately.
+2. *Proper fix:* rebuild the module for the kernel you're now on:
+   ```bash
+   sudo apt install -y build-essential git linux-headers-$(uname -r)
+   cd ~/AIC8800-Linux-Driver/drivers/aic8800 2>/dev/null || {
+     cd ~ && git clone https://github.com/BLUEMOON233/AIC8800-Linux-Driver.git
+     cd ~/AIC8800-Linux-Driver/drivers/aic8800
+   }
+   sed -i 's/in_irq()/in_hardirq()/g' aic8800_fdrv/rwnx_rx.c   # harmless if already patched
+   sudo make && sudo make install
+   sudo modprobe aic_load_fw && sudo modprobe aic8800_fdrv
+   iw dev                                                       # wlx… managed iface should reappear
+   ```
+
+**Prevent it — pick ONE:**
+
+- **Option A — install via DKMS (recommended):** DKMS auto-rebuilds the module every
+  time a new kernel is installed, so upgrades never strand the dongle. Run this once,
+  from the driver source dir (`~/AIC8800-Linux-Driver/drivers/aic8800`):
+  ```bash
+  sudo apt install -y dkms
+  # find the exact .ko locations first (paths vary by driver revision):
+  make >/dev/null 2>&1; find . -name '*.ko'
+  #   e.g. ./aic8800_fdrv/aic8800_fdrv.ko  and  ./aic_load_fw/aic_load_fw.ko
+
+  sudo cp -r . /usr/src/aic8800-1.0
+  sudo tee /usr/src/aic8800-1.0/dkms.conf >/dev/null <<'EOF'
+  PACKAGE_NAME="aic8800"
+  PACKAGE_VERSION="1.0"
+  BUILT_MODULE_NAME[0]="aic8800_fdrv"
+  BUILT_MODULE_LOCATION[0]="aic8800_fdrv"
+  DEST_MODULE_LOCATION[0]="/updates"
+  BUILT_MODULE_NAME[1]="aic_load_fw"
+  BUILT_MODULE_LOCATION[1]="aic_load_fw"
+  DEST_MODULE_LOCATION[1]="/updates"
+  AUTOINSTALL="yes"
+  EOF
+  sudo dkms add    -m aic8800 -v 1.0
+  sudo dkms install -m aic8800 -v 1.0
+  dkms status                                     # should show: aic8800/1.0, <kernel>: installed
+  ```
+  > Match `BUILT_MODULE_NAME`/`BUILT_MODULE_LOCATION` to the actual `.ko` paths from
+  > the `find` above. If `dkms build` fails, that mismatch is almost always why.
+
+- **Option B — pin the kernel:** simplest for a locked-down appliance, but it stops
+  kernel security updates:
+  ```bash
+  sudo apt-mark hold linux-image-generic linux-headers-generic linux-generic
+  ```
+
+> **Before any broad `apt upgrade` on a field device:** capture a golden system image
+> first (Admin → 💾 System Image — see `SYSTEM_IMAGE.md`) so a bad kernel bump can be
+> rolled back by re-flashing.
+
+> **Note:** a much newer kernel (e.g. an HWE 6.11+ jump) may need extra source patches
+> before this driver compiles. If `make` errors out, run on the pinned older kernel and
+> update the driver source.
+
 ### 2b. GStreamer 1.0 — full plugin stack
 
 ```bash
