@@ -4338,19 +4338,45 @@ loadDeviceIp();
         listEl.innerHTML = '<div style="font-size:11px;color:rgba(255,255,255,0.4)">No images yet.</div>';
         return;
       }
+      const jobRunning = !!(data.job && data.job.running);
       listEl.innerHTML = "";
       data.images.forEach((img) => {
+        const isIso = img.kind === "iso";
         const row = document.createElement("div");
         row.style.cssText = "display:flex;align-items:center;gap:8px;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 8px";
         const info = document.createElement("div");
         info.style.cssText = "flex:1;min-width:0";
         const when = new Date(img.mtime).toLocaleString();
+        const state = img.partial ? (isIso ? " · ⏳ building…" : " · ⏳ capturing…") : "";
         info.innerHTML =
-          '<div style="font-size:11px;color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + img.name + '</div>' +
-          '<div style="font-size:10px;color:rgba(255,255,255,0.5)">' + fmtGB(img.bytes) + ' · ' + when + (img.partial ? ' · ⏳ capturing…' : '') + '</div>';
+          '<div style="font-size:11px;color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (isIso ? "💿 " : "💾 ") + img.name + '</div>' +
+          '<div style="font-size:10px;color:rgba(255,255,255,0.5)">' + (isIso ? "Recovery ISO · " : "Image · ") + fmtGB(img.bytes) + ' · ' + when + state + '</div>';
         row.appendChild(info);
 
         if (!img.partial) {
+          // Build a bootable recovery ISO from a captured image.
+          if (!isIso) {
+            const build = document.createElement("button");
+            build.textContent = "🏗";
+            build.title = "Build a bootable recovery ISO from this image";
+            build.disabled = jobRunning;
+            build.style.cssText = "font-size:13px;padding:2px 8px;border:1px solid rgba(99,102,241,0.5);border-radius:5px;background:rgba(99,102,241,0.15);color:#c7d2fe;cursor:pointer";
+            build.addEventListener("click", async () => {
+              if (!confirm("Build a bootable recovery ISO from:\n" + img.name + "\n\n• Downloads the Ubuntu base ISO the first time (~6 GB).\n• Produces a ~10 GB .iso you flash to a USB with balenaEtcher.\n• Takes several minutes; runs on the device.\n\nContinue?")) return;
+              build.disabled = true;
+              try {
+                const r = await fetch("/api/system/image/build-iso", {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ image: img.name }),
+                });
+                const d = await r.json();
+                if (!r.ok || !d.success) { alert("Build failed: " + (d.error || r.status)); build.disabled = false; return; }
+                startProgressPolling();
+              } catch (e) { alert("Build failed: " + e.message); build.disabled = false; }
+            });
+            row.appendChild(build);
+          }
+
           const dl = document.createElement("a");
           dl.href = "/api/system/image/file/" + encodeURIComponent(img.name);
           dl.textContent = "⬇︎";
@@ -4362,6 +4388,7 @@ loadDeviceIp();
           const del = document.createElement("button");
           del.textContent = "🗑";
           del.title = "Delete";
+          del.disabled = jobRunning;
           del.style.cssText = "font-size:13px;padding:2px 8px;border:1px solid rgba(220,38,38,0.5);border-radius:5px;background:rgba(220,38,38,0.15);color:#fca5a5;cursor:pointer";
           del.addEventListener("click", async () => {
             if (!confirm("Delete " + img.name + "?")) return;
@@ -4378,23 +4405,32 @@ loadDeviceIp();
       });
     }
 
-    // While a capture runs, poll the growing file size and update the message.
+    // While a capture OR ISO build runs, poll progress and update the message.
     function startProgressPolling() {
       const btn = createBtn(), msg = createMsg();
-      if (btn) { btn.disabled = true; btn.textContent = "⏳ Capturing…"; }
+      if (btn) { btn.disabled = true; btn.textContent = "⏳ Working…"; }
       if (imagePoll) return;
       imagePoll = setInterval(async () => {
         let data;
         try { data = await (await fetch("/api/system/image/list")).json(); } catch { return; }
         const job = data && data.job;
         if (job && job.running) {
-          if (msg) { msg.textContent = "💾 Capturing… " + fmtGB(job.bytes) + " written so far. This runs on the device — you can leave this page."; msg.style.color = "#facc15"; }
+          if (msg) {
+            if (job.kind === "iso") {
+              msg.textContent = "💿 Building recovery ISO — " + (job.phase || "working") + " (" + fmtGB(job.bytes) + "). Runs on the device; you can leave this page.";
+            } else {
+              msg.textContent = "💾 Capturing… " + fmtGB(job.bytes) + " written so far. Runs on the device; you can leave this page.";
+            }
+            msg.style.color = "#facc15";
+          }
+          refreshImageList();  // reflect the ⏳ row + keep other buttons disabled
         } else {
           clearInterval(imagePoll); imagePoll = null;
           if (btn) { btn.disabled = false; btn.textContent = "💾 Create Image"; }
           if (msg) {
-            if (job && job.error) { msg.textContent = "⚠️ Capture failed: " + job.error; msg.style.color = "#f87171"; }
-            else { msg.textContent = "✅ Image ready — download it from the list below."; msg.style.color = "#4ade80"; }
+            if (job && job.error) { msg.textContent = "⚠️ " + (job.kind === "iso" ? "ISO build" : "Capture") + " failed: " + job.error; msg.style.color = "#f87171"; }
+            else if (job && job.kind === "iso") { msg.textContent = "✅ Recovery ISO ready — download it from the list below."; msg.style.color = "#4ade80"; }
+            else { msg.textContent = "✅ Image ready — download it, or click 🏗 to build a recovery ISO."; msg.style.color = "#4ade80"; }
           }
           refreshImageList();
         }

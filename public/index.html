@@ -1059,9 +1059,10 @@
                 <summary class="admin-section-title">💾 System Image</summary>
                 <div class="admin-collapsible-body">
                   <p style="font-size:11px;color:rgba(255,255,255,0.6);margin:0 0 10px">
-                    Download a complete image of this device. Flash it onto a new device from
-                    a bootable recovery USB (see SYSTEM_IMAGE.md); the new device sanitises
-                    itself into a unique unit on first boot.
+                    1) <b>Create Image</b> to capture this device. 2) On the image, click
+                    <b>🏗</b> to build a bootable recovery <b>.iso</b>. 3) Download the .iso and
+                    flash it to a USB (balenaEtcher). Boot a new device from it to clone this one;
+                    it sanitises itself into a unique unit on first boot. See SYSTEM_IMAGE.md.
                   </p>
                   <div class="wifi-info-row">
                     <span class="wifi-label">Platform</span>
@@ -1122,6 +1123,6 @@
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-    <script src="app.js?v=13"></script>
+    <script src="app.js?v=14"></script>
   </body>
 </html>

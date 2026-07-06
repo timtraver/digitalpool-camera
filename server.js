@@ -1348,10 +1348,11 @@ function isDpAdmin(req, res) {
   if (req.session?.user?.username !== "dpadmin") { res.status(403).json({ success: false, error: "Access denied" }); return false; }
   return true;
 }
-// Guard against path traversal: only our own image filenames are addressable.
+// Guard against path traversal: only our own image / recovery-ISO filenames are
+// addressable (dp-image-*.tar.zst captures, dp-recovery-*.iso recovery media).
 function safeImageName(name) {
   return typeof name === "string" && !name.includes("..") &&
-    /^dp-image-[A-Za-z0-9._-]+\.tar\.zst$/.test(name);
+    /^dp-(image|recovery)-[A-Za-z0-9._-]+\.(tar\.zst|iso)$/.test(name);
 }
 function imageFileSize(p) { try { return fsSync.statSync(p).size; } catch { return 0; } }
 
@@ -1389,9 +1390,11 @@ app.get("/api/system/image/list", requireAdmin, (req, res) => {
   try {
     if (fsSync.existsSync(IMAGES_DIR)) {
       images = fsSync.readdirSync(IMAGES_DIR)
-        .filter((f) => f.endsWith(".tar.zst"))
+        // Only our own captures + recovery ISOs (hides the cached Ubuntu base ISO).
+        .filter((f) => safeImageName(f))
         .map((f) => ({
           name: f,
+          kind: f.endsWith(".iso") ? "iso" : "image",
           bytes: imageFileSize(path.join(IMAGES_DIR, f)),
           mtime: fsSync.statSync(path.join(IMAGES_DIR, f)).mtimeMs,
           partial: !!(imageJob && imageJob.running && imageJob.filename === f),
@@ -1404,9 +1407,9 @@ app.get("/api/system/image/list", requireAdmin, (req, res) => {
   res.json({
     success: true, images,
     job: imageJob ? {
-      filename: imageJob.filename, running: imageJob.running,
-      startedAt: imageJob.startedAt, error: imageJob.error || null,
-      bytes: imageFileSize(imageJob.path),
+      kind: imageJob.kind || "capture", filename: imageJob.filename, running: imageJob.running,
+      startedAt: imageJob.startedAt, error: imageJob.error || null, phase: imageJob.phase || null,
+      bytes: imageFileSize(imageJob.progressPath || imageJob.path),
     } : null,
   });
 });
@@ -1444,7 +1447,7 @@ app.post("/api/system/image/create", requireAdmin, async (req, res) => {
   console.log(`💾 System image capture started → ${outPath}`);
   const child = spawn("sudo", ["/usr/bin/bash", IMAGE_SCRIPT,
     "--created", created, "--app-version", appVersion], { stdio: ["ignore", "pipe", "pipe"] });
-  imageJob = { filename, path: outPath, startedAt: Date.now(), running: true, error: null, exitCode: null };
+  imageJob = { kind: "capture", filename, path: outPath, progressPath: outPath, startedAt: Date.now(), running: true, error: null, exitCode: null };
   child.stdout.pipe(out);
   child.stderr.on("data", (d) => process.stderr.write(`[dp-create-image] ${d}`));
   child.on("error", (err) => {
@@ -1494,6 +1497,79 @@ app.delete("/api/system/image/file/:name", requireAdmin, (req, res) => {
   catch (e) { return res.status(500).json({ success: false, error: e.message }); }
   res.json({ success: true });
 });
+
+// Build an all-in-one bootable recovery ISO from a captured image (async job).
+// Automates: ensure Ubuntu base ISO (auto-download + cache), then run
+// dp-build-recovery-iso.sh. xorriso must be installed once: sudo apt install -y xorriso.
+const ISO_BUILDER = path.join(__dirname, "dp-build-recovery-iso.sh");
+app.post("/api/system/image/build-iso", requireAdmin, async (req, res) => {
+  if (!isDpAdmin(req, res)) return;
+  if (imageJob && imageJob.running)
+    return res.status(409).json({ success: false, error: "A job is already running" });
+  const name = (req.body && req.body.image) || "";
+  if (!safeImageName(name) || !name.endsWith(".tar.zst"))
+    return res.status(400).json({ success: false, error: "pick a captured image (.tar.zst)" });
+  if (!fsSync.existsSync(path.join(IMAGES_DIR, name)))
+    return res.status(404).json({ success: false, error: "image not found" });
+  if (!fsSync.existsSync(ISO_BUILDER))
+    return res.status(500).json({ success: false, error: "dp-build-recovery-iso.sh not found" });
+  runIsoBuild(name);  // fire-and-forget; progress via /list
+  res.json({ success: true });
+});
+
+// Background worker for the ISO build (updates imageJob for /list progress).
+async function runIsoBuild(imageName) {
+  const arch = (await execAsync("uname -m").catch(() => ({ stdout: "" }))).stdout.trim();
+  const isoArch = arch === "x86_64" ? "amd64" : (arch === "aarch64" ? "arm64" : arch);
+  const imgPath = path.join(IMAGES_DIR, imageName);
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[-:]/g, "").replace("T", "-");
+  const outName = `dp-recovery-${stamp}.iso`;
+  const outPath = path.join(IMAGES_DIR, outName);
+  const baseIso = path.join(IMAGES_DIR, `ubuntu-base-${isoArch}.iso`);
+  imageJob = { kind: "iso", filename: outName, path: outPath, progressPath: null,
+    startedAt: Date.now(), running: true, error: null, phase: "preparing" };
+  console.log(`💿 Recovery ISO build started → ${outName} (from ${imageName})`);
+
+  const run = (cmd, args) => new Promise((resolve, reject) => {
+    const c = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    c.stdout.on("data", (d) => process.stderr.write(`[build-iso] ${d}`));
+    c.stderr.on("data", (d) => process.stderr.write(`[build-iso] ${d}`));
+    c.on("error", reject);
+    c.on("close", (code) => code === 0 ? resolve() : reject(new Error(`${cmd} exited ${code}`)));
+  });
+
+  try {
+    if (!(await execAsync("command -v xorriso").catch(() => ({ stdout: "" }))).stdout.trim())
+      throw new Error("xorriso not installed — run once on the device: sudo apt install -y xorriso");
+
+    // Ensure the cached Ubuntu base ISO (auto-download amd64; other arches must be pre-placed).
+    if (!fsSync.existsSync(baseIso) || imageFileSize(baseIso) < 1e9) {
+      if (isoArch !== "amd64") throw new Error(`No Ubuntu base ISO for ${isoArch} — place one at ${baseIso}`);
+      imageJob.phase = "finding Ubuntu ISO";
+      const listing = (await execAsync("curl -fsSL https://releases.ubuntu.com/24.04/").catch(() => ({ stdout: "" }))).stdout;
+      const matches = listing.match(/ubuntu-24\.04[0-9.]*-desktop-amd64\.iso/g);
+      if (!matches) throw new Error("could not locate an Ubuntu 24.04 desktop amd64 ISO to download");
+      const iso = [...new Set(matches)].sort().pop();
+      imageJob.phase = "downloading Ubuntu ISO";
+      imageJob.progressPath = baseIso + ".part";
+      await run("wget", ["-q", "-O", baseIso + ".part", `https://releases.ubuntu.com/24.04/${iso}`]);
+      fsSync.renameSync(baseIso + ".part", baseIso);
+    }
+
+    imageJob.phase = "building ISO";
+    imageJob.progressPath = outPath;
+    await run("bash", [ISO_BUILDER, baseIso, imgPath, outPath]);
+
+    imageJob.running = false; imageJob.phase = "done";
+    console.log(`💿 Recovery ISO built → ${outPath} (${imageFileSize(outPath)} bytes)`);
+    io.emit("systemImageJob", { running: false, filename: outName, error: null });
+  } catch (e) {
+    imageJob.running = false; imageJob.error = e.message; imageJob.phase = "error";
+    try { if (fsSync.existsSync(outPath) && imageFileSize(outPath) === 0) fsSync.unlinkSync(outPath); } catch { /* ignore */ }
+    console.error("💿 ISO build failed:", e.message);
+    io.emit("systemImageJob", { running: false, filename: outName, error: e.message });
+  }
+}
 
 // API endpoint to list recent commits from origin (dpadmin only).
 // Fetches from origin first so the list always includes commits not yet on the device.

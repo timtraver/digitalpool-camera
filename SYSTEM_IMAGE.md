@@ -79,44 +79,69 @@ plain HTTP, Chrome may still show "insecure download blocked" for a file this si
 if so, use **Firefox**, which downloads from the HTTP origin without complaint. The
 resumable static download is far more reliable than the old live stream either way.
 
-## 2. Build the recovery USB (one-time, per architecture)
+## 2. Build an all-in-one recovery ISO (recommended)
 
-The recovery USB is just any bootable Linux (that is **not** the target disk)
-with a handful of tools. Put `dp-restore.sh` and the downloaded image somewhere
-the recovery environment can read them (a second USB stick is simplest).
+Bake everything into **one bootable `.iso`** — the Ubuntu live environment, your
+image, `dp-restore.sh`, and the flashing tools as offline `.deb`s — so the target
+needs **no network** and there is nothing else to copy.
 
-Required tools in the recovery environment:
+**From the UI (recommended):** in the image list, click **🏗** on a captured image.
+The server auto-downloads & caches the Ubuntu base ISO the first time, builds the
+recovery ISO as a background job (live progress), and drops it in the list to
+download. The **only** one-time prerequisite is `xorriso` (it needs root, so it's
+not auto-installed):
+```bash
+sudo apt install -y xorriso     # once, on the device
+```
+
+**Or from the CLI** on the **camera device** (x86_64 image → amd64 Ubuntu ISO):
+
+```bash
+sudo apt install -y xorriso
+# download Ubuntu Desktop 24.04 amd64 ISO onto the device (e.g. into ~/):
+#   wget https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso
+bash ~/digitalpool-camera/dp-build-recovery-iso.sh \
+     ~/ubuntu-24.04-desktop-amd64.iso \
+     /home/dp/system-images/dp-image-<host>-x86_64-<ts>.tar.zst
+# → writes /home/dp/system-images/dp-recovery-<ts>.iso  (~10 GB)
+```
+
+The ISO lands in `system-images/`, so it appears in the UI's image list — download
+it to your Mac with **Firefox** (resumable), then **balenaEtcher** that one `.iso`
+to a **16 GB+** USB stick. Boot the target → **Try Ubuntu** → Terminal:
+
+```bash
+sudo bash /cdrom/dp/dp-flash.sh
+```
+
+That installs the bundled tools offline and launches the restore (§3). Rebuild the
+ISO whenever you make a new golden image.
+
+> **Notes.** Building needs internet on the device (to fetch the tool `.debs`) and
+> ~10 GB free. `dp-flash.sh` `dpkg -i`s only leaf tool packages (`gdisk`, `lvm2`,
+> `dosfstools`, `cloud-guest-utils`, `zstd`, `parted`) — their libraries are already
+> in the Ubuntu live env, so core libs are never touched. For an **aarch64 (RK3588)**
+> image, build with an **arm64** Ubuntu ISO on an aarch64 machine.
+
+### Alternative: plain boot stick + separate image drive
+
+If you'd rather not rebuild a 10 GB ISO each time, use any bootable Ubuntu USB
+(balenaEtcher an ISO) plus a separate **exFAT** drive holding the image +
+`dp-restore.sh`, and install tools in the live session (needs network):
 
 ```bash
 sudo apt install -y zstd gdisk cloud-guest-utils dosfstools util-linux python3 lvm2
-# provides: zstd, sgdisk, growpart, mkfs.vfat, sfdisk/mkfs.ext4/partprobe/blkid/lsblk,
-#           python3, and pvcreate/vgcreate/lvcreate (needed for LVM-root images)
 ```
 
 > **LVM caveat:** the restore recreates the VG by its original name (e.g.
-> `ubuntu-vg`). A "Try Ubuntu" live session runs from the ISO (not LVM), so there
-> is no name clash. Just don't run `dp-restore.sh` from an environment that already
-> has an active VG of the same name.
-
-### x86_64 (Intel N97)
-1. Write an **Ubuntu Server/Desktop 24.04 live ISO** to a USB stick (Rufus / `dd` /
-   `balenaEtcher`) and boot the new device from it in "Try / live" mode.
-2. Open a terminal, run the `apt install` above.
-3. Put the image + `dp-restore.sh` on a second USB stick, mount it, and run the
-   restore (see §3).
-
-### aarch64 (RK3588 — Orange Pi 5 / Radxa Rock 5C)
-There is no universal x86-style live ISO. Boot the new board from **removable
-media it can already boot** (an SD card or USB with a working aarch64 Ubuntu /
-Armbian) — anything that is *not* the internal eMMC/NVMe you're flashing.
-1. Boot that removable aarch64 Linux.
-2. Run the `apt install` above.
-3. Copy the image + `dp-restore.sh` locally (or from another USB) and run the
-   restore against the internal disk (e.g. `/dev/mmcblk0` or `/dev/nvme0n1`).
-
-> u-boot/idbloader are captured in the image's "bootgap" and written straight
-> back by `dp-restore.sh`, so the recovery environment does **not** need to know
-> anything about the board's boot procedure.
+> `ubuntu-vg`). A "Try Ubuntu" live session runs from the ISO (not LVM), so there is
+> no name clash. Don't run `dp-restore.sh` from an environment that already has an
+> active VG of the same name.
+>
+> **aarch64 (RK3588):** there's no x86-style live ISO — boot from any removable
+> aarch64 Linux (SD/USB, *not* the target disk). u-boot/idbloader ride in the image's
+> "bootgap" and are written back automatically, so the recovery env needs nothing
+> board-specific.
 
 ## 3. Flash the new device
 
