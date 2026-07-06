@@ -1350,7 +1350,7 @@ app.get("/api/system/image/info", requireAdmin, async (req, res) => {
     // Walk the block-device stack to the whole disk. Works for plain partitions
     // (nvme0n1p2→nvme0n1) AND device-mapper/LVM roots (ubuntu--vg-ubuntu--lv→sda),
     // where PKNAME returns nothing.
-    const base     = rootSrc ? await val("lsblk -nso NAME " + rootSrc + " | tail -n1") : "";
+    const base     = rootSrc ? await val("lsblk -rnso NAME " + rootSrc + " | tail -n1") : "";
     const disk     = base ? "/dev/" + base : "";
     const usedB    = parseInt(await val("df -B1 --output=used / | tail -n1"), 10) || 0;
     const diskB    = disk ? parseInt(await val("blockdev --getsize64 " + disk), 10) || 0 : 0;
@@ -1384,7 +1384,7 @@ app.get("/api/system/image/download", requireAdmin, async (req, res) => {
   const created = new Date().toISOString();
   const arch = (await execAsync("uname -m").catch(() => ({ stdout: "unknown" }))).stdout.trim() || "unknown";
   const host = os.hostname().replace(/[^a-zA-Z0-9_-]/g, "");
-  const stamp = created.replace(/[:T]/g, "").slice(0, 13); // YYYYMMDDHHMM
+  const stamp = created.slice(0, 16).replace(/[-:]/g, "").replace("T", "-"); // YYYYMMDD-HHMM
   const filename = `dp-image-${host}-${arch}-${stamp}.tar.zst`;
 
   // No Content-Length — the compressed size is unknown until the stream ends,

@@ -58,7 +58,7 @@ ROOT_SRC="${ROOT_SRC%%[*}"                          # strip any btrfs subvol suf
 # Walk the block-device stack down to the whole disk. Handles plain partitions
 # (nvme0n1p2→nvme0n1) and LVM/device-mapper roots (…-lv→sda3→sda), where PKNAME
 # returns nothing.
-DISK="/dev/$(lsblk -nso NAME "$ROOT_SRC" | tail -n1)"
+DISK="/dev/$(lsblk -rnso NAME "$ROOT_SRC" | tail -n1)"   # -r: raw (no tree chars)
 [[ -b "$DISK" ]] || fatal "computed disk '$DISK' is not a block device (root src: $ROOT_SRC)"
 
 ARCH="$(uname -m)"
