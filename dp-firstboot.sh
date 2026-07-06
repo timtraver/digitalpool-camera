@@ -99,6 +99,22 @@ for f in "${APP_STATE_FILES[@]}"; do
     rm -f "${APP_DIR}/${f}" && echo "  removed ${f}" || true
 done
 
+# Seed remote.json with the device name = hostname.  The name is NOT operator-
+# settable in the UI — it is permanently this unit's hostname (dp-stream-<4 hex>).
+# The device is still unregistered (no owner email / NetBird identity) until the
+# operator registers it.
+echo "Seeding remote.json with deviceName=${NEW_HOSTNAME}…"
+cat > "${APP_DIR}/remote.json" <<EOF
+{
+  "deviceName": "${NEW_HOSTNAME}",
+  "enabled": false,
+  "registered": false,
+  "ownerEmail": "",
+  "registeredAt": null
+}
+EOF
+chown "${APP_USER}:${APP_USER}" "${APP_DIR}/remote.json" 2>/dev/null || true
+
 # ── 6. Regenerate SESSION_SECRET in .env ────────────────────────────────────────
 ENV_FILE="${APP_DIR}/.env"
 if [[ -f "$ENV_FILE" ]]; then

@@ -116,6 +116,21 @@ for f in "${APP_STATE_FILES[@]}"; do
     fi
 done
 
+# Seed remote.json with the device name = hostname.  The name is NOT operator-
+# settable in the UI — it is permanently this unit's hostname (dp-stream-N).
+# The device is still unregistered until the operator registers it.
+cat > "${APP_DIR}/remote.json" <<EOF
+{
+  "deviceName": "${NEW_HOSTNAME}",
+  "enabled": false,
+  "registered": false,
+  "ownerEmail": "",
+  "registeredAt": null
+}
+EOF
+chown "${APP_USER}:${APP_USER}" "${APP_DIR}/remote.json" 2>/dev/null || true
+info "Seeded remote.json with deviceName=${NEW_HOSTNAME}"
+
 # ── 7. Netplan ethernet override (back to DHCP) ───────────────────────────────
 NETPLAN_FILE="/etc/netplan/99-digitalpool-ethernet.yaml"
 if [[ -f "$NETPLAN_FILE" ]]; then

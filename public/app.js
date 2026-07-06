@@ -4781,11 +4781,11 @@ loadDeviceIp();
     try {
       const r = await fetch("/api/setup/status");
       const d = await r.json();
+      // Device name is fixed to this unit's hostname — display only, never editable.
+      if (nameInput  && d.deviceName)  nameInput.textContent = d.deviceName;
+      if (emailInput && d.ownerEmail)  emailInput.value      = d.ownerEmail;
       if (d.registered) {
         showRegistered(d);
-        // Pre-fill name input for re-register flow
-        if (nameInput  && d.deviceName)  nameInput.value  = d.deviceName;
-        if (emailInput && d.ownerEmail)  emailInput.value = d.ownerEmail;
       } else {
         showUnregistered(d.hasInternet);
       }
@@ -4837,16 +4837,15 @@ loadDeviceIp();
 
     // Register button
     registerBtn?.addEventListener("click", async () => {
-      const name  = nameInput?.value.trim();
       const email = emailInput?.value.trim();
-      if (!name)  { showRegMsg("❌ Device name is required", true); return; }
       if (!email) { showRegMsg("❌ Owner email is required", true); return; }
       showRegMsg("⏳ Registering… this may take up to 30 s");
       registerBtn.disabled = true;
       try {
+        // Device name is fixed to the hostname server-side — only the owner email is sent.
         const r = await fetch("/api/setup/register", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ deviceName: name, ownerEmail: email }),
+          body: JSON.stringify({ ownerEmail: email }),
         });
         const d = await r.json();
         if (d.success) {
@@ -4910,8 +4909,9 @@ loadDeviceIp();
       if (startStreamBtn) startStreamBtn.disabled = true;
       if (formArea)   formArea.style.display  = "";
       if (statusArea) statusArea.style.display = "none";
-      if (nameInput  && currentName)  nameInput.value  = currentName;
-      if (emailInput && currentEmail) emailInput.value = currentEmail;
+      // Device name is fixed to the hostname — display only, not editable.
+      if (nameInput  && currentName)  nameInput.textContent = currentName;
+      if (emailInput && currentEmail) emailInput.value      = currentEmail;
       reregBtn.disabled = false;
     });
   }

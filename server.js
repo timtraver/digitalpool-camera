@@ -491,6 +491,21 @@ function saveRemoteConfig(cfg) {
   fsSync.writeFileSync(REMOTE_CONFIG_FILE, JSON.stringify(cfg, null, 2));
 }
 
+/**
+ * The device name is NOT user-settable.  It is permanently the system hostname
+ * assigned at flash/reset time (dp-stream-<last 4 of MAC>).  The flash script
+ * seeds remote.json with it; this returns the authoritative, sanitised value,
+ * falling back to the live OS hostname if the config was cleared.
+ */
+function getDeviceName() {
+  const cfg = loadRemoteConfig();
+  const raw = cfg.deviceName || os.hostname() || "digitalpool-camera";
+  return raw.trim().toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || "digitalpool-camera";
+}
+
 // ── NetBird Management API helpers ───────────────────────────────────────────
 
 /**
@@ -654,15 +669,14 @@ async function netbirdGetStatus() {
 }
 
 app.get("/api/remote/status", requireAdmin, async (req, res) => {
-  const cfg = loadRemoteConfig();
   try {
     // netbird status --json gives us everything we need
     const { ip, connected, raw } = await netbirdGetStatus();
     const state = raw.daemonStatus || raw.status || "Disconnected";
-    res.json({ enabled: connected, ip, deviceName: cfg.deviceName, backendState: state });
+    res.json({ enabled: connected, ip, deviceName: getDeviceName(), backendState: state });
   } catch {
     // netbird not installed or daemon not running yet
-    res.json({ enabled: false, ip: null, deviceName: cfg.deviceName, backendState: "Stopped" });
+    res.json({ enabled: false, ip: null, deviceName: getDeviceName(), backendState: "Stopped" });
   }
 });
 
@@ -682,7 +696,7 @@ app.get("/api/setup/status", requireAdmin, async (req, res) => {
   res.json({
     registered,
     hasInternet,
-    deviceName:   cfg.deviceName   || "",
+    deviceName:   getDeviceName(),
     ownerEmail:   cfg.ownerEmail   || "",
     registeredAt: cfg.registeredAt || null,
     netbirdIp,
@@ -691,17 +705,15 @@ app.get("/api/setup/status", requireAdmin, async (req, res) => {
 
 // POST /api/setup/register — first-time registration (name + email → netbird up)
 app.post("/api/setup/register", requireAdmin, express.json(), async (req, res) => {
-  const { deviceName, ownerEmail } = req.body || {};
-  if (!deviceName || !ownerEmail)
-    return res.status(400).json({ error: "Device name and owner email are required" });
+  const { ownerEmail } = req.body || {};
+  if (!ownerEmail)
+    return res.status(400).json({ error: "Owner email is required" });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail))
     return res.status(400).json({ error: "Invalid email address" });
 
-  const name = deviceName.trim().toLowerCase()
-    .replace(/[^a-z0-9-]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-  if (!name) return res.status(400).json({ error: "Invalid device name" });
+  // The device name is not user-settable — it is permanently the system hostname
+  // (dp-stream-<last 4 of MAC>) assigned at flash/reset time.
+  const name = getDeviceName();
 
   const setupKey      = process.env.NETBIRD_SETUP_KEY || "";
   const managementUrl = (process.env.NETBIRD_MANAGEMENT_URL || "").replace(/\/$/, "");
@@ -755,12 +767,8 @@ app.post("/api/setup/register", requireAdmin, express.json(), async (req, res) =
 
 app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) => {
   const cfg = loadRemoteConfig();
-  const name = (req.body?.deviceName || cfg.deviceName || "digitalpool-camera")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
+  // Device name is not user-settable — always the system hostname.
+  const name = getDeviceName();
   // force:true = cloned-device / re-registration path — wipes node identity so
   // NetBird assigns a completely fresh peer and IP.
   const force = !!req.body?.force;
@@ -1015,37 +1023,9 @@ app.post("/api/remote/ssh/disable", requireAdmin, async (req, res) => {
   res.json({ success: true, active: false });
 });
 
-app.put("/api/remote/name", requireAdmin, express.json(), async (req, res) => {
-  const name = (req.body?.deviceName || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-  if (!name) return res.status(400).json({ error: "Device name is required" });
-  const cfg = loadRemoteConfig();
-  cfg.deviceName = name;
-  saveRemoteConfig(cfg);
-  // If netbird is connected, restart with the new hostname.
-  // NetBird does not support live hostname rename — a down/up cycle is required.
-  try {
-    const { connected } = await netbirdGetStatus();
-    if (connected) {
-      const managementUrl = process.env.NETBIRD_MANAGEMENT_URL || "";
-      const setupKey      = process.env.NETBIRD_SETUP_KEY || "";
-      const renameCfg = loadRemoteConfig();
-      await execAsync("sudo /usr/bin/netbird down").catch(() => {});
-      let upCmd = `sudo /usr/bin/netbird up --hostname=${name}`;
-      if (managementUrl)       upCmd += ` --management-url=${managementUrl}`;
-      if (setupKey)            upCmd += ` --setup-key=${setupKey}`;
-      if (renameCfg.sshEnabled) upCmd += ` --allow-server-ssh --enable-ssh-root`;
-      await execAsync(upCmd, { timeout: 30000 }).catch((e) => {
-        console.warn("netbird up (rename) warning:", e.stderr || e.message);
-      });
-    }
-  } catch { /* netbird not running — name saved for next enable */ }
-  res.json({ success: true, deviceName: name });
-});
+// NOTE: the device name is NOT user-settable — it is permanently the system
+// hostname (dp-stream-<last 4 of MAC>) assigned at flash/reset time.  The former
+// PUT /api/remote/name rename endpoint has been removed; use getDeviceName().
 
 // Helper function to proxy any URL
 function proxyUrl(targetUrl, res, req = null) {
