@@ -1905,6 +1905,74 @@ footer {
 }
 
 
+/* ── Device registration modal ──────────────────────────────────────────── */
+.reg-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  padding: 20px;
+}
+
+.reg-modal {
+  background: #0d1f30;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  width: 420px;
+  max-width: 100%;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  box-shadow: 0 14px 55px rgba(0, 0, 0, 0.7);
+}
+
+.reg-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  position: sticky;
+  top: 0;
+  background: #0d1f30;
+  border-radius: 14px 14px 0 0;
+}
+
+.reg-modal-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.reg-modal-close {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s;
+}
+.reg-modal-close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.reg-modal-body {
+  padding: 18px 20px 22px;
+}
+
+/* The registration message inside the modal reads larger than the sidebar. */
+.reg-modal-body .wifi-msg {
+  font-size: 13px;
+  margin-top: 10px;
+}
+
+
 /* ── Camera Selector Tab Bar ─────────────────────────────────────────────── */
 .camera-tab-bar {
   display: flex;

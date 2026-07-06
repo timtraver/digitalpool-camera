@@ -884,6 +884,17 @@
                 <summary class="admin-section-title">📡 Device Registration</summary>
                 <div class="admin-collapsible-body">
 
+                  <!-- Unregistered prompt (opens the registration modal) -->
+                  <div id="regUnregisteredPrompt" style="display:none">
+                    <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.35);border-radius:6px;padding:10px 12px;margin-bottom:10px">
+                      <div style="color:rgba(245,158,11,0.95);font-size:12px;font-weight:600;margin-bottom:6px">⚠️ This device is not registered</div>
+                      <div style="color:rgba(255,255,255,0.6);font-size:11px;line-height:1.5;margin-bottom:10px">
+                        Streaming is disabled until you register this camera to your DigitalPool venue.
+                      </div>
+                      <button class="btn-wifi-action" id="regOpenModalBtn" style="width:100%">🔗 Register Device</button>
+                    </div>
+                  </div>
+
                   <!-- No internet blocker (shown instead of form when offline) -->
                   <div id="regNoInternetArea" style="display:none">
                     <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:6px;padding:12px 12px 10px;margin-bottom:10px">
@@ -1149,6 +1160,20 @@
             <button class="eth-modal-btn eth-modal-cancel" id="ethWarningCancel">Cancel</button>
             <button class="eth-modal-btn eth-modal-confirm" id="ethWarningConfirm">Apply &amp; Disconnect</button>
           </div>
+        </div>
+      </div>
+
+      <!-- ── Device Registration Modal ── -->
+      <!-- #regNoInternetArea and #regFormArea are moved into #regModalMount at
+           runtime (see initRegistration in app.js) so the registration process
+           appears front-and-center instead of tucked into the sidebar. -->
+      <div id="regModal" class="reg-modal-backdrop" style="display:none">
+        <div class="reg-modal">
+          <div class="reg-modal-header">
+            <span class="reg-modal-title">📡 Device Registration</span>
+            <button class="reg-modal-close" id="regModalClose" title="Close" aria-label="Close">✕</button>
+          </div>
+          <div class="reg-modal-body" id="regModalMount"></div>
         </div>
       </div>
 

@@ -1133,7 +1133,7 @@ app.post("/api/remote/wipe", requireAdmin, async (req, res) => {
   }
 });
 
-// ── SSH (openssh-server) ── admin + dpadmin ──────────────────────────────────
+// ── SSH (openssh-server) ── dpadmin only ─────────────────────────────────────
 // Toggles ssh.socket AND ssh.service.  Modern Ubuntu uses socket activation, so
 // stopping ssh.service alone leaves ssh.socket listening on :22 and the
 // service is respawned on the next connection — both must be toggled.
@@ -1142,9 +1142,9 @@ app.post("/api/remote/wipe", requireAdmin, async (req, res) => {
 //   ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable --now ssh
 //   ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable --now ssh.socket
 //   ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable --now ssh.socket
-// Any admin-role user (including hotspot users) can toggle SSH so that a user
-// connected to the WiFi hotspot can enable SSH access without needing dpadmin.
-app.get("/api/remote/ssh/status", requireAdmin, async (req, res) => {
+// SSH is a sensitive system toggle, so it is restricted to the dpadmin support
+// account — venue admins/operators and hotspot users cannot open SSH on the box.
+app.get("/api/remote/ssh/status", requireDpAdmin, async (req, res) => {
   const cfg = loadRemoteConfig();
   // systemctl returns non-zero when inactive/disabled/missing, so swallow the
   // rejection and read the stdout that execAsync attaches to the error object.
@@ -1167,11 +1167,8 @@ app.get("/api/remote/ssh/status", requireAdmin, async (req, res) => {
     const st = await netbirdGetStatus();
     ip = st.ip || null;
   } catch { /* netbird not running */ }
-  // canToggleSsh: true for any admin-role user (including hotspot users and dpadmin)
-  const canToggleSsh = isHotspotRequest(req) ||
-    req.session?.user?.role === "admin" ||
-    req.session?.user?.username === "dpadmin";
-  res.json({ active, enabled, ip, persisted: !!cfg.sshEnabled, isDpAdmin: canToggleSsh, canToggleSsh });
+  // Only dpadmin reaches this handler (requireDpAdmin), so toggling is allowed.
+  res.json({ active, enabled, ip, persisted: !!cfg.sshEnabled, isDpAdmin: true, canToggleSsh: true });
 });
 
 // Helper: run a sudo command and tolerate "unit not found" / "no such file"
@@ -1186,7 +1183,7 @@ async function tryUnitCmd(cmd) {
   }
 }
 
-app.post("/api/remote/ssh/enable", requireAdmin, async (req, res) => {
+app.post("/api/remote/ssh/enable", requireDpAdmin, async (req, res) => {
   // 1. Enable the SSH daemon (socket activation + service fallback)
   const sock = await tryUnitCmd("sudo /usr/bin/systemctl enable --now ssh.socket");
   const svc  = await tryUnitCmd("sudo /usr/bin/systemctl enable --now ssh");
@@ -1216,7 +1213,7 @@ app.post("/api/remote/ssh/enable", requireAdmin, async (req, res) => {
   res.json({ success: true, active: true });
 });
 
-app.post("/api/remote/ssh/disable", requireAdmin, async (req, res) => {
+app.post("/api/remote/ssh/disable", requireDpAdmin, async (req, res) => {
   // 1. Disable the SSH daemon — socket first to close the listener immediately,
   //    then service.  Existing sessions stay open by design.
   const sock = await tryUnitCmd("sudo /usr/bin/systemctl disable --now ssh.socket");

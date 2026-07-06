@@ -4181,7 +4181,8 @@ loadDeviceIp();
     if (remoteSec) remoteSec.style.display = "block";
     await initRegistration();   // sets deviceRegistered + gates start button
     initRemoteAccess();
-    initRemoteSsh();
+    // SSH is a dpadmin-only support control — never surface it to venue admins.
+    if (currentUser.username === "dpadmin") initRemoteSsh();
   }
 
   // ── Software version ─────────────────────────────────────────
@@ -4736,7 +4737,23 @@ loadDeviceIp();
     let pendingEmail = "", pendingPassword = "";
     const regBadge       = document.getElementById("regRequiredBadge");
     const regDetails     = document.getElementById("registrationDetails");
+    const regModal       = document.getElementById("regModal");
+    const regModalMount  = document.getElementById("regModalMount");
+    const regModalClose  = document.getElementById("regModalClose");
+    const regOpenBtn     = document.getElementById("regOpenModalBtn");
+    const unregPrompt    = document.getElementById("regUnregisteredPrompt");
     let   noInternetPoll = null;  // interval handle for auto-retry
+
+    // Relocate the registration process UI (offline blocker + credential/venue
+    // form) into the centered modal so it's front-and-center rather than a
+    // hard-to-notice sidebar panel.  IDs and event bindings are preserved.
+    if (regModalMount && noInternetArea && formArea) {
+      regModalMount.appendChild(noInternetArea);
+      regModalMount.appendChild(formArea);
+    }
+
+    function openRegModal()  { if (regModal) regModal.style.display = "flex"; }
+    function closeRegModal() { if (regModal) regModal.style.display = "none"; }
 
     function showRegMsg(text, isError = false) {
       if (!regMsg) return;
@@ -4748,6 +4765,8 @@ loadDeviceIp();
     function showRegistered(data) {
       deviceRegistered = true;
       clearInterval(noInternetPoll);
+      closeRegModal();
+      if (unregPrompt)    unregPrompt.style.display    = "none";
       if (noInternetArea) noInternetArea.style.display = "none";
       if (formArea)       formArea.style.display       = "none";
       if (statusArea)     statusArea.style.display     = "";
@@ -4779,11 +4798,14 @@ loadDeviceIp();
 
     function showUnregistered(hasInternet) {
       deviceRegistered = false;
-      if (statusArea) statusArea.style.display = "none";
-      if (regBadge)   regBadge.style.display   = "";
-      if (regDetails && !regDetails.open) regDetails.open = true;
+      if (statusArea)  statusArea.style.display  = "none";
+      if (unregPrompt) unregPrompt.style.display = "";   // sidebar prompt + Register button
+      if (regBadge)    regBadge.style.display    = "";
       if (startStreamBtn) startStreamBtn.disabled = true;
 
+      // Set the correct view inside the modal (form vs offline blocker).  The
+      // modal itself is opened by the caller so a status refresh/poll doesn't
+      // reopen a modal the operator deliberately closed.
       if (hasInternet) {
         // Internet available — show the registration form
         clearInterval(noInternetPoll);
@@ -4823,13 +4845,36 @@ loadDeviceIp();
         showRegistered(d);
       } else {
         showUnregistered(d.hasInternet);
+        openRegModal();   // registration is required — bring it front-and-center
       }
     } catch {
       showUnregistered(false);
+      openRegModal();
     }
 
-    // "Go to Network Settings" — open the Network accordion and scroll to it
+    // Sidebar "Register Device" button — (re)opens the modal with fresh state.
+    regOpenBtn?.addEventListener("click", async () => {
+      try {
+        const r = await fetch("/api/setup/status");
+        const d = await r.json();
+        if (nameInput  && d.deviceName) nameInput.textContent = d.deviceName;
+        if (emailInput && d.ownerEmail) emailInput.value      = d.ownerEmail;
+        if (d.registered) { showRegistered(d); return; }
+        showUnregistered(d.hasInternet);
+      } catch {
+        showUnregistered(false);
+      }
+      openRegModal();
+    });
+
+    // Close controls: ✕ button and clicking the dimmed backdrop.
+    regModalClose?.addEventListener("click", closeRegModal);
+    regModal?.addEventListener("click", (e) => { if (e.target === regModal) closeRegModal(); });
+
+    // "Go to Network Settings" — close the modal (so the sidebar is reachable),
+    // then open the Network accordion and scroll to it.
     document.getElementById("regGoToNetworkBtn")?.addEventListener("click", () => {
+      closeRegModal();
       const networkDetails = document.querySelector(".admin-collapsible[data-section='network'], #networkDetails, details.admin-collapsible");
       // Find the Network Settings <details> by looking for its summary text
       const allDetails = document.querySelectorAll("details.admin-collapsible");
@@ -4994,7 +5039,7 @@ loadDeviceIp();
         const r = await fetch("/api/remote/wipe", { method: "POST" });
         const d = await r.json();
         if (d.success) {
-          showMsg("✅ Old peer removed. Enter new details below and click Register.");
+          showMsg("✅ Old peer removed. Re-register in the pop-up to resume streaming.");
         } else {
           showMsg(`❌ Wipe failed: ${d.error}`, true);
           reregBtn.disabled = false;
@@ -5006,14 +5051,19 @@ loadDeviceIp();
         return;
       }
 
-      // Show the registration form with existing values pre-filled
+      // Show the registration form (in the modal) with existing values pre-filled.
       deviceRegistered = false;
       if (startStreamBtn) startStreamBtn.disabled = true;
-      if (formArea)   formArea.style.display  = "";
-      if (statusArea) statusArea.style.display = "none";
+      if (unregPrompt)    unregPrompt.style.display    = "";
+      if (statusArea)     statusArea.style.display     = "none";
+      if (regBadge)       regBadge.style.display       = "";
+      if (noInternetArea) noInternetArea.style.display = "none";
+      if (formArea)       formArea.style.display       = "";
+      hideVenueSteps();
       // Device name is fixed to the hostname — display only, not editable.
       if (nameInput  && currentName)  nameInput.textContent = currentName;
       if (emailInput && currentEmail) emailInput.value      = currentEmail;
+      openRegModal();
       reregBtn.disabled = false;
     });
   }
