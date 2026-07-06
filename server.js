@@ -640,7 +640,7 @@ async function ensureNetbirdUp() {
  * as registered (venue id/name, device id, NetBird IP).  Sends the HTTP response.
  * The password is used only for this call and never written to disk.
  */
-async function finalizeRegistration(res, { email, password, venueId, venueName, deviceName, ip }) {
+async function finalizeRegistration(res, { email, password, venueId, venueName, venueSlug, deviceName, ip }) {
   const macAddress = getPrimaryMac();
   let assign;
   try {
@@ -660,9 +660,10 @@ async function finalizeRegistration(res, { email, password, venueId, venueName, 
   cfg.netbirdIp    = ip;
   cfg.macAddress   = macAddress;
   cfg.venueId      = assign.body?.venue_id   || assign.body?.venueId   || venueId;
-  // Prefer the name the registration response returns; fall back to the name we
+  // Prefer the values the registration response returns; fall back to what we
   // already knew (from the verify venue list / the operator's picker choice).
   cfg.venueName    = assign.body?.venue_name || assign.body?.venueName || venueName || "";
+  cfg.venueSlug    = assign.body?.venue_slug || assign.body?.venueSlug || venueSlug || "";
   cfg.deviceId     = assign.body?.device_id  || assign.body?.deviceId  || "";
   cfg.registered   = true;
   cfg.registeredAt = new Date().toISOString();
@@ -670,7 +671,7 @@ async function finalizeRegistration(res, { email, password, venueId, venueName, 
   console.log(`✅ Device registered: ${deviceName} / ${email} → venue ${cfg.venueName || cfg.venueId} — NetBird IP ${ip}`);
   return res.json({
     success: true, ip, deviceName, ownerEmail: email,
-    venueId: cfg.venueId, venueName: cfg.venueName, deviceId: cfg.deviceId,
+    venueId: cfg.venueId, venueName: cfg.venueName, venueSlug: cfg.venueSlug, deviceId: cfg.deviceId,
   });
 }
 
@@ -868,6 +869,7 @@ app.get("/api/setup/status", requireAdmin, async (req, res) => {
     ownerEmail:   cfg.ownerEmail   || "",
     venueName:    cfg.venueName    || "",
     venueId:      cfg.venueId      || "",
+    venueSlug:    cfg.venueSlug    || "",
     registeredAt: cfg.registeredAt || null,
     netbirdIp,
   });
@@ -934,6 +936,7 @@ app.post("/api/setup/register", requireAdmin, express.json(), async (req, res) =
   const venues = rawVenues.map(v => ({
     id:   v.venue_id   || v.id   || "",
     name: v.venue_name || v.name || "",
+    slug: v.venue_slug || v.slug || "",
   })).filter(v => v.id);
   const assignedVenueId = verify.body?.assigned_venue_id || verify.body?.assignedVenueId || null;
 
@@ -941,20 +944,21 @@ app.post("/api/setup/register", requireAdmin, express.json(), async (req, res) =
     return res.json({ needVenue: true, ip });
 
   // Auto-select when there's exactly one venue, or one already assigned to this device.
-  let venueId = null, venueName = "";
-  if (assignedVenueId) {
-    venueId   = assignedVenueId;
-    venueName = (venues.find(v => v.id === assignedVenueId) || {}).name || "";
-  } else if (venues.length === 1) {
-    venueId   = venues[0].id;
-    venueName = venues[0].name || "";
+  let venueId = null, venueName = "", venueSlug = "";
+  const selected = assignedVenueId
+    ? venues.find(v => v.id === assignedVenueId)
+    : (venues.length === 1 ? venues[0] : null);
+  if (selected) {
+    venueId   = selected.id;
+    venueName = selected.name || "";
+    venueSlug = selected.slug || "";
   }
 
   if (!venueId)
     return res.json({ chooseVenue: true, venues, ip });
 
   // 3. Assign + finalize.
-  return finalizeRegistration(res, { email, password, venueId, venueName, deviceName, ip });
+  return finalizeRegistration(res, { email, password, venueId, venueName, venueSlug, deviceName, ip });
 });
 
 // POST /api/setup/register/venue — step 2, called when the operator picks a venue.
@@ -964,6 +968,7 @@ app.post("/api/setup/register/venue", requireAdmin, express.json(), async (req, 
   const password  = req.body?.password  || "";
   const venueId   = req.body?.venueId   || "";
   const venueName = req.body?.venueName || "";   // known from the picker; assign response wins
+  const venueSlug = req.body?.venueSlug || "";
   if (!email || !password || !venueId)
     return res.status(400).json({ error: "Email, password and venue are required" });
 
@@ -979,7 +984,7 @@ app.post("/api/setup/register/venue", requireAdmin, express.json(), async (req, 
   if (!ip)
     return res.status(500).json({ error: "NetBird IP unavailable — restart registration." });
 
-  return finalizeRegistration(res, { email, password, venueId, venueName, deviceName, ip });
+  return finalizeRegistration(res, { email, password, venueId, venueName, venueSlug, deviceName, ip });
 });
 
 app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) => {

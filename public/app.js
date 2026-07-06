@@ -4753,7 +4753,23 @@ loadDeviceIp();
       if (statusArea)     statusArea.style.display     = "";
       if (regStatusName)  regStatusName.textContent    = data.deviceName  || "—";
       if (regStatusEmail) regStatusEmail.textContent   = data.ownerEmail  || "—";
-      if (regStatusVenue) regStatusVenue.textContent   = data.venueName   || "—";
+      if (regStatusVenue) {
+        const vName = data.venueName || "";
+        const vSlug = data.venueSlug || "";
+        if (vName && vSlug) {
+          // Link the venue name to its page on digitalpool.com.
+          regStatusVenue.textContent = "";
+          const a = document.createElement("a");
+          a.href = `https://digitalpool.com/venues/${encodeURIComponent(vSlug)}`;
+          a.target = "_blank";
+          a.rel = "noopener";
+          a.textContent = vName;
+          a.style.color = "#4ade80";
+          regStatusVenue.appendChild(a);
+        } else {
+          regStatusVenue.textContent = vName || "—";
+        }
+      }
       if (regStatusDate && data.registeredAt)
         regStatusDate.textContent = new Date(data.registeredAt).toLocaleDateString();
       if (regStatusIp) regStatusIp.textContent = data.netbirdIp || data.ip || "—";
@@ -4884,6 +4900,7 @@ loadDeviceIp();
             const opt = document.createElement("option");
             opt.value = v.id;
             opt.textContent = v.name || v.id;
+            if (v.slug) opt.dataset.slug = v.slug;
             venueSelect.appendChild(opt);
           }
         }
@@ -4925,6 +4942,7 @@ loadDeviceIp();
     venueConfirmBtn?.addEventListener("click", async () => {
       const venueId = venueSelect?.value;
       const venueName = venueSelect?.selectedOptions?.[0]?.textContent || "";
+      const venueSlug = venueSelect?.selectedOptions?.[0]?.dataset?.slug || "";
       if (!venueId) { showRegMsg("❌ Select a venue", true); return; }
       if (!pendingEmail || !pendingPassword) {
         showRegMsg("❌ Session expired — enter your credentials and click Register again.", true);
@@ -4936,7 +4954,7 @@ loadDeviceIp();
       try {
         const r = await fetch("/api/setup/register/venue", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: pendingEmail, password: pendingPassword, venueId, venueName }),
+          body: JSON.stringify({ email: pendingEmail, password: pendingPassword, venueId, venueName, venueSlug }),
         });
         const d = await r.json();
         handleRegResponse(d);
