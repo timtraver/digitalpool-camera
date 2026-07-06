@@ -4742,6 +4742,7 @@ loadDeviceIp();
     const regModalClose  = document.getElementById("regModalClose");
     const regOpenBtn     = document.getElementById("regOpenModalBtn");
     const unregPrompt    = document.getElementById("regUnregisteredPrompt");
+    const registeredExtras = document.getElementById("regRegisteredExtras");
     let   noInternetPoll = null;  // interval handle for auto-retry
 
     // Relocate the registration process UI (offline blocker + credential/venue
@@ -4766,10 +4767,11 @@ loadDeviceIp();
       deviceRegistered = true;
       clearInterval(noInternetPoll);
       closeRegModal();
-      if (unregPrompt)    unregPrompt.style.display    = "none";
-      if (noInternetArea) noInternetArea.style.display = "none";
-      if (formArea)       formArea.style.display       = "none";
-      if (statusArea)     statusArea.style.display     = "";
+      if (unregPrompt)      unregPrompt.style.display      = "none";
+      if (registeredExtras) registeredExtras.style.display = "";
+      if (noInternetArea)   noInternetArea.style.display   = "none";
+      if (formArea)         formArea.style.display         = "none";
+      if (statusArea)       statusArea.style.display       = "";
       if (regStatusName)  regStatusName.textContent    = data.deviceName  || "—";
       if (regStatusEmail) regStatusEmail.textContent   = data.ownerEmail  || "—";
       if (regStatusVenue) {
@@ -4798,9 +4800,10 @@ loadDeviceIp();
 
     function showUnregistered(hasInternet) {
       deviceRegistered = false;
-      if (statusArea)  statusArea.style.display  = "none";
-      if (unregPrompt) unregPrompt.style.display = "";   // sidebar prompt + Register button
-      if (regBadge)    regBadge.style.display    = "";
+      if (statusArea)       statusArea.style.display       = "none";
+      if (registeredExtras) registeredExtras.style.display = "none"; // hide status + De-Register
+      if (unregPrompt)      unregPrompt.style.display       = "";   // sidebar prompt + Register button
+      if (regBadge)         regBadge.style.display          = "";
       if (startStreamBtn) startStreamBtn.disabled = true;
 
       // Set the correct view inside the modal (form vs offline blocker).  The
@@ -5054,11 +5057,12 @@ loadDeviceIp();
       // Show the registration form (in the modal) with existing values pre-filled.
       deviceRegistered = false;
       if (startStreamBtn) startStreamBtn.disabled = true;
-      if (unregPrompt)    unregPrompt.style.display    = "";
-      if (statusArea)     statusArea.style.display     = "none";
-      if (regBadge)       regBadge.style.display       = "";
-      if (noInternetArea) noInternetArea.style.display = "none";
-      if (formArea)       formArea.style.display       = "";
+      if (unregPrompt)      unregPrompt.style.display      = "";
+      if (registeredExtras) registeredExtras.style.display = "none";
+      if (statusArea)       statusArea.style.display       = "none";
+      if (regBadge)         regBadge.style.display         = "";
+      if (noInternetArea)   noInternetArea.style.display   = "none";
+      if (formArea)         formArea.style.display         = "";
       hideVenueSteps();
       // Device name is fixed to the hostname — display only, not editable.
       if (nameInput  && currentName)  nameInput.textContent = currentName;
