@@ -1355,6 +1355,12 @@ function safeImageName(name) {
     /^dp-(image|recovery)-[A-Za-z0-9._-]+\.(tar\.zst|iso)$/.test(name);
 }
 function imageFileSize(p) { try { return fsSync.statSync(p).size; } catch { return 0; } }
+// Local-time YYYYMMDD-HHMM for filenames (uses the device's configured timezone,
+// not UTC, so the stamp matches the operator's wall clock).
+function localStamp(d = new Date()) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+}
 
 // Non-destructive: arch/disk/used/free so the UI can preview + gate.
 app.get("/api/system/image/info", requireAdmin, async (req, res) => {
@@ -1436,11 +1442,10 @@ app.post("/api/system/image/create", requireAdmin, async (req, res) => {
 
   let appVersion = "unknown";
   try { appVersion = JSON.parse(fsSync.readFileSync(path.join(__dirname, "package.json"), "utf8")).version || "unknown"; } catch { /* ignore */ }
-  const created = new Date().toISOString();
+  const created = new Date().toISOString();          // manifest metadata (UTC, unambiguous)
   const arch = (await execAsync("uname -m").catch(() => ({ stdout: "unknown" }))).stdout.trim() || "unknown";
   const host = os.hostname().replace(/[^a-zA-Z0-9_-]/g, "");
-  const stamp = created.slice(0, 16).replace(/[-:]/g, "").replace("T", "-"); // YYYYMMDD-HHMM
-  const filename = `dp-image-${host}-${arch}-${stamp}.tar.zst`;
+  const filename = `dp-image-${host}-${arch}-${localStamp()}.tar.zst`; // local-time stamp
   const outPath = path.join(IMAGES_DIR, filename);
 
   const out = fsSync.createWriteStream(outPath);
@@ -1522,8 +1527,7 @@ async function runIsoBuild(imageName) {
   const arch = (await execAsync("uname -m").catch(() => ({ stdout: "" }))).stdout.trim();
   const isoArch = arch === "x86_64" ? "amd64" : (arch === "aarch64" ? "arm64" : arch);
   const imgPath = path.join(IMAGES_DIR, imageName);
-  const stamp = new Date().toISOString().slice(0, 16).replace(/[-:]/g, "").replace("T", "-");
-  const outName = `dp-recovery-${stamp}.iso`;
+  const outName = `dp-recovery-${localStamp()}.iso`;
   const outPath = path.join(IMAGES_DIR, outName);
   const baseIso = path.join(IMAGES_DIR, `ubuntu-base-${isoArch}.iso`);
   imageJob = { kind: "iso", filename: outName, path: outPath, progressPath: null,
