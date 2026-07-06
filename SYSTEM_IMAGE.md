@@ -66,6 +66,20 @@ The download size is unknown up front (streamed), so the browser shows an
 indeterminate progress bar. Keep the tab open until it finishes. Because streams
 are stopped, restart streaming afterward (or reboot).
 
+**Download from a real browser, not the captive-portal popup.** The image is
+8–15 GB, so:
+- Use a **laptop/desktop browser** (a tablet/phone will struggle with a file this
+  large), opened directly at `http://192.168.50.1:3000` — *not* the "sign in to
+  WiFi" captive-portal mini-window, which can't handle large downloads and returns
+  a 0-byte file.
+- If the browser warns about an "insecure download," choose **Keep** — it's a
+  `.tar.zst` from your own device over HTTP, not a threat. (Prefer the plain
+  `http://…:3000` origin over the self-signed `https` captive portal to avoid the
+  warning entirely.)
+- Even better for a file this size: skip the browser and plug the destination USB
+  into the device — but that path isn't built yet (browser download is the current
+  mechanism).
+
 ## 2. Build the recovery USB (one-time, per architecture)
 
 The recovery USB is just any bootable Linux (that is **not** the target disk)

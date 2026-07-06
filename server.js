@@ -1391,9 +1391,15 @@ app.get("/api/system/image/download", requireAdmin, async (req, res) => {
   // so the browser shows an indeterminate download.  Disable socket timeouts;
   // capturing a full rootfs can take many minutes.
   req.setTimeout(0); res.setTimeout(0);
-  res.setHeader("Content-Type", "application/zstd");
+  // octet-stream forces a plain download in every browser (avoids type-based
+  // handling); attachment names the file.
+  res.setHeader("Content-Type", "application/octet-stream");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.setHeader("Cache-Control", "no-store");
+  // Flush the 200 + headers to the client IMMEDIATELY so the browser commits to
+  // the download up front, rather than sitting header-less through the ~1s
+  // metadata phase (which writes only to stderr) and possibly giving up.
+  res.flushHeaders();
 
   console.log(`💾 System image capture started → ${filename}`);
   const child = spawn("sudo", ["/usr/bin/bash", IMAGE_SCRIPT,
