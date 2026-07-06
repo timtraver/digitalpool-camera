@@ -507,6 +507,49 @@ function getDeviceName() {
 }
 
 /**
+ * Return this device's primary hardware MAC address (lowercase, colon-separated).
+ * Always prefers the wired ethernet NIC (en/eth) and returns its burned-in MAC
+ * even when the port has no cable/link — this is the interface the hostname
+ * suffix (dp-stream-<last 4>) is derived from, so the two always agree.  Falls
+ * back to WiFi (wl) then any other physical NIC only when no wired port exists.
+ * Returns "" if none can be read.
+ */
+function getPrimaryMac() {
+  const NET_DIR = "/sys/class/net";
+  // Lower rank = higher priority: wired ethernet first, then WiFi, then other.
+  const rank = (n) => (/^(en|eth)/.test(n) ? 0 : /^wl/.test(n) ? 1 : 2);
+  try {
+    // Reading /sys/.../address returns the MAC regardless of carrier/link state,
+    // so a wired port with no cable plugged in still wins over WiFi.
+    const ordered = fsSync.readdirSync(NET_DIR).sort((a, b) => rank(a) - rank(b));
+    for (const iface of ordered) {
+      if (iface === "lo") continue;
+      // Skip virtual interfaces (no backing device) — matches firstboot.
+      if (!fsSync.existsSync(`${NET_DIR}/${iface}/device`)) continue;
+      let mac = "";
+      try { mac = fsSync.readFileSync(`${NET_DIR}/${iface}/address`, "utf8").trim().toLowerCase(); }
+      catch { continue; }
+      if (mac && mac !== "00:00:00:00:00:00") return mac;
+    }
+  } catch { /* not Linux / no sysfs — fall through */ }
+  // Fallback: os.networkInterfaces() (skips internal + null MACs).  Note this
+  // only lists interfaces that are up, so it's a last resort — the sysfs path
+  // above is what covers a wired port with no active link.
+  try {
+    const nics = os.networkInterfaces();
+    for (const name of Object.keys(nics).sort((a, b) => rank(a) - rank(b))) {
+      if (name === "lo") continue;
+      for (const addr of nics[name] || []) {
+        if (addr.internal) continue;
+        const mac = (addr.mac || "").toLowerCase();
+        if (mac && mac !== "00:00:00:00:00:00") return mac;
+      }
+    }
+  } catch { /* ignore */ }
+  return "";
+}
+
+/**
  * POST a registration payload to the DigitalPool Firebase Cloud Function.
  * The function authenticates the operator's DigitalPool account server-side,
  * verifies venue ownership, records the device + its NetBird IP, and returns
@@ -598,9 +641,10 @@ async function ensureNetbirdUp() {
  * The password is used only for this call and never written to disk.
  */
 async function finalizeRegistration(res, { email, password, venueId, deviceName, ip }) {
+  const macAddress = getPrimaryMac();
   let assign;
   try {
-    assign = await callDigitalPoolRegister({ action: "assign", email, password, venueId, deviceName, netbirdIp: ip });
+    assign = await callDigitalPoolRegister({ action: "assign", email, password, venueId, deviceName, macAddress, netbirdIp: ip });
   } catch (e) {
     return res.status(502).json({ error: `Could not reach DigitalPool registration service: ${e.message}` });
   }
@@ -614,6 +658,7 @@ async function finalizeRegistration(res, { email, password, venueId, deviceName,
   cfg.deviceName   = deviceName;
   cfg.ownerEmail   = email;
   cfg.netbirdIp    = ip;
+  cfg.macAddress   = macAddress;
   cfg.venueId      = assign.body?.venueId   || venueId;
   cfg.venueName    = assign.body?.venueName || "";
   cfg.deviceId     = assign.body?.deviceId  || "";
@@ -829,7 +874,9 @@ app.get("/api/setup/status", requireAdmin, async (req, res) => {
 // POST /api/setup/register — step 1 of registration.
 // Body: { email, password } (DigitalPool account credentials).
 // Brings NetBird up to obtain this device's VPN IP, then verifies the account
-// and lists its venues via the DigitalPool cloud function.  Outcomes:
+// and lists its venues via the DigitalPool cloud function.  The cloud-function
+// payload also carries deviceName, the device's primary MAC address, and the
+// NetBird IP.  Outcomes:
 //   • one venue (or one already assigned) → auto-assigns + finalizes (success)
 //   • multiple venues → { chooseVenue: true, venues } (client shows a picker)
 //   • no venue        → { needVenue: true }
@@ -844,6 +891,7 @@ app.post("/api/setup/register", requireAdmin, express.json(), async (req, res) =
     return res.status(400).json({ error: "Invalid email address" });
 
   const deviceName = getDeviceName();
+  const macAddress = getPrimaryMac();
 
   // 1. Join the VPN first so we have an IP to report to DigitalPool.
   let ip;
@@ -855,18 +903,20 @@ app.post("/api/setup/register", requireAdmin, express.json(), async (req, res) =
   if (!ip)
     return res.status(500).json({ error: "NetBird did not receive an IP within 90 s. Check service logs." });
 
-  // Persist name + email + IP immediately (never the password) so they survive a
-  // crash mid-registration.  `registered` stays false until a venue is assigned.
+  // Persist name + email + IP + MAC immediately (never the password) so they
+  // survive a crash mid-registration.  `registered` stays false until a venue
+  // is assigned.
   const cfg = loadRemoteConfig();
   cfg.deviceName = deviceName;
   cfg.ownerEmail = email;
   cfg.netbirdIp  = ip;
+  cfg.macAddress = macAddress;
   saveRemoteConfig(cfg);
 
   // 2. Verify credentials + fetch venues.
   let verify;
   try {
-    verify = await callDigitalPoolRegister({ action: "verify", email, password, deviceName, netbirdIp: ip });
+    verify = await callDigitalPoolRegister({ action: "verify", email, password, deviceName, macAddress, netbirdIp: ip });
   } catch (e) {
     return res.status(502).json({ error: `Could not reach DigitalPool registration service: ${e.message}` });
   }
