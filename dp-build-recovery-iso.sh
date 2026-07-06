@@ -1,19 +1,20 @@
 #!/bin/bash
 # dp-build-recovery-iso.sh — bake an all-in-one bootable RECOVERY ISO.
 #
-# Runs on the camera device (Linux). Takes a stock Ubuntu Desktop ISO and one of
-# your captured images, and produces a single bootable .iso that already contains:
+# Runs on the camera device (Linux). Takes a stock Ubuntu Server (live-server) ISO
+# and one of your captured images, and produces a single bootable .iso containing:
 #   • the Ubuntu live environment (the boot part)
 #   • your image  (…tar.zst)
 #   • dp-restore.sh + the flashing tools as offline .deb packages
 #
-# On a Mac you then just balenaEtcher that ONE file to ONE stick — no network is
-# needed on the target device, nothing else to copy. Boot the target and run the
-# printed one-liner to flash it. See SYSTEM_IMAGE.md.
+# The live-server ISO (~2.6 GB) keeps the output small; the flash flow is CLI-only
+# so no desktop GUI is needed. On a Mac you then just balenaEtcher that ONE file to
+# ONE stick — no network is needed on the target, nothing else to copy. See
+# SYSTEM_IMAGE.md.
 #
 # Usage:
 #   sudo apt install -y xorriso
-#   bash dp-build-recovery-iso.sh <ubuntu-desktop.iso> <image.tar.zst> [out.iso]
+#   bash dp-build-recovery-iso.sh <ubuntu-live-server.iso> <image.tar.zst> [out.iso]
 #
 # Notes:
 #   • Needs internet on THIS device (to fetch the tool .debs) — build-time only.
@@ -70,32 +71,37 @@ cp "$HERE/dp-restore.sh" "$PAYLOAD/dp-restore.sh"
 
 cat > "$PAYLOAD/dp-flash.sh" <<PAYLOAD_EOF
 #!/bin/bash
-# Auto-generated flash wrapper — run this in the Ubuntu live session:
-#     sudo bash /cdrom/dp/dp-flash.sh
+# Auto-generated flash wrapper — run this from the Ubuntu Server installer shell:
+#     bash /cdrom/dp/dp-flash.sh
 # Installs the bundled tools offline, then launches the restore (which lists the
 # target disks and prompts you to pick one).
 set -uo pipefail
 HERE="\$(cd "\$(dirname "\$0")" && pwd)"
+# The server-installer shell runs as root; use sudo only if we're not already root.
+SUDO=""; [[ \$EUID -ne 0 ]] && SUDO="sudo"
 echo "Installing bundled flashing tools (offline)…"
 # Two passes settle any dpkg ordering; failures are tolerated (libs already present).
-sudo dpkg -i "\$HERE"/tools/*.deb >/dev/null 2>&1 || true
-sudo dpkg -i "\$HERE"/tools/*.deb >/dev/null 2>&1 || true
+\$SUDO dpkg -i "\$HERE"/tools/*.deb >/dev/null 2>&1 || true
+\$SUDO dpkg -i "\$HERE"/tools/*.deb >/dev/null 2>&1 || true
 IMG="\$(ls "\$HERE"/*.tar.zst 2>/dev/null | head -n1)"
 [[ -n "\$IMG" ]] || { echo "No image .tar.zst found on the recovery medium"; exit 1; }
 echo "Image: \$IMG"
-exec sudo bash "\$HERE/dp-restore.sh" "\$IMG"
+exec \$SUDO bash "\$HERE/dp-restore.sh" "\$IMG"
 PAYLOAD_EOF
 chmod +x "$PAYLOAD/dp-flash.sh"
 
 cat > "$PAYLOAD/README.txt" <<'READ_EOF'
-DigitalPool Camera — recovery medium
-====================================
-1. Boot this USB (Ubuntu) on the TARGET device → "Try Ubuntu".
-2. Open a Terminal and run:
-       sudo bash /cdrom/dp/dp-flash.sh
-   (If /cdrom/dp is missing, run:  sudo bash "$(find / -name dp-flash.sh 2>/dev/null | head -1)")
-3. Type ERASE when prompted and pick the internal disk. Wait for "Flash complete".
-4. Power off, remove the USB, boot the device — it sanitises itself on first boot.
+DigitalPool Camera — recovery medium (Ubuntu Server base)
+=========================================================
+1. Boot this USB on the TARGET device. At the GRUB menu pick "Try or Install
+   Ubuntu Server" — it starts the installer.
+2. Get a root shell: press Ctrl+Alt+F2 (a root prompt appears), OR in the
+   installer click "Help" (top-right) → "Enter shell".
+3. Run:
+       bash /cdrom/dp/dp-flash.sh
+   (If /cdrom/dp is missing:  bash "$(find / -name dp-flash.sh 2>/dev/null | head -1)")
+4. Type ERASE when prompted and pick the internal disk. Wait for "Flash complete".
+5. Power off, remove the USB, boot the device — it sanitises itself on first boot.
 No network is required.
 READ_EOF
 info "Payload staged"

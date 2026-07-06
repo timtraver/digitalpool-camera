@@ -1551,8 +1551,9 @@ async function runIsoBuild(imageName) {
       if (isoArch !== "amd64") throw new Error(`No Ubuntu base ISO for ${isoArch} — place one at ${baseIso}`);
       imageJob.phase = "finding Ubuntu ISO";
       const listing = (await execAsync("curl -fsSL https://releases.ubuntu.com/24.04/").catch(() => ({ stdout: "" }))).stdout;
-      const matches = listing.match(/ubuntu-24\.04[0-9.]*-desktop-amd64\.iso/g);
-      if (!matches) throw new Error("could not locate an Ubuntu 24.04 desktop amd64 ISO to download");
+      // Live-server ISO (~2.6 GB) — much smaller than desktop; the flash flow is CLI-only.
+      const matches = listing.match(/ubuntu-24\.04[0-9.]*-live-server-amd64\.iso/g);
+      if (!matches) throw new Error("could not locate an Ubuntu 24.04 live-server amd64 ISO to download");
       const iso = [...new Set(matches)].sort().pop();
       imageJob.phase = "downloading Ubuntu ISO";
       imageJob.progressPath = baseIso + ".part";

@@ -4362,7 +4362,7 @@ loadDeviceIp();
             build.disabled = jobRunning;
             build.style.cssText = "font-size:13px;padding:2px 8px;border:1px solid rgba(99,102,241,0.5);border-radius:5px;background:rgba(99,102,241,0.15);color:#c7d2fe;cursor:pointer";
             build.addEventListener("click", async () => {
-              if (!confirm("Build a bootable recovery ISO from:\n" + img.name + "\n\n• Downloads the Ubuntu base ISO the first time (~6 GB).\n• Produces a ~10 GB .iso you flash to a USB with balenaEtcher.\n• Takes several minutes; runs on the device.\n\nContinue?")) return;
+              if (!confirm("Build a bootable recovery ISO from:\n" + img.name + "\n\n• Downloads the Ubuntu Server base ISO the first time (~2.6 GB).\n• Produces a ~7 GB .iso you flash to an 8 GB+ USB with balenaEtcher.\n• Takes several minutes; runs on the device.\n\nContinue?")) return;
               build.disabled = true;
               try {
                 const r = await fetch("/api/system/image/build-iso", {

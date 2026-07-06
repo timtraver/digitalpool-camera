@@ -94,33 +94,38 @@ not auto-installed):
 sudo apt install -y xorriso     # once, on the device
 ```
 
-**Or from the CLI** on the **camera device** (x86_64 image → amd64 Ubuntu ISO):
+**Or from the CLI** on the **camera device** (x86_64 image → amd64 Ubuntu ISO). Use
+the **live-server** ISO (~2.6 GB) — the flash flow is command-line only, so no
+desktop is needed and the output stays small:
 
 ```bash
 sudo apt install -y xorriso
-# download Ubuntu Desktop 24.04 amd64 ISO onto the device (e.g. into ~/):
-#   wget https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso
+# download Ubuntu Server (live-server) 24.04 amd64 ISO onto the device (e.g. into ~/):
+#   wget https://releases.ubuntu.com/24.04/ubuntu-24.04.2-live-server-amd64.iso
 bash ~/digitalpool-camera/dp-build-recovery-iso.sh \
-     ~/ubuntu-24.04-desktop-amd64.iso \
+     ~/ubuntu-24.04.2-live-server-amd64.iso \
      /home/dp/system-images/dp-image-<host>-x86_64-<ts>.tar.zst
-# → writes /home/dp/system-images/dp-recovery-<ts>.iso  (~10 GB)
+# → writes /home/dp/system-images/dp-recovery-<ts>.iso  (~7 GB)
 ```
 
 The ISO lands in `system-images/`, so it appears in the UI's image list — download
 it to your Mac with **Firefox** (resumable), then **balenaEtcher** that one `.iso`
-to a **16 GB+** USB stick. Boot the target → **Try Ubuntu** → Terminal:
+to an **8 GB+** USB stick. Boot the target → at the GRUB menu pick **"Try or Install
+Ubuntu Server"**, then get a root shell (**Ctrl+Alt+F2**, or the installer's
+**Help → Enter shell**) and run:
 
 ```bash
-sudo bash /cdrom/dp/dp-flash.sh
+bash /cdrom/dp/dp-flash.sh
 ```
 
 That installs the bundled tools offline and launches the restore (§3). Rebuild the
 ISO whenever you make a new golden image.
 
 > **Notes.** Building needs internet on the device (to fetch the tool `.debs`) and
-> ~10 GB free. `dp-flash.sh` `dpkg -i`s only leaf tool packages (`gdisk`, `lvm2`,
+> ~7 GB free. `dp-flash.sh` `dpkg -i`s only leaf tool packages (`gdisk`, `lvm2`,
 > `dosfstools`, `cloud-guest-utils`, `zstd`, `parted`) — their libraries are already
-> in the Ubuntu live env, so core libs are never touched. For an **aarch64 (RK3588)**
+> in the Ubuntu Server live env (the installer itself uses them), so core libs are
+> never touched. For an **aarch64 (RK3588)**
 > image, build with an **arm64** Ubuntu ISO on an aarch64 machine.
 
 ### Alternative: plain boot stick + separate image drive
