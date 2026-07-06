@@ -86,8 +86,12 @@ step "Selecting target disk"
 IMG_DISK="$(df --output=source "$IMG" 2>/dev/null | tail -n1)"   # disk the image file lives on
 if [[ -z "$TARGET" ]]; then
     echo "  Available disks:"
-    lsblk -dn -o NAME,SIZE,MODEL,TYPE | awk '$4=="disk"{printf "    /dev/%s  %s  %s\n",$1,$2,$3}'
-    read -rp "  Enter target disk (e.g. /dev/nvme0n1): " TARGET
+    # MODEL is placed LAST so multi-word models (e.g. "Mass Storage") can't shift the
+    # columns and hide a disk from the TYPE filter. TRAN shows the transport bus.
+    lsblk -dn -o NAME,TYPE,SIZE,TRAN,MODEL \
+      | awk '$2=="disk"{name=$1; size=$3; tran=$4; $1=$2=$3=$4=""; sub(/^ +/,"");
+             printf "    /dev/%-8s %-8s %-6s %s\n", name, size, tran, $0}'
+    read -rp "  Enter target disk (e.g. /dev/sda or /dev/nvme0n1): " TARGET
 fi
 [[ -b "$TARGET" ]] || fatal "'$TARGET' is not a block device"
 # Guards.
