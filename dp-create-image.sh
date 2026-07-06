@@ -30,7 +30,10 @@
 #
 # All diagnostic output goes to stderr; stdout carries ONLY the image bytes.
 
-set -euo pipefail
+# NOT set -e: tar legitimately returns exit 1 when a file changes while being read
+# (unavoidable on a live system), which must NOT abort the capture. All critical
+# steps below fail loudly via explicit `|| fatal`. -u catches unset-var typos.
+set -uo pipefail
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 CREATED=""

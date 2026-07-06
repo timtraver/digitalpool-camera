@@ -1405,6 +1405,7 @@ app.get("/api/system/image/download", requireAdmin, async (req, res) => {
   const child = spawn("sudo", ["/usr/bin/bash", IMAGE_SCRIPT,
     "--created", created, "--app-version", appVersion], { stdio: ["ignore", "pipe", "pipe"] });
 
+  let captureDone = false;
   child.stdout.pipe(res);
   child.stderr.on("data", (d) => process.stderr.write(`[dp-create-image] ${d}`));
   child.on("error", (err) => {
@@ -1413,12 +1414,16 @@ app.get("/api/system/image/download", requireAdmin, async (req, res) => {
     else res.destroy();
   });
   child.on("close", (code) => {
+    // tar exits 1 when files changed during a live read — that's expected and the
+    // archive is still complete, so treat any exit as "capture finished".
+    captureDone = true;
     console.log(`💾 System image capture finished (exit ${code})`);
     res.end();
   });
-  // If the client aborts the download, stop the capture so we don't keep tarring.
+  // Only a genuine early close (client aborted before the stream finished) should
+  // kill the capture. If the child already finished, res 'close' is normal.
   res.on("close", () => {
-    if (child.exitCode === null) {
+    if (!captureDone && child.exitCode === null && !res.writableEnded) {
       console.log("💾 image download aborted by client — killing capture");
       child.kill("SIGKILL");
       execAsync("sudo pkill -f dp-create-image.sh").catch(() => {});
