@@ -4328,13 +4328,12 @@ loadDeviceIp();
       btn.disabled = true;
       btn.textContent = "⏳ Capturing…";
 
-      // Trigger the browser download without navigating away from the page.
-      const a = document.createElement("a");
-      a.href = "/api/system/image/download";
-      a.download = "";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      // Navigate the tab to the download URL. Because the response is a
+      // Content-Disposition attachment the browser downloads it in place without
+      // leaving the page — and a direct navigation is less likely to trip
+      // Chrome's "insecure download blocked" heuristic than a programmatic
+      // anchor click that follows a confirm() dialog.
+      window.location.href = "/api/system/image/download";
 
       // We can't observe the streamed download's completion from here, so
       // re-enable the button after a grace period for a second attempt.
