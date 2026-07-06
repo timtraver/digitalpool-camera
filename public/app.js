@@ -8,16 +8,25 @@ console.log("=".repeat(60));
 let deviceRegistered = false;
 
 // ── Global 401 interceptor ────────────────────────────────────────────────────
-// Wraps window.fetch so that ANY API response with HTTP 401 (session expired /
-// server restarted) immediately redirects to the login page instead of leaving
-// the user staring at a UI that looks active but is actually unauthenticated.
+// Wraps window.fetch so that a session-expiry 401 redirects to the login page
+// instead of leaving the user staring at a UI that looks active but is actually
+// unauthenticated.  The server's auth guard marks those 401s with
+// { redirect: "/login" }; application-level 401s (e.g. a wrong DigitalPool
+// password during registration) do NOT carry that marker and are passed straight
+// back to the caller so it can show an inline error — otherwise the redirect
+// reloads the page and hides the message.
 (function installAuthInterceptor() {
   const _fetch = window.fetch.bind(window);
   window.fetch = async function (...args) {
     const res = await _fetch(...args);
-    if (res.status === 401) {
-      // Avoid redirect loops on the login page itself
-      if (!window.location.pathname.startsWith("/login")) {
+    if (res.status === 401 && !window.location.pathname.startsWith("/login")) {
+      let sessionExpired = true;   // default: treat unreadable 401s as session loss
+      try {
+        const data = await res.clone().json();
+        // Only a genuine session-expiry 401 is marked with redirect:"/login".
+        sessionExpired = data?.redirect === "/login";
+      } catch { /* non-JSON body → assume session expiry */ }
+      if (sessionExpired) {
         console.warn("🔒 Session expired — redirecting to login");
         window.location.href = "/login";
       }
@@ -4915,6 +4924,7 @@ loadDeviceIp();
     // Confirm Venue button — step 2 (assign the picked venue)
     venueConfirmBtn?.addEventListener("click", async () => {
       const venueId = venueSelect?.value;
+      const venueName = venueSelect?.selectedOptions?.[0]?.textContent || "";
       if (!venueId) { showRegMsg("❌ Select a venue", true); return; }
       if (!pendingEmail || !pendingPassword) {
         showRegMsg("❌ Session expired — enter your credentials and click Register again.", true);
@@ -4926,7 +4936,7 @@ loadDeviceIp();
       try {
         const r = await fetch("/api/setup/register/venue", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: pendingEmail, password: pendingPassword, venueId }),
+          body: JSON.stringify({ email: pendingEmail, password: pendingPassword, venueId, venueName }),
         });
         const d = await r.json();
         handleRegResponse(d);
