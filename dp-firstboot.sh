@@ -75,10 +75,12 @@ rm -f /etc/ssh/ssh_host_*
 ssh-keygen -A -q
 
 # ── 4. NetBird peer identity ────────────────────────────────────────────────────
+# Just remove the identity — do NOT `systemctl start/stop netbird` here. This unit
+# is ordered Before=netbird.service, so calling `systemctl start netbird` deadlocks
+# (systemd won't start netbird until we finish, and we'd be waiting on it) until the
+# start-timeout fires. netbird starts clean on the reboot at the end of this script.
 echo "Wiping NetBird peer identity…"
-systemctl stop netbird 2>/dev/null || true
 rm -rf /var/lib/netbird/
-systemctl start netbird 2>/dev/null || true
 
 # ── 5. App state files ──────────────────────────────────────────────────────────
 echo "Clearing app state…"
