@@ -4479,7 +4479,20 @@ io.on("connection", (socket) => {
           clearTimeout(restartTimer);
           const restartForOverlay = async (reason) => {
             console.log(`📸 [Cam${camIdx}] ${reason} — restarting idle preview to show overlay`);
+            // Drain any in-flight idle-preview start first. startPersistentIdlePreview
+            // silently no-ops while another start is running, so calling it during
+            // one (boot, source setup, auto-restart, /video/stream) would drop our
+            // rebuild — leaving a pipeline with no gdkpixbufoverlay and the overlay
+            // permanently invisible. Waiting for the queue to clear guarantees our
+            // rebuild actually runs and picks up the now-present overlay PNG.
+            let q = camIdx === 2 ? _idlePreviewStartQueue2 : _idlePreviewStartQueue;
+            while (q) {
+              try { await q; } catch (_) { /* ignore */ }
+              q = camIdx === 2 ? _idlePreviewStartQueue2 : _idlePreviewStartQueue;
+            }
             await startPersistentIdlePreview(camIdx);
+            // Emit only after the rebuild has spawned + settled so the browser
+            // reconnects to the pipeline that actually composites the overlay.
             io.emit("refreshIdlePreview", { cameraIndex: camIdx });
           };
           // The idle preview is a plain gst-launch pipeline built once; it only
