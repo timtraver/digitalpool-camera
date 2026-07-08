@@ -4477,17 +4477,31 @@ io.on("connection", (socket) => {
         if (!sc.isStreaming) {
           const restartTimer = camIdx === 2 ? idlePreviewRestartTimer2 : idlePreviewRestartTimer;
           clearTimeout(restartTimer);
-          const restartForOverlay = async () => {
-            console.log(`📸 [Cam${camIdx}] Remote screenshot ready — restarting idle preview to show overlay`);
+          const restartForOverlay = async (reason) => {
+            console.log(`📸 [Cam${camIdx}] ${reason} — restarting idle preview to show overlay`);
             await startPersistentIdlePreview(camIdx);
             io.emit("refreshIdlePreview", { cameraIndex: camIdx });
           };
-          const onUpdated = () => { clearTimeout(fallback); restartForOverlay(); };
+          // The idle preview is a plain gst-launch pipeline built once; it only
+          // includes gdkpixbufoverlay if the PNG already exists (>100 bytes) at
+          // build time. So we must restart the preview on the first *real*
+          // screenshot ("updated" only fires on real captures in URL mode — never
+          // the placeholder). Remote pages can be slow to load (30s+), so do NOT
+          // remove this listener when the safety timeout fires: if we only got the
+          // fallback restart, the PNG was still the placeholder and the pipeline
+          // has no overlay element — the late screenshot must trigger one more
+          // restart that actually composites the overlay.
+          const onUpdated = () => {
+            clearTimeout(fallback);
+            restartForOverlay("Remote screenshot ready");
+          };
+          // Safety net only: if Puppeteer never produces a screenshot (site down,
+          // etc.) the running preview keeps showing plain video. Restart once so
+          // the UI reflects the attempt, but keep listening for a late screenshot.
           const fallback = setTimeout(() => {
-            camPuppeteer.removeListener("updated", onUpdated);
-            console.log(`⏱️ [Cam${camIdx}] Timeout waiting for remote screenshot — restarting preview anyway`);
-            restartForOverlay();
-          }, 10000);
+            console.log(`⏱️ [Cam${camIdx}] Timeout waiting for remote screenshot — restarting preview anyway (overlay will appear once a screenshot lands)`);
+            restartForOverlay("Overlay timeout");
+          }, 30000);
           camPuppeteer.once("updated", onUpdated);
         }
       }

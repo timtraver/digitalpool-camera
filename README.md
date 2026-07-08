@@ -786,11 +786,53 @@ sudo apt install -y imagemagick wkhtmltopdf
 
 ### 2i. Chromium browser (Puppeteer headless — remote URL overlay)
 
+> ⚠️ **Do NOT use `apt install chromium-browser` on Ubuntu 22.04/24.04.** On these
+> releases Canonical ships `chromium-browser` (and `chromium`) as a *transitional
+> package that installs the snap*. The snap wrapper cannot launch cleanly from
+> inside our systemd service cgroup — the first launch dies with
+> `xdg-settings: not found` / `is not a snap cgroup for tag snap.chromium.chromium`,
+> and the overlay stays blank until a retry succeeds. Use the Google Chrome `.deb`
+> below instead — it is a real package, apt-updated for security, and is the
+> reference build Puppeteer targets, so it is the most stable/efficient option on
+> Ubuntu 24.04.
+
+First, remove any snap Chromium that a previous `apt install chromium-browser` pulled in
+(otherwise the snap wrapper lingers at `/usr/bin/chromium-browser` and gets picked first):
+
 ```bash
-sudo apt install -y chromium-browser
+sudo snap remove chromium 2>/dev/null || true
+sudo apt purge -y chromium-browser chromium 2>/dev/null || true
 ```
 
-> The app searches for the Chromium binary at `/usr/bin/chromium-browser`, `/usr/bin/chromium`, and `/snap/bin/chromium`. The standard Ubuntu package installs to `/usr/bin/chromium-browser`.
+Install Google Chrome stable from Google's apt repo:
+
+```bash
+wget -qO- https://dl.google.com/linux/linux_signing_key.pub \
+  | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+  | sudo tee /etc/apt/sources.list.d/google-chrome.list
+sudo apt update
+sudo apt install -y google-chrome-stable
+```
+
+Verify it is a real ELF binary (not a snap wrapper shell script) and note the version:
+
+```bash
+file /usr/bin/google-chrome-stable   # → ELF 64-bit … (NOT a shell script)
+google-chrome-stable --version
+```
+
+> The app searches for the Chromium/Chrome binary in this order:
+> `/usr/bin/chromium-browser`, `/usr/bin/chromium`, `/snap/bin/chromium`,
+> `/usr/bin/google-chrome-stable` (see `_findChromiumPath()` in `puppeteerOverlay.js`).
+> Purging the snap package removes the `/usr/bin/chromium-browser` wrapper so the
+> search falls through to `/usr/bin/google-chrome-stable`.
+>
+> **ARM64 (Rockchip RK3588):** Google does not ship Chrome for arm64. Install a
+> genuine `.deb` Chromium there instead — e.g. the `ppa:xtradeb/apps` PPA
+> (`sudo add-apt-repository ppa:xtradeb/apps && sudo apt install -y chromium`),
+> which installs a real binary at `/usr/bin/chromium` — and confirm with
+> `file /usr/bin/chromium` that it is an ELF, not a snap wrapper.
 
 ### 2j. Python GLib / GStreamer bindings (for `gst-overlay-pipeline.py`)
 
@@ -1152,7 +1194,7 @@ cd digitalpool-camera
 npm install
 ```
 
-> `puppeteer-core@20.9.0` is listed in `package.json` and is installed automatically by `npm install`. It **must** stay pinned at `20.9.0` — newer versions use a DevTools Protocol revision that the system Chromium 114 does not support, causing Chromium to crash silently during page navigation.
+> `puppeteer-core` is listed in `package.json` (pinned to `^25.3.0`) and installed automatically by `npm install`. This tracks the current stable line and pairs with the up-to-date Google Chrome stable installed in step 2i. (The old `20.9.0` pin was a Jetson-era constraint tied to a bundled Chromium 114 and no longer applies — the code is version-agnostic about the `Browser.connected` / `isConnected()` API that changed in Puppeteer 22/23.)
 
 ### 4a. Create the environment file
 
@@ -2098,8 +2140,8 @@ sudo journalctl -u mediamtx -n 50
 ### Puppeteer / Chromium overlay fails to launch
 
 ```bash
-chromium-browser --version
-which chromium-browser
+google-chrome-stable --version
+which google-chrome-stable
 
 # If sandboxing is blocked by the kernel:
 sudo sysctl -w kernel.unprivileged_userns_clone=1
@@ -2107,12 +2149,27 @@ sudo sysctl -w kernel.unprivileged_userns_clone=1
 echo 'kernel.unprivileged_userns_clone=1' | sudo tee /etc/sysctl.d/99-chrome-sandbox.conf
 ```
 
-**Version compatibility:** The system Chromium is version 114. `puppeteer-core` is pinned to `20.9.0` in `package.json` and installed automatically by `npm install`. Do not upgrade it — newer versions use a DevTools Protocol revision that Chromium 114 does not support, causing Chromium to crash silently with a misleading "Timed out after waiting 30000ms" error.
+**Snap wrapper still being picked up:** If the logs show `xdg-settings: not found` or
+`is not a snap cgroup for tag snap.chromium.chromium`, a snap Chromium is still installed
+and `_findChromiumPath()` is finding its wrapper at `/usr/bin/chromium-browser` first.
+Confirm and remove it so the search falls through to Google Chrome (see step 2i):
 
 ```bash
-# Verify the correct version is installed:
+file /usr/bin/chromium-browser        # shell script = snap wrapper (bad); ELF = real deb (ok)
+sudo snap remove chromium
+sudo apt purge -y chromium-browser chromium
+file /usr/bin/google-chrome-stable    # → ELF 64-bit …
+```
+
+**Version compatibility:** `puppeteer-core` is pinned to `^25.3.0` in `package.json` and
+installed automatically by `npm install`. It pairs with the current Google Chrome stable
+from step 2i. The code uses only stable Puppeteer APIs and handles the
+`Browser.connected` / `isConnected()` rename (Puppeteer 22/23) in a version-agnostic
+`_browserConnected()` helper, so the old "pin to 20.9.0 for Chromium 114" rule no longer
+applies. After changing the pin, run `npm install` and verify:
+
+```bash
 npm list puppeteer-core
-# Should print: puppeteer-core@20.9.0
 ```
 
 ### Audio / video drift after long streams

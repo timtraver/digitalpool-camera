@@ -251,10 +251,23 @@ class PuppeteerOverlay extends EventEmitter {
     }
   }
 
+  /**
+   * Version-agnostic connectivity check.
+   * Puppeteer 20.x exposes Browser.isConnected() (a method); v22 deprecated it in
+   * favour of the `connected` getter and v23 removed the method entirely. Support
+   * both so the code works whether puppeteer-core is pinned old or bumped to latest.
+   */
+  _browserConnected() {
+    const b = this._browser;
+    if (!b) return false;
+    if (typeof b.connected === "boolean") return b.connected;      // puppeteer >= 22
+    if (typeof b.isConnected === "function") return b.isConnected(); // puppeteer <= 20
+    return false;
+  }
+
   async _ensureBrowser() {
     // If we already have a working browser + page, reuse it
-    // NOTE: Puppeteer 20.x uses isConnected() method, NOT .connected property
-    if (this._browser && this._browser.isConnected() && this._page) return;
+    if (this._browser && this._browserConnected() && this._page) return;
 
     // Clean up any leftover browser before launching a new one
     await this._closeBrowser();
@@ -421,7 +434,7 @@ class PuppeteerOverlay extends EventEmitter {
     } catch (err) {
       // Always log — silently swallowing errors makes debugging impossible.
       console.error("❌ Overlay render error:", err.message);
-      if (!this._browser || !this._browser.isConnected()) {
+      if (!this._browser || !this._browserConnected()) {
         // Browser died — _ensureBrowser will relaunch on the next cycle.
         console.log("🔄 Chromium disconnected — will relaunch on next cycle");
         this._browser = null;
