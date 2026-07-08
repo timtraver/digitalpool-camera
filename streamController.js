@@ -2367,7 +2367,7 @@ class StreamController extends EventEmitter {
     this.saveConfig(); // Save to file
     return {
       success: true,
-      message: "Overlay updated and saved. Restart stream to apply changes.",
+      message: "Overlay updated and saved. Live pipeline reloads the overlay PNG automatically.",
       config: this.streamConfig,
     };
   }

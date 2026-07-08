@@ -1774,6 +1774,34 @@ const titleFormatToggle = document.getElementById("titleFormatToggle");
 const timestampFormatToggle = document.getElementById("timestampFormatToggle");
 const overlayNeedsRestart = document.getElementById("overlayNeedsRestart");
 
+// The overlay status banner (one slot, two messages) reflects whether a change
+// applies live while streaming:
+//   • Remote overlay content (URL/zoom) is reloaded live by the streaming pipeline
+//     (gst-overlay-pipeline.py polls the PNG mtime), so we show a transient
+//     "Updating overlay now…" and auto-dismiss it.
+//   • Text/timestamp elements are baked into the GStreamer pipeline at stream start,
+//     and toggling the remote overlay on/off changes whether the overlay element
+//     exists at all — those only take effect on restart, so we show a persistent
+//     "Restart stream…" warning.
+let _overlayUpdatingHideTimer = null;
+function showOverlayUpdating() {
+  if (!overlayNeedsRestart) return;
+  clearTimeout(_overlayUpdatingHideTimer);
+  overlayNeedsRestart.textContent = "🔄 Updating overlay now…";
+  overlayNeedsRestart.className = "overlay-preview-status";
+  overlayNeedsRestart.style.display = "";
+  _overlayUpdatingHideTimer = setTimeout(() => {
+    overlayNeedsRestart.style.display = "none";
+  }, 2500);
+}
+function showOverlayNeedsRestart() {
+  if (!overlayNeedsRestart) return;
+  clearTimeout(_overlayUpdatingHideTimer); // keep the warning visible; don't auto-hide
+  overlayNeedsRestart.textContent = "⚠️ Restart stream to apply this overlay change";
+  overlayNeedsRestart.className = "overlay-needs-restart";
+  overlayNeedsRestart.style.display = "";
+}
+
 // Initialize custom dropdowns for ALL select elements
 console.log("🎨 Initializing custom dropdowns...");
 
@@ -3117,10 +3145,9 @@ function applyOverlaySettings() {
   console.log("Saving overlay config:", overlayConfig);
   socket.emit("updateOverlay", { ...overlayConfig, cameraIndex: activeCamIndex });
 
-  // Show "needs restart" banner if currently streaming
-  if (isCurrentlyStreaming) {
-    overlayNeedsRestart.style.display = "";
-  }
+  // Note: the streaming status banner is set by each change handler (via
+  // showOverlayUpdating / showOverlayNeedsRestart) since only the handler knows
+  // whether its change applies live or requires a restart.
 
   // Show "Updating preview..." immediately when not streaming
   // (the banner will be hidden by the refreshIdlePreview handler once the preview loads)
@@ -3142,6 +3169,8 @@ overlayEnabled.addEventListener("change", () => {
   if (!isCurrentlyStreaming) {
     const ps = document.getElementById("overlayPreviewStatus");
     if (ps) ps.style.display = "block";
+  } else {
+    showOverlayNeedsRestart(); // title overlay is baked into the pipeline
   }
   applyOverlaySettings();
 });
@@ -3155,6 +3184,10 @@ remoteOverlayEnabled.addEventListener("change", () => {
   if (!isCurrentlyStreaming) {
     const ps = document.getElementById("overlayPreviewStatus");
     if (ps) ps.style.display = "block";
+  } else {
+    // Toggling the remote overlay on/off changes whether gdkpixbufoverlay is in
+    // the pipeline at all — that only takes effect on restart.
+    showOverlayNeedsRestart();
   }
   applyOverlaySettings();
 });
@@ -3165,7 +3198,7 @@ overlayText.addEventListener("input", () => {
   drawOverlay();
 });
 overlayText.addEventListener("blur", () => {
-  if (isCurrentlyStreaming) overlayNeedsRestart.style.display = "";
+  if (isCurrentlyStreaming) showOverlayNeedsRestart();
   applyOverlaySettings();
 });
 overlayText.addEventListener("keydown", (e) => {
@@ -3179,6 +3212,8 @@ showTimestamp.addEventListener("change", () => {
   if (!isCurrentlyStreaming) {
     const ps = document.getElementById("overlayPreviewStatus");
     if (ps) ps.style.display = "block";
+  } else {
+    showOverlayNeedsRestart(); // clockoverlay is baked into the pipeline
   }
   applyOverlaySettings();
 });
@@ -3188,7 +3223,7 @@ timestampFormat.addEventListener("input", () => {
   currentOverlayConfig.timestampFormat = timestampFormat.value;
 });
 timestampFormat.addEventListener("blur", () => {
-  if (isCurrentlyStreaming) overlayNeedsRestart.style.display = "";
+  if (isCurrentlyStreaming) showOverlayNeedsRestart();
   applyOverlaySettings();
 });
 timestampFormat.addEventListener("keydown", (e) => {
@@ -3201,6 +3236,7 @@ titleFontSize.addEventListener("input", () => {
   currentOverlayConfig.titleFontSize = parseInt(titleFontSize.value);
   currentOverlayConfig.overlayFontSize = parseInt(titleFontSize.value); // sync legacy
   drawOverlay();
+  if (isCurrentlyStreaming) showOverlayNeedsRestart();
   clearTimeout(titleFontSizeTimeout);
   titleFontSizeTimeout = setTimeout(() => { applyOverlaySettings(); }, 500);
 });
@@ -3209,6 +3245,7 @@ let tsFontSizeTimeout;
 timestampFontSize.addEventListener("input", () => {
   currentOverlayConfig.timestampFontSize = parseInt(timestampFontSize.value);
   drawOverlay();
+  if (isCurrentlyStreaming) showOverlayNeedsRestart();
   clearTimeout(tsFontSizeTimeout);
   tsFontSizeTimeout = setTimeout(() => { applyOverlaySettings(); }, 500);
 });
@@ -3218,11 +3255,13 @@ titleColor.addEventListener("change", () => {
   currentOverlayConfig.titleColor = titleColor.value;
   currentOverlayConfig.overlayColor = titleColor.value; // sync legacy
   drawOverlay();
+  if (isCurrentlyStreaming) showOverlayNeedsRestart();
   applyOverlaySettings();
 });
 timestampColor.addEventListener("change", () => {
   currentOverlayConfig.timestampColor = timestampColor.value;
   drawOverlay();
+  if (isCurrentlyStreaming) showOverlayNeedsRestart();
   applyOverlaySettings();
 });
 
@@ -3231,11 +3270,13 @@ titleBackground.addEventListener("change", () => {
   currentOverlayConfig.titleBackground = titleBackground.value;
   currentOverlayConfig.overlayBackground = titleBackground.value; // sync legacy
   drawOverlay();
+  if (isCurrentlyStreaming) showOverlayNeedsRestart();
   applyOverlaySettings();
 });
 timestampBackground.addEventListener("change", () => {
   currentOverlayConfig.timestampBackground = timestampBackground.value;
   drawOverlay();
+  if (isCurrentlyStreaming) showOverlayNeedsRestart();
   applyOverlaySettings();
 });
 
@@ -3245,7 +3286,7 @@ overlayUrl.addEventListener("input", () => {
   drawOverlay();
 });
 overlayUrl.addEventListener("blur", () => {
-  if (isCurrentlyStreaming) overlayNeedsRestart.style.display = "";
+  if (isCurrentlyStreaming) showOverlayUpdating();
   applyOverlaySettings();
 });
 overlayUrl.addEventListener("keydown", (e) => {
@@ -3258,6 +3299,7 @@ overlayZoom.addEventListener("input", () => {
   currentOverlayConfig.overlayZoom = parseInt(overlayZoom.value);
 });
 overlayZoom.addEventListener("change", () => {
+  if (isCurrentlyStreaming) showOverlayUpdating(); // zoom is applied to the live PNG
   applyOverlaySettings();
 });
 
@@ -3269,6 +3311,7 @@ timestampPosition.addEventListener("change", () => {
   currentOverlayConfig.timestampPosition = timestampPosition.value;
   console.log(`📍 Timestamp position changed to: ${timestampPosition.value}`);
   drawOverlay();
+  if (isCurrentlyStreaming) showOverlayNeedsRestart();
   applyOverlaySettings();
 });
 
@@ -3276,6 +3319,7 @@ titlePosition.addEventListener("change", () => {
   currentOverlayConfig.titlePosition = titlePosition.value;
   console.log(`📍 Title position changed to: ${titlePosition.value}`);
   drawOverlay();
+  if (isCurrentlyStreaming) showOverlayNeedsRestart();
   applyOverlaySettings();
 });
 
