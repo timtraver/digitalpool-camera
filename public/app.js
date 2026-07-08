@@ -1884,10 +1884,6 @@ let _webrtcPc = null;
 let _snapshotPollActive = false;
 let _snapshotBlobUrl    = null;
 
-// Low Bandwidth Mode — when true, all preview modes use periodic JPEG snapshots
-// instead of continuous MJPEG/HLS streams.
-let lowBandwidthMode = false;
-
 /**
  * Stop snapshot polling, close any active WebRTC session, and cancel any
  * in-flight preview img/video elements.
@@ -1898,7 +1894,7 @@ function cancelCurrentPreviewImg() {
   _snapshotPollActive = false;
   if (_snapshotBlobUrl) { URL.revokeObjectURL(_snapshotBlobUrl); _snapshotBlobUrl = null; }
   const lowBwLabel = document.getElementById("lowBwLabel");
-  if (lowBwLabel && !lowBandwidthMode) lowBwLabel.style.display = "none";
+  if (lowBwLabel) lowBwLabel.style.display = "none";
 
   // Cancel any pending WebRTC retry
   if (_webrtcRetryTimer) { clearTimeout(_webrtcRetryTimer); _webrtcRetryTimer = null; }
@@ -1916,14 +1912,19 @@ function cancelCurrentPreviewImg() {
   }
 }
 
+// Snapshot-fallback poll interval (seconds). Used when WebRTC preview can't
+// connect and we fall back to periodic JPEG snapshots.
+const SNAPSHOT_FALLBACK_SECS = 3;
+
 /**
- * Low-Bandwidth preview — polls /video/snapshot at the user-selected interval
- * instead of opening a continuous MJPEG/HLS stream.  One HTTP request per
- * interval; ~5–15 KB per frame vs. ~60–200 KB/s for a continuous stream.
+ * Snapshot-fallback preview — polls /video/snapshot on a fixed interval instead
+ * of opening a continuous MJPEG/HLS stream.  One HTTP request per interval;
+ * ~5–15 KB per frame vs. ~60–200 KB/s for a continuous stream.  Reached only as
+ * a last resort when WebRTC fails to connect after repeated attempts.
  * Works in both idle (GStreamer idle preview) and streaming (port 8555) states.
  */
 function switchToSnapshotPreview() {
-  console.log("🔄 Switching to low-bandwidth snapshot preview...");
+  console.log("🔄 Switching to snapshot fallback preview...");
   cancelCurrentPreviewImg(); // tears down any existing MJPEG/HLS/snapshot
 
   const container = document.querySelector(".video-container");
@@ -1958,8 +1959,7 @@ function switchToSnapshotPreview() {
     }
 
     if (!_snapshotPollActive) return;
-    const secs = parseInt(document.getElementById("snapshotInterval")?.value || "3");
-    setTimeout(fetchNext, secs * 1000);
+    setTimeout(fetchNext, SNAPSHOT_FALLBACK_SECS * 1000);
   }
 
   fetchNext(); // immediate first frame, then recurring
@@ -1973,7 +1973,6 @@ function switchToSnapshotPreview() {
  * @param {number}   [_attempt=0]  - internal retry counter (do not pass from call sites)
  */
 async function switchToWebRTCPreview(streamPath, onConnected, _attempt = 0) {
-  if (lowBandwidthMode) { switchToSnapshotPreview(); if (typeof onConnected === "function") onConnected(); return; }
   console.log(`🔄 Switching to WebRTC preview (path="${streamPath}", attempt=${_attempt})...`);
 
   // Tear down everything that might currently own the preview area
@@ -2193,10 +2192,8 @@ async function switchToWebRTCPreview(streamPath, onConnected, _attempt = 0) {
 /**
  * Switch the preview area to the live HLS stream served by MediaMTX.
  * Falls back to TCP MJPEG (port 8555) if HLS is unavailable (e.g. SRT mode).
- * When Low Bandwidth Mode is active, defers to switchToSnapshotPreview() instead.
  */
 function switchToHLSPreview() {
-  if (lowBandwidthMode) { switchToSnapshotPreview(); return; }
   console.log("🔄 Switching to HLS live preview...");
   const container = document.querySelector(".video-container");
 
@@ -2322,8 +2319,6 @@ function _switchToTCPMJPEG(container) {
  * slow/remote connections, preventing the runaway lag that occurred at 5 fps.
  */
 function switchToMJPEGPreview(onLoaded) {
-  // In Low Bandwidth Mode skip continuous MJPEG and use snapshot polling instead.
-  if (lowBandwidthMode) { switchToSnapshotPreview(); if (typeof onLoaded === "function") onLoaded(); return; }
   console.log("🔄 Switching to idle MJPEG preview (1 fps)...");
   const container = document.querySelector(".video-container");
   const oldElement = document.getElementById("videoStream");
@@ -5276,40 +5271,3 @@ loadDeviceIp();
 })();
 
 
-// ── Low Bandwidth Mode — snapshot polling toggle ───────────────────────────
-(function () {
-  const checkbox = document.getElementById("lowBandwidthMode");
-  const intervalSel = document.getElementById("snapshotInterval");
-  if (!checkbox || !intervalSel) return;
-
-  // Restore saved preferences
-  const savedMode = localStorage.getItem("lowBandwidthMode") === "true";
-  const savedInterval = localStorage.getItem("snapshotInterval");
-  if (savedInterval) intervalSel.value = savedInterval;
-  if (savedMode) {
-    lowBandwidthMode = true;
-    checkbox.checked = true;
-  }
-
-  checkbox.addEventListener("change", () => {
-    lowBandwidthMode = checkbox.checked;
-    localStorage.setItem("lowBandwidthMode", lowBandwidthMode);
-
-    // Switch the live preview immediately to reflect the new mode
-    if (lowBandwidthMode) {
-      switchToSnapshotPreview();
-    } else {
-      // Restore the WebRTC preview for the active camera
-      const _restorePath = activeCamIndex === 2 ? "preview2" : "preview";
-      switchToWebRTCPreview(_restorePath);
-    }
-  });
-
-  intervalSel.addEventListener("change", () => {
-    localStorage.setItem("snapshotInterval", intervalSel.value);
-    // Restart snapshot polling immediately with the new interval if active
-    if (lowBandwidthMode && _snapshotPollActive) {
-      switchToSnapshotPreview();
-    }
-  });
-})();
