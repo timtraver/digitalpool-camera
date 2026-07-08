@@ -1092,7 +1092,17 @@ app.post("/api/remote/disable", requireAdmin, async (req, res) => {
 app.post("/api/remote/wipe", requireAdmin, async (req, res) => {
   const log = [];
   try {
-    // 0. Remove the device record from DigitalPool via the cloud function
+    // 0. Stop any active stream(s) first — a deregistered device must not keep
+    //    streaming, and requireRegistered only blocks NEW streams (an already-
+    //    running one would otherwise continue after the wipe).
+    if (streamController.isStreaming || streamController2.isStreaming) {
+      log.push("🔄 Stopping active stream(s) before deregister…");
+      try { await streamController.stopStream(); }  catch { /* not streaming */ }
+      try { await streamController2.stopStream(); } catch { /* not streaming */ }
+      log.push("✅ Stream(s) stopped");
+    }
+
+    // 1. Remove the device record from DigitalPool via the cloud function
     //    (identity-based deregister — no password).  Best-effort: a failure here
     //    must not block the local + NetBird de-registration.  Done first, while
     //    the stored identifiers are still available.
@@ -1119,7 +1129,7 @@ app.post("/api/remote/wipe", requireAdmin, async (req, res) => {
       }
     }
 
-    // 1. Delete from NetBird server (best-effort — needs NETBIRD_API_TOKEN)
+    // 2. Delete from NetBird server (best-effort — needs NETBIRD_API_TOKEN)
     try {
       const deleted = await netbirdDeleteCurrentPeer();
       log.push(deleted
@@ -1131,7 +1141,7 @@ app.post("/api/remote/wipe", requireAdmin, async (req, res) => {
       console.warn("netbirdDeleteCurrentPeer:", e.message);
     }
 
-    // 2. Stop daemon, clear local identity
+    // 3. Stop daemon, clear local identity
     log.push("🔄 Stopping netbird daemon…");
     await execAsync("sudo /usr/bin/systemctl stop netbird").catch(() => {});
     await new Promise(r => setTimeout(r, 1000));
@@ -1145,7 +1155,7 @@ app.post("/api/remote/wipe", requireAdmin, async (req, res) => {
     await execAsync("sudo /usr/bin/systemctl start netbird").catch(() => {});
     await new Promise(r => setTimeout(r, 1500));
 
-    // 3. Clear registered state + venue association (the device no longer exists
+    // 4. Clear registered state + venue association (the device no longer exists
     //    on DigitalPool).  Keep name/email/MAC for pre-fill and identity.
     const cfg = loadRemoteConfig();
     cfg.registered   = false;
