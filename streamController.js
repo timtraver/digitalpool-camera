@@ -2348,14 +2348,26 @@ class StreamController extends EventEmitter {
     const os = require("os");
     const interfaces = os.networkInterfaces();
 
-    // Find first non-internal IPv4 address
+    // The always-on WiFi hotspot lives on this subnet. Clients (OBS, VLC, etc.)
+    // must connect over Ethernet or client-WiFi, never the AP address, so we
+    // deliberately skip the hotspot subnet when resolving the connect URL.
+    const HOTSPOT_SUBNET = process.env.HOTSPOT_SUBNET || "192.168.50.";
+    const isHotspot = (addr) => addr.startsWith(HOTSPOT_SUBNET);
+
+    // Collect all usable (non-internal, non-hotspot) IPv4 addresses.
+    const candidates = [];
     for (const name of Object.keys(interfaces)) {
       for (const iface of interfaces[name]) {
-        if (iface.family === "IPv4" && !iface.internal) {
-          return iface.address;
-        }
+        if (iface.family !== "IPv4" || iface.internal) continue;
+        if (isHotspot(iface.address)) continue;
+        candidates.push({ name, address: iface.address });
       }
     }
+
+    // Priority: 1) Ethernet (eth*/en*), 2) any other non-hotspot address.
+    const eth = candidates.find((c) => /^e(th|n)/.test(c.name));
+    if (eth) return eth.address;
+    if (candidates.length > 0) return candidates[0].address;
     return "localhost";
   }
 

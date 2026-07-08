@@ -1681,12 +1681,15 @@ socket.on("streamStatus", (status) => {
     const liveLabel = liveProtocol === "rtsp" ? "RTSP Server" : liveProtocol === "srt" ? "SRT Server" : "RTMP Push";
     setStreamStatus("live", `Streaming LIVE — ${liveLabel}`);
 
-    // Update connection info with actual IP from server status
-    if (status.localIP) deviceLocalIP = status.localIP;
-    if (status.connectionUrl && connectionUrlEl) {
+    // Update connection info with actual IP from server status.
+    // Only trust the server IP if it isn't the WiFi hotspot address —
+    // clients must connect over Ethernet/WiFi, never the AP subnet.
+    if (status.localIP && status.localIP !== AP_IP) deviceLocalIP = status.localIP;
+    // Render the full box (main URL + HLS/SRT extras) from the resolved IP so
+    // every line stays in sync, then let the server's URL override the main line.
+    updateConnectionInfo(liveProtocol, deviceLocalIP);
+    if (status.connectionUrl && !status.connectionUrl.includes(AP_IP) && connectionUrlEl) {
       connectionUrlEl.textContent = status.connectionUrl;
-    } else {
-      updateConnectionInfo(liveProtocol, deviceLocalIP);
     }
 
     // Switch to WebRTC "live" preview when streaming.
