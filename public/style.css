@@ -1366,6 +1366,9 @@ footer {
 .wifi-net-meta { font-size: 11px; color: rgba(255,255,255,0.45); }
 
 .wifi-msg { font-size: 11px; min-height: 16px; margin-top: 4px; }
+/* In the Power section, don't reserve vertical space for empty status lines —
+   keeps the Restart/Reboot/Power Down buttons tightly stacked. */
+#powerSection .wifi-msg:empty { display: none; }
 
 /* ═══════════════════════════════════════════════════════════
    Collapsible Settings Cards
