@@ -4343,6 +4343,23 @@ loadDeviceIp();
     setTimeout(poll, 15000);
   });
 
+  // ── Power: shut down device (any admin) ──────────────────────
+  document.getElementById("shutdownSystemBtn")?.addEventListener("click", async () => {
+    const btn = document.getElementById("shutdownSystemBtn");
+    const msg = document.getElementById("shutdownSystemMsg");
+
+    if (!confirm("Power down the entire device? It will turn off and must be powered on manually to use again.")) return;
+
+    btn.disabled = true;
+    btn.textContent = "⏳ Powering down…";
+    msg.textContent = "⏻ Device is powering down — power it on manually to use again.";
+    msg.style.color = "#facc15";
+
+    try {
+      await fetch("/api/shutdown", { method: "POST" });
+    } catch { /* device already shutting down */ }
+  });
+
   // ── System Image / golden clone (dpadmin only) ───────────────
   if (currentUser.username === "dpadmin") {
     const imgSec = document.getElementById("systemImageSection");

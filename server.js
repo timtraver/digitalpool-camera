@@ -1550,9 +1550,9 @@ app.get("/api/version", (req, res) => {
   }
 });
 
-// API endpoint to restart the service without updating code (admin only)
+// API endpoint to restart the service without updating code (any logged-in user)
 // process.exit(0) causes systemd (Restart=always) to bring it straight back up.
-app.post("/api/restart", requireAdmin, async (req, res) => {
+app.post("/api/restart", requireAuth, async (req, res) => {
   res.json({ success: true });
   setTimeout(() => {
     console.log("🔄 Restart requested via admin panel — restarting service via process.exit");
@@ -1560,12 +1560,21 @@ app.post("/api/restart", requireAdmin, async (req, res) => {
   }, 800);
 });
 
-// API endpoint to reboot the entire device (admin only)
-app.post("/api/reboot", requireAdmin, async (req, res) => {
+// API endpoint to reboot the entire device (any logged-in user)
+app.post("/api/reboot", requireAuth, async (req, res) => {
   res.json({ success: true });
   setTimeout(() => {
     console.log("⚡ Device reboot requested via admin panel — running sudo reboot");
     execAsync("sudo reboot").catch(() => {});
+  }, 800);
+});
+
+// API endpoint to power down the entire device (any logged-in user)
+app.post("/api/shutdown", requireAuth, async (req, res) => {
+  res.json({ success: true });
+  setTimeout(() => {
+    console.log("⚡ Device power down requested via admin panel — running sudo poweroff");
+    execAsync("sudo poweroff").catch(() => {});
   }, 800);
 });
 

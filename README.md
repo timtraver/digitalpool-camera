@@ -1758,7 +1758,7 @@ Ubuntu 24.04 manages wired ethernet via **netplan → systemd-networkd**, not Ne
 
 ### Required sudoers entries
 
-Three `sudo` commands are needed. Add them to the existing sudoers file created in § 7c:
+Four `sudo` commands are needed. Add them to the existing sudoers file created in § 7c:
 
 ```bash
 sudo tee -a /etc/sudoers.d/digitalpool-captive > /dev/null << 'EOF'
@@ -1766,6 +1766,7 @@ dp ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/netplan/99-digitalpool-ethernet.yaml
 dp ALL=(ALL) NOPASSWD: /usr/bin/netplan apply
 dp ALL=(ALL) NOPASSWD: /usr/bin/timedatectl set-timezone *
 dp ALL=(ALL) NOPASSWD: /usr/sbin/reboot
+dp ALL=(ALL) NOPASSWD: /usr/sbin/poweroff
 EOF
 
 # Validate before applying
@@ -1777,6 +1778,7 @@ sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
 | `netplan` / `tee` | Ethernet IP configuration in Admin Settings |
 | `timedatectl set-timezone` | Timezone selector in Admin Settings (🕐 Timezone) |
 | `reboot` | **⚡ Power → Reboot Device** button in Admin Settings |
+| `poweroff` | **⚡ Power → Power Down Device** button in Admin Settings |
 
 ### Setting a static IP
 
