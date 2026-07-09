@@ -204,7 +204,7 @@ fi
 # ── 6. Extract the root filesystem ──────────────────────────────────────────────
 step "Extracting root filesystem (this is the long part)"
 mount "$ROOT_DEV" "$ROOTMNT" || fatal "cannot mount root $ROOT_DEV"
-zstd -dc "$IMG" | tar -x --numeric-owner --xattrs --acls -p -S -C "$ROOTMNT" \
+zstd -dc "$IMG" | tar -x --numeric-owner --xattrs --acls -p -S --warning=no-timestamp -C "$ROOTMNT" \
     || fatal "root extraction failed"
 info "Root filesystem extracted"
 
@@ -220,7 +220,7 @@ while IFS='|' read -r NUM MP FSTYPE UUID LABEL ROLE TARF; do
     MOUNTED+=("$DEST")
     TARPATH="${ROOTMNT}/var/lib/dp-image/${TARF}"
     [[ -f "$TARPATH" ]] || { warn "archive $TARF missing in image — skipping $MP"; continue; }
-    zstd -dc "$TARPATH" | tar -x --numeric-owner --xattrs --acls -p -S -C "$DEST" \
+    zstd -dc "$TARPATH" | tar -x --numeric-owner --xattrs --acls -p -S --warning=no-timestamp -C "$DEST" \
         || fatal "extraction of $MP failed"
     info "Populated ${MP} from ${TARF}"
 done < <(mj "$PART_LINES")
