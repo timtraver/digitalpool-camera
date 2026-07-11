@@ -62,7 +62,7 @@ class AuthManager {
 
     // ── dpadmin — support account; cannot be deleted but password may be
     //    overridden via DPADMIN_PASSWORD in .env (takes effect on restart).
-    const dpPw   = process.env.DPADMIN_PASSWORD || 'DigitalpoolC42';
+    const dpPw   = process.env.DPADMIN_PASSWORD || 'Digitalpool42';
     const dpadmin = this.findUser('dpadmin');
     if (!dpadmin) {
       const hash = bcrypt.hashSync(dpPw, SALT_ROUNDS);
