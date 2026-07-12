@@ -4948,26 +4948,23 @@ loadDeviceIp();
       passwordToggle.setAttribute("aria-label", label);
     });
 
-    // "Go to Network Settings" — close the modal (so the sidebar is reachable),
-    // then open the Network accordion and scroll to it.
+    // "Go to Network Settings" — close the modal (so the panel is reachable),
+    // then expand the "Network & WiFi Setup" panel and scroll to it.
     document.getElementById("regGoToNetworkBtn")?.addEventListener("click", () => {
       closeRegModal();
-      const networkDetails = document.querySelector(".admin-collapsible[data-section='network'], #networkDetails, details.admin-collapsible");
-      // Find the Network Settings <details> by looking for its summary text
-      const allDetails = document.querySelectorAll("details.admin-collapsible");
-      for (const d of allDetails) {
-        const summary = d.querySelector("summary");
-        if (summary && summary.textContent.toLowerCase().includes("network")) {
-          d.open = true;
-          d.scrollIntoView({ behavior: "smooth", block: "start" });
-          return;
-        }
+      const toggle  = document.getElementById("wifiPanelToggle");
+      const body    = document.getElementById("wifiPanelBody");
+      const chevron = document.getElementById("wifiChevron");
+      if (!toggle || !body) return;
+      // Expand it if collapsed.
+      if (body.style.display === "none") {
+        body.style.display = "block";
+        if (chevron) chevron.textContent = "▼";
       }
-      // Fallback: just open the admin settings card if it's collapsed
-      const adminBody = document.getElementById("adminSettingsBody");
-      if (adminBody && adminBody.style.display === "none") {
-        document.getElementById("adminSettingsToggle")?.click();
-      }
+      // Wait a tick so layout reflows before scrolling.
+      requestAnimationFrame(() => {
+        toggle.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
     });
 
     // "Check Again" — re-probe internet and update the UI
