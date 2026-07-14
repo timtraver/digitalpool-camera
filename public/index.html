@@ -469,6 +469,13 @@
               </div>
               <div id="urlOverlayOptions">
                 <div class="control-item-compact">
+                  <label>Overlay:</label>
+                  <select id="overlaySelect" style="flex: 1">
+                    <option value="">— None —</option>
+                    <option value="__custom__">Custom URL…</option>
+                  </select>
+                </div>
+                <div class="control-item-compact" id="overlayUrlRow" style="display: none">
                   <label>URL:</label>
                   <input type="text" id="overlayUrl" placeholder="https://example.com/overlay" style="flex: 1" />
                 </div>

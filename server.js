@@ -2311,6 +2311,57 @@ app.post("/api/overlay-url", express.json(), async (req, res) => {
   res.json({ success: true, overlayUrl: url || "" });
 });
 
+// API endpoint to list the overlays available to this device's DigitalPool
+// account — the owner's own custom overlays plus public overlays for the venue.
+// Identity-based (no password), keyed on the identifiers stored in remote.json
+// during registration; same cloud function + client as register/deregister.
+let _overlayListCache = { at: 0, overlays: null };
+const OVERLAY_LIST_TTL_MS = 60000;
+app.get("/api/overlays", async (req, res) => {
+  const cfg = loadRemoteConfig();
+  if (!cfg.registered) {
+    return res.json({ ok: false, error: "device not registered", overlays: [] });
+  }
+
+  // Serve a recent cached list so re-opening the panel doesn't re-hit the function.
+  if (req.query.refresh !== "1"
+      && _overlayListCache.overlays
+      && Date.now() - _overlayListCache.at < OVERLAY_LIST_TTL_MS) {
+    return res.json({ ok: true, overlays: _overlayListCache.overlays, cached: true });
+  }
+
+  let result;
+  try {
+    result = await callDigitalPoolRegister({
+      action:     "listOverlays",
+      ownerEmail: cfg.ownerEmail || "",
+      venueId:    cfg.venueId    || "",
+      deviceId:   cfg.deviceId   || "",
+      macAddress: cfg.macAddress || getPrimaryMac(),
+    });
+  } catch (e) {
+    console.warn("listOverlays failed:", e.message);
+    return res.status(502).json({ ok: false, error: `Could not reach DigitalPool overlay service: ${e.message}`, overlays: [] });
+  }
+
+  if (result.statusCode >= 400 || result.body?.ok === false) {
+    return res.status(502).json({ ok: false, error: result.body?.error || `Overlay service error (HTTP ${result.statusCode})`, overlays: [] });
+  }
+
+  // Normalize: keep only entries with a usable URL; default missing scope to public.
+  const overlays = (Array.isArray(result.body?.overlays) ? result.body.overlays : [])
+    .map((o) => ({
+      id:    o.id ?? o.url ?? "",
+      name:  o.name || o.title || o.url || "Overlay",
+      url:   typeof o.url === "string" ? o.url.trim() : "",
+      scope: o.scope === "mine" ? "mine" : "public",
+    }))
+    .filter((o) => o.url);
+
+  _overlayListCache = { at: Date.now(), overlays };
+  res.json({ ok: true, overlays });
+});
+
 // API endpoint to get all controls
 app.get("/api/controls", async (req, res) => {
   const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;

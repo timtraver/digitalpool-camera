@@ -1784,6 +1784,8 @@ const urlOverlayOptions = document.getElementById("urlOverlayOptions");
 const overlayText = document.getElementById("overlayText");
 const showTimestamp = document.getElementById("showTimestamp");
 const overlayUrl = document.getElementById("overlayUrl");
+const overlaySelect = document.getElementById("overlaySelect");
+const overlayUrlRow = document.getElementById("overlayUrlRow");
 const timestampPosition = document.getElementById("timestampPosition");
 const timestampFormat = document.getElementById("timestampFormat");
 const titlePosition = document.getElementById("titlePosition");
@@ -3321,6 +3323,84 @@ overlayUrl.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { overlayUrl.blur(); }
 });
 
+// ── Overlay picker (overlays from the user's DigitalPool account) ────────────
+// The list is account-wide (owner's own + venue-public overlays), so it is
+// fetched once and re-used for both cameras. Selecting an item just sets
+// overlayUrl.value and flows through the existing applyOverlaySettings() path.
+let availableOverlays = [];
+
+function populateOverlaySelect() {
+  // Rebuild options: — None —, [My Overlays], [Venue Overlays], Custom URL…
+  overlaySelect.innerHTML = "";
+  const none = new Option("— None —", "");
+  overlaySelect.add(none);
+
+  const groups = [
+    { label: "My Overlays",    scope: "mine" },
+    { label: "Venue Overlays", scope: "public" },
+  ];
+  for (const g of groups) {
+    const items = availableOverlays.filter((o) => o.scope === g.scope);
+    if (!items.length) continue;
+    const og = document.createElement("optgroup");
+    og.label = g.label;
+    for (const o of items) og.appendChild(new Option(o.name, o.url));
+    overlaySelect.appendChild(og);
+  }
+
+  overlaySelect.add(new Option("Custom URL…", "__custom__"));
+}
+
+// Sync the dropdown + custom-URL row to the current overlayUrl.value.
+function reconcileOverlaySelect() {
+  const url = overlayUrl.value || "";
+  const known = availableOverlays.some((o) => o.url === url);
+  if (!url) {
+    overlaySelect.value = "";
+    overlayUrlRow.style.display = "none";
+  } else if (known) {
+    overlaySelect.value = url;
+    overlayUrlRow.style.display = "none";
+  } else {
+    // A pasted/legacy URL not in the list → show it under "Custom URL…".
+    overlaySelect.value = "__custom__";
+    overlayUrlRow.style.display = "";
+  }
+}
+
+async function loadOverlayList() {
+  try {
+    const resp = await fetch("/api/overlays");
+    const data = await resp.json();
+    availableOverlays = data.ok && Array.isArray(data.overlays) ? data.overlays : [];
+  } catch (e) {
+    console.warn("Could not load overlay list:", e);
+    availableOverlays = [];
+  }
+  populateOverlaySelect();
+  reconcileOverlaySelect();
+}
+
+overlaySelect.addEventListener("change", () => {
+  const val = overlaySelect.value;
+  if (val === "__custom__") {
+    // Reveal the free-text field for an arbitrary URL; keep whatever's typed.
+    overlayUrlRow.style.display = "";
+    overlayUrl.focus();
+    return;
+  }
+  // "" (None) or a concrete overlay URL — set it and apply through the normal path.
+  overlayUrlRow.style.display = "none";
+  overlayUrl.value = val;
+  currentOverlayConfig.overlayUrl = val;
+  drawOverlay();
+  if (isCurrentlyStreaming) showOverlayUpdating();
+  applyOverlaySettings();
+});
+
+// Load the account's overlays once at startup; re-reconciled on each config load.
+loadOverlayList();
+
 // Overlay zoom slider
 overlayZoom.addEventListener("input", () => {
   overlayZoomValue.textContent = overlayZoom.value + "%";
@@ -3368,6 +3448,7 @@ socket.on("streamStatus", (status) => {
     showTimestamp.checked = status.config.showTimestamp || false;
     remoteOverlayEnabled.checked = status.config.remoteOverlayEnabled || false;
     overlayUrl.value = status.config.overlayUrl || "";
+    reconcileOverlaySelect();
     overlayZoom.value = status.config.overlayZoom || 100;
     overlayZoomValue.textContent = overlayZoom.value + "%";
 
