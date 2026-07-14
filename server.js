@@ -4083,6 +4083,21 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
     "rtmpsink", `location=rtmp://localhost:1935${getSC(camIdx).previewPath}`, "sync=false", "async=false",
   );
 
+  // NDI sources carry an audio pad that this video-only preview never links.
+  // ndisrcdemux pushes an audio buffer as soon as it appears; with no sink it
+  // returns NOT_LINKED, which propagates back through ndisrc as a fatal
+  // "Internal data stream error" and kills the preview.  Give the pad a
+  // fakesink so it has somewhere to go.  (The live pipeline handles the same
+  // hazard with a DROP probe in gst-overlay-pipeline.py.)  async=false keeps a
+  // late-appearing audio pad from stalling the pipeline's preroll.
+  if (activeSource.type === "ndi" && activeSource.ndiName) {
+    gstArgs.push(
+      "ndi_demux.audio",
+      "!", "queue", "max-size-buffers=2", "max-size-time=0", "max-size-bytes=0", "leaky=downstream",
+      "!", "fakesink", "sync=false", "async=false",
+    );
+  }
+
   return gstArgs;
 }
 
