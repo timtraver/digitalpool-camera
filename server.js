@@ -2779,6 +2779,20 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
   }
   sc.setInputSource(getActiveSource(camIdx));
 
+  // Ensure this controller's encoder matches the actual hardware before we build
+  // any pipeline.  A controller whose camera was absent at boot — e.g. camera 2
+  // defaulting to a non-existent /dev/video2 — skips initialize()/_autoDetectEncoder(),
+  // so its encoder is still the Rockchip default "mpph264enc".  On an Intel box that
+  // makes the idle preview select the nonexistent mpph264enc / mppjpegdec elements and
+  // fail to launch ("no element mppjpegdec"), which loops into backoff and reverts the
+  // source.  Re-detecting here (gst-inspect only, no camera needed) corrects the encoder
+  // — and the JPEG decoder derived from it — and persists the fix.
+  try {
+    await sc._autoDetectEncoder();
+  } catch (e) {
+    console.warn(`⚠️ [Cam${camIdx}] Encoder auto-detect failed:`, e.message);
+  }
+
   // ── Step 3: Bring up idle preview on the new source ─────────────────────
   try {
     await startPersistentIdlePreview(camIdx);
