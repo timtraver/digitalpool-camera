@@ -1034,6 +1034,22 @@ let reloadCameraInput = null;
         if (ndiSection) ndiSection.style.display = "";
         activeSource = { type: "ndi", device: "", rtspUrl: "", rtmpUrl: "", ndiName: data.current.ndiName || "" };
       }
+
+      // Reflect the applied source type in the dropdown + panels for ALL cases.
+      // The per-type blocks above only fill in their own field/URL; the USB case
+      // in particular never set the type, so switching camera tabs left the
+      // dropdown showing the previous camera's source type.  Setting
+      // <select>.value programmatically does NOT fire "change", so we must also
+      // refresh the custom-dropdown display and toggle the panels here.
+      const curType = (data.current?.type && data.current.type !== "none")
+        ? data.current.type : "usb";
+      sourceTypeEl.value = curType;
+      updateCustomDropdownDisplay(sourceTypeEl);
+      usbSection.style.display                    = curType === "usb"  ? "" : "none";
+      rtspSection.style.display                   = curType === "rtsp" ? "" : "none";
+      if (rtmpSection) rtmpSection.style.display  = curType === "rtmp" ? "" : "none";
+      if (ndiSection)  ndiSection.style.display   = curType === "ndi"  ? "" : "none";
+      updateAudioDeviceRowVisibility();
     } catch (e) {
       if (deviceSelect) deviceSelect.innerHTML = "<option value=''>Error loading devices</option>";
     }
