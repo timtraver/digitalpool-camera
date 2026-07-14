@@ -943,7 +943,10 @@ let reloadCameraInput = null;
 
   function updateApplyButton() {
     if (!applyBtn) return;
-    const type = sourceTypeEl.value;
+    // "No Camera" is offered inside the USB device list; when picked the effective
+    // source type is "none" (clears the slot) rather than "usb".
+    let type = sourceTypeEl.value;
+    if (type === "usb" && (deviceSelect?.value || "") === "none") type = "none";
     let matches = type === activeSource.type;
     if (matches) {
       if (type === "usb")  matches = (deviceSelect?.value || "") === activeSource.device;
@@ -961,20 +964,41 @@ let reloadCameraInput = null;
       const data = await r.json();
       if (!deviceSelect) return;
       deviceSelect.innerHTML = "";
+      // "No Camera" always leads the list — selecting it clears this slot and
+      // releases the physical device so it can be assigned to the other camera.
+      const noneOpt = document.createElement("option");
+      noneOpt.value = "none";
+      noneOpt.textContent = "— No Camera —";
+      deviceSelect.appendChild(noneOpt);
       if (!data.devices || data.devices.length === 0) {
-        deviceSelect.innerHTML = "<option value=''>No devices found</option>";
-        return;
+        const noDev = document.createElement("option");
+        noDev.value = "";
+        noDev.disabled = true;
+        noDev.textContent = "No devices found";
+        deviceSelect.appendChild(noDev);
+      } else {
+        // Deduplicate: prefer the first /dev/videoN entry per camera name
+        const seen = new Set();
+        data.devices.forEach(({ device, name }) => {
+          if (seen.has(name)) return;
+          seen.add(name);
+          const opt = document.createElement("option");
+          opt.value = device;
+          opt.textContent = `${name} (${device})`;
+          deviceSelect.appendChild(opt);
+        });
       }
-      // Deduplicate: prefer the first /dev/videoN entry per camera name
-      const seen = new Set();
-      data.devices.forEach(({ device, name }) => {
-        if (seen.has(name)) return;
-        seen.add(name);
-        const opt = document.createElement("option");
-        opt.value = device;
-        opt.textContent = `${name} (${device})`;
-        deviceSelect.appendChild(opt);
-      });
+      // Pre-select the current active source.
+      if (data.current?.type === "none") {
+        // Cleared slot: show the USB device row with "No Camera" selected.
+        sourceTypeEl.value = "usb";
+        deviceSelect.value = "none";
+        usbSection.style.display  = "";
+        rtspSection.style.display = "none";
+        if (rtmpSection) rtmpSection.style.display = "none";
+        if (ndiSection) ndiSection.style.display = "none";
+        activeSource = { type: "none", device: "", rtspUrl: "", rtmpUrl: "", ndiName: "" };
+      }
       // Pre-select the current active device and record it as activeSource
       if (data.current?.type === "usb" && data.current.device) {
         deviceSelect.value = data.current.device;
@@ -1128,9 +1152,13 @@ let reloadCameraInput = null;
 
   if (applyBtn) {
     applyBtn.addEventListener("click", async () => {
-      const type = sourceTypeEl.value;
+      // "No Camera" is selected via the USB device list but applies as type "none".
+      let type = sourceTypeEl.value;
+      if (type === "usb" && (deviceSelect?.value || "") === "none") type = "none";
       const body = { type };
-      if (type === "usb") {
+      if (type === "none") {
+        // Nothing else to send — the slot is being cleared.
+      } else if (type === "usb") {
         body.device = deviceSelect?.value || "";
         if (!body.device) { statusEl.textContent = "⚠️ Select a device first."; return; }
       } else if (type === "rtsp") {
@@ -1167,7 +1195,9 @@ let reloadCameraInput = null;
           // Refresh resolution capabilities for the newly-active source.
           if (typeof loadCameraCapabilities === "function") loadCameraCapabilities();
           statusEl.style.color = "rgba(80,220,120,0.9)";
-          statusEl.textContent = data.streamRestarted ? "✅ Applied — stream restarted" : "✅ Applied";
+          statusEl.textContent = activeSource.type === "none"
+            ? "✅ Camera cleared — device released"
+            : data.streamRestarted ? "✅ Applied — stream restarted" : "✅ Applied";
         } else {
           statusEl.style.color = "rgba(255,160,80,0.9)";
           statusEl.textContent = `⚠️ ${data.error}`;

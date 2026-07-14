@@ -2600,7 +2600,7 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
   if (type === "ndi" && !ndiName) {
     return res.status(400).json({ success: false, error: "ndiName required" });
   }
-  if (type !== "usb" && type !== "rtsp" && type !== "rtmp" && type !== "ndi") {
+  if (type !== "usb" && type !== "rtsp" && type !== "rtmp" && type !== "ndi" && type !== "none") {
     return res.status(400).json({ success: false, error: "Unknown source type" });
   }
 
@@ -2608,6 +2608,56 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
   const previousSource    = { ...activeSource };
   const wasStreaming      = sc.isStreaming;
   const savedStreamConfig = wasStreaming ? { ...sc.streamConfig } : null;
+
+  // ── "No Camera" — clear this slot entirely ───────────────────────────────
+  // Stops any running stream, tears down the idle preview so the physical
+  // device's V4L2 fd is released, and clears discovered PTZ controls.  This
+  // frees the device so it can be re-assigned to the other camera slot (the
+  // whole point: swapping which physical camera drives camera 1 vs camera 2).
+  // Unlike the connect-and-verify flow below there is nothing to bring up or
+  // wait for, so we persist and return immediately.
+  if (type === "none") {
+    const newSource = { type: "none", device: "", rtspUrl: "", rtmpUrl: "", ndiName: "" };
+    // Flip the active source to "none" FIRST so any in-flight idle-preview
+    // auto-restart (fired by the stop below) hits the "none" guard in
+    // startPersistentIdlePreview() and bails instead of re-opening the device.
+    if (camIdx === 2) activeCameraSource2 = newSource; else activeCameraSource = newSource;
+    sc.setInputSource(newSource);
+
+    isRestartInProgress[camIdx] = true;
+    if (wasStreaming) {
+      io.emit("streamStatus", { ...sc.getStatus(), status: "stopping", cameraIndex: camIdx });
+      console.log(`📷 [Cam${camIdx}] Camera source cleared: stopping active stream…`);
+      await sc.stopStream();
+    }
+    // Kill the tracked idle preview process so its V4L2 fd is released.
+    await _killIdlePreviewForCamera(camIdx);
+    // _killIdlePreviewForCamera only fuser -k's a "usb" source, and we've
+    // already switched to "none" — so release the PREVIOUS device explicitly to
+    // clear any orphan holders, freeing it for the other camera slot.
+    if (previousSource.type === "usb") {
+      const prevDev = previousSource.device || defaultDevice;
+      try {
+        execSync(`fuser -k "${prevDev}" 2>/dev/null || true`);
+        console.log(`🔓 [Cam${camIdx}] fuser -k ${prevDev} — device released for reassignment`);
+        await new Promise((r) => setTimeout(r, 500));
+      } catch (_) { /* fuser not installed or device already free — ignore */ }
+    }
+    isRestartInProgress[camIdx] = false;
+
+    // Drop all stale camera state so no PTZ ranges leak from the removed camera.
+    cam.currentPan = 0;
+    cam.currentTilt = 0;
+    cam.discoveredControls = null;
+    cam._ptzQueue = Promise.resolve();
+
+    saveCameraSource(newSource, camIdx);
+    io.emit("refreshIdlePreview", { cameraIndex: camIdx });
+    io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: [], ptzRanges: {} });
+    io.emit("streamStatus", { ...sc.getStatus(), cameraIndex: camIdx });
+    console.log(`📷 [Cam${camIdx}] Camera source set to "No Camera" — device released`);
+    return res.json({ success: true, source: newSource, wasStreaming, streamRestarted: false });
+  }
 
   // ── Step 1: Stop the live stream if running ──────────────────────────────
   // isRestartInProgress suppresses the automatic idle-preview restart that the
@@ -3991,6 +4041,14 @@ async function startPersistentIdlePreview(camIdx = 1) {
   const failStreak   = camIdx === 2 ? _idlePreviewFailStreak2 : _idlePreviewFailStreak;
   const curProc      = camIdx === 2 ? currentIdlePreviewProcess2 : currentIdlePreviewProcess;
 
+  // "No Camera" — this slot is intentionally empty; nothing to preview and the
+  // physical device must stay released so the other slot can claim it.  Guarding
+  // here covers every caller (boot restore, /video/stream, gst-close auto-restart).
+  if (activeSource.type === "none") {
+    console.log(`⚪ [Cam${camIdx}] Idle preview skipped — source is "No Camera"`);
+    return;
+  }
+
   // Don't start if this camera's stream is active
   if (sc.isStreaming) {
     console.log(`⚠️  [Cam${camIdx}] Not starting idle preview — stream is active`);
@@ -4734,6 +4792,12 @@ server.listen(PORT, async () => {
     }
   }
 
+  // If Camera 1 is intentionally cleared ("No Camera"), leave the device released:
+  // skip stream init (auto-start would grab the default device).  Idle preview and
+  // activation are already no-ops for a "none" source.
+  const cam1Empty = activeCameraSource.type === "none";
+  if (cam1Empty) console.log('📷 [Cam1] Saved source is "No Camera" — slot left empty, device released');
+
   // Step 1 — Detect format so the idle preview (and any auto-start stream)
   // use the right pipeline from the very first frame.
   console.log("\n🚀 Activating camera and detecting capture format...");
@@ -4769,10 +4833,12 @@ server.listen(PORT, async () => {
   // Step 4 — Initialize stream controller (auto-start if configured).
   // At this point the camera has been streaming for ~3 s so VIDIOC_S_FMT
   // will succeed immediately after _killCameraProcesses() releases the device.
-  try {
-    await streamController.initialize();
-  } catch (error) {
-    console.error("❌ Error initializing stream controller:", error.message);
+  if (!cam1Empty) {
+    try {
+      await streamController.initialize();
+    } catch (error) {
+      console.error("❌ Error initializing stream controller:", error.message);
+    }
   }
 
   // Boot is complete — allow /video/stream to auto-start idle preview if needed
@@ -4818,6 +4884,14 @@ server.listen(PORT, async () => {
         if (activeCameraSource2.type === "usb" && activeCameraSource2.device) {
           camera2.device = activeCameraSource2.device;
         }
+      }
+
+      // If Camera 2 is intentionally cleared ("No Camera"), skip the full init
+      // sequence so the device stays released for the other slot.
+      if (activeCameraSource2.type === "none") {
+        console.log('ℹ️  [Cam2] Saved source is "No Camera" — slot left empty, device released.');
+        cameraInitialized2 = true;
+        return;
       }
 
       // If Camera 2 is configured as a USB source but the device file does not
