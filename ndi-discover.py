@@ -9,7 +9,15 @@ array of objects to stdout:
     [{"name": "DESKTOP-ABC (OBS)", "url": "192.168.1.10:5960"}, ...]
 
 Usage:
-    python3 ndi-discover.py [timeout_ms]   # default: 5000
+    python3 ndi-discover.py [timeout_ms] [extra_ips]   # default: 5000, ""
+
+`extra_ips` is an optional comma-separated list of IP addresses (or subnet
+addresses) to query directly via NDI unicast discovery.  This bypasses mDNS
+multicast entirely — essential on multi-homed devices (wired LAN + AP hotspot
++ VPN) where the SDK's multicast discovery goes out the wrong interface and
+never reaches a source on the LAN.  Example:
+
+    python3 ndi-discover.py 5000 192.168.1.20,192.168.1.21
 """
 
 import ctypes
@@ -43,7 +51,7 @@ class _NDIlib_find_create_t(ctypes.Structure):
     ]
 
 
-def discover(timeout_ms: int = 5000) -> list:
+def discover(timeout_ms: int = 5000, extra_ips: str = "") -> list:
     # ── Load library ──────────────────────────────────────────────────────────
     try:
         ndi = ctypes.CDLL(NDI_LIB_PATH)
@@ -76,10 +84,14 @@ def discover(timeout_ms: int = 5000) -> list:
         ndi.NDIlib_destroy()
         return [{"error": "No NDIlib_find_create symbol found in NDI library"}]
 
+    # When extra_ips is supplied, query those addresses directly via unicast
+    # discovery.  Keep the encoded bytes in a local so ctypes doesn't free the
+    # buffer before NDIlib_find_create reads it.
+    extra_ips_b = extra_ips.encode("utf-8") if extra_ips else None
     settings = _NDIlib_find_create_t(
         show_local_sources=True,
         p_groups=None,
-        p_extra_ips=None,
+        p_extra_ips=extra_ips_b,
     )
     finder = create_fn(ctypes.byref(settings))
     if not finder:
@@ -118,5 +130,6 @@ def discover(timeout_ms: int = 5000) -> list:
 
 
 if __name__ == "__main__":
-    timeout = int(sys.argv[1]) if len(sys.argv) > 1 else 5000
-    print(json.dumps(discover(timeout)))
+    timeout   = int(sys.argv[1]) if len(sys.argv) > 1 else 5000
+    extra_ips = sys.argv[2]      if len(sys.argv) > 2 else ""
+    print(json.dumps(discover(timeout, extra_ips)))
