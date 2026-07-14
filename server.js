@@ -1870,7 +1870,30 @@ app.post("/api/update", requireAdmin, async (req, res) => {
     const { stdout, stderr } = await execAsync(`git reset --hard ${target}`, { cwd: __dirname });
     const output = (stdout || "").trim() || (stderr || "").trim() || "No output";
     console.log(`🔄 Deploying ${target}: ${output}`);
-    res.json({ success: true, output });
+
+    // Apply any host-config migrations that arrived with this update (packages,
+    // systemd units, /etc changes — things git alone can't do because we run as
+    // the unprivileged `dp` user).  The migration service is a root oneshot that
+    // blocks until finished; `systemctl start` returns non-zero if it failed.
+    // See migrations/README.md.  Tolerates boxes not yet bootstrapped (the sudo
+    // call just errors, the update still succeeds and restarts).
+    let migrations = "";
+    try {
+      await execAsync("sudo /usr/bin/systemctl start digitalpool-migrations.service",
+                      { cwd: __dirname, timeout: 600000 });
+      migrations = "Migrations applied.";
+    } catch (mErr) {
+      migrations = `Migration run reported an error: ${mErr.message}`;
+      console.error("⚠️  Migration run failed:", mErr.message);
+    }
+    // Surface the tail of the migration log so the admin sees what happened
+    // without needing to SSH in.  (Log is world-readable; created by the runner.)
+    try {
+      const { stdout: logTail } = await execAsync("tail -n 40 /var/log/digitalpool-migrations.log");
+      if (logTail && logTail.trim()) migrations += "\n\n" + logTail.trim();
+    } catch { /* log may not exist yet on un-bootstrapped boxes */ }
+
+    res.json({ success: true, output, migrations });
   } catch (e) {
     return res.status(500).json({ success: false, error: e.message });
   }

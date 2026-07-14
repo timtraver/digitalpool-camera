@@ -947,7 +947,40 @@ For every incoming viewer connection (RTSP, SRT, RTMP, WebRTC) MediaMTX calls `P
 
 NDI lets the device receive a network video feed from any NDI sender on the same LAN — OBS, NewTek TriCaster, Mac Scan Converter, vMix, etc. — and re-stream it through the normal hardware-encode pipeline. Both standard NDI (uncompressed `video/x-raw`) and the compressed variants **NDI HX / HX2** (H.264) and **NDI HX3** (H.265) are supported; the pipeline auto-detects the format at runtime.
 
-Two components are required: the **NDI SDK runtime library** (`libndi.so.6`) and the **GStreamer NDI plugin** (Teltek `gst-plugin-ndi`, providing `ndisrc` and `ndisrcdemux`).
+Three components are required: the **`avahi-daemon`** mDNS service (NDI's discovery backend), the **NDI SDK runtime library** (`libndi.so.6`), and the **GStreamer NDI plugin** (Teltek `gst-plugin-ndi`, providing `ndisrc` and `ndisrcdemux`).
+
+> **⚠️ `avahi-daemon` is mandatory — nothing about NDI works without it.** `libndi.so.6` has no built-in
+> mDNS; it is linked against `libavahi-client`/`libavahi-common` and delegates *all* source discovery to a
+> running `avahi-daemon`. With no daemon, `ndi-discover.py` returns `[]`, the 🔍 scan finds nothing, and the
+> live `ndisrc` pipeline can never resolve a source — even though the camera, network, routing, and firewall
+> are all perfectly fine. (macOS "just works" because it ships Apple's mDNSResponder; a fresh Ubuntu Server
+> install does **not** include Avahi.) Verify the dependency with `ldd /usr/lib/x86_64-linux-gnu/libndi.so.6 | grep avahi`.
+
+#### Step 0 — Install and enable Avahi (NDI discovery backend)
+
+```bash
+sudo apt install -y avahi-daemon avahi-utils
+sudo systemctl enable --now avahi-daemon
+
+# Sanity check — should list your NDI camera within a few seconds:
+avahi-browse -rt _ndi._tcp
+```
+
+> **⚠️ Port 5353 conflict with MediaMTX.** MediaMTX's WebRTC stack (pion) also binds UDP `5353` for mDNS ICE
+> candidates, and `avahi-daemon` and MediaMTX **cannot both own the port**. Avahi *must* win — MediaMTX only
+> uses mDNS for `.local` ICE candidates it does not need on a direct LAN, and it fails soft (logs a warning,
+> keeps running) when it can't bind 5353. Order MediaMTX to start *after* Avahi so Avahi always grabs the port
+> first at boot:
+> ```bash
+> sudo mkdir -p /etc/systemd/system/mediamtx.service.d
+> sudo tee /etc/systemd/system/mediamtx.service.d/10-after-avahi.conf >/dev/null <<'EOF'
+> [Unit]
+> After=avahi-daemon.service
+> Wants=avahi-daemon.service
+> EOF
+> sudo systemctl daemon-reload
+> ```
+> Verify after a reboot that `avahi-daemon` (not `mediamtx`) owns the port: `sudo ss -ulnp | grep 5353`.
 
 #### Step 1 — Install the NDI SDK runtime library
 
@@ -2372,6 +2405,33 @@ sudo journalctl -u digitalpool-camera -f
 ### 16b. One-time setup steps for new features
 
 Run each block below **once** on any appliance that hasn't had it set up yet.  They are safe to re-run on an existing unit — they are idempotent.
+
+#### Host-config migration system (bootstrap once — do this first)
+
+Delivers **system-level** changes (packages, systemd units, `/etc` files) to every
+device automatically, so you no longer have to SSH into each box for one-time setup
+steps like the ones in this very section. Ordered scripts in `migrations/` run once
+each — at boot (before the app) and after every UI **Update** (`/api/update`) — with
+applied ones tracked in `/var/lib/digitalpool-camera/applied-migrations.txt`. See
+[`migrations/README.md`](migrations/README.md).
+
+```bash
+cd /home/dp/digitalpool-camera
+sudo ./install-migrations.sh          # installs the unit + sudoers, runs pending migrations
+sudo systemctl restart digitalpool-camera   # pick up the updated service unit
+```
+
+After this, new system changes ship as `migrations/NNNN-*.sh` in a normal commit and
+self-apply on the next update — no per-box SSH. (`migrations/0001-avahi-daemon.sh`
+installs the Avahi daemon that NDI discovery requires; see the NDI section.)
+
+> **Trust note:** migrations run as **root** from the git repo — whoever controls
+> `origin/main` controls root on every device. Fine for a private fleet repo; know it.
+
+> **CLI updates:** the auto-run hook is in `/api/update` (the admin UI **Update**
+> button). If you update from the shell with `git pull` instead, either run
+> `sudo systemctl start digitalpool-migrations.service` afterward or just let them
+> apply at the next boot.
 
 #### WebRTC preview — MediaMTX ICE host update script
 

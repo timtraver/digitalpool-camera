@@ -1,0 +1,23 @@
+[Unit]
+Description=DigitalPool Camera — host-config migrations
+Documentation=file:///home/dp/digitalpool-camera/migrations/README.md
+# apt / package installs need the network; wait for it to be up.
+After=network-online.target
+Wants=network-online.target
+# Apply pending migrations before the app starts, so a freshly-imaged box is
+# fully provisioned before it begins serving.
+Before=digitalpool-camera.service
+
+[Service]
+Type=oneshot
+# Not RemainAfterExit — so it can be re-triggered (by /api/update) after it has
+# already run once this boot.
+RemainAfterExit=no
+# Runs as root (default for a system unit): migrations do apt / systemctl /
+# writes under /etc.
+ExecStart=/home/dp/digitalpool-camera/run-migrations.sh
+# A stuck migration must not wedge the boot forever.
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

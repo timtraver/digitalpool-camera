@@ -4690,7 +4690,7 @@ loadDeviceIp();
         return false;
       }
 
-      output.textContent = d.output;
+      output.textContent = d.output + (d.migrations ? "\n\n── Host migrations ──\n" + d.migrations : "");
       output.style.display = "block";
       msg.textContent = "🔄 Restarting service…";
       msg.style.color = "#facc15";
