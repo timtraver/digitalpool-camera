@@ -800,10 +800,44 @@ class CameraController {
       return false;
     }
     console.log("📌 Applying startup position:", startupPos);
-    await this.setControl("pan_absolute", startupPos.pan_absolute);
-    await this.setControl("tilt_absolute", startupPos.tilt_absolute);
-    await this.setControl("zoom_absolute", startupPos.zoom_absolute);
-    this.currentPan = startupPos.pan_absolute;
+
+    // Many USB PTZ cameras run a mechanical self-home on power-up that takes a
+    // few seconds, during which they REJECT or OVERRIDE an absolute-position
+    // command.  A single fire-and-forget therefore only works on fast cameras;
+    // slow ones finish homing to THEIR default after our command and never reach
+    // the saved position.  So send the position, read pan/tilt back, and re-send
+    // until the camera actually lands on it (or we run out of attempts) — this
+    // lets a still-homing camera finish, then accept the position on a later try.
+    const panStep   = (this.discoveredControls?.pan_absolute?.step
+                       || this.controls?.pan_absolute?.step || 1);
+    const tolerance = Math.max(panStep * 2, 1);
+    const maxAttempts = 6;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      await this.setControl("pan_absolute",  startupPos.pan_absolute,  false);
+      await this.setControl("tilt_absolute", startupPos.tilt_absolute, false);
+      await this.setControl("zoom_absolute", startupPos.zoom_absolute, false);
+
+      // Let the camera move / finish any in-progress self-home before verifying.
+      await new Promise((r) => setTimeout(r, 1200));
+
+      const pan  = await this.getControl("pan_absolute");
+      const tilt = await this.getControl("tilt_absolute");
+      const panOk  = pan.success  && pan.value  !== null && Math.abs(pan.value  - startupPos.pan_absolute)  <= tolerance;
+      const tiltOk = tilt.success && tilt.value !== null && Math.abs(tilt.value - startupPos.tilt_absolute) <= tolerance;
+
+      if (panOk && tiltOk) {
+        this.currentPan  = pan.value;
+        this.currentTilt = tilt.value;
+        console.log(`📌 Startup position reached (attempt ${attempt}/${maxAttempts})`);
+        return true;
+      }
+      console.log(`📌 Startup position not reached yet (attempt ${attempt}/${maxAttempts}): ` +
+                  `pan ${pan.value}→${startupPos.pan_absolute}, tilt ${tilt.value}→${startupPos.tilt_absolute} — retrying…`);
+    }
+
+    console.log("⚠️ Startup position not confirmed after retries — camera may still be busy or not report absolute PTZ");
+    this.currentPan  = startupPos.pan_absolute;
     this.currentTilt = startupPos.tilt_absolute;
     return true;
   }
