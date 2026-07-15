@@ -1519,12 +1519,8 @@ streamProtocol.addEventListener("change", () => {
     h265Option.disabled = true;
     if (streamCodec.value === "h265") {
       streamCodec.value = "h264";
-      // Sync the custom dropdown label back to H.264
-      const codecDropdown = streamCodec.parentElement.querySelector(".custom-dropdown-selected");
-      if (codecDropdown) {
-        codecDropdown.textContent = "H.264 (all protocols)";
-        codecDropdown.dataset.value = "h264";
-      }
+      // Sync the custom dropdown label AND option highlight back to H.264
+      updateCustomDropdownDisplay(streamCodec);
     }
     // For YouTube, also nudge bitrate to 4 Mbps (YouTube's recommended setting)
     if (protocol === "youtube") {
@@ -3720,38 +3716,14 @@ async function loadStreamConfig() {
         h265Option.disabled = false;
       }
 
-      // Update custom dropdowns (updateCustomDropdownDisplay handles data-html / SVG logos)
+      // Update custom dropdowns. updateCustomDropdownDisplay handles both the
+      // closed display AND the .selected highlight on the option rows (and
+      // data-html / SVG logos) — the earlier manual updates only touched the
+      // closed display, leaving the open menu highlighting the stale default.
       updateCustomDropdownDisplay(streamProtocol);
-
-      const bitrateDropdown = streamBitrate.parentElement.querySelector(
-        ".custom-dropdown-selected",
-      );
-      if (bitrateDropdown) {
-        const bitrateOption =
-          streamBitrate.options[streamBitrate.selectedIndex];
-        bitrateDropdown.textContent = bitrateOption.text;
-        bitrateDropdown.dataset.value = bitrateOption.value;
-      }
-
-      const framerateDropdown = streamFramerate.parentElement.querySelector(
-        ".custom-dropdown-selected",
-      );
-      if (framerateDropdown) {
-        const framerateOption =
-          streamFramerate.options[streamFramerate.selectedIndex];
-        framerateDropdown.textContent = framerateOption.text;
-        framerateDropdown.dataset.value = framerateOption.value;
-      }
-
-      const codecDropdown = streamCodec.parentElement.querySelector(
-        ".custom-dropdown-selected",
-      );
-      if (codecDropdown) {
-        const codecOption = streamCodec.options[streamCodec.selectedIndex];
-        codecDropdown.textContent = codecOption.text;
-        codecDropdown.dataset.value = codecOption.value;
-      }
-
+      updateCustomDropdownDisplay(streamBitrate);
+      updateCustomDropdownDisplay(streamFramerate);
+      updateCustomDropdownDisplay(streamCodec);
       updateCustomDropdownDisplay(streamResolution);
 
       // Show/hide destination field and connection info box based on UI protocol selection
