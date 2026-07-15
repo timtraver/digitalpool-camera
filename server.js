@@ -3776,6 +3776,10 @@ let idlePreviewRestartTimer2 = null;
 // a newer switch supersedes it, so a superseded switch doesn't fire a spurious
 // settle/fallback rebuild. Keyed by camera index.
 const _overlaySettleCleanup = { 1: null, 2: null };
+// Whether the currently-running idle preview pipeline contains the named
+// "overlay" element. When true, the gst-idle-preview.py runner hot-reloads the
+// overlay PNG in place, so switching overlays needs NO pipeline rebuild.
+const _idlePreviewHasOverlay = { 1: false, 2: false };
 // 8554 is reserved for MediaMTX RTSP; 8553 & 8552 used for camera 1 & 2 idle preview
 const IDLE_PREVIEW_PORT   = 8553;
 const IDLE_PREVIEW_PORT_2 = 8552;
@@ -4002,6 +4006,7 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
     if (hasRemoteOverlay && pngExists) {
       gstArgs.push(
         "gdkpixbufoverlay",
+        "name=overlay",   // named so gst-idle-preview.py can hot-reload its PNG
         `location=${pngOverlayPath}`,
         "overlay-width=1280",
         "overlay-height=720",
@@ -4225,9 +4230,16 @@ async function startPersistentIdlePreview(camIdx = 1) {
 
     const gstArgs = buildIdlePreviewGstArgs(camIdx);
     const previewPath = sc.previewPath;
-    console.log(`📹 [Cam${camIdx}] Starting idle preview → rtmp://localhost:1935${previewPath} (source: ${activeSource.type})`);
+    // Track whether this build includes the hot-swappable overlay element, so the
+    // socket handler knows a later overlay switch can skip the rebuild.
+    _idlePreviewHasOverlay[camIdx] = gstArgs.includes("name=overlay");
+    console.log(`📹 [Cam${camIdx}] Starting idle preview → rtmp://localhost:1935${previewPath} (source: ${activeSource.type}${_idlePreviewHasOverlay[camIdx] ? ", overlay hot-swap" : ""})`);
 
-    const gst = spawn("gst-launch-1.0", gstArgs);
+    // Run via gst-idle-preview.py (Gst.parse_launchv → identical pipeline to
+    // gst-launch-1.0) so the overlay PNG can be hot-reloaded at runtime instead
+    // of requiring a pipeline rebuild. arg 1 is the overlay PNG to watch.
+    const idlePreviewScript = path.join(__dirname, "gst-idle-preview.py");
+    const gst = spawn("python3", [idlePreviewScript, sc.pngOverlayPath || "", ...gstArgs]);
     if (camIdx === 2) currentIdlePreviewProcess2 = gst;
     else              currentIdlePreviewProcess  = gst;
     const spawnTime = Date.now();
@@ -4675,7 +4687,16 @@ io.on("connection", (socket) => {
         });
         camPuppeteer.startPeriodicRefresh();
 
-        if (!sc.isStreaming) {
+        if (!sc.isStreaming && _idlePreviewHasOverlay[camIdx]) {
+          // The running idle preview already has the hot-swappable overlay
+          // element. gst-idle-preview.py reloads the PNG on mtime, so switching
+          // to a different overlay needs NO pipeline rebuild — the new overlay
+          // appears within ~2s of its screenshot landing, with no blink and no
+          // settle/stale-frame juggling. Cancel any leftover settle from a prior
+          // enable and do nothing else here.
+          if (_overlaySettleCleanup[camIdx]) _overlaySettleCleanup[camIdx]();
+          console.log(`♻️  [Cam${camIdx}] Overlay switch — hot-swapping PNG in place (no rebuild)`);
+        } else if (!sc.isStreaming) {
           const restartTimer = camIdx === 2 ? idlePreviewRestartTimer2 : idlePreviewRestartTimer;
           clearTimeout(restartTimer);
           const restartForOverlay = async (reason) => {
@@ -4859,7 +4880,10 @@ server.listen(PORT, async () => {
     // Kill any GStreamer processes first
     try {
       console.log("Checking for GStreamer processes...");
-      const gstProcesses = execSync("pgrep -f gst-launch", {
+      // Match both the legacy gst-launch idle preview and the current
+      // python3 gst-idle-preview.py runner so a stale one from a crashed prior
+      // run can't keep holding the camera / NDI source / preview port.
+      const gstProcesses = execSync('pgrep -f "gst-launch|gst-idle-preview"', {
         encoding: "utf-8",
       }).trim();
 

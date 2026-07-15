@@ -1202,7 +1202,7 @@ class StreamController extends EventEmitter {
       // belonging to a different camera controller instance.
       try {
         await execPromise(
-          `ps aux | grep -E '(gst-launch|gst-overlay-pipeline|png-overlay-helper)' | grep '${this.cameraDevice}' | grep -v grep | awk '{print $2}' | xargs -r sudo kill -9 2>/dev/null || true`
+          `ps aux | grep -E '(gst-launch|gst-overlay-pipeline|png-overlay-helper|gst-idle-preview)' | grep '${this.cameraDevice}' | grep -v grep | awk '{print $2}' | xargs -r sudo kill -9 2>/dev/null || true`
         );
       } catch (_) { /* ignore */ }
 
