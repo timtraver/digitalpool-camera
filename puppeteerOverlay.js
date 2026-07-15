@@ -164,17 +164,21 @@ class PuppeteerOverlay extends EventEmitter {
     // This ensures the next cycle only starts AFTER the current render completes,
     // preventing timer overlap when renders take longer than the interval.
     this._refreshActive = true;
-    const scheduleNext = () => {
+    // On success, wait the normal interval before the next screenshot. On
+    // failure (e.g. the post-navigation renderer hang), retry almost immediately
+    // — the re-navigation reliably clears the wedge, so a fast retry turns a
+    // ~8s stall into a quick recover instead of waiting a full interval on top.
+    const scheduleNext = (delayMs) => {
       if (!this._refreshActive) return;
       this._refreshTimer = setTimeout(async () => {
         if (!this._refreshActive) return;
-        await this._renderUrlOverlay();
-        scheduleNext();
-      }, this._refreshIntervalMs);
+        const ok = await this._renderUrlOverlay();
+        scheduleNext(ok ? this._refreshIntervalMs : 300);
+      }, delayMs);
     };
 
     // Do an immediate first render, then start the cycle
-    this._renderUrlOverlay().then(() => scheduleNext());
+    this._renderUrlOverlay().then((ok) => scheduleNext(ok ? this._refreshIntervalMs : 300));
 
     // Schedule periodic browser restarts to keep Chromium memory bounded.
     this._scheduleBrowserRestart();
@@ -302,10 +306,12 @@ class PuppeteerOverlay extends EventEmitter {
       executablePath: chromiumPath,
       headless: true,
       pipe: false,
-      // A wedged CDP call (e.g. Runtime.callFunctionOn on a throttled page)
-      // otherwise blocks for Puppeteer's 180s default, stalling the whole refresh
-      // loop. Fail fast at 30s so the catch below can reset state and re-navigate.
-      protocolTimeout: 30000,
+      // The freshly-loaded overlay page intermittently leaves the renderer
+      // unresponsive to CDP (screenshot / Emulation / evaluate all hang) for a
+      // while after navigation — a re-navigation clears it. Keep this timeout
+      // short so a wedged call fails fast and the loop re-navigates, instead of
+      // stalling for Puppeteer's 180s default (or a long 30s).
+      protocolTimeout: 8000,
       args: [
         "--no-sandbox",
         "--disable-gpu",
@@ -432,9 +438,9 @@ class PuppeteerOverlay extends EventEmitter {
    */
   async _renderUrlOverlay() {
     if (this._renderInProgress) {
-      return; // Skip this cycle, next interval will try again
+      return true; // Skip this cycle, next interval will try again
     }
-    if (!this._overlayUrl) return;
+    if (!this._overlayUrl) return true;
 
     this._renderInProgress = true;
     try {
@@ -459,6 +465,26 @@ class PuppeteerOverlay extends EventEmitter {
         // Wait for JS frameworks to finish initial render
         console.log(`⏳ Waiting ${this._jsDelay}ms for JS framework to render...`);
         await new Promise(r => setTimeout(r, this._jsDelay));
+
+        // Detect a client-side redirect (page.url() is cached — no CDP call, safe
+        // even when the renderer is wedged). A redirect right after load is the
+        // suspected cause of the post-navigation CDP hangs.
+        const _finalUrl = this._page.url();
+        if (_finalUrl && _finalUrl !== this._overlayUrl) {
+          console.log(`↪️  Overlay page redirected to: ${_finalUrl}`);
+        }
+
+        // Responsiveness probe: a freshly-loaded overlay page sometimes leaves the
+        // renderer unable to service CDP calls for a while (the screenshot below
+        // would otherwise hang to protocolTimeout). A cheap evaluate raced against
+        // a 2s timeout detects that wedge fast; throwing here drops to the catch,
+        // which re-navigates — and the re-navigation reliably clears it.
+        await Promise.race([
+          this._page.evaluate(() => true),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("renderer unresponsive after navigation — re-navigating")), 2000)
+          ),
+        ]);
       }
       const _shotStart = Date.now();
 
@@ -504,13 +530,15 @@ class PuppeteerOverlay extends EventEmitter {
       console.log(`📸 Overlay screenshot written in ${Date.now() - _shotStart}ms`);
 
       this.emit("updated", this.pngPath);
+      return true;
     } catch (err) {
       // Always log — silently swallowing errors makes debugging impossible.
       console.error("❌ Overlay render error:", err.message);
       // Force a fresh navigation on the next cycle regardless of the failure
       // mode — a timed-out screenshot or a partially-loaded page should not be
       // treated as "already loaded" (which would skip re-navigation and keep
-      // screenshotting a wedged page).
+      // screenshotting a wedged page). The re-navigation reliably clears the
+      // post-load renderer hang.
       this._currentLoadedUrl = null;
       if (!this._browser || !this._browserConnected()) {
         // Browser died — _ensureBrowser will relaunch on the next cycle.
@@ -518,6 +546,7 @@ class PuppeteerOverlay extends EventEmitter {
         this._browser = null;
         this._page = null;
       }
+      return false;
     } finally {
       this._renderInProgress = false;
     }
