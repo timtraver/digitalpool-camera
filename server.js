@@ -4209,6 +4209,10 @@ async function startPersistentIdlePreview(camIdx = 1) {
     // Kill existing idle preview process for this camera
     if (curProc && !curProc.killed) {
       console.log(`🔄 [Cam${camIdx}] Killing previous idle preview`);
+      // Mark this as a deliberate kill (we're rebuilding, e.g. for an overlay
+      // change) so its "close" handler doesn't miscount the short lifetime as a
+      // crash and trigger the failure-streak backoff on the rebuild.
+      curProc._intentionalKill = true;
       curProc.kill("SIGTERM");
       if (camIdx === 2) currentIdlePreviewProcess2 = null;
       else              currentIdlePreviewProcess  = null;
@@ -4240,7 +4244,7 @@ async function startPersistentIdlePreview(camIdx = 1) {
       if (camIdx === 2) { if (currentIdlePreviewProcess2 === gst) currentIdlePreviewProcess2 = null; }
       else              { if (currentIdlePreviewProcess  === gst) currentIdlePreviewProcess  = null; }
 
-      if (lifetime < 8000) {
+      if (lifetime < 8000 && !gst._intentionalKill) {
         if (camIdx === 2) _idlePreviewFailStreak2 = Math.min(_idlePreviewFailStreak2 + 1, _IDLE_BACKOFF_MS.length - 1);
         else              _idlePreviewFailStreak  = Math.min(_idlePreviewFailStreak  + 1, _IDLE_BACKOFF_MS.length - 1);
         console.log(`⚠️  [Cam${camIdx}] Idle preview died quickly`);
@@ -4662,16 +4666,10 @@ io.on("connection", (socket) => {
         if (!camPuppeteer.isRunning) {
           await camPuppeteer.initialize(PORT, sc.pngOverlayPath);
         }
-        const _prevOverlayUrl = camPuppeteer._overlayUrl || "";
         camPuppeteer.setOverlayUrl(overlayConfig.overlayUrl, {
           zoom: overlayConfig.overlayZoom,
         });
         camPuppeteer.startPeriodicRefresh();
-        // True only when replacing one overlay with a *different* one (not the
-        // first enable) — used to clear the old overlay from the idle preview
-        // immediately instead of waiting for the new screenshot / 30s fallback.
-        const switchingOverlay = !!_prevOverlayUrl &&
-          _prevOverlayUrl !== (overlayConfig.overlayUrl || "").trim();
 
         if (!sc.isStreaming) {
           const restartTimer = camIdx === 2 ? idlePreviewRestartTimer2 : idlePreviewRestartTimer;
@@ -4715,15 +4713,6 @@ io.on("connection", (socket) => {
             restartForOverlay("Overlay timeout");
           }, 30000);
           camPuppeteer.once("updated", onUpdated);
-
-          // Switching overlays: clear the old one from the preview immediately.
-          // setOverlayUrl already wrote the transparent placeholder (< 100 bytes),
-          // so this rebuild produces a pipeline with no overlay element = blank.
-          // The operator sees old → blank now → new (when onUpdated fires), instead
-          // of the old overlay lingering until the new screenshot finally lands.
-          if (switchingOverlay) {
-            restartForOverlay("Overlay switching — clearing previous overlay");
-          }
         }
       }
     } else if (overlayConfig.remoteOverlayEnabled === false && camPuppeteer) {

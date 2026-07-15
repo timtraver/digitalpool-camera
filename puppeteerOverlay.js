@@ -27,7 +27,11 @@ class PuppeteerOverlay extends EventEmitter {
     this._overlayUrl = null;        // Remote URL to screenshot (null = local HTML mode)
     this._refreshTimer = null;      // Periodic refresh timer for URL mode
     this._refreshIntervalMs = 2000; // How often to re-screenshot the URL (ms)
-    this._jsDelay = 2000;           // Time to wait for JS execution before screenshot (ms)
+    // Wait after navigation before the first screenshot. Only applies right
+    // after a switch/enable (not on every refresh), so it's pure switch latency.
+    // Kept modest because the 2s periodic refresh + hot-swap self-corrects a
+    // slightly-early first frame within one cycle.
+    this._jsDelay = 1000;           // Time to wait for JS execution before screenshot (ms)
     this._zoom = 100;               // CSS zoom level for overlay page (50-200%)
     // Puppeteer browser instance (reused across screenshots)
     this._browser = null;
@@ -115,13 +119,13 @@ class PuppeteerOverlay extends EventEmitter {
         this._zoom = options.zoom;
         this._zoomDirty = true; // Flag to re-apply zoom on next screenshot cycle
       }
-      // When switching to a *different* URL, clear the currently-composited PNG
-      // right away so the old overlay visibly disappears instead of lingering
-      // for the few seconds it takes Chromium to navigate + screenshot the new
-      // page. The immediate _renderUrlOverlay() (via startPeriodicRefresh) then
-      // replaces this transparent placeholder with the new overlay.
+      // On a switch, do NOT clear the composited PNG. Fetching + rendering the
+      // new page takes a few seconds; blanking now would leave the overlay empty
+      // for that whole window. Instead keep the previous overlay visible until
+      // the new screenshot is ready, so the swap reads as a clean old → new with
+      // no blank gap (both the streaming mtime hot-swap and the idle rebuild pick
+      // up the new PNG the moment it lands). Only disabling clears it (below).
       if (urlChanged) {
-        this._createPlaceholderPNG(this.pngPath);
         // Force the next render to re-navigate to the new page (rather than
         // treating the already-loaded old page as current).
         this._currentLoadedUrl = null;
@@ -445,6 +449,9 @@ class PuppeteerOverlay extends EventEmitter {
         path: tempPath,
         type: "png",
         omitBackground: true,
+        // Bound the capture so a wedged Chromium render can't stall the whole
+        // refresh loop for the default 30s (which left the overlay blank/absent).
+        timeout: 10000,
       });
       // Atomic rename so GStreamer never reads a partial file
       fs.renameSync(tempPath, this.pngPath);
@@ -454,12 +461,16 @@ class PuppeteerOverlay extends EventEmitter {
     } catch (err) {
       // Always log — silently swallowing errors makes debugging impossible.
       console.error("❌ Overlay render error:", err.message);
+      // Force a fresh navigation on the next cycle regardless of the failure
+      // mode — a timed-out screenshot or a partially-loaded page should not be
+      // treated as "already loaded" (which would skip re-navigation and keep
+      // screenshotting a wedged page).
+      this._currentLoadedUrl = null;
       if (!this._browser || !this._browserConnected()) {
         // Browser died — _ensureBrowser will relaunch on the next cycle.
         console.log("🔄 Chromium disconnected — will relaunch on next cycle");
         this._browser = null;
         this._page = null;
-        this._currentLoadedUrl = null;
       }
     } finally {
       this._renderInProgress = false;
