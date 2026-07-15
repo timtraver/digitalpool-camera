@@ -467,24 +467,17 @@ class PuppeteerOverlay extends EventEmitter {
         await new Promise(r => setTimeout(r, this._jsDelay));
 
         // Detect a client-side redirect (page.url() is cached — no CDP call, safe
-        // even when the renderer is wedged). A redirect right after load is the
-        // suspected cause of the post-navigation CDP hangs.
+        // even when the renderer is wedged). A redirect right after load is one
+        // suspected cause of a post-navigation CDP hang.
         const _finalUrl = this._page.url();
         if (_finalUrl && _finalUrl !== this._overlayUrl) {
           console.log(`↪️  Overlay page redirected to: ${_finalUrl}`);
         }
-
-        // Responsiveness probe: a freshly-loaded overlay page sometimes leaves the
-        // renderer unable to service CDP calls for a while (the screenshot below
-        // would otherwise hang to protocolTimeout). A cheap evaluate raced against
-        // a 2s timeout detects that wedge fast; throwing here drops to the catch,
-        // which re-navigates — and the re-navigation reliably clears it.
-        await Promise.race([
-          this._page.evaluate(() => true),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("renderer unresponsive after navigation — re-navigating")), 2000)
-          ),
-        ]);
+        // NOTE: no aggressive responsiveness probe here. A freshly-loaded overlay
+        // page is briefly busy (JS bundle + opening its data WebSocket); probing
+        // it too eagerly and re-navigating interrupts that data connection. Let
+        // the page settle — if the renderer is genuinely wedged, the screenshot
+        // below fails at protocolTimeout (8s) and the catch re-navigates.
       }
       const _shotStart = Date.now();
 
