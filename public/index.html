@@ -679,9 +679,12 @@
               <!-- Two-column grid: Hotspot info | Client WiFi -->
               <div class="wifi-grid">
 
-                <!-- Hotspot (always-on AP) -->
-                <div class="wifi-card">
-                  <h4>📡 Device Hotspot <span class="ap-badge" id="apBadge">…</span></h4>
+                <!-- Hotspot (always-on AP) — collapsed by default; rarely changed -->
+                <details class="wifi-card wifi-card-collapsible" style="order:2">
+                  <summary>
+                    <span class="wifi-card-summary-title">📡 Device Hotspot <span class="ap-badge" id="apBadge">…</span></span>
+                    <span class="wifi-card-summary-chevron">▶</span>
+                  </summary>
                   <p class="wifi-hint">Your device always broadcasts this network. Connect to it from any phone or laptop to reach the admin page.</p>
 
                   <div class="wifi-info-row">
@@ -709,10 +712,10 @@
                       <div class="wifi-msg" id="apConfigMsg"></div>
                     </div>
                   </details>
-                </div>
+                </details>
 
                 <!-- Network / Internet Connection -->
-                <div class="wifi-card">
+                <div class="wifi-card" style="order:1">
                   <h4 style="display:flex;align-items:center;justify-content:space-between;">
                     <span>🌐 Internet Connection</span>
                     <button id="networkRefreshBtn" class="btn-icon-small" title="Refresh connection status" style="font-size:13px;padding:2px 7px;">🔄</button>

@@ -87,6 +87,7 @@ class WifiManager extends EventEmitter {
       }
       if (managed.length > 0) {
         console.log(`📡 WiFi client adapter found via iw dev: ${managed[0]}`);
+        this._noClientLogged = false;
         return managed[0];
       }
     }
@@ -102,11 +103,17 @@ class WifiManager extends EventEmitter {
         .filter(i => i && i !== this.wifiIface);
       if (ifaces.length > 0) {
         console.log(`📡 WiFi client adapter found via nmcli: ${ifaces[0]}`);
+        this._noClientLogged = false;
         return ifaces[0];
       }
     }
 
-    console.log('📡 No second WiFi adapter found (only one interface present)');
+    // getClientWifiStatus() re-runs detection every poll (every 30 s) while no
+    // dongle is present, so only log the "not found" state once per transition.
+    if (!this._noClientLogged) {
+      console.log('📡 No second WiFi adapter found (only one interface present)');
+      this._noClientLogged = true;
+    }
     return null;
   }
 

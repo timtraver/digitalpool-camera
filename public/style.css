@@ -1260,6 +1260,29 @@ footer {
   gap: 8px;
 }
 
+/* Collapsible wifi card (e.g. Device Hotspot) — summary styled like the h4 */
+.wifi-card-collapsible > summary {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(18, 199, 255, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.wifi-card-collapsible > summary::-webkit-details-marker { display: none; }
+.wifi-card-collapsible[open] > summary { margin-bottom: 10px; }
+.wifi-card-summary-title { display: flex; align-items: center; gap: 8px; }
+.wifi-card-summary-chevron {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+  transition: transform 0.15s ease;
+}
+.wifi-card-collapsible[open] > summary .wifi-card-summary-chevron { transform: rotate(90deg); }
+
 .wifi-hint {
   font-size: 11px;
   color: rgba(255,255,255,0.45);

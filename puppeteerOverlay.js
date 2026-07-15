@@ -480,7 +480,6 @@ class PuppeteerOverlay extends EventEmitter {
         // is bounded by a short race below, which re-navigates on the wedge (the
         // re-navigation clears it, typically in <1s thanks to the code cache).
       }
-      const _shotStart = Date.now();
 
       // Apply zoom when dirty (after nav or zoom change). Transparent background
       // is already handled by the injected evaluateOnNewDocument script above, so
@@ -528,7 +527,6 @@ class PuppeteerOverlay extends EventEmitter {
       ]);
       // Atomic rename so GStreamer never reads a partial file
       fs.renameSync(tempPath, this.pngPath);
-      console.log(`📸 Overlay screenshot written in ${Date.now() - _shotStart}ms`);
 
       // Tag the event with the URL this frame came from so the server can ignore
       // stale screenshots of a previous overlay (an in-flight render of the old
