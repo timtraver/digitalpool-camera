@@ -2793,6 +2793,18 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     console.warn(`⚠️ [Cam${camIdx}] Encoder auto-detect failed:`, e.message);
   }
 
+  // The stop in Step 1 set isRestartInProgress to suppress the "stopped" event's
+  // automatic idle-preview restart mid-switch.  Clear it now — the stop is done
+  // and the new source is set — so the validation preview below can actually
+  // start.  Without this, changing the source of a *streaming* camera always
+  // fails: startPersistentIdlePreview() bails on "restart in progress", the
+  // waitForRtmpPublisher() times out, and the source reverts every time.
+  isRestartInProgress[camIdx] = false;
+  // Also clear any idle-preview failure backoff so the validation preview starts
+  // immediately — a stale backoff (e.g. streak from earlier failures) would eat
+  // the waitForRtmpPublisher window and cause a spurious revert.
+  if (camIdx === 2) _idlePreviewFailStreak2 = 0; else _idlePreviewFailStreak = 0;
+
   // ── Step 3: Bring up idle preview on the new source ─────────────────────
   try {
     await startPersistentIdlePreview(camIdx);
