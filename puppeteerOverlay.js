@@ -302,6 +302,10 @@ class PuppeteerOverlay extends EventEmitter {
       executablePath: chromiumPath,
       headless: true,
       pipe: false,
+      // A wedged CDP call (e.g. Runtime.callFunctionOn on a throttled page)
+      // otherwise blocks for Puppeteer's 180s default, stalling the whole refresh
+      // loop. Fail fast at 30s so the catch below can reset state and re-navigate.
+      protocolTimeout: 30000,
       args: [
         "--no-sandbox",
         "--disable-gpu",
@@ -312,6 +316,14 @@ class PuppeteerOverlay extends EventEmitter {
         "--disable-translate",
         "--metrics-recording-only",
         "--no-first-run",
+        // Keep the headless page fully active while it sits idle. Without these,
+        // Chromium throttles/freezes background pages, and the first operation
+        // after an idle stretch (page.evaluate for the zoom, or the screenshot)
+        // hangs until protocolTimeout — the ~100s "nothing happens then times
+        // out" delay seen when switching overlays after the preview sat a while.
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
         // Disable Chromium's audio subsystem entirely — this process is screenshot-only
         // and has no need for audio playback or capture.
         //
