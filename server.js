@@ -3772,6 +3772,10 @@ let currentIdlePreviewProcess  = null;  // Camera 1
 let currentIdlePreviewProcess2 = null;  // Camera 2
 let idlePreviewRestartTimer  = null;
 let idlePreviewRestartTimer2 = null;
+// Cancels the previous overlay-switch's pending "updated" listener + timers when
+// a newer switch supersedes it, so a superseded switch doesn't fire a spurious
+// settle/fallback rebuild. Keyed by camera index.
+const _overlaySettleCleanup = { 1: null, 2: null };
 // 8554 is reserved for MediaMTX RTSP; 8553 & 8552 used for camera 1 & 2 idle preview
 const IDLE_PREVIEW_PORT   = 8553;
 const IDLE_PREVIEW_PORT_2 = 8552;
@@ -4703,16 +4707,26 @@ io.on("connection", (socket) => {
           // restart that actually composites the overlay.
           // The idle preview is a gst-launch pipeline that bakes the PNG in at
           // build time and can't hot-reload it — so it freezes on whatever PNG
-          // exists at rebuild time. The FIRST screenshot after a switch is often
-          // captured before the overlay page has finished rendering its data,
-          // which would freeze a partial/empty frame. So don't rebuild on the
-          // first screenshot: wait a short settle window (Puppeteer keeps writing
-          // a fresher PNG every 2s during it), then rebuild once with the settled,
-          // complete frame. The previous overlay stays visible until then.
+          // exists at rebuild time. Two hazards to avoid:
+          //   1) A screenshot of the *previous* overlay (an in-flight render that
+          //      completes right after the switch) must NOT trigger the rebuild —
+          //      it would freeze the old/stale frame before the new one loads. So
+          //      only act on a screenshot tagged with THIS overlay's URL.
+          //   2) The first new-overlay screenshot is often captured before the
+          //      page finished rendering its data. So after the first matching
+          //      screenshot, wait a short settle window (Puppeteer keeps writing a
+          //      fresher PNG every 2s) and rebuild once with the complete frame.
+          // The previous overlay stays visible until the rebuild.
+          // Supersede any pending settle from an earlier, now-outdated switch.
+          if (_overlaySettleCleanup[camIdx]) _overlaySettleCleanup[camIdx]();
+
+          const targetOverlayUrl = overlayConfig.overlayUrl.trim();
           let settleTimer = null;
-          const onUpdated = () => {
+          const onUpdated = (_pngPath, loadedUrl) => {
+            if (loadedUrl !== targetOverlayUrl) return; // stale frame of a prior overlay — ignore
             clearTimeout(fallback);
-            if (settleTimer) return; // settle already scheduled by the first screenshot
+            if (settleTimer) return; // settle already scheduled by the first matching screenshot
+            camPuppeteer.off("updated", onUpdated); // got our target overlay; stop listening
             settleTimer = setTimeout(() => {
               restartForOverlay("Overlay settled");
             }, 4000);
@@ -4722,9 +4736,17 @@ io.on("connection", (socket) => {
           // the UI reflects the attempt, but keep listening for a late screenshot.
           const fallback = setTimeout(() => {
             console.log(`⏱️ [Cam${camIdx}] Timeout waiting for remote screenshot — restarting preview anyway (overlay will appear once a screenshot lands)`);
+            camPuppeteer.off("updated", onUpdated);
             restartForOverlay("Overlay timeout");
           }, 30000);
-          camPuppeteer.once("updated", onUpdated);
+          camPuppeteer.on("updated", onUpdated);
+          // Record how to cancel this switch's pending work if a newer switch arrives.
+          _overlaySettleCleanup[camIdx] = () => {
+            camPuppeteer.off("updated", onUpdated);
+            clearTimeout(fallback);
+            if (settleTimer) clearTimeout(settleTimer);
+            _overlaySettleCleanup[camIdx] = null;
+          };
         }
       }
     } else if (overlayConfig.remoteOverlayEnabled === false && camPuppeteer) {

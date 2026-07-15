@@ -473,11 +473,12 @@ class PuppeteerOverlay extends EventEmitter {
         if (_finalUrl && _finalUrl !== this._overlayUrl) {
           console.log(`↪️  Overlay page redirected to: ${_finalUrl}`);
         }
-        // NOTE: no aggressive responsiveness probe here. A freshly-loaded overlay
-        // page is briefly busy (JS bundle + opening its data WebSocket); probing
-        // it too eagerly and re-navigating interrupts that data connection. Let
-        // the page settle — if the renderer is genuinely wedged, the screenshot
-        // below fails at protocolTimeout (8s) and the catch re-navigates.
+        // No separate evaluate-probe: the first navigation to a new overlay URL
+        // reliably wedges the screenshot's Emulation.setDefaultBackgroundColorOverride
+        // call (omitBackground) for ~8s even though page.evaluate() answers fine —
+        // so an evaluate probe passes and misses it. Instead the screenshot itself
+        // is bounded by a short race below, which re-navigates on the wedge (the
+        // re-navigation clears it, typically in <1s thanks to the code cache).
       }
       const _shotStart = Date.now();
 
@@ -508,21 +509,31 @@ class PuppeteerOverlay extends EventEmitter {
         this._zoomDirty = false;
       }
 
-      // Screenshot with native transparency — no ImageMagick chroma-key needed
+      // Screenshot with native transparency — no ImageMagick chroma-key needed.
+      // Race against a short timeout: the first screenshot after navigating to a
+      // new overlay URL frequently wedges on Emulation.setDefaultBackgroundColor-
+      // Override (~8s to protocolTimeout). Bounding it here fails fast (~2.5s) so
+      // the catch re-navigates, which clears the wedge — usually in <1s (cached).
       const tempPath = this.pngPath + ".tmp";
-      await this._page.screenshot({
-        path: tempPath,
-        type: "png",
-        omitBackground: true,
-        // Bound the capture so a wedged Chromium render can't stall the whole
-        // refresh loop for the default 30s (which left the overlay blank/absent).
-        timeout: 10000,
-      });
+      await Promise.race([
+        this._page.screenshot({
+          path: tempPath,
+          type: "png",
+          omitBackground: true,
+          timeout: 10000,
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("screenshot wedged after navigation — re-navigating")), 2500)
+        ),
+      ]);
       // Atomic rename so GStreamer never reads a partial file
       fs.renameSync(tempPath, this.pngPath);
       console.log(`📸 Overlay screenshot written in ${Date.now() - _shotStart}ms`);
 
-      this.emit("updated", this.pngPath);
+      // Tag the event with the URL this frame came from so the server can ignore
+      // stale screenshots of a previous overlay (an in-flight render of the old
+      // URL completing right after a switch) and only act on the new overlay.
+      this.emit("updated", this.pngPath, this._currentLoadedUrl);
       return true;
     } catch (err) {
       // Always log — silently swallowing errors makes debugging impossible.
