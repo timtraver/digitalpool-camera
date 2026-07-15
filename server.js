@@ -1889,9 +1889,11 @@ app.post("/api/update", requireAdmin, async (req, res) => {
     // Surface the tail of the migration log so the admin sees what happened
     // without needing to SSH in.  (Log is world-readable; created by the runner.)
     try {
-      const { stdout: logTail } = await execAsync("tail -n 40 /var/log/digitalpool-migrations.log");
-      if (logTail && logTail.trim()) migrations += "\n\n" + logTail.trim();
-    } catch { /* log may not exist yet on un-bootstrapped boxes */ }
+      // last-run.log is truncated at the start of every migration run, so this
+      // shows ONLY what this update executed — not the cumulative history.
+      const { stdout: runLog } = await execAsync("cat /var/lib/digitalpool-camera/last-run.log");
+      if (runLog && runLog.trim()) migrations += "\n\n" + runLog.trim();
+    } catch { /* file may not exist yet on un-bootstrapped boxes */ }
 
     res.json({ success: true, output, migrations });
   } catch (e) {

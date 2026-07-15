@@ -21,12 +21,14 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MIG_DIR="$REPO_DIR/migrations"
 STATE_DIR="/var/lib/digitalpool-camera"
 STATE_FILE="$STATE_DIR/applied-migrations.txt"
-LOG_FILE="/var/log/digitalpool-migrations.log"
+LOG_FILE="/var/log/digitalpool-migrations.log"   # cumulative history (append-only)
+RUN_LOG="$STATE_DIR/last-run.log"                # ONLY this run — truncated each run
 
 log() {
   local line="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
   echo "$line"
   echo "$line" >> "$LOG_FILE" 2>/dev/null || true
+  echo "$line" >> "$RUN_LOG"  2>/dev/null || true
 }
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -36,6 +38,10 @@ fi
 
 mkdir -p "$STATE_DIR"
 touch "$STATE_FILE" "$LOG_FILE" 2>/dev/null || true
+# Start this run's log fresh so /api/update surfaces only what THIS run did,
+# not the whole cumulative history.  World-readable so the (dp) app can read it.
+: > "$RUN_LOG" 2>/dev/null || true
+chmod 0644 "$RUN_LOG" 2>/dev/null || true
 
 if [ ! -d "$MIG_DIR" ]; then
   log "No migrations directory ($MIG_DIR) — nothing to do."
@@ -56,7 +62,7 @@ for script in "${scripts[@]}"; do
   fi
   pending=$((pending + 1))
   log ">> Applying $id"
-  if bash "$script" >>"$LOG_FILE" 2>&1; then
+  if bash "$script" 2>&1 | tee -a "$LOG_FILE" >> "$RUN_LOG"; then
     echo "$id" >> "$STATE_FILE"
     applied=$((applied + 1))
     log "OK Applied $id"
