@@ -4701,9 +4701,21 @@ io.on("connection", (socket) => {
           // fallback restart, the PNG was still the placeholder and the pipeline
           // has no overlay element — the late screenshot must trigger one more
           // restart that actually composites the overlay.
+          // The idle preview is a gst-launch pipeline that bakes the PNG in at
+          // build time and can't hot-reload it — so it freezes on whatever PNG
+          // exists at rebuild time. The FIRST screenshot after a switch is often
+          // captured before the overlay page has finished rendering its data,
+          // which would freeze a partial/empty frame. So don't rebuild on the
+          // first screenshot: wait a short settle window (Puppeteer keeps writing
+          // a fresher PNG every 2s during it), then rebuild once with the settled,
+          // complete frame. The previous overlay stays visible until then.
+          let settleTimer = null;
           const onUpdated = () => {
             clearTimeout(fallback);
-            restartForOverlay("Remote screenshot ready");
+            if (settleTimer) return; // settle already scheduled by the first screenshot
+            settleTimer = setTimeout(() => {
+              restartForOverlay("Overlay settled");
+            }, 4000);
           };
           // Safety net only: if Puppeteer never produces a screenshot (site down,
           // etc.) the running preview keeps showing plain video. Restart once so
