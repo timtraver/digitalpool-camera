@@ -99,6 +99,13 @@ for f in "${APP_STATE_FILES[@]}"; do
     rm -f "${APP_DIR}/${f}" && echo "  removed ${f}" || true
 done
 
+# DELIBERATELY NOT cleared: /var/lib/digitalpool-camera/applied-migrations.txt
+# (the host-config migration record).  A golden image is captured from a
+# fully-migrated device, so that file lists the baked-in migrations (0001…N) as
+# already applied.  Preserving it here means a cloned device skips replaying them
+# — the image itself is the migration baseline.  Do NOT add it to APP_STATE_FILES.
+# (New migrations numbered above the baseline still run normally on the clone.)
+
 # Seed remote.json with the device name = hostname.  The name is NOT operator-
 # settable in the UI — it is permanently this unit's hostname (dp-stream-<4 hex>).
 # The device is still unregistered (no owner email / NetBird identity) until the

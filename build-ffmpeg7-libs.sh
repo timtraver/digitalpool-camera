@@ -32,10 +32,13 @@ make -j"$(nproc)"
 rm -rf staging && DESTDIR="$PWD/staging" make install
 
 mkdir -p "$OUT_DIR"
-# Copy ONLY the versioned runtime libs (real files + SONAME symlinks), not the
-# headers or the unversioned .so dev symlinks (those could shadow the system
-# FFmpeg at build time on the device).
-cp -a staging/usr/local/lib/*.so.[0-9]* "$OUT_DIR"/
+# Copy ONLY the fully-versioned REAL .so files (e.g. libavcodec.so.61.19.101),
+# not the SONAME/dev symlinks (libavcodec.so.61, libavcodec.so).  -type f skips
+# symlinks.  migrations/0002 copies these and runs ldconfig, which creates the
+# SONAME symlinks itself — shipping our own non-symlink copies at the SONAME
+# path makes ldconfig emit "is not a symbolic link" and register the libs
+# non-deterministically (a fresh box would fail 0002 on the first try).
+find staging/usr/local/lib -maxdepth 1 -type f -name '*.so.*' -exec cp {} "$OUT_DIR"/ \;
 
 echo
 echo "Staged libs in $OUT_DIR:"

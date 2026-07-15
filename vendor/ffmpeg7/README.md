@@ -13,9 +13,18 @@ vendor/ffmpeg7/
   aarch64/    ← FFmpeg 7 .so.* for Rockchip RK3588 (add when NDI|HX is needed there)
 ```
 
-Each arch folder holds the versioned runtime libs only (`libavcodec.so.61*`,
-`libavutil.so.59*`, `libswscale.so.8*`, `libswresample.so.5*`,
-`libavformat.so.61*`) — no headers, no unversioned `.so` symlinks.
+Each arch folder holds **only the fully-versioned real `.so` files** (e.g.
+`libavcodec.so.61.19.101`, `libavutil.so.59.39.100`, …) — **not** the SONAME
+symlinks (`libavcodec.so.61`) or the unversioned dev symlink (`libavcodec.so`),
+and no headers.
+
+> **Why real files only:** `migrations/0002` copies these into `/usr/local/lib`
+> and runs `ldconfig`, which reads each file's SONAME and creates the
+> `libavcodec.so.61 → …61.19.101` symlinks itself. If we also shipped our own
+> non-symlink copy at the SONAME path, `ldconfig` warns "is not a symbolic link"
+> and registers the libs non-deterministically — a fresh box then fails `0002`
+> on the first attempt (it only self-heals on the retry). Ship real files; let
+> `ldconfig` make the links.
 
 ## How these were produced
 
