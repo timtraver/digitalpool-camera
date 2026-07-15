@@ -959,9 +959,16 @@ let reloadCameraInput = null;
 
   async function loadDevices() {
     if (deviceSelect) deviceSelect.innerHTML = "<option>Scanning…</option>";
+    // Capture which camera this load is for.  Clicking between tabs fires
+    // loadDevices() repeatedly; a fetch started for the previous camera can
+    // resolve AFTER the user has switched, and would then repopulate the panel
+    // (source type, device, sub-panels) with the wrong camera's data.  Bail if
+    // the active camera changed while our request was in flight.
+    const reqCam = activeCamIndex;
     try {
-      const r = await fetch(`/api/camera/devices?cam=${activeCamIndex}`);
+      const r = await fetch(`/api/camera/devices?cam=${reqCam}`);
       const data = await r.json();
+      if (reqCam !== activeCamIndex) return;   // user switched tabs mid-fetch
       if (!deviceSelect) return;
       deviceSelect.innerHTML = "";
       // "No Camera" always leads the list — selecting it clears this slot and
@@ -3606,9 +3613,13 @@ async function loadAudioDevices() {
 
 // Load stream configuration on page load
 async function loadStreamConfig() {
+  // Bail if the user switches tabs while this request is in flight, so a
+  // late response for the previous camera can't overwrite the current panel.
+  const reqCam = activeCamIndex;
   try {
-    const response = await fetch(`/api/stream/config?cam=${activeCamIndex}`);
+    const response = await fetch(`/api/stream/config?cam=${reqCam}`);
     const data = await response.json();
+    if (reqCam !== activeCamIndex) return;
     if (data.success && data.config) {
       console.log("📡 Loaded stream config:", data.config);
 

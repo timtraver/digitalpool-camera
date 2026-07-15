@@ -1131,6 +1131,21 @@ gst-inspect-1.0 mppvideodec  # handles H.264, H.265, VP8, JPEG (Rockchip only)
 # vaapidecodebin can also be used if gstreamer1.0-vaapi is installed (step 2c-ii).
 ```
 
+> **⚠️ NDI|HX decode needs FFmpeg 7 (Ubuntu 24.04).** Most affordable "NDI" cameras
+> (e.g. Zowietek) are actually **NDI|HX** — H.264/H.265 wrapped in NDI. `libndi.so.6`
+> does not decode HX itself; it `dlopen()`s FFmpeg's **`libavcodec.so.61` / `libavutil.so.59`
+> (FFmpeg 7)** and hands GStreamer already-decoded `video/x-raw`. Ubuntu 24.04 ships only
+> FFmpeg **6** (`libavcodec.so.60`), so without FFmpeg 7 present, NDI can't decode the stream
+> and feeds a **"Video decoder not found"** placeholder frame instead of the camera — even
+> though discovery, connection, and the GStreamer decoders above all look fine. Confirm the
+> requirement with `strings /usr/lib/x86_64-linux-gnu/libndi.so.6 | grep -i libavcodec`.
+>
+> **Fix:** install FFmpeg 7's versioned `.so` files into `/usr/local/lib` *alongside* the
+> system FFmpeg 6 (different SONAME → no conflict; GStreamer keeps using `.60`). This is
+> automated by **`migrations/0002-ndi-hx-ffmpeg7.sh`** (see Section 16b) using prebuilt libs
+> under `vendor/ffmpeg7/<arch>/`; to build them for a new architecture, run
+> **`build-ffmpeg7-libs.sh`** on a box of that arch. Verify: `ldconfig -p | grep libavcodec.so.61`.
+
 > **Note:** The NDI library discovery test (`ndi-discover.py`) requires the `digitalpool-camera` repo to be cloned first. That check is in **Section 4c** below.
 
 #### NDI firewall rules
