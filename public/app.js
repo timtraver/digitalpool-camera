@@ -3231,6 +3231,9 @@ overlayEnabled.addEventListener("change", () => {
 remoteOverlayEnabled.addEventListener("change", () => {
   currentOverlayConfig.remoteOverlayEnabled = remoteOverlayEnabled.checked;
   console.log("Remote overlay changed:", remoteOverlayEnabled.checked);
+  // Pull a fresh overlay list each time the feature is switched on, so an
+  // overlay just created on the website shows up without waiting out the cache.
+  if (remoteOverlayEnabled.checked) loadOverlayList(true);
   updateOverlayVisibility();
   drawOverlay();
   // Show "Updating preview" banner immediately — don't wait for server round-trip
@@ -3391,9 +3394,9 @@ function reconcileOverlaySelect() {
   }
 }
 
-async function loadOverlayList() {
+async function loadOverlayList(force = false) {
   try {
-    const resp = await fetch("/api/overlays");
+    const resp = await fetch(force ? "/api/overlays?refresh=1" : "/api/overlays");
     const data = await resp.json();
     availableOverlays = data.ok && Array.isArray(data.overlays) ? data.overlays : [];
   } catch (e) {
@@ -3421,8 +3424,9 @@ overlaySelect.addEventListener("change", () => {
   applyOverlaySettings();
 });
 
-// Load the account's overlays once at startup; re-reconciled on each config load.
-loadOverlayList();
+// The overlay list is fetched when "Remote Overlay" is switched on (below) and
+// when a camera's saved config loads with it already enabled (streamStatus
+// handler) — not unconditionally at startup.
 
 // Overlay zoom slider
 overlayZoom.addEventListener("input", () => {
@@ -3471,7 +3475,13 @@ socket.on("streamStatus", (status) => {
     showTimestamp.checked = status.config.showTimestamp || false;
     remoteOverlayEnabled.checked = status.config.remoteOverlayEnabled || false;
     overlayUrl.value = status.config.overlayUrl || "";
-    reconcileOverlaySelect();
+    // If this camera already has remote overlay on, make sure the picker is
+    // populated (cache is fine here); otherwise just re-sync the selection.
+    if (remoteOverlayEnabled.checked && availableOverlays.length === 0) {
+      loadOverlayList();
+    } else {
+      reconcileOverlaySelect();
+    }
     overlayZoom.value = status.config.overlayZoom || 100;
     overlayZoomValue.textContent = overlayZoom.value + "%";
 

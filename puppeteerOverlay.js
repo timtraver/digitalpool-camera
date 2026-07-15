@@ -106,12 +106,22 @@ class PuppeteerOverlay extends EventEmitter {
    */
   setOverlayUrl(url, options = {}) {
     if (url && url.trim()) {
-      this._overlayUrl = url.trim();
+      const trimmed = url.trim();
+      const urlChanged = trimmed !== this._overlayUrl;
+      this._overlayUrl = trimmed;
       if (options.refreshInterval) this._refreshIntervalMs = options.refreshInterval;
       if (options.jsDelay) this._jsDelay = options.jsDelay;
       if (options.zoom && options.zoom !== this._zoom) {
         this._zoom = options.zoom;
         this._zoomDirty = true; // Flag to re-apply zoom on next screenshot cycle
+      }
+      // When switching to a *different* URL, clear the currently-composited PNG
+      // right away so the old overlay visibly disappears instead of lingering
+      // for the few seconds it takes Chromium to navigate + screenshot the new
+      // page. The immediate _renderUrlOverlay() (via startPeriodicRefresh) then
+      // replaces this transparent placeholder with the new overlay.
+      if (urlChanged) {
+        this._createPlaceholderPNG(this.pngPath);
       }
       console.log(`🌍 Overlay URL mode enabled: ${this._overlayUrl}`);
       console.log(`   Refresh interval: ${this._refreshIntervalMs}ms, JS delay: ${this._jsDelay}ms, zoom: ${this._zoom}%`);
