@@ -3831,6 +3831,15 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
       "!",
       "videoconvert",
       "!",
+      // Downscale to the shared 1280×720 preview size. NDI sources arrive at
+      // their native resolution (typically 1920×1080), and without this scale
+      // the frame stays full-size while the overlay is composited at a fixed
+      // 1280×720 — so the overlay only covers ~2/3 of the frame. Matching the
+      // other sources here keeps the overlay filling the preview.
+      "videoscale",
+      "!",
+      "video/x-raw,width=1280,height=720",
+      "!",
       // 15 fps gives a smooth preview; drop-only=true means videorate only ever
       // discards excess frames from the 30-60 fps NDI source — it never duplicates.
       "videorate", "drop-only=true",
@@ -4653,10 +4662,16 @@ io.on("connection", (socket) => {
         if (!camPuppeteer.isRunning) {
           await camPuppeteer.initialize(PORT, sc.pngOverlayPath);
         }
+        const _prevOverlayUrl = camPuppeteer._overlayUrl || "";
         camPuppeteer.setOverlayUrl(overlayConfig.overlayUrl, {
           zoom: overlayConfig.overlayZoom,
         });
         camPuppeteer.startPeriodicRefresh();
+        // True only when replacing one overlay with a *different* one (not the
+        // first enable) — used to clear the old overlay from the idle preview
+        // immediately instead of waiting for the new screenshot / 30s fallback.
+        const switchingOverlay = !!_prevOverlayUrl &&
+          _prevOverlayUrl !== (overlayConfig.overlayUrl || "").trim();
 
         if (!sc.isStreaming) {
           const restartTimer = camIdx === 2 ? idlePreviewRestartTimer2 : idlePreviewRestartTimer;
@@ -4700,6 +4715,15 @@ io.on("connection", (socket) => {
             restartForOverlay("Overlay timeout");
           }, 30000);
           camPuppeteer.once("updated", onUpdated);
+
+          // Switching overlays: clear the old one from the preview immediately.
+          // setOverlayUrl already wrote the transparent placeholder (< 100 bytes),
+          // so this rebuild produces a pipeline with no overlay element = blank.
+          // The operator sees old → blank now → new (when onUpdated fires), instead
+          // of the old overlay lingering until the new screenshot finally lands.
+          if (switchingOverlay) {
+            restartForOverlay("Overlay switching — clearing previous overlay");
+          }
         }
       }
     } else if (overlayConfig.remoteOverlayEnabled === false && camPuppeteer) {

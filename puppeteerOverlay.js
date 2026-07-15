@@ -122,10 +122,15 @@ class PuppeteerOverlay extends EventEmitter {
       // replaces this transparent placeholder with the new overlay.
       if (urlChanged) {
         this._createPlaceholderPNG(this.pngPath);
+        // Force the next render to re-navigate to the new page (rather than
+        // treating the already-loaded old page as current).
+        this._currentLoadedUrl = null;
       }
       console.log(`🌍 Overlay URL mode enabled: ${this._overlayUrl}`);
       console.log(`   Refresh interval: ${this._refreshIntervalMs}ms, JS delay: ${this._jsDelay}ms, zoom: ${this._zoom}%`);
+      return urlChanged;
     } else {
+      const wasEnabled = !!this._overlayUrl;
       this._overlayUrl = null;
       this._stopPeriodicRefresh();
       this._closeBrowser(); // Clean up Chromium when disabling URL mode
@@ -133,6 +138,7 @@ class PuppeteerOverlay extends EventEmitter {
       // so GStreamer doesn't keep showing the old (possibly white) image
       this._createPlaceholderPNG(this.pngPath);
       console.log("📄 Overlay switched to local HTML mode (cleared old overlay)");
+      return wasEnabled;
     }
   }
 
@@ -407,10 +413,12 @@ class PuppeteerOverlay extends EventEmitter {
         // Use "domcontentloaded" instead of "networkidle0" — overlay pages often have
         // persistent WebSocket / polling connections that prevent networkidle0 from
         // ever firing, causing a silent 30-second timeout.
+        const _navStart = Date.now();
         await this._page.goto(this._overlayUrl, {
           waitUntil: "domcontentloaded",
           timeout: 30000,
         });
+        console.log(`✅ Navigation completed in ${Date.now() - _navStart}ms`);
         this._currentLoadedUrl = this._overlayUrl;
         this._zoomDirty = true; // Always apply zoom after navigation
 
@@ -418,6 +426,7 @@ class PuppeteerOverlay extends EventEmitter {
         console.log(`⏳ Waiting ${this._jsDelay}ms for JS framework to render...`);
         await new Promise(r => setTimeout(r, this._jsDelay));
       }
+      const _shotStart = Date.now();
 
       // Apply zoom and transparent background when dirty (after nav or zoom change)
       if (this._zoomDirty) {
@@ -439,6 +448,7 @@ class PuppeteerOverlay extends EventEmitter {
       });
       // Atomic rename so GStreamer never reads a partial file
       fs.renameSync(tempPath, this.pngPath);
+      console.log(`📸 Overlay screenshot written in ${Date.now() - _shotStart}ms`);
 
       this.emit("updated", this.pngPath);
     } catch (err) {
