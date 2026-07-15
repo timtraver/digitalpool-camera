@@ -370,6 +370,24 @@ class PuppeteerOverlay extends EventEmitter {
     // viewport size.  A 3840×2160 PNG painted onto a 1920×1080 video frame
     // would appear 2× too large and overflow the frame.
     await this._page.setViewport({ width: this.width, height: this.height, deviceScaleFactor: 1 });
+    // Force a transparent background via an injected script that runs at document
+    // creation on EVERY navigation — instead of a post-load page.evaluate(), which
+    // intermittently wedges (Runtime.callFunctionOn hanging until protocolTimeout)
+    // when the freshly-loaded overlay page is busy or mid-redirect. Combined with
+    // the screenshot's omitBackground, this keeps overlays transparent without a
+    // hang-prone CDP round-trip on the hot path.
+    try {
+      await this._page.evaluateOnNewDocument(() => {
+        const makeTransparent = () => {
+          if (document.documentElement) document.documentElement.style.backgroundColor = "transparent";
+          if (document.body) document.body.style.backgroundColor = "transparent";
+        };
+        makeTransparent();
+        document.addEventListener("DOMContentLoaded", makeTransparent);
+      });
+    } catch (e) {
+      console.warn(`⚠️  Could not install transparent-bg script: ${e.message}`);
+    }
     this._currentLoadedUrl = null; // Track what URL is loaded
     console.log("  ✅ Chromium browser ready");
   }
@@ -444,14 +462,30 @@ class PuppeteerOverlay extends EventEmitter {
       }
       const _shotStart = Date.now();
 
-      // Apply zoom and transparent background when dirty (after nav or zoom change)
-      if (this._zoomDirty) {
+      // Apply zoom when dirty (after nav or zoom change). Transparent background
+      // is already handled by the injected evaluateOnNewDocument script above, so
+      // this call is only needed for a non-100% zoom. Skipping it at 100% (the
+      // default) avoids a post-load page.evaluate() on the hot path entirely.
+      if (this._zoomDirty && this._zoom !== 100) {
         console.log(`🔍 Applying zoom: ${this._zoom}%`);
-        await this._page.evaluate((zoom) => {
-          document.documentElement.style.backgroundColor = "transparent";
-          document.body.style.backgroundColor = "transparent";
-          document.body.style.zoom = (zoom / 100).toString();
-        }, this._zoom);
+        try {
+          // Race against a short timeout so a wedged JS context (busy page or
+          // mid-redirect) can't stall the loop until protocolTimeout — screenshot
+          // anyway; zoom re-applies next cycle since _zoomDirty stays set on failure.
+          await Promise.race([
+            this._page.evaluate((zoom) => {
+              document.body.style.zoom = (zoom / 100).toString();
+            }, this._zoom),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("zoom apply timed out (page busy)")), 3000)
+            ),
+          ]);
+          this._zoomDirty = false;
+        } catch (e) {
+          console.warn(`⚠️  Overlay zoom apply skipped this cycle: ${e.message}`);
+        }
+      } else if (this._zoomDirty) {
+        // 100% zoom is a no-op — nothing to apply, just clear the flag.
         this._zoomDirty = false;
       }
 
