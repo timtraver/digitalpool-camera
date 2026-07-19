@@ -1931,6 +1931,51 @@ footer {
 }
 
 
+/* ── Restarting / rebooting full-screen blocker ─────────────────────────── */
+.restarting-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100000; /* above every other modal/overlay */
+  backdrop-filter: blur(2px);
+}
+
+.restarting-box {
+  text-align: center;
+  padding: 40px 48px;
+}
+
+.restarting-spinner {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 24px;
+  border: 5px solid rgba(56, 189, 248, 0.2);
+  border-top-color: #38bdf8;
+  border-radius: 50%;
+  animation: restarting-spin 0.9s linear infinite;
+}
+
+@keyframes restarting-spin {
+  to { transform: rotate(360deg); }
+}
+
+.restarting-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 10px;
+}
+
+.restarting-sub {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.65);
+  line-height: 1.5;
+}
+
+
 /* ── Device registration modal ──────────────────────────────────────────── */
 .reg-modal-backdrop {
   position: fixed;

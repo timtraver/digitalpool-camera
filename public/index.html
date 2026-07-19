@@ -1179,6 +1179,17 @@
         </div>
       </div>
 
+      <!-- ── Restarting / Rebooting Modal ── -->
+      <!-- Full-screen blocker shown as the last thing on screen while the
+           service restarts or the device reboots (see showRestartingModal). -->
+      <div id="restartingModal" class="restarting-backdrop" style="display:none">
+        <div class="restarting-box">
+          <div class="restarting-spinner"></div>
+          <div class="restarting-title" id="restartingTitle">Restarting Software…</div>
+          <div class="restarting-sub" id="restartingSub">Please wait — this page will reload automatically.</div>
+        </div>
+      </div>
+
       <!-- ── Device Registration Modal ── -->
       <!-- #regNoInternetArea and #regFormArea are moved into #regModalMount at
            runtime (see initRegistration in app.js) so the registration process

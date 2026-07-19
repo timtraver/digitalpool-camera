@@ -280,6 +280,20 @@ socket.on("controlResult", (result) => {
   }
 });
 
+// Full-screen "Restarting Software…" blocker — the last thing shown before the
+// service restarts or the device reboots. Sits above every other modal/overlay
+// (z-index 100000) and is dismissed only by the automatic page reload once the
+// server is reachable again.
+function showRestartingModal(title, sub) {
+  const modal = document.getElementById("restartingModal");
+  if (!modal) return;
+  const titleEl = document.getElementById("restartingTitle");
+  const subEl = document.getElementById("restartingSub");
+  if (titleEl && title) titleEl.textContent = title;
+  if (subEl && sub) subEl.textContent = sub;
+  modal.style.display = "flex";
+}
+
 function showControlError(control, message) {
   let toast = document.getElementById("controlErrorToast");
   if (!toast) {
@@ -4412,6 +4426,8 @@ loadDeviceIp();
     msg.textContent = "🔄 Restarting service…";
     msg.style.color = "#facc15";
 
+    showRestartingModal("Restarting Software…", "Please wait — this page will reload automatically.");
+
     try {
       await fetch("/api/restart", { method: "POST" });
     } catch { /* server already restarting */ }
@@ -4442,6 +4458,8 @@ loadDeviceIp();
     btn.textContent = "⏳ Rebooting…";
     msg.textContent = "🔄 Device is rebooting — reconnect in about 30–60 seconds…";
     msg.style.color = "#facc15";
+
+    showRestartingModal("Rebooting Device…", "The camera will be offline for 30–60 seconds. This page will reload automatically.");
 
     try {
       await fetch("/api/reboot", { method: "POST" });
@@ -4703,11 +4721,13 @@ loadDeviceIp();
       output.style.display = "block";
       msg.textContent = "🔄 Restarting service…";
       msg.style.color = "#facc15";
+      showRestartingModal("Restarting Software…", "Deploying update — this page will reload automatically.");
       pollUntilBack();
     } catch {
       // Server already restarted before it could respond — just poll
       msg.textContent = "🔄 Restarting service…";
       msg.style.color = "#facc15";
+      showRestartingModal("Restarting Software…", "Deploying update — this page will reload automatically.");
       pollUntilBack();
     }
     return true;
