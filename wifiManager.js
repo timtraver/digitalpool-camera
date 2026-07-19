@@ -12,6 +12,7 @@
 
 const { exec } = require('child_process');
 const { promisify } = require('util');
+const fs = require('fs');
 const EventEmitter = require('events');
 
 const execAsync = promisify(exec);
@@ -338,17 +339,40 @@ class WifiManager extends EventEmitter {
   }
 
   /**
+   * Return the device's primary hardware MAC (lowercase, colon-separated),
+   * preferring the wired ethernet NIC (en/eth) over WiFi (wl) over any other
+   * physical interface.  This is the SAME MAC the hostname suffix is derived from
+   * (dp-stream-<XXXX>) — mirrors getPrimaryMac() in server.js and primary_mac()
+   * in dp-firstboot.sh.  Reads /sys so a wired port with no cable still counts.
+   * Returns "" if none can be read.
+   */
+  _primaryMac() {
+    const NET_DIR = '/sys/class/net';
+    const rank = (n) => (/^(en|eth)/.test(n) ? 0 : /^wl/.test(n) ? 1 : 2);
+    try {
+      const ordered = fs.readdirSync(NET_DIR).sort((a, b) => rank(a) - rank(b));
+      for (const iface of ordered) {
+        if (iface === 'lo') continue;
+        if (!fs.existsSync(`${NET_DIR}/${iface}/device`)) continue; // skip virtual ifaces
+        let mac = '';
+        try { mac = fs.readFileSync(`${NET_DIR}/${iface}/address`, 'utf8').trim().toLowerCase(); }
+        catch { continue; }
+        if (mac && mac !== '00:00:00:00:00:00') return mac;
+      }
+    } catch { /* not Linux / no sysfs */ }
+    return '';
+  }
+
+  /**
    * Build a device-unique SSID: "DigitalPool-<XXXX>" where XXXX is the last
-   * 4 hex chars (2 bytes) of the WiFi adapter's MAC address, upper-cased.
-   * Two devices with different dongles in the same room will have different SSIDs.
-   * Falls back to DEFAULT_AP_SSID if the MAC cannot be read.
+   * 4 hex chars (2 bytes) of the *primary* (wired ethernet) MAC, upper-cased.
+   * Using the wired MAC — not the WiFi adapter's — makes the SSID match the
+   * NetBird device name (hostname dp-stream-<XXXX>) and keeps it stable no matter
+   * which WiFi dongle is fitted.  Falls back to DEFAULT_AP_SSID if unreadable.
    */
   async _defaultSsid() {
     try {
-      const { stdout } = await execAsync(
-        `cat /sys/class/net/${this.wifiIface}/address 2>/dev/null`
-      );
-      const mac    = stdout.trim().replace(/:/g, '').toUpperCase();
+      const mac    = this._primaryMac().replace(/:/g, '').toUpperCase();
       const suffix = mac.slice(-4);
       if (suffix.length === 4) return `${AP_SSID_PREFIX}-${suffix}`;
     } catch { /* fall through */ }

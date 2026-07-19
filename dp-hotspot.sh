@@ -54,15 +54,30 @@ if [ -z "$IFACE" ]; then
 fi
 echo "📡 WiFi interface: $IFACE (found after ${IFACE_WAITED}s)"
 
-# Derive a device-unique SSID from the last 4 hex chars of the adapter MAC
-# (upper-case, colons stripped).  Two cameras at the same venue won't clash.
-MAC_RAW=$(cat /sys/class/net/"$IFACE"/address 2>/dev/null | tr -d ':' | tr 'a-f' 'A-F' || true)
+# Derive a device-unique SSID from the last 4 hex chars of the *primary* NIC MAC
+# (upper-case, colons stripped).  This is the SAME MAC the hostname suffix is
+# derived from (dp-stream-<XXXX>), preferring the wired ethernet port over the
+# WiFi adapter, so the SSID matches the NetBird device name.  The wired MAC is
+# stable regardless of which WiFi dongle is fitted.  Mirrors dp-firstboot.sh's
+# primary_mac(): wired (en*/eth*) → WiFi (wl*) → any physical NIC.
+primary_mac() {
+    local iface mac
+    for iface in $(ls /sys/class/net 2>/dev/null | grep -E '^(en|eth)') \
+                 $(ls /sys/class/net 2>/dev/null | grep -E '^wl') \
+                 $(ls /sys/class/net 2>/dev/null); do
+        [ "$iface" = "lo" ] && continue
+        [ -e "/sys/class/net/$iface/device" ] || continue   # skip virtual ifaces
+        mac="$(cat "/sys/class/net/$iface/address" 2>/dev/null)"
+        [ -n "$mac" ] && [ "$mac" != "00:00:00:00:00:00" ] && { echo "$mac"; return; }
+    done
+}
+MAC_RAW=$(primary_mac | tr -d ':' | tr 'a-f' 'A-F' || true)
 MAC_SUFFIX="${MAC_RAW: -4}"
 if [ ${#MAC_SUFFIX} -eq 4 ]; then
     DEFAULT_SSID="DigitalPool-${MAC_SUFFIX}"
     echo "📡 Device SSID suffix: ${MAC_SUFFIX}  →  ${DEFAULT_SSID}"
 else
-    echo "⚠️  Could not read MAC — using generic SSID: $DEFAULT_SSID" >&2
+    echo "⚠️  Could not read primary MAC — using generic SSID: $DEFAULT_SSID" >&2
 fi
 
 # ── Step 2: wait for the interface to be ready (NM state ≥ 30) ──────────────
