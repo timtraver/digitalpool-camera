@@ -408,8 +408,8 @@ socket.on("cameraConfigReset", (data) => {
 // same feel on every camera regardless of whether its range is tiny or huge —
 // a single raw hardware step is imperceptible on wide-range cameras, so we never
 // use it as the base movement.
-const PTZ_LARGE_PCT = 5;   // % of full travel per outer-ring / Shift+arrow press (coarse)
-const PTZ_SMALL_PCT = 0.5; // % of full travel per inner-ring / Arrow key press   (fine)
+const PTZ_LARGE_PCT = 5;    // % of full travel per outer-ring / Shift+arrow press (coarse)
+const PTZ_SMALL_PCT = 0.25; // % of full travel per inner-ring / Arrow key press   (fine)
 
 // Live hardware state — updated from ptzRanges in the cameraConfig socket event.
 // Defaults are for the OBSBot Tiny 2 Lite: step=3600 units, range ±468000/±324000.
