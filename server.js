@@ -2512,9 +2512,17 @@ app.get("/api/camera/capabilities", requireAuth, async (req, res) => {
       supports4K: true,
       maxWidth: 0,
       maxHeight: 0,
+      // Network sources are transcoded — the encoder, not the camera, sets the
+      // framerate ceiling, so report no per-resolution constraint (empty map).
+      framerates: {},
     });
   }
   const dev = activeSource.device || defaultDevice;
+  // Report framerates for the format the streaming pipeline actually captures in
+  // (MJPEG vs YUYV) — the two formats can advertise different rates, and picking
+  // the wrong block would let the UI offer an fps the pipeline can't negotiate.
+  const wantFmt = (getSC(camIdx).captureFormat || "mjpeg").toLowerCase() === "yuyv"
+    ? "YUYV" : "MJPG";
   try {
     const { stdout } = await execAsync(
       `sudo v4l2-ctl -d ${dev} --list-formats-ext 2>/dev/null || true`,
@@ -2522,20 +2530,36 @@ app.get("/api/camera/capabilities", requireAuth, async (req, res) => {
     );
     let maxW = 0, maxH = 0;
     let supports720p = false, supports1080p = false, supports4K = false;
-    const re = /Size: Discrete (\d+)x(\d+)/g;
-    let m;
-    while ((m = re.exec(stdout)) !== null) {
-      const w = parseInt(m[1], 10), h = parseInt(m[2], 10);
-      if (w >= 1280 && h >= 720)  supports720p  = true;
-      if (w >= 1920 && h >= 1080) supports1080p = true;
-      if (w >= 3840 && h >= 2160) supports4K    = true;
-      if (w * h > maxW * maxH) { maxW = w; maxH = h; }
+    // Per-resolution supported framerates ("WxH" → sorted unique int fps),
+    // scoped to the capture format the pipeline will use.
+    const framerates = {};
+    let curFmt = null, curSize = null;
+    for (const line of stdout.split("\n")) {
+      const fmtM = line.match(/\[\d+\]:\s*'(\w+)'/);
+      if (fmtM) { curFmt = fmtM[1]; curSize = null; continue; }
+      const sizeM = line.match(/Size: Discrete (\d+)x(\d+)/);
+      if (sizeM) {
+        curSize = `${sizeM[1]}x${sizeM[2]}`;
+        const w = parseInt(sizeM[1], 10), h = parseInt(sizeM[2], 10);
+        if (w >= 1280 && h >= 720)  supports720p  = true;
+        if (w >= 1920 && h >= 1080) supports1080p = true;
+        if (w >= 3840 && h >= 2160) supports4K    = true;
+        if (w * h > maxW * maxH) { maxW = w; maxH = h; }
+        continue;
+      }
+      const fpsM = line.match(/\(([\d.]+)\s*fps\)/);
+      if (fpsM && curSize && curFmt === wantFmt) {
+        const fps = Math.round(parseFloat(fpsM[1]));
+        const list = framerates[curSize] || (framerates[curSize] = []);
+        if (!list.includes(fps)) list.push(fps);
+      }
     }
-    res.json({ success: true, source: "usb", device: dev, supports720p, supports1080p, supports4K, maxWidth: maxW, maxHeight: maxH });
+    for (const k of Object.keys(framerates)) framerates[k].sort((a, b) => a - b);
+    res.json({ success: true, source: "usb", device: dev, captureFormat: wantFmt, supports720p, supports1080p, supports4K, maxWidth: maxW, maxHeight: maxH, framerates });
   } catch (e) {
     // On parse / exec failure, fall back to the safe set (no 4K) so the UI
     // doesn't accidentally enable an option the camera can't satisfy.
-    res.json({ success: false, error: e.message, supports720p: true, supports1080p: true, supports4K: false, maxWidth: 0, maxHeight: 0 });
+    res.json({ success: false, error: e.message, supports720p: true, supports1080p: true, supports4K: false, maxWidth: 0, maxHeight: 0, framerates: {} });
   }
 });
 

@@ -384,6 +384,15 @@ class StreamController extends EventEmitter {
     // For RTMP, destination is optional (defaults to local MediaMTX)
     // For SRT server mode, destination is not needed (device acts as server)
 
+    // Clamp the requested framerate to what the USB camera can actually deliver
+    // at the configured resolution/format.  A stale saved config or an auto-start
+    // (which runs before any UI capability check) could otherwise request e.g.
+    // 60 fps on a 30-fps-only camera, and v4l2src fails the whole pipeline with
+    // "not-negotiated (-4)".  Better to start at the closest supported rate.
+    if (this.inputSource.type === "usb") {
+      await this._clampFramerateToCamera();
+    }
+
     try {
       // Emit "preparing" FIRST — before killing any processes.
       //
@@ -1563,6 +1572,52 @@ class StreamController extends EventEmitter {
   /**
    * Build GStreamer pipeline based on configuration
    */
+  /**
+   * Clamp streamConfig.framerate to a rate the camera advertises for the
+   * configured resolution in the active capture format (MJPEG/YUYV).
+   *
+   * Queries `v4l2-ctl --list-formats-ext` and, if the requested framerate is not
+   * offered at the configured width×height, drops to the highest supported rate
+   * that does not exceed the request (falling back to the max available). This
+   * mirrors the UI's per-resolution framerate constraint so auto-start and
+   * stale configs can't trigger a v4l2 "not-negotiated (-4)" pipeline failure.
+   *
+   * Fails open: any parse/exec error leaves the configured framerate untouched.
+   */
+  async _clampFramerateToCamera() {
+    const { width, height, framerate } = this.streamConfig;
+    const wantFmt = (this.captureFormat || "mjpeg").toLowerCase() === "yuyv" ? "YUYV" : "MJPG";
+    const targetSize = `${width}x${height}`;
+    try {
+      const { stdout } = await execAsync(
+        `sudo v4l2-ctl -d ${this.cameraDevice} --list-formats-ext 2>/dev/null || true`,
+        { timeout: 4000 },
+      );
+      const rates = [];
+      let curFmt = null, curSize = null;
+      for (const line of stdout.split("\n")) {
+        const fmtM = line.match(/\[\d+\]:\s*'(\w+)'/);
+        if (fmtM) { curFmt = fmtM[1]; curSize = null; continue; }
+        const sizeM = line.match(/Size: Discrete (\d+)x(\d+)/);
+        if (sizeM) { curSize = `${sizeM[1]}x${sizeM[2]}`; continue; }
+        const fpsM = line.match(/\(([\d.]+)\s*fps\)/);
+        if (fpsM && curFmt === wantFmt && curSize === targetSize) {
+          const fps = Math.round(parseFloat(fpsM[1]));
+          if (!rates.includes(fps)) rates.push(fps);
+        }
+      }
+      if (rates.length === 0 || rates.includes(framerate)) return; // supported or unknown → leave as-is
+      rates.sort((a, b) => a - b);
+      // Prefer the highest supported rate ≤ requested; else the max available.
+      const atOrBelow = rates.filter((r) => r <= framerate);
+      const clamped = atOrBelow.length ? atOrBelow[atOrBelow.length - 1] : rates[rates.length - 1];
+      console.warn(`⚠️  [Cam${this.streamId}] ${framerate}fps not supported by camera at ${targetSize} (${wantFmt}); clamping to ${clamped}fps (supported: ${rates.join(", ")})`);
+      this.streamConfig.framerate = clamped;
+    } catch (e) {
+      console.warn(`⚠️  [Cam${this.streamId}] Framerate capability check failed (${e.message}) — using configured ${framerate}fps`);
+    }
+  }
+
   _buildGStreamerPipeline() {
     const {
       protocol,

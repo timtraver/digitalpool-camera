@@ -3840,11 +3840,30 @@ function setStreamOptionDisabled(selectEl, value, disabled, fallbackValue) {
   }
 }
 
-// 4K caps the encoder at 30 fps on the Orange Pi 5 — disable 50/60 in that case.
+// Per-resolution framerates the active camera advertises ("WxH" → [fps,…]),
+// populated by loadCameraCapabilities(). Empty for network sources (no camera
+// constraint) or before capabilities have loaded.
+let cameraFramerates = {};
+
+// Grey out framerates the selected resolution can't produce so the user can't
+// start a stream the camera will reject with v4l2 "not-negotiated (-4)".
+// Two independent limits apply:
+//   1. Camera hardware — what v4l2-ctl --list-formats-ext advertises for the
+//      current resolution + capture format (cameraFramerates).
+//   2. Encoder — 4K is capped at 30 fps on the Orange Pi 5 regardless of camera.
 function applyResolutionConstraints() {
-  const is4K = streamResolution && streamResolution.value === "3840x2160";
-  setStreamOptionDisabled(streamFramerate, "50", is4K, "30");
-  setStreamOptionDisabled(streamFramerate, "60", is4K, "30");
+  if (!streamFramerate) return;
+  const res = streamResolution ? streamResolution.value : "";
+  const is4K = res === "3840x2160";
+  // A camera list for this resolution constrains the options; no list (network
+  // source, or capabilities not yet loaded) means "don't constrain by camera".
+  const camList = cameraFramerates[res] || null;
+  for (const opt of Array.from(streamFramerate.options)) {
+    const fps = parseInt(opt.value, 10);
+    const encoderBlocks = is4K && fps > 30;
+    const cameraBlocks  = camList ? !camList.includes(fps) : false;
+    setStreamOptionDisabled(streamFramerate, opt.value, encoderBlocks || cameraBlocks, "30");
+  }
 }
 
 // Query the backend for what the active source can deliver, and disable
@@ -3855,6 +3874,7 @@ async function loadCameraCapabilities() {
   try {
     const r = await fetch(`/api/camera/capabilities?cam=${activeCamIndex}`);
     const d = await r.json();
+    cameraFramerates = d.framerates || {};
     setStreamOptionDisabled(streamResolution, "1280x720",  !d.supports720p,  "1920x1080");
     setStreamOptionDisabled(streamResolution, "1920x1080", !d.supports1080p, "1280x720");
     setStreamOptionDisabled(streamResolution, "3840x2160", !d.supports4K,    "1920x1080");
