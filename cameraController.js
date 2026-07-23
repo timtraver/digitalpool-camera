@@ -296,13 +296,25 @@ class CameraController {
    */
   translateValue(controlName, configValue, hwControl) {
     if (!hwControl || hwControl.type === 'bool') return configValue;
-    const { min = 0, max = 100 } = hwControl;
+    const { min = 0, max = 100, step = 1 } = hwControl;
+    let value;
     if (CameraController.PERCENTAGE_CONTROLS.has(controlName)) {
+      // Percentage controls (zoom, brightness, …) store 0-100 in config. Map to
+      // the camera's actual [min,max] so 1% always means 1% of THIS camera's
+      // range — whether that range is tiny or huge (e.g. a big-zoom PTZ camera).
       const fraction = Math.max(0, Math.min(100, configValue)) / 100;
-      return Math.round(min + fraction * (max - min));
+      value = min + fraction * (max - min);
+    } else {
+      // Direct value (pan/tilt absolute) — clamp to hardware range.
+      value = Math.max(min, Math.min(max, configValue));
     }
-    // Direct value — clamp to hardware range
-    return Math.max(min, Math.min(max, configValue));
+    // Snap to the nearest valid increment the camera actually accepts. Cameras
+    // advertise a `step` via v4l2-ctl (e.g. zoom in units of 5); sending an
+    // off-step value can be rejected or silently rounded, so we honor it here.
+    if (step && step > 1) {
+      value = min + Math.round((value - min) / step) * step;
+    }
+    return Math.max(min, Math.min(max, Math.round(value)));
   }
 
   /**
@@ -791,6 +803,41 @@ class CameraController {
   }
 
   /**
+   * Wait for the camera's power-on self-home / calibration sweep to finish.
+   *
+   * Many USB PTZ cameras run a mechanical self-home when first opened; it takes
+   * several seconds, during which absolute-position commands are ignored or
+   * overridden. If we send the saved home too early it's lost and the camera
+   * settles at ITS mechanical home instead of ours. We detect completion by
+   * polling pan/tilt until the reported position stops changing (calibration
+   * sweep done), after a minimum settle delay and up to a hard timeout.
+   */
+  async _waitForPtzIdle({ minWaitMs = 2500, maxWaitMs = 12000, sampleMs = 700, stableSamples = 2 } = {}) {
+    const t0 = Date.now();
+    if (minWaitMs > 0) await new Promise((r) => setTimeout(r, minWaitMs));
+
+    let prev = null;
+    let stable = 0;
+    while (Date.now() - t0 < maxWaitMs) {
+      const pan  = await this.getControl("pan_absolute");
+      const tilt = await this.getControl("tilt_absolute");
+      if (pan.success && tilt.success && pan.value !== null && tilt.value !== null) {
+        if (prev && prev.pan === pan.value && prev.tilt === tilt.value) {
+          if (++stable >= stableSamples) {
+            console.log(`📌 PTZ settled (pan=${pan.value}, tilt=${tilt.value}) after ${Date.now() - t0}ms — calibration done`);
+            return;
+          }
+        } else {
+          stable = 0;
+        }
+        prev = { pan: pan.value, tilt: tilt.value };
+      }
+      await new Promise((r) => setTimeout(r, sampleMs));
+    }
+    console.log(`📌 PTZ settle timed out after ${maxWaitMs}ms — applying home anyway`);
+  }
+
+  /**
    * Apply the startup position to the camera (pan/tilt/zoom only)
    */
   async applyStartupPosition() {
@@ -799,6 +846,12 @@ class CameraController {
       console.log("📌 No startup position set, using saved config position");
       return false;
     }
+
+    // Let any power-on calibration finish first, so the command below isn't
+    // discarded by a still-homing camera (which would leave it stuck at the end
+    // of its own calibration sweep instead of our saved home).
+    await this._waitForPtzIdle();
+
     console.log("📌 Applying startup position:", startupPos);
 
     // Many USB PTZ cameras run a mechanical self-home on power-up that takes a

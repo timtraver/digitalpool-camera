@@ -357,8 +357,8 @@ socket.on("cameraConfig", (data) => {
       }
       console.log(
         `📐 PTZ hw state updated — ` +
-        `pan: range=${_panHwRange} units, step=${_panHwStep} units, large=${panLargeSteps()} steps | ` +
-        `tilt: range=${_tiltHwRange} units, step=${_tiltHwStep} units, large=${tiltLargeSteps()} steps`
+        `pan: range=${_panHwRange} units, step=${_panHwStep} units, fine=${panSmallSteps()}/coarse=${panLargeSteps()} steps | ` +
+        `tilt: range=${_tiltHwRange} units, step=${_tiltHwStep} units, fine=${tiltSmallSteps()}/coarse=${tiltLargeSteps()} steps`
       );
     }
   }
@@ -391,13 +391,19 @@ socket.on("cameraConfigReset", (data) => {
 // All movement is expressed in RAW HARDWARE STEPS — the integer multiple of the
 // camera's minimum step unit — so nothing is lost to degree conversion rounding.
 //
-//   Inner ring / Arrow key      → 1 step up to PTZ_ACCEL_PCT % of full travel
-//   Outer ring / Shift+Arrow    → PTZ_LARGE_PCT % of the full travel, in steps
+//   Inner ring / Arrow key      → PTZ_SMALL_PCT % of full travel, ramping to
+//                                  PTZ_LARGE_PCT % on hold (fine positioning)
+//   Outer ring / Shift+Arrow    → PTZ_LARGE_PCT % of the full travel (coarse)
 //
 // The server's pan(steps) and tilt(steps) methods multiply by hwCtrl.step to
 // get the actual hardware unit delta, then clamp to [min, max].
-const PTZ_LARGE_PCT = 5; // % of full travel per outer-ring / Shift+arrow press
-const PTZ_ACCEL_PCT = 1; // % of full travel — acceleration ceiling for inner-ring / Arrow key
+// Movement is sized as a PERCENTAGE OF EACH CAMERA'S FULL TRAVEL, then converted
+// to hardware steps using that camera's discovered range/step. This gives the
+// same feel on every camera regardless of whether its range is tiny or huge —
+// a single raw hardware step is imperceptible on wide-range cameras, so we never
+// use it as the base movement.
+const PTZ_LARGE_PCT = 5;   // % of full travel per outer-ring / Shift+arrow press (coarse)
+const PTZ_SMALL_PCT = 0.5; // % of full travel per inner-ring / Arrow key press   (fine)
 
 // Live hardware state — updated from ptzRanges in the cameraConfig socket event.
 // Defaults are for the OBSBot Tiny 2 Lite: step=3600 units, range ±468000/±324000.
@@ -406,18 +412,16 @@ let _tiltHwStep  = 3600;   // minimum hardware units per tilt step
 let _panHwRange  = 936000; // total pan travel in hardware units (max − min)
 let _tiltHwRange = 648000; // total tilt travel in hardware units (max − min)
 
-/** Steps for the inner ring (always 1 — the hardware minimum). */
-const panSmallSteps  = () => 1;
-const tiltSmallSteps = () => 1;
+/** Steps for a given percentage of full travel (minimum 1 hw step). */
+const _stepsForPct = (range, hwStep, pct) => Math.max(1, Math.round(range * pct / 100 / hwStep));
 
-/** Steps for the outer ring (PTZ_LARGE_PCT of full travel, minimum 1). */
-const panLargeSteps  = () => Math.max(1, Math.round(_panHwRange  * PTZ_LARGE_PCT / 100 / _panHwStep));
-const tiltLargeSteps = () => Math.max(1, Math.round(_tiltHwRange * PTZ_LARGE_PCT / 100 / _tiltHwStep));
+/** Inner ring / fine: PTZ_SMALL_PCT (0.5%) of full travel. */
+const panSmallSteps  = () => _stepsForPct(_panHwRange,  _panHwStep,  PTZ_SMALL_PCT);
+const tiltSmallSteps = () => _stepsForPct(_tiltHwRange, _tiltHwStep, PTZ_SMALL_PCT);
 
-/** Acceleration ceiling for the inner ring / Arrow key (PTZ_ACCEL_PCT of full travel, minimum 1).
- *  Inner-ring hold ramps from 1 hw step up to this cap — never reaching outer-ring speed. */
-const panAccelSteps  = () => Math.max(1, Math.round(_panHwRange  * PTZ_ACCEL_PCT / 100 / _panHwStep));
-const tiltAccelSteps = () => Math.max(1, Math.round(_tiltHwRange * PTZ_ACCEL_PCT / 100 / _tiltHwStep));
+/** Outer ring / coarse: PTZ_LARGE_PCT (5%) of full travel. */
+const panLargeSteps  = () => _stepsForPct(_panHwRange,  _panHwStep,  PTZ_LARGE_PCT);
+const tiltLargeSteps = () => _stepsForPct(_tiltHwRange, _tiltHwStep, PTZ_LARGE_PCT);
 
 // ── Hold-to-repeat + acceleration ────────────────────────────────────────────
 // After PTZ_REPEAT_DELAY ms, commands fire every PTZ_REPEAT_INTERVAL ms.
@@ -437,22 +441,26 @@ function _clearPTZTimers() {
 }
 
 /**
- * Compute an exponentially accelerated step count.
+ * Compute an exponentially accelerated step count that ramps from the fine
+ * (inner-ring, 0.5%) step up to the coarse (outer-ring, 5%) step on hold.
  *
- * Uses the curve  steps = round( maxSteps ^ (tick / PTZ_RAMP_TICKS) )
+ * Uses the curve  steps = round( minSteps · (maxSteps / minSteps) ^ (tick / N) )
  * which gives:
- *   tick  0  →  1 step          (first press, maximum precision)
- *   tick  N/2 →  √maxSteps      (halfway)
- *   tick  N  →  maxSteps steps  (full outer-ring speed)
+ *   tick  0   →  minSteps  (first press — fine 0.5% movement)
+ *   tick  N/2 →  geometric midpoint
+ *   tick  N   →  maxSteps  (full coarse 5% speed)
  *
  * @param {number} tick      How many fire() calls have happened so far (0-based)
- * @param {number} maxSteps  The ceiling — same value as the outer-ring button
+ * @param {number} minSteps  The fine base — the inner-ring step count for this axis
+ * @param {number} maxSteps  The ceiling — the outer-ring step count for this axis
  * @returns {number}         Positive step count (≥ 1)
  */
-function ptzAccelSteps(tick, maxSteps) {
-  if (maxSteps <= 1 || tick === 0) return 1;
+function ptzAccelSteps(tick, minSteps, maxSteps) {
+  minSteps = Math.max(1, minSteps);
+  maxSteps = Math.max(minSteps, maxSteps);
+  if (maxSteps <= minSteps || tick <= 0) return minSteps;
   const factor = Math.min(1, tick / PTZ_RAMP_TICKS);
-  return Math.max(1, Math.round(Math.pow(maxSteps, factor)));
+  return Math.max(1, Math.round(minSteps * Math.pow(maxSteps / minSteps, factor)));
 }
 
 /**
@@ -475,11 +483,12 @@ function makePTZButton(id, evt, getSteps, label, getMaxSteps = null) {
   let _tick = 0;
 
   function currentSteps() {
-    if (!getMaxSteps) return getSteps(); // outer ring: always constant
-    const sign = getSteps() < 0 ? -1 : 1;
-    // Math.abs — getMaxSteps() may be negative for right/down buttons;
-    // the sign is already applied above, so the ceiling must be positive.
-    return sign * ptzAccelSteps(_tick, Math.abs(getMaxSteps()));
+    const base = getSteps();
+    if (!getMaxSteps) return base; // outer ring: always constant
+    const sign = base < 0 ? -1 : 1;
+    // Math.abs — getSteps()/getMaxSteps() may be negative for right/down buttons;
+    // the sign is applied above, so the ramp works on positive magnitudes.
+    return sign * ptzAccelSteps(_tick, Math.abs(base), Math.abs(getMaxSteps()));
   }
 
   function fire() {
@@ -515,11 +524,12 @@ function makePTZButton(id, evt, getSteps, label, getMaxSteps = null) {
   el.addEventListener("touchcancel", stopRepeat);
 }
 
-// Inner ring — starts at 1 hw step, accelerates to PTZ_ACCEL_PCT (1%) of full travel on hold
-makePTZButton("panLeftSmall",  "pan",  () =>  1,  "🔵 Pan Left",  () =>  panAccelSteps());
-makePTZButton("panRightSmall", "pan",  () => -1,  "🔵 Pan Right", () => -panAccelSteps());
-makePTZButton("tiltUpSmall",   "tilt", () =>  1,  "🔵 Tilt Up",   () =>  tiltAccelSteps());
-makePTZButton("tiltDownSmall", "tilt", () => -1,  "🔵 Tilt Down", () => -tiltAccelSteps());
+// Inner ring — starts at the fine PTZ_SMALL_PCT (0.5%) step, accelerates up to
+// the coarse PTZ_LARGE_PCT (5%) step on hold.
+makePTZButton("panLeftSmall",  "pan",  () =>  panSmallSteps(),  "🔵 Pan Left",  () =>  panLargeSteps());
+makePTZButton("panRightSmall", "pan",  () => -panSmallSteps(),  "🔵 Pan Right", () => -panLargeSteps());
+makePTZButton("tiltUpSmall",   "tilt", () =>  tiltSmallSteps(), "🔵 Tilt Up",   () =>  tiltLargeSteps());
+makePTZButton("tiltDownSmall", "tilt", () => -tiltSmallSteps(), "🔵 Tilt Down", () => -tiltLargeSteps());
 
 // Outer ring — constant PTZ_LARGE_PCT % of full travel (no acceleration)
 makePTZButton("panLeftLarge",  "pan",  () =>  panLargeSteps(),  "🔷 Pan Left (large)");
@@ -1282,19 +1292,19 @@ document.addEventListener("keydown", (e) => {
   if (_heldKeys.has(e.key)) return;
   _heldKeys.add(e.key);
 
-  // Shift+Arrow: constant outer-ring speed (no ramp).
-  // Arrow alone: starts at 1 hw step, accelerates to outer-ring speed on hold.
+  // Shift+Arrow: constant coarse (outer-ring, 5%) speed (no ramp).
+  // Arrow alone: starts at the fine (0.5%) step, accelerates to coarse on hold.
   const isLarge = e.shiftKey;
-  let evt, sign, getMax;
+  let evt, sign, getSmall, getLarge;
   switch (e.key) {
-    case "ArrowLeft":  evt = "pan";  sign = +1; getMax = isLarge ? panLargeSteps  : panAccelSteps;  break;
-    case "ArrowRight": evt = "pan";  sign = -1; getMax = isLarge ? panLargeSteps  : panAccelSteps;  break;
-    case "ArrowUp":    evt = "tilt"; sign = +1; getMax = isLarge ? tiltLargeSteps : tiltAccelSteps; break;
-    case "ArrowDown":  evt = "tilt"; sign = -1; getMax = isLarge ? tiltLargeSteps : tiltAccelSteps; break;
+    case "ArrowLeft":  evt = "pan";  sign = +1; getSmall = panSmallSteps;  getLarge = panLargeSteps;  break;
+    case "ArrowRight": evt = "pan";  sign = -1; getSmall = panSmallSteps;  getLarge = panLargeSteps;  break;
+    case "ArrowUp":    evt = "tilt"; sign = +1; getSmall = tiltSmallSteps; getLarge = tiltLargeSteps; break;
+    case "ArrowDown":  evt = "tilt"; sign = -1; getSmall = tiltSmallSteps; getLarge = tiltLargeSteps; break;
   }
 
   function fire() {
-    const steps = sign * (isLarge ? getMax() : ptzAccelSteps(_keyTick, getMax()));
+    const steps = sign * (isLarge ? getLarge() : ptzAccelSteps(_keyTick, getSmall(), getLarge()));
     socket.emit(evt, { steps, cameraIndex: activeCamIndex });
     _keyTick++;
   }
@@ -3685,10 +3695,17 @@ async function loadStreamConfig() {
         streamDestination.value = savedDestination;
       }
       streamBitrate.value = data.config.bitrate || 5000000;
-      streamFramerate.value = data.config.framerate || 30;
+      // Stash the saved framerate/resolution so loadCameraCapabilities() honors
+      // them when it rebuilds the menus from the camera's real capabilities —
+      // even for values not in the static fallback lists (e.g. a 100 fps camera
+      // or an unusual resolution). The .value assignments below are best-effort
+      // for the brief moment before that async rebuild finalizes the options.
+      _pendingFramerate = data.config.framerate || 30;
+      streamFramerate.value = String(_pendingFramerate);
       streamCodec.value = data.config.codec || "h264";
       const w = data.config.width || 1920, h = data.config.height || 1080;
       const resKey = `${w}x${h}`;
+      _pendingResolution = resKey;
       // Only assign if the option exists; otherwise fall back to 1080p.
       streamResolution.value = Array.from(streamResolution.options).some((o) => o.value === resKey) ? resKey : "1920x1080";
       audioEnabledCheckbox.checked = data.config.audioEnabled !== false; // default true
@@ -3748,9 +3765,9 @@ async function loadStreamConfig() {
       if (flipVerticalCheckbox)   flipVerticalCheckbox.checked   = data.config.flipVertical   || false;
       if (panInvertedCheckbox)    panInvertedCheckbox.checked    = data.config.panInverted    || false;
 
-      // Apply fps constraints implied by current resolution, then refresh
-      // capability info so unsupported resolutions get greyed out.
-      applyResolutionConstraints();
+      // Rebuild the resolution + framerate menus from the camera's actual
+      // capabilities. This also honors the _pendingResolution/_pendingFramerate
+      // stashed above and finalizes the dropdown selections.
       loadCameraCapabilities();
     }
   } catch (error) {
@@ -3818,69 +3835,130 @@ if (flipHorizontalCheckbox) flipHorizontalCheckbox.addEventListener("change", sa
 if (flipVerticalCheckbox)   flipVerticalCheckbox.addEventListener("change", saveFlipConfig);
 if (panInvertedCheckbox)    panInvertedCheckbox.addEventListener("change", saveFlipConfig);
 
-// Disable a custom-dropdown option (both the underlying <option> and its
-// rendered .custom-dropdown-option div). When the currently-selected value
-// becomes disabled, snap to fallbackValue.
-function setStreamOptionDisabled(selectEl, value, disabled, fallbackValue) {
-  const opt = Array.from(selectEl.options).find((o) => o.value === value);
-  if (opt) opt.disabled = disabled;
-  const optionsContainer = selectEl.parentElement.querySelector(".custom-dropdown-options");
-  if (optionsContainer) {
-    const div = optionsContainer.querySelector(`.custom-dropdown-option[data-value="${value}"]`);
-    if (div) {
-      div.style.opacity       = disabled ? "0.35" : "";
-      div.style.pointerEvents = disabled ? "none" : "";
-      div.style.cursor        = disabled ? "not-allowed" : "";
-    }
-  }
-  if (disabled && selectEl.value === value && fallbackValue != null) {
-    selectEl.value = fallbackValue;
-    updateCustomDropdownDisplay(selectEl);
-    selectEl.dispatchEvent(new Event("change", { bubbles: true }));
-  }
-}
+// ── Data-driven resolution / framerate dropdowns ────────────────────────────
+// The resolution and framerate menus are populated from what the active camera
+// actually advertises via `v4l2-ctl --list-formats-ext` (relayed by
+// /api/camera/capabilities). This means whatever modes the camera supports —
+// including uncommon resolutions or high rates like 100/120 fps — show up, and
+// modes it can't do never appear, so the user can't start a stream that v4l2src
+// would reject with "not-negotiated (-4)".
 
 // Per-resolution framerates the active camera advertises ("WxH" → [fps,…]),
-// populated by loadCameraCapabilities(). Empty for network sources (no camera
-// constraint) or before capabilities have loaded.
+// populated by loadCameraCapabilities(). Empty {} for network sources (RTSP/NDI,
+// which are transcoded so the camera imposes no constraint) or before load.
 let cameraFramerates = {};
 
-// Grey out framerates the selected resolution can't produce so the user can't
-// start a stream the camera will reject with v4l2 "not-negotiated (-4)".
-// Two independent limits apply:
-//   1. Camera hardware — what v4l2-ctl --list-formats-ext advertises for the
-//      current resolution + capture format (cameraFramerates).
-//   2. Encoder — 4K is capped at 30 fps on the Orange Pi 5 regardless of camera.
+// Saved config values to honor on the next capabilities-driven rebuild. Needed
+// because the saved resolution/framerate may not exist in the current (static
+// or previous-camera) option list yet — we can't just set select.value.
+let _pendingResolution = null;
+let _pendingFramerate  = null;
+
+// Fallbacks used when there is no camera capability data (network source, or
+// the capability query failed). Match the original static HTML menus.
+const DEFAULT_RESOLUTIONS = ["1280x720", "1920x1080", "3840x2160"];
+const DEFAULT_FRAMERATES  = [24, 25, 30, 50, 60];
+
+function _resArea(res) {
+  const [w, h] = String(res).split("x").map(Number);
+  return (w || 0) * (h || 0);
+}
+
+function formatResolutionLabel(res) {
+  const [w, h] = String(res).split("x").map(Number);
+  const known = { "1280x720": "720p", "1920x1080": "1080p", "2560x1440": "1440p", "3840x2160": "4K" };
+  return known[res] ? `${w}×${h} (${known[res]})` : `${w}×${h}`;
+}
+
+// Pick a sensible resolution when the saved/selected one isn't available:
+// prefer 1080p, else the largest that doesn't exceed 1080p, else the smallest.
+function pickFallbackResolution(values) {
+  if (values.includes("1920x1080")) return "1920x1080";
+  const area1080 = 1920 * 1080;
+  const withArea = values.map((v) => ({ v, a: _resArea(v) }));
+  const below = withArea.filter((x) => x.a <= area1080).sort((a, b) => b.a - a.a);
+  if (below.length) return below[0].v;
+  const asc = withArea.slice().sort((a, b) => a.a - b.a);
+  return asc.length ? asc[0].v : "1920x1080";
+}
+
+// Repopulate a custom-dropdown's underlying <select> with a fresh option set and
+// re-render its custom UI, preserving `preferredValue` if it's still available.
+// The change listener lives on the <select> (which persists), so it survives.
+function rebuildCustomDropdown(selectEl, items, preferredValue) {
+  selectEl.innerHTML = "";
+  for (const it of items) {
+    const o = document.createElement("option");
+    o.value = it.value;
+    o.textContent = it.text;
+    selectEl.appendChild(o);
+  }
+  let chosen = items.find((it) => it.value === preferredValue) || items[0];
+  if (chosen) selectEl.value = chosen.value;
+  const existing = selectEl.parentElement.querySelector(".custom-dropdown");
+  if (existing) existing.remove();
+  createCustomDropdown(selectEl);
+}
+
+// Rebuild the framerate menu for the currently-selected resolution. Called after
+// the resolution list is (re)built and whenever the user changes resolution.
+// The 4K→30fps cap is an Orange Pi 5 encoder limit, applied on top of the
+// camera's advertised rates.
 function applyResolutionConstraints() {
   if (!streamFramerate) return;
   const res = streamResolution ? streamResolution.value : "";
   const is4K = res === "3840x2160";
-  // A camera list for this resolution constrains the options; no list (network
-  // source, or capabilities not yet loaded) means "don't constrain by camera".
-  const camList = cameraFramerates[res] || null;
-  for (const opt of Array.from(streamFramerate.options)) {
-    const fps = parseInt(opt.value, 10);
-    const encoderBlocks = is4K && fps > 30;
-    const cameraBlocks  = camList ? !camList.includes(fps) : false;
-    setStreamOptionDisabled(streamFramerate, opt.value, encoderBlocks || cameraBlocks, "30");
+
+  let rates = (cameraFramerates[res] && cameraFramerates[res].length)
+    ? cameraFramerates[res].slice()
+    : DEFAULT_FRAMERATES.slice();
+  if (is4K) rates = rates.filter((r) => r <= 30);
+  if (!rates.length) rates = [30];
+  rates.sort((a, b) => a - b);
+
+  // Desired fps: pending saved value on first load → current selection → smart
+  // default (30 if available, else highest ≤30, else lowest offered).
+  let desired = _pendingFramerate != null ? _pendingFramerate : parseInt(streamFramerate.value, 10);
+  _pendingFramerate = null;
+  if (!rates.includes(desired)) {
+    if (rates.includes(30)) desired = 30;
+    else {
+      const below = rates.filter((r) => r <= 30);
+      desired = below.length ? Math.max(...below) : Math.min(...rates);
+    }
   }
+
+  const items = rates.map((f) => ({ value: String(f), text: `${f} fps` }));
+  rebuildCustomDropdown(streamFramerate, items, String(desired));
 }
 
-// Query the backend for what the active source can deliver, and disable
-// resolutions the camera doesn't advertise. Call after loadStreamConfig and
-// after a successful camera-source switch.
+// Query the backend for what the active source can deliver and rebuild the
+// resolution + framerate menus from it. Call after loadStreamConfig and after a
+// successful camera-source switch.
 async function loadCameraCapabilities() {
   if (!streamResolution) return;
   try {
     const r = await fetch(`/api/camera/capabilities?cam=${activeCamIndex}`);
     const d = await r.json();
     cameraFramerates = d.framerates || {};
-    setStreamOptionDisabled(streamResolution, "1280x720",  !d.supports720p,  "1920x1080");
-    setStreamOptionDisabled(streamResolution, "1920x1080", !d.supports1080p, "1280x720");
-    setStreamOptionDisabled(streamResolution, "3840x2160", !d.supports4K,    "1920x1080");
-    applyResolutionConstraints();
+
+    const resValues = Object.keys(cameraFramerates);
+    const list = (resValues.length ? resValues : DEFAULT_RESOLUTIONS)
+      .slice()
+      .sort((a, b) => _resArea(b) - _resArea(a)); // largest first
+
+    let preferredRes = _pendingResolution || streamResolution.value;
+    if (!list.includes(preferredRes)) preferredRes = pickFallbackResolution(list);
+    _pendingResolution = null;
+
+    const items = list.map((res) => ({ value: res, text: formatResolutionLabel(res) }));
+    rebuildCustomDropdown(streamResolution, items, preferredRes);
+
+    applyResolutionConstraints(); // rebuild framerate menu for the chosen resolution
   } catch (e) {
     console.warn("⚠️  Could not load camera capabilities:", e.message);
+    _pendingResolution = null;
+    _pendingFramerate = null;
   }
 }
 
