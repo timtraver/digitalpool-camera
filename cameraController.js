@@ -115,13 +115,11 @@ class CameraController {
       },
       focus_automatic_continuous: { id: "0x009a090c", type: "bool", default: 1 },
       zoom_absolute: { id: "0x009a090d", min: 0, max: 100, step: 1, default: 0 },
-      zoom_continuous: {
-        id: "0x009a090f",
-        min: 0,
-        max: 100,
-        step: 1,
-        default: 100,
-      },
+      // NOTE: zoom_continuous (0x009a090f) is deliberately NOT here. It is a RATE
+      // control (a nonzero value makes the lens keep zooming until stopped), not a
+      // position — applying a fixed value at startup would zoom the camera on its
+      // own. The UI uses zoom_absolute for positional zoom instead. See
+      // NEVER_APPLY_CONTROLS below, which also guards against old saved configs.
       pan_speed: { id: "0x009a0920", min: -1, max: 160, step: 1, default: 20 },
       tilt_speed: { id: "0x009a0921", min: -1, max: 120, step: 1, default: 20 },
     };
@@ -155,6 +153,10 @@ class CameraController {
         // Validate and fix invalid values
         let needsSave = false;
         for (const [controlName, value] of Object.entries(config)) {
+          // Absolute PTZ values are raw, camera-specific units — don't validate
+          // them against the static fallback range (that would wrongly reset a
+          // large-zoom camera's saved value). setControl() clamps at apply time.
+          if (CameraController.ABSOLUTE_PTZ_CONTROLS.has(controlName)) continue;
           if (this.controls[controlName]) {
             const control = this.controls[controlName];
             // Check if value is out of range
@@ -276,6 +278,13 @@ class CameraController {
         }
       }
       console.log(`📷 Camera controls discovered: ${Object.keys(discovered).join(', ')}`);
+      // Log the absolute PTZ ranges/steps so the real hardware zoom (and pan/tilt)
+      // increments are visible in journalctl — `step` is the smallest change the
+      // camera accepts, which is what the UI sliders now move by.
+      for (const name of ['zoom_absolute', 'pan_absolute', 'tilt_absolute']) {
+        const c = discovered[name];
+        if (c) console.log(`   ↳ ${name}: min=${c.min} max=${c.max} step=${c.step}`);
+      }
       this.discoveredControls = discovered;
       return discovered;
     } catch (err) {
@@ -372,6 +381,9 @@ class CameraController {
 
     // Categorize controls
     for (const [controlName, value] of Object.entries(this.config)) {
+      // Never apply rate/action controls (e.g. zoom_continuous) from config — a
+      // fixed nonzero value would make the camera zoom continuously on its own.
+      if (CameraController.NEVER_APPLY_CONTROLS.has(controlName)) continue;
       if (ptzControls.includes(controlName)) {
         ptzSettings.push([controlName, value]);
       } else if (autoModeControls.includes(controlName)) {
@@ -758,8 +770,11 @@ class CameraController {
   }
 
   /**
-   * Zoom the camera
-   * @param {number} level - Zoom level (0-100)
+   * Zoom the camera.
+   * @param {number} level - RAW hardware zoom value (within the camera's
+   *   discovered zoom_absolute min/max). setControl() clamps and snaps it to the
+   *   hardware step. The UI slider works in these same raw units so one notch is
+   *   the smallest zoom change the camera actually supports.
    */
   async zoom(level) {
     return await this.setControl("zoom_absolute", level);
@@ -920,11 +935,29 @@ class CameraController {
 
 // Controls where the config/UI stores a 0-100 percentage value that must be
 // scaled to the camera's actual hardware range before applying via v4l2-ctl.
-// PTZ absolute controls (pan_absolute, tilt_absolute) are NOT in this set —
-// they store raw camera-unit values and are clamped to the hardware range.
+// The absolute PTZ controls (pan_absolute, tilt_absolute, zoom_absolute) are NOT
+// in this set — they store RAW camera-unit values and are clamped/step-snapped
+// to the hardware range. Zoom is raw so the slider can move in the camera's
+// actual zoom increments; a forced 0-100 percentage produced dead zones on
+// small-range cameras and skipped real stops on coarse-step ones.
 CameraController.PERCENTAGE_CONTROLS = new Set([
   'brightness', 'contrast', 'saturation', 'hue', 'sharpness', 'gamma',
-  'zoom_absolute',
+]);
+
+// Absolute PTZ controls store raw, camera-specific hardware units. Their valid
+// range depends on the attached camera, so loadConfig() must not reset them
+// against the static fallback range — setControl() clamps them to the real
+// discovered range at apply time instead.
+CameraController.ABSOLUTE_PTZ_CONTROLS = new Set([
+  'pan_absolute', 'tilt_absolute', 'zoom_absolute',
+]);
+
+// Rate/action controls that must never be applied from saved config at startup.
+// zoom_continuous is a SPEED control (nonzero → the lens keeps zooming until set
+// back to 0), so setting it to a stored value would zoom the camera on its own.
+// Positional zoom is done via zoom_absolute instead.
+CameraController.NEVER_APPLY_CONTROLS = new Set([
+  'zoom_continuous',
 ]);
 
 module.exports = CameraController;

@@ -342,7 +342,7 @@ socket.on("cameraConfig", (data) => {
     }
 
     // Update PTZ hardware state for percentage/step calculations.
-    // ptzRanges: { pan_absolute: {min, max, step}, tilt_absolute: {min, max, step} }
+    // ptzRanges: { pan_absolute, tilt_absolute, zoom_absolute } each {min, max, step}
     // All values are raw hardware units — no degree conversion needed.
     if (data.ptzRanges) {
       if (data.ptzRanges.pan_absolute) {
@@ -355,10 +355,16 @@ socket.on("cameraConfig", (data) => {
         _tiltHwStep  = step || 3600;
         _tiltHwRange = max - min;
       }
+      if (data.ptzRanges.zoom_absolute) {
+        // Drive the zoom slider from the camera's REAL hardware range/step so a
+        // single notch = the smallest zoom change the camera actually makes.
+        applyZoomRange(data.ptzRanges.zoom_absolute);
+      }
       console.log(
         `📐 PTZ hw state updated — ` +
         `pan: range=${_panHwRange} units, step=${_panHwStep} units, fine=${panSmallSteps()}/coarse=${panLargeSteps()} steps | ` +
-        `tilt: range=${_tiltHwRange} units, step=${_tiltHwStep} units, fine=${tiltSmallSteps()}/coarse=${tiltLargeSteps()} steps`
+        `tilt: range=${_tiltHwRange} units, step=${_tiltHwStep} units, fine=${tiltSmallSteps()}/coarse=${tiltLargeSteps()} steps | ` +
+        `zoom: min=${_zoomHwMin} max=${_zoomHwMax} step=${_zoomHwStep}`
       );
     }
   }
@@ -542,17 +548,47 @@ document.getElementById("resetPos").addEventListener("click", () => {
   socket.emit("resetPosition", { cameraIndex: activeCamIndex });
 });
 
-// Zoom controls - range slider
+// Zoom controls - range slider.
+// The slider works in RAW hardware zoom units (min/max/step come from the
+// camera via ptzRanges), so one notch = the smallest zoom change the camera
+// actually supports. The value label shows a friendly 0-100% derived from the
+// raw position. Defaults below match the old 0-100 slider until a camera's real
+// range arrives in the cameraConfig event.
 const zoomLevel = document.getElementById("zoomLevel");
 const zoomLevelValue = document.getElementById("zoomLevelValue");
 let currentZoom = 0;
+let _zoomHwMin = 0, _zoomHwMax = 100, _zoomHwStep = 1;
+
+/** Convert a raw zoom value to a 0-100% label for display. */
+function _zoomPct(raw) {
+  const span = _zoomHwMax - _zoomHwMin;
+  if (span <= 0) return 0;
+  return Math.round(((raw - _zoomHwMin) / span) * 100);
+}
+
+/** Apply the camera's discovered zoom range/step to the slider. */
+function applyZoomRange({ min, max, step }) {
+  _zoomHwMin  = Number.isFinite(min)  ? min  : 0;
+  _zoomHwMax  = Number.isFinite(max)  ? max  : 100;
+  _zoomHwStep = (Number.isFinite(step) && step > 0) ? step : 1;
+  if (!zoomLevel) return;
+  zoomLevel.min  = _zoomHwMin;
+  zoomLevel.max  = _zoomHwMax;
+  zoomLevel.step = _zoomHwStep;
+  // Clamp the current position into the (possibly new) range and refresh label.
+  const clamped = Math.max(_zoomHwMin, Math.min(_zoomHwMax, currentZoom));
+  currentZoom = clamped;
+  zoomLevel.value = clamped;
+  if (zoomLevelValue) zoomLevelValue.textContent = `${_zoomPct(clamped)}%`;
+}
 
 if (zoomLevel) {
   zoomLevel.addEventListener("input", (e) => {
     const value = parseInt(e.target.value);
     currentZoom = value;
-    if (zoomLevelValue) zoomLevelValue.textContent = value;
-    console.log(`🔍 Zoom level changed to: ${value}`);
+    if (zoomLevelValue) zoomLevelValue.textContent = `${_zoomPct(value)}%`;
+    console.log(`🔍 Zoom → raw=${value} (${_zoomPct(value)}%)`);
+    // Send the raw hardware value; the server clamps/step-snaps to the range.
     socket.emit("zoom", { level: value, cameraIndex: activeCamIndex });
   });
 }
@@ -787,15 +823,17 @@ function loadCameraConfigToUI(config) {
       config.focus_absolute;
   }
 
-  // Zoom control
+  // Zoom control — config.zoom_absolute is a RAW hardware value. The slider's
+  // range/step is set by applyZoomRange() when ptzRanges arrives; here we just
+  // place the slider at the saved raw value and show its 0-100% label.
   if (config.zoom_absolute !== undefined) {
     const zoomLevelInput = document.getElementById("zoomLevel");
     const zoomValueDisplay = document.getElementById("zoomLevelValue");
     if (zoomLevelInput) {
-      zoomLevelInput.value = config.zoom_absolute;
       currentZoom = config.zoom_absolute;
-      if (zoomValueDisplay) zoomValueDisplay.textContent = config.zoom_absolute;
-      console.log(`🔍 Loaded zoom level: ${config.zoom_absolute}`);
+      zoomLevelInput.value = config.zoom_absolute;
+      if (zoomValueDisplay) zoomValueDisplay.textContent = `${_zoomPct(config.zoom_absolute)}%`;
+      console.log(`🔍 Loaded zoom: raw=${config.zoom_absolute} (${_zoomPct(config.zoom_absolute)}%)`);
     }
   }
 

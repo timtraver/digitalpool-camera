@@ -120,6 +120,21 @@ function getCam(idx) { return idx === 2 ? camera2 : camera; }
 /** Return the StreamController for index 1 or 2. */
 function getSC(idx)  { return idx === 2 ? streamController2 : streamController; }
 
+/**
+ * Build the PTZ range payload the UI uses to size its pan/tilt/zoom controls.
+ * Each entry carries the camera's real hardware min/max/step so the frontend can
+ * drive sliders/steps in raw hardware units — zoom included, so its slider moves
+ * in the camera's actual zoom increments instead of a forced 0-100 percentage.
+ */
+function buildPtzRanges(hwControls) {
+  const ranges = {};
+  for (const name of ["pan_absolute", "tilt_absolute", "zoom_absolute"]) {
+    const c = hwControls[name];
+    if (c) ranges[name] = { min: c.min, max: c.max, step: c.step };
+  }
+  return ranges;
+}
+
 // WiFi Manager — the hotspot is started by digitalpool-hotspot.service (systemd)
 // before this process launches.  Here we only start the interface monitor so
 // the /api/wifi/* endpoints and the 30-second AP health-check work correctly.
@@ -2867,9 +2882,7 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     // Broadcast reverted camera capabilities to all clients.
     {
       const hwControls = cam.discoveredControls || cam.controls;
-      const ptzRanges = {};
-      if (hwControls.pan_absolute)  ptzRanges.pan_absolute  = { min: hwControls.pan_absolute.min,  max: hwControls.pan_absolute.max,  step: hwControls.pan_absolute.step  };
-      if (hwControls.tilt_absolute) ptzRanges.tilt_absolute = { min: hwControls.tilt_absolute.min, max: hwControls.tilt_absolute.max, step: hwControls.tilt_absolute.step };
+      const ptzRanges = buildPtzRanges(hwControls);
       io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: Object.keys(hwControls), ptzRanges });
     }
 
@@ -2905,9 +2918,7 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
   // page reload.  This mirrors what getCameraConfig emits on demand.
   {
     const hwControls = cam.discoveredControls || cam.controls;
-    const ptzRanges = {};
-    if (hwControls.pan_absolute)  ptzRanges.pan_absolute  = { min: hwControls.pan_absolute.min,  max: hwControls.pan_absolute.max,  step: hwControls.pan_absolute.step  };
-    if (hwControls.tilt_absolute) ptzRanges.tilt_absolute = { min: hwControls.tilt_absolute.min, max: hwControls.tilt_absolute.max, step: hwControls.tilt_absolute.step };
+    const ptzRanges = buildPtzRanges(hwControls);
     io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: Object.keys(hwControls), ptzRanges });
   }
 
@@ -2963,9 +2974,7 @@ app.post("/api/camera/reset", async (req, res) => {
   const cam = getCam(camIdx);
   const result = await cam.resetToDefaults();
   const hwControls = cam.discoveredControls || cam.controls;
-  const ptzRanges = {};
-  if (hwControls.pan_absolute)  ptzRanges.pan_absolute  = { min: hwControls.pan_absolute.min,  max: hwControls.pan_absolute.max,  step: hwControls.pan_absolute.step  };
-  if (hwControls.tilt_absolute) ptzRanges.tilt_absolute = { min: hwControls.tilt_absolute.min, max: hwControls.tilt_absolute.max, step: hwControls.tilt_absolute.step };
+  const ptzRanges = buildPtzRanges(hwControls);
   res.json({
     success: true,
     results: result,
@@ -4457,9 +4466,7 @@ io.on("connection", (socket) => {
 
     // Send the actual hardware min/max/step for pan and tilt so the client can
     // compute step sizes that match this camera's range and minimum motor step.
-    const ptzRanges = {};
-    if (hwControls.pan_absolute)  ptzRanges.pan_absolute  = { min: hwControls.pan_absolute.min,  max: hwControls.pan_absolute.max,  step: hwControls.pan_absolute.step  };
-    if (hwControls.tilt_absolute) ptzRanges.tilt_absolute = { min: hwControls.tilt_absolute.min, max: hwControls.tilt_absolute.max, step: hwControls.tilt_absolute.step };
+    const ptzRanges = buildPtzRanges(hwControls);
 
     // Determine whether the camera hardware is actually present so the UI can
     // show "No Camera" instead of "Connected" when no device is plugged in.
@@ -4505,9 +4512,7 @@ io.on("connection", (socket) => {
     // resetToDefaults re-runs discoverControls — include the fresh hardware
     // control set and PTZ ranges so the UI refreshes its dim state too.
     const hwControls = cam.discoveredControls || cam.controls;
-    const ptzRanges = {};
-    if (hwControls.pan_absolute)  ptzRanges.pan_absolute  = { min: hwControls.pan_absolute.min,  max: hwControls.pan_absolute.max,  step: hwControls.pan_absolute.step  };
-    if (hwControls.tilt_absolute) ptzRanges.tilt_absolute = { min: hwControls.tilt_absolute.min, max: hwControls.tilt_absolute.max, step: hwControls.tilt_absolute.step };
+    const ptzRanges = buildPtzRanges(hwControls);
     // Broadcast to all clients so other tabs/devices viewing the same camera
     // pick up the refreshed capabilities, mirroring the source-switch handler.
     io.emit("cameraConfigReset", {
