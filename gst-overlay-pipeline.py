@@ -69,7 +69,7 @@ def main():
     bitrate = int(sys.argv[5])
     protocol = sys.argv[6]        # 'srt' or 'rtmp'
     destination = sys.argv[7]     # Full destination URL
-    png_path = sys.argv[8] if len(sys.argv) > 8 else "/tmp/graphics-overlay.png"
+    png_path = sys.argv[8] if len(sys.argv) > 8 else "/dev/shm/graphics-overlay.png"
     overlay_text = sys.argv[9] if len(sys.argv) > 9 else ""
     show_timestamp = sys.argv[10] if len(sys.argv) > 10 else "false"
     font_size = sys.argv[11] if len(sys.argv) > 11 else "48"

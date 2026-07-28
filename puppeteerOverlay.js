@@ -155,9 +155,12 @@ async function _acquireSharedBrowser() {
 class PuppeteerOverlay extends EventEmitter {
   constructor() {
     super();
-    this.pngPath = "/tmp/graphics-overlay.png";
-    this.rawPngPath = "/tmp/overlay-raw.png";
-    this.tempHtmlPath = "/tmp/overlay-render.html";
+    // Defaults only — initialize() is always called with the per-stream path
+    // from streamController.pngOverlayPath. On /dev/shm (RAM) to avoid disk I/O;
+    // see the note in streamController.js.
+    this.pngPath = "/dev/shm/graphics-overlay.png";
+    this.rawPngPath = "/dev/shm/overlay-raw.png";
+    this.tempHtmlPath = "/dev/shm/overlay-render.html";
     this.isRunning = false;
     this.width = 1920;
     this.height = 1080;
@@ -193,7 +196,7 @@ class PuppeteerOverlay extends EventEmitter {
    * @param {number} serverPort - unused (kept for API compatibility)
    * @param {string} pngPath - Path to write the final transparent PNG
    */
-  async initialize(serverPort = 3000, pngPath = "/tmp/graphics-overlay.png") {
+  async initialize(serverPort = 3000, pngPath = "/dev/shm/graphics-overlay.png") {
     this.pngPath = pngPath;
 
     console.log("🌐 Initializing overlay renderer...");

@@ -68,9 +68,14 @@ class StreamController extends EventEmitter {
     this.previewPath    = this.streamId === 2 ? "/preview2" : "/preview";
     this.srtDefaultPort = this.streamId === 2 ? 8892       : 8891;
     // Per-camera overlay PNG so both cameras can have independent graphics overlays.
+    // Overlay PNGs live on /dev/shm (RAM tmpfs), NOT /tmp — on these appliances
+    // /tmp is on the eMMC/SSD, so writing a full-res PNG every few seconds
+    // (Chromium screenshot) and re-reading it in the GStreamer pipeline shows up
+    // as steady iowait + periodic CPU spikes. /dev/shm keeps the whole hand-off
+    // in memory with zero disk I/O.
     this.pngOverlayPath = this.streamId === 2
-      ? "/tmp/graphics-overlay-2.png"
-      : "/tmp/graphics-overlay.png";
+      ? "/dev/shm/graphics-overlay-2.png"
+      : "/dev/shm/graphics-overlay.png";
 
     // Active input source — updated via setInputSource() when the user switches in the UI.
     this.inputSource = { type: "usb", device: cameraDevice, rtspUrl: "", rtmpUrl: "", ndiName: "" };
