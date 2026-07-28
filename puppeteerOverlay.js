@@ -15,6 +15,11 @@ const puppeteer = require("puppeteer-core");
 let _sharedBrowser = null;          // the one Chromium instance, or null
 let _sharedBrowserLaunching = null; // in-flight launch Promise (concurrency guard)
 let _sharedBrowserPageCount = 0;    // live overlay pages; browser closes at 0
+// Screenshot stagger: each screenshot is a ~1-core CPU spike (renderer paint +
+// 1080p PNG encode). With two cameras on the same cadence the spikes stack into
+// one ~2-core spike that momentarily saturates the N97. Offsetting alternate
+// overlays by half an interval keeps the peak at ~1 core instead of ~2.
+let _overlayStartOrder = 0;
 
 // Version-agnostic connectivity check.
 // Puppeteer 20.x exposes Browser.isConnected() (a method); v22 deprecated it in
@@ -324,8 +329,19 @@ class PuppeteerOverlay extends EventEmitter {
       }, delayMs);
     };
 
-    // Do an immediate first render, then start the cycle
-    this._renderUrlOverlay().then((ok) => scheduleNext(ok ? this._refreshIntervalMs : 300));
+    // Stagger alternate overlays by half an interval so the two cameras never
+    // screenshot simultaneously (see _overlayStartOrder). The first overlay
+    // starts immediately; the second waits half a cycle, permanently offsetting
+    // their screenshot spikes.
+    const staggerMs = (_overlayStartOrder++ % 2) * Math.floor(this._refreshIntervalMs / 2);
+    if (staggerMs > 0) {
+      console.log(`🔀 Staggering this overlay's screenshots by ${staggerMs}ms to de-sync from the other camera`);
+    }
+    setTimeout(() => {
+      if (!this._refreshActive) return;
+      // Do an immediate first render, then start the cycle
+      this._renderUrlOverlay().then((ok) => scheduleNext(ok ? this._refreshIntervalMs : 300));
+    }, staggerMs);
 
     // Schedule periodic browser restarts to keep Chromium memory bounded.
     this._scheduleBrowserRestart();

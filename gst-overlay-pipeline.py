@@ -1237,6 +1237,7 @@ def main():
         _cairo_surface = [None]   # current cairo.ImageSurface for the PNG
         _cairo_mtime   = [0]      # mtime of the PNG when it was last loaded
         _cairo_bbox    = [None]   # (x,y,w,h) band to blend, or None = whole frame
+        _bbox_logged   = [None]   # last bbox we logged (throttle: log only on change)
 
         def _compute_bbox(surface):
             """Vertical bounding band — (x, y, w, h) with full width and clipped
@@ -1286,7 +1287,10 @@ def main():
                 _cairo_surface[0] = surf
                 _cairo_mtime[0] = os.path.getmtime(png_path)
                 _cairo_bbox[0] = _compute_bbox(surf)
-                if _cairo_bbox[0] is not None:
+                # Log only when the band changes — not every screenshot — to keep
+                # journald (and the relayed stream log) quiet on the hot path.
+                if _cairo_bbox[0] is not None and _cairo_bbox[0] != _bbox_logged[0]:
+                    _bbox_logged[0] = _cairo_bbox[0]
                     bx, by, bw, bh = _cairo_bbox[0]
                     pct = 100.0 * (bw * bh) / max(1, surf.get_width() * surf.get_height())
                     print(f"🧮 Overlay bbox {bw}×{bh}@({bx},{by}) — blending {pct:.0f}% of frame per tick", file=sys.stderr)
