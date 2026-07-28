@@ -1236,18 +1236,64 @@ def main():
         # the GLib main loop thread writes, the GStreamer streaming thread reads.
         _cairo_surface = [None]   # current cairo.ImageSurface for the PNG
         _cairo_mtime   = [0]      # mtime of the PNG when it was last loaded
+        _cairo_bbox    = [None]   # (x,y,w,h) band to blend, or None = whole frame
+
+        def _compute_bbox(surface):
+            """Vertical bounding band — (x, y, w, h) with full width and clipped
+            height — of the overlay's non-transparent pixels. Returns (0,0,0,0)
+            when fully transparent (paint nothing), or None to mean 'paint the
+            whole frame'.
+
+            Pure-Python and dependency-free: reads the ARGB32 alpha bytes and
+            uses C-level bytes.lstrip/rstrip to locate the first and last
+            non-transparent rows in a couple of milliseconds. Clips HEIGHT only
+            (not width) — a per-column scan would need numpy, and pool
+            scoreboards are typically full-width top/bottom banners, so the
+            height clip already captures the bulk of the per-frame blend saving.
+            Runs on the GLib main-loop thread once per screenshot."""
+            try:
+                surface.flush()
+                w = surface.get_width()
+                h = surface.get_height()
+                stride = surface.get_stride()
+                if w <= 0 or h <= 0 or stride != w * 4:
+                    return None  # unexpected layout/padding → full-frame paint
+                mv = surface.get_data()
+                # Cairo FORMAT_ARGB32 on little-endian x86 stores bytes B,G,R,A,
+                # so alpha is every 4th byte starting at offset 3. With stride
+                # == w*4 this slice is exactly w*h alpha bytes, row-major.
+                alpha = mv[3::4].tobytes()
+                head = alpha.lstrip(b"\x00")
+                if not head:
+                    return (0, 0, 0, 0)             # fully transparent
+                first = len(alpha) - len(head)      # first non-zero alpha byte
+                last  = len(alpha.rstrip(b"\x00")) - 1
+                top    = first // w
+                bottom = last // w
+                return (0, top, w, bottom - top + 1)
+            except Exception as exc:
+                print(f"⚠️  Overlay bbox compute failed (full-frame paint): {exc}", file=sys.stderr)
+                return None
 
         def _load_png_surface():
             """Load (or reload) the PNG into a Cairo ImageSurface."""
             try:
                 if not os.path.exists(png_path) or os.path.getsize(png_path) < 100:
                     _cairo_surface[0] = None
+                    _cairo_bbox[0] = None
                     return
-                _cairo_surface[0] = _cairo.ImageSurface.create_from_png(png_path)
+                surf = _cairo.ImageSurface.create_from_png(png_path)
+                _cairo_surface[0] = surf
                 _cairo_mtime[0] = os.path.getmtime(png_path)
+                _cairo_bbox[0] = _compute_bbox(surf)
+                if _cairo_bbox[0] is not None:
+                    bx, by, bw, bh = _cairo_bbox[0]
+                    pct = 100.0 * (bw * bh) / max(1, surf.get_width() * surf.get_height())
+                    print(f"🧮 Overlay bbox {bw}×{bh}@({bx},{by}) — blending {pct:.0f}% of frame per tick", file=sys.stderr)
             except Exception as exc:
                 print(f"⚠️  Cairo PNG load failed: {exc}", file=sys.stderr)
                 _cairo_surface[0] = None
+                _cairo_bbox[0] = None
 
         _load_png_surface()  # pre-load at startup
 
@@ -1288,13 +1334,29 @@ def main():
 
             png_w = _cairo_surface[0].get_width()
             png_h = _cairo_surface[0].get_height()
-            # Scale the PNG to fill the actual canvas exactly.
-            # A no-op (scale = 1.0) when sizes already match; corrects both
-            # Puppeteer DPR > 1 screenshots AND pipeline resolution mismatches.
             if png_w != canvas_w or png_h != canvas_h:
+                # Size mismatch (e.g. Puppeteer DPR > 1 screenshot, or a pipeline
+                # resolution mismatch): scale the PNG to fill the canvas and paint
+                # the whole thing — the bbox is in unscaled PNG coordinates so we
+                # don't try to clip in this (rare) path.
                 cr.scale(canvas_w / png_w, canvas_h / png_h)
-            cr.set_source_surface(_cairo_surface[0], 0, 0)
-            cr.paint()
+                cr.set_source_surface(_cairo_surface[0], 0, 0)
+                cr.paint()
+            else:
+                # 1:1 (the normal case) — blend ONLY the non-transparent bounding
+                # box computed at load time, not the whole frame. A corner/banner
+                # scoreboard covers a fraction of 1920×1080, so clipping the paint
+                # to its bbox cuts this per-frame software alpha-blend (the hot
+                # queue0:src thread on the N97) proportionally. Falls back to a
+                # full paint when bbox is None (numpy missing / compute failed).
+                bbox = _cairo_bbox[0]
+                if bbox is not None and (bbox[2] == 0 or bbox[3] == 0):
+                    return  # fully transparent overlay — nothing to blend
+                cr.set_source_surface(_cairo_surface[0], 0, 0)
+                if bbox is not None:
+                    cr.rectangle(bbox[0], bbox[1], bbox[2], bbox[3])
+                    cr.clip()
+                cr.paint()
 
         pngoverlay_el.connect("draw", on_png_draw)
         overlay_element = pngoverlay_el  # so overlay_msg below is correct
