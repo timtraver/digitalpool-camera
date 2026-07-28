@@ -554,6 +554,18 @@ def main():
     preview_videorate_opts  = 'drop-only=true ' if preview_gating_enabled else ''
     preview_path_name       = preview_rtmp_url.rstrip('/').rsplit('/', 1)[-1] or 'preview'
 
+    # Preview size/rate/bitrate — env-tunable so weaker hardware (e.g. Intel N100)
+    # can dial the WHEP monitor preview down without a code change. The preview is
+    # only an operator monitor, so it does NOT need 720p/15fps: on the N97 the
+    # preview is software x264enc (VA-API can't run a 2nd session without corrupting
+    # the main stream), and at full 720p/15fps two of them dominate CPU whenever the
+    # admin UI is open. 640×360@10 cuts that ~6× (¼ the pixels × ⅔ the frames).
+    preview_w    = int(os.environ.get('PREVIEW_WIDTH',       '640'))
+    preview_h    = int(os.environ.get('PREVIEW_HEIGHT',      '360'))
+    preview_fps  = int(os.environ.get('PREVIEW_FPS',         '10'))
+    preview_kbps = int(os.environ.get('PREVIEW_BITRATE_KBPS', '800'))
+    preview_gop  = max(10, preview_fps * 3)  # keyframe ~every 3s
+
     pipeline_str = (
         f'{source_str}'
         # Thread boundary: isolate overlay compositing (or just buffering) from capture.
@@ -670,26 +682,26 @@ def main():
         # parse time, so the preview branch is not downstream of any live source at pipeline
         # construction time.  A sink with async=true would block the PAUSED→PLAYING
         # transition waiting for a preroll buffer that never arrives until PLAYING).
-        # Preview branch: scale to 1280×720 before encoding.
+        # Preview branch: scale to the (env-tunable) preview size before encoding.
         # max-size-buffers=2 leaky=upstream: tight cap prevents preview latency
         # build-up when the encoder briefly stalls.  leaky=upstream drops the OLDEST
         # buffered frame (not the newest incoming one), so the encoder always
         # works on the most recent camera frame.
         f't. ! queue name=preview_q max-size-buffers=2 leaky=upstream '
-        f'! videoscale ! video/x-raw,width=1280,height=720 '
+        f'! videoscale ! video/x-raw,width={preview_w},height={preview_h} '
         # drop-only=true (software-preview gating only): the viewer-gate probe on
         # preview_q drops most frames when nobody is watching; drop-only stops
-        # videorate from duplicating them back up to 15fps so the encoder idles.
-        f'! videorate {preview_videorate_opts}! video/x-raw,framerate=15/1 '
+        # videorate from duplicating them back up to full rate so the encoder idles.
+        f'! videorate {preview_videorate_opts}! video/x-raw,framerate={preview_fps}/1 '
         # Preview encoder: same hardware selection as the main stream encoder.
         # Each branch must include a videoconvert so the encoder receives its
         # required pixel format regardless of what videoscale/videorate output.
-        + (f'! videoconvert ! video/x-raw,format=NV12 ! mpph264enc bps=2500000 header-mode=each-idr gop=30 '
+        + (f'! videoconvert ! video/x-raw,format=NV12 ! mpph264enc bps={preview_kbps * 1000} header-mode=each-idr gop={preview_gop} '
            if encoder == 'mpph264enc' else
-           f'! videoconvert ! video/x-raw,format=NV12 ! vaapih264enc bitrate=2500 keyframe-period=30 '
+           f'! videoconvert ! video/x-raw,format=NV12 ! vaapih264enc bitrate={preview_kbps} keyframe-period={preview_gop} '
            if encoder == 'vaapih264enc' else
            f'! videoconvert ! video/x-raw,format=I420 '
-           f'! x264enc bitrate=2500 speed-preset=ultrafast tune=zerolatency key-int-max=30 ')
+           f'! x264enc bitrate={preview_kbps} speed-preset=ultrafast tune=zerolatency key-int-max={preview_gop} ')
         + f'! h264parse config-interval=-1 '
         f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream '
         f'! flvmux streamable=true '
