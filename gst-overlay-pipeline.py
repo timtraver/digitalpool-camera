@@ -9,6 +9,9 @@ It polls the PNG file's modification time and reloads when it changes.
 import sys
 import os
 import time
+import json
+import threading
+import urllib.request
 import gi
 gi.require_version('Gst', '1.0')
 gi.require_version('GLib', '2.0')
@@ -524,6 +527,33 @@ def main():
     #   Thread 3: queue → mpph264enc → h264parse → queue → mux → fdsink (encode+stream)
     #   Thread 4: queue → videorate → videoscale → jpegenc → tcpserversink (preview)
     #   Audio is handled by ffmpeg (ALSA capture) outside this pipeline.
+
+    # ── Preview encoder gating (software x264 preview only) ──────────────────
+    # The preview branch below re-encodes a 720p/15fps H.264 copy for the WebRTC
+    # (WHEP) admin preview.  The preview encoder is chosen the same way as the
+    # main encoder: hardware for Rockchip (mpph264enc) and legacy Intel VA-API
+    # (vaapih264enc), but SOFTWARE x264enc for everything else — which on the
+    # Intel N97 (vah264enc main) means the preview is x264enc burning real CPU
+    # 100% of the time, even when nobody has the admin UI open.
+    #
+    # When the preview is software-encoded we gate it on actual viewers (see the
+    # setup block after the pipeline reaches PLAYING): poll MediaMTX for readers
+    # on the preview path and, when there are none, drop all but ~1 frame every
+    # couple of seconds before the encoder.  videorate drop-only=true stops it
+    # from duplicating those dropped frames back up to 15fps, so videoscale,
+    # videoconvert and x264enc downstream all idle at ~0.5fps.  The keepalive
+    # frame keeps the RTMP publisher registered in MediaMTX (well within its
+    # read timeout) so a viewer can still connect, at which point the poller
+    # snaps the branch back to full 15fps.  Hardware-preview hosts skip all of
+    # this — their preview encode is nearly free.
+    _preview_viewers        = [0]     # reader count from MediaMTX (poller thread writes)
+    _preview_idle_last_pass = [0.0]   # monotonic time the last keepalive frame passed
+    PREVIEW_KEEPALIVE_SEC   = 2.0     # idle: pass ~1 frame this often (< MediaMTX read timeout)
+    PREVIEW_POLL_SEC        = 2.0     # how often to poll MediaMTX for viewers
+    preview_gating_enabled  = encoder not in ('mpph264enc', 'vaapih264enc')
+    preview_videorate_opts  = 'drop-only=true ' if preview_gating_enabled else ''
+    preview_path_name       = preview_rtmp_url.rstrip('/').rsplit('/', 1)[-1] or 'preview'
+
     pipeline_str = (
         f'{source_str}'
         # Thread boundary: isolate overlay compositing (or just buffering) from capture.
@@ -645,9 +675,12 @@ def main():
         # build-up when the encoder briefly stalls.  leaky=upstream drops the OLDEST
         # buffered frame (not the newest incoming one), so the encoder always
         # works on the most recent camera frame.
-        f't. ! queue max-size-buffers=2 leaky=upstream '
+        f't. ! queue name=preview_q max-size-buffers=2 leaky=upstream '
         f'! videoscale ! video/x-raw,width=1280,height=720 '
-        f'! videorate ! video/x-raw,framerate=15/1 '
+        # drop-only=true (software-preview gating only): the viewer-gate probe on
+        # preview_q drops most frames when nobody is watching; drop-only stops
+        # videorate from duplicating them back up to 15fps so the encoder idles.
+        f'! videorate {preview_videorate_opts}! video/x-raw,framerate=15/1 '
         # Preview encoder: same hardware selection as the main stream encoder.
         # Each branch must include a videoconvert so the encoder receives its
         # required pixel format regardless of what videoscale/videorate output.
@@ -1363,6 +1396,56 @@ def main():
             pass
     else:
         print(f"✅ Clock verified post-PLAYING: pipeline is using our CLOCK_REALTIME system clock", file=sys.stderr)
+
+    # ── Preview encoder gating: viewer-count probe + MediaMTX poller ───────
+    # See the tuning/rationale block where preview_gating_enabled is defined.
+    # Only active for software-encoded previews (e.g. Intel N97); hardware
+    # previews skip this and always run at full rate.
+    if preview_gating_enabled:
+        _preview_q = pipeline.get_by_name("preview_q")
+        if _preview_q is not None:
+            _pq_srcpad = _preview_q.get_static_pad("src")
+
+            def _preview_gate_probe(pad, info):
+                # Viewer(s) connected → pass every buffer (videorate caps to 15fps).
+                if _preview_viewers[0] > 0:
+                    return Gst.PadProbeReturn.OK
+                # Idle → pass ~1 frame every PREVIEW_KEEPALIVE_SEC (keeps the RTMP
+                # publisher alive in MediaMTX), drop the rest so the software
+                # encoder/scale/convert downstream run at ~0.5fps instead of 15fps.
+                now = time.monotonic()
+                if now - _preview_idle_last_pass[0] >= PREVIEW_KEEPALIVE_SEC:
+                    _preview_idle_last_pass[0] = now
+                    return Gst.PadProbeReturn.OK
+                return Gst.PadProbeReturn.DROP
+
+            _pq_srcpad.add_probe(Gst.PadProbeType.BUFFER, _preview_gate_probe)
+
+            def _preview_viewer_poller():
+                api_url = f"http://127.0.0.1:9997/v3/paths/get/{preview_path_name}"
+                while True:
+                    n = 0
+                    try:
+                        with urllib.request.urlopen(api_url, timeout=1.5) as resp:
+                            data = json.load(resp)
+                        n = len(data.get("readers") or [])
+                    except Exception:
+                        # Path not yet published, MediaMTX down, or transient
+                        # error → treat as idle (safe default: saves CPU).
+                        n = 0
+                    prev = _preview_viewers[0]
+                    _preview_viewers[0] = n
+                    if n > 0 and prev == 0:
+                        print(f"👁️  Preview viewer(s) connected ({n}) — preview encoder at full 15fps", file=sys.stderr)
+                    elif n == 0 and prev > 0:
+                        print("💤 No preview viewers — preview encoder throttled to keepalive rate", file=sys.stderr)
+                    time.sleep(PREVIEW_POLL_SEC)
+
+            threading.Thread(target=_preview_viewer_poller,
+                             name="preview-viewer-poller", daemon=True).start()
+            print(f"🎛️  Preview gating enabled (path='{preview_path_name}', keepalive={PREVIEW_KEEPALIVE_SEC}s, poll={PREVIEW_POLL_SEC}s)", file=sys.stderr)
+        else:
+            print("⚠️  Preview gating: 'preview_q' element not found — preview runs at full rate", file=sys.stderr)
 
     # ── Periodic drift monitor ────────────────────────────────────────────
     # Every 60 s, logs THREE independent drift measurements:

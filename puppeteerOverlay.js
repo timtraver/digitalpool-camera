@@ -5,6 +5,146 @@ const path = require("path");
 const zlib = require("zlib");
 const puppeteer = require("puppeteer-core");
 
+// ── Shared headless Chromium ─────────────────────────────────────────────────
+// All overlay instances (one per camera) share a SINGLE Chromium process, each
+// owning its own page/tab.  Launching a full second browser per camera wastes an
+// entire browser + gpu + utility process stack (~150-250 MB and steady CPU) for
+// no benefit — one browser with N pages produces the same screenshots far more
+// cheaply, which matters most on the Intel N97 where CPU headroom is tight when
+// both cameras stream with remote overlays.
+let _sharedBrowser = null;          // the one Chromium instance, or null
+let _sharedBrowserLaunching = null; // in-flight launch Promise (concurrency guard)
+let _sharedBrowserPageCount = 0;    // live overlay pages; browser closes at 0
+
+// Version-agnostic connectivity check.
+// Puppeteer 20.x exposes Browser.isConnected() (a method); v22 deprecated it in
+// favour of the `connected` getter and v23 removed the method entirely. Support
+// both so the code works whether puppeteer-core is pinned old or bumped to latest.
+function _isBrowserConnected(b) {
+  if (!b) return false;
+  if (typeof b.connected === "boolean") return b.connected;      // puppeteer >= 22
+  if (typeof b.isConnected === "function") return b.isConnected(); // puppeteer <= 20
+  return false;
+}
+
+// Locate the Chromium executable across the common install locations.
+function _findChromiumPath() {
+  const { execSync } = require("child_process");
+  const candidates = [
+    "/usr/bin/chromium-browser",
+    "/usr/bin/chromium",
+    "/snap/bin/chromium",
+    "/usr/bin/google-chrome-stable",
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch (e) { /* skip */ }
+  }
+  // Fall back to `which`
+  try {
+    return execSync("which chromium-browser || which chromium", { encoding: "utf-8" }).trim();
+  } catch (e) {
+    return "/usr/bin/chromium-browser"; // best guess
+  }
+}
+
+/**
+ * Launch (or reuse) the ONE shared headless Chromium.  Guarded so concurrent
+ * callers (both cameras enabling overlays at once) await the same launch instead
+ * of racing two browsers into existence.
+ */
+async function _acquireSharedBrowser() {
+  if (_sharedBrowser && _isBrowserConnected(_sharedBrowser)) return _sharedBrowser;
+  if (_sharedBrowserLaunching) return _sharedBrowserLaunching;
+
+  _sharedBrowserLaunching = (async () => {
+    const chromiumPath = _findChromiumPath();
+    console.log(`🚀 Launching shared headless Chromium for URL overlays (${chromiumPath})...`);
+    // Minimal flags only — proven stable on ARM64 with Chromium 114 + puppeteer-core 20.9
+    // pipe:false → use WebSocket transport instead of stdio pipes.
+    // Pipes can be disrupted when the Node process has many child processes
+    // (GStreamer, ImageMagick) competing for stdio resources.
+    const browser = await puppeteer.launch({
+      executablePath: chromiumPath,
+      headless: true,
+      pipe: false,
+      // The freshly-loaded overlay page intermittently leaves the renderer
+      // unresponsive to CDP (screenshot / Emulation / evaluate all hang) for a
+      // while after navigation — a re-navigation clears it. Keep this timeout
+      // short so a wedged call fails fast and the loop re-navigates, instead of
+      // stalling for Puppeteer's 180s default (or a long 30s).
+      protocolTimeout: 8000,
+      args: [
+        "--no-sandbox",
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--disable-background-networking",
+        "--disable-extensions",
+        "--disable-sync",
+        "--disable-translate",
+        "--metrics-recording-only",
+        "--no-first-run",
+        // Keep the headless page fully active while it sits idle. Without these,
+        // Chromium throttles/freezes background pages, and the first operation
+        // after an idle stretch (page.evaluate for the zoom, or the screenshot)
+        // hangs until protocolTimeout — the ~100s "nothing happens then times
+        // out" delay seen when switching overlays after the preview sat a while.
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        // Disable Chromium's audio subsystem entirely — this process is screenshot-only
+        // and has no need for audio playback or capture.
+        //
+        // On systems without PulseAudio/PipeWire (bare ALSA), Chromium initialises its
+        // ALSA backend on startup and opens /dev/snd/pcmC1D0c (plughw:1,0) — even when
+        // the page plays no sound.  This holds the USB capture device exclusively,
+        // preventing GStreamer's alsasrc from opening it and causing:
+        //   "Could not open audio device for recording. Device is being used by another application."
+        //
+        // --disable-audio : shuts down Chromium's entire audio stack (no ALSA open).
+        // --mute-audio    : left in as belt-and-suspenders for any residual output path.
+        // --use-fake-device-for-media-stream : if the page calls getUserMedia(), it
+        //     receives a fake mic/camera so the real ALSA device is never opened.
+        "--disable-audio",
+        "--mute-audio",
+        "--use-fake-device-for-media-stream",
+        // One renderer PER overlay page (up to 2 cameras). Prevents orphaned
+        // renderers accumulating after failed navigations while still giving each
+        // camera's page its own renderer process (so one page can't starve or
+        // crash the other). With a single shared browser this replaces the old
+        // per-browser --renderer-process-limit=1.
+        "--renderer-process-limit=2",
+        // Cap V8's old-generation heap inside each renderer. Two simple
+        // React/WebSocket overlay pages don't need a large heap; this bounds
+        // GC retention over a long-running session. Sized for up to two pages
+        // that may share one renderer when same-origin.
+        "--js-flags=--max-old-space-size=256",
+      ],
+    });
+
+    // Track disconnection — clear the shared refs so the next overlay cycle
+    // relaunches.  Page count resets to 0; each instance recreates its page
+    // (and re-increments) on its next _ensureBrowser().
+    browser.on("disconnected", () => {
+      if (_sharedBrowser === browser) {
+        console.log("🔄 Shared Chromium disconnected — will relaunch on next overlay cycle");
+        _sharedBrowser = null;
+        _sharedBrowserPageCount = 0;
+      }
+    });
+
+    _sharedBrowser = browser;
+    return browser;
+  })();
+
+  try {
+    return await _sharedBrowserLaunching;
+  } finally {
+    _sharedBrowserLaunching = null;
+  }
+}
+
 /**
  * HTML Overlay Generator
  * - Local mode: uses wkhtmltoimage + ImageMagick chroma-key for local HTML scoreboard
@@ -26,7 +166,11 @@ class PuppeteerOverlay extends EventEmitter {
     // URL mode
     this._overlayUrl = null;        // Remote URL to screenshot (null = local HTML mode)
     this._refreshTimer = null;      // Periodic refresh timer for URL mode
-    this._refreshIntervalMs = 2000; // How often to re-screenshot the URL (ms)
+    // How often to re-screenshot the URL (ms). Each screenshot is a full-res
+    // 1920×1080 PNG encode with alpha; at 3s (vs the old 2s) that's a third
+    // fewer captures per camera for scoreboards that update slowly, with barely
+    // perceptible added latency. Overridable via setOverlayUrl({refreshInterval}).
+    this._refreshIntervalMs = 3000;
     // Wait after navigation before the first screenshot. Only applies right
     // after a switch/enable (not on every refresh), so it's pure switch latency.
     // Kept modest because the 2s periodic refresh + hot-swap self-corrects a
@@ -251,125 +395,29 @@ class PuppeteerOverlay extends EventEmitter {
   }
 
   /**
-   * Launch (or reuse) headless Chromium via Puppeteer for URL overlay rendering.
-   * The browser stays alive between screenshots for efficiency.
+   * Version-agnostic connectivity check for THIS instance's view of the shared
+   * browser.  (Kept as an instance method so the render loop's existing calls
+   * work unchanged.)
    */
-  _findChromiumPath() {
-    const { execSync } = require("child_process");
-    const candidates = [
-      "/usr/bin/chromium-browser",
-      "/usr/bin/chromium",
-      "/snap/bin/chromium",
-      "/usr/bin/google-chrome-stable",
-    ];
-    for (const p of candidates) {
-      try {
-        if (fs.existsSync(p)) return p;
-      } catch (e) { /* skip */ }
-    }
-    // Fall back to `which`
-    try {
-      return execSync("which chromium-browser || which chromium", { encoding: "utf-8" }).trim();
-    } catch (e) {
-      return "/usr/bin/chromium-browser"; // best guess
-    }
+  _browserConnected() {
+    return _isBrowserConnected(this._browser);
   }
 
   /**
-   * Version-agnostic connectivity check.
-   * Puppeteer 20.x exposes Browser.isConnected() (a method); v22 deprecated it in
-   * favour of the `connected` getter and v23 removed the method entirely. Support
-   * both so the code works whether puppeteer-core is pinned old or bumped to latest.
+   * Ensure the shared Chromium is up and this instance owns an open page in it.
+   * The browser is launched once for all cameras; each camera gets its own page.
    */
-  _browserConnected() {
-    const b = this._browser;
-    if (!b) return false;
-    if (typeof b.connected === "boolean") return b.connected;      // puppeteer >= 22
-    if (typeof b.isConnected === "function") return b.isConnected(); // puppeteer <= 20
-    return false;
-  }
-
   async _ensureBrowser() {
-    // If we already have a working browser + page, reuse it
-    if (this._browser && this._browserConnected() && this._page) return;
+    // Acquire (launching if needed) the single shared Chromium.
+    this._browser = await _acquireSharedBrowser();
 
-    // Clean up any leftover browser before launching a new one
-    await this._closeBrowser();
+    // Reuse this instance's page if it's still open.
+    if (this._page && !this._page.isClosed()) return;
 
-    const chromiumPath = this._findChromiumPath();
-    console.log(`🚀 Launching headless Chromium for URL overlay (${chromiumPath})...`);
-    // Minimal flags only — proven stable on ARM64 with Chromium 114 + puppeteer-core 20.9
-    // pipe:false → use WebSocket transport instead of stdio pipes.
-    // Pipes can be disrupted when the Node process has many child processes
-    // (GStreamer, ImageMagick) competing for stdio resources.
-    this._browser = await puppeteer.launch({
-      executablePath: chromiumPath,
-      headless: true,
-      pipe: false,
-      // The freshly-loaded overlay page intermittently leaves the renderer
-      // unresponsive to CDP (screenshot / Emulation / evaluate all hang) for a
-      // while after navigation — a re-navigation clears it. Keep this timeout
-      // short so a wedged call fails fast and the loop re-navigates, instead of
-      // stalling for Puppeteer's 180s default (or a long 30s).
-      protocolTimeout: 8000,
-      args: [
-        "--no-sandbox",
-        "--disable-gpu",
-        "--disable-dev-shm-usage",
-        "--disable-background-networking",
-        "--disable-extensions",
-        "--disable-sync",
-        "--disable-translate",
-        "--metrics-recording-only",
-        "--no-first-run",
-        // Keep the headless page fully active while it sits idle. Without these,
-        // Chromium throttles/freezes background pages, and the first operation
-        // after an idle stretch (page.evaluate for the zoom, or the screenshot)
-        // hangs until protocolTimeout — the ~100s "nothing happens then times
-        // out" delay seen when switching overlays after the preview sat a while.
-        "--disable-background-timer-throttling",
-        "--disable-backgrounding-occluded-windows",
-        "--disable-renderer-backgrounding",
-        // Disable Chromium's audio subsystem entirely — this process is screenshot-only
-        // and has no need for audio playback or capture.
-        //
-        // On systems without PulseAudio/PipeWire (bare ALSA), Chromium initialises its
-        // ALSA backend on startup and opens /dev/snd/pcmC1D0c (plughw:1,0) — even when
-        // the page plays no sound.  This holds the USB capture device exclusively,
-        // preventing GStreamer's alsasrc from opening it and causing:
-        //   "Could not open audio device for recording. Device is being used by another application."
-        //
-        // --disable-audio : shuts down Chromium's entire audio stack (no ALSA open).
-        // --mute-audio    : left in as belt-and-suspenders for any residual output path.
-        // --use-fake-device-for-media-stream : if the page calls getUserMedia(), it
-        //     receives a fake mic/camera so the real ALSA device is never opened.
-        "--disable-audio",
-        "--mute-audio",
-        "--use-fake-device-for-media-stream",
-        // Limit to one renderer process — prevents orphaned renderers from
-        // accumulating after failed navigations (two renderers were observed
-        // consuming ~256 MB when only one page is open).
-        "--renderer-process-limit=1",
-        // Cap V8's old-generation heap inside the renderer at 128 MB.
-        // The overlay page is a simple React/WebSocket app; it does not need
-        // a large heap, and this prevents V8's GC from retaining stale objects
-        // indefinitely during a long-running session.
-        "--js-flags=--max-old-space-size=128",
-      ],
-    });
-
-    // Track disconnection — silently clean up refs so _ensureBrowser relaunches.
-    this._browserIntentionalClose = false;
-    this._browser.on("disconnected", () => {
-      if (!this._browserIntentionalClose) {
-        console.log("🔄 Chromium disconnected — will relaunch on next overlay cycle");
-      }
-      this._browser = null;
-      this._page = null;
-      this._currentLoadedUrl = null;
-    });
-
+    // (Re)create this camera's own page/tab in the shared browser.
     this._page = await this._browser.newPage();
+    _sharedBrowserPageCount++;
+
     // deviceScaleFactor: 1 is required — without it Chromium may auto-detect
     // the system DPI and apply a DPR > 1 (common on HiDPI / ARM64 hosts with
     // high-density display configs), producing a screenshot at 2× or 3× the
@@ -395,39 +443,42 @@ class PuppeteerOverlay extends EventEmitter {
       console.warn(`⚠️  Could not install transparent-bg script: ${e.message}`);
     }
     this._currentLoadedUrl = null; // Track what URL is loaded
-    console.log("  ✅ Chromium browser ready");
+    console.log(`  ✅ Overlay page ready (shared Chromium, ${_sharedBrowserPageCount} page(s) open)`);
   }
 
   /**
-   * Close the Puppeteer browser instance and kill any orphan processes.
+   * Release this instance's page.  Closes only THIS camera's page/tab; the
+   * shared Chromium stays alive for the other camera and is shut down (with its
+   * whole process group killed) only when the last overlay page is gone.
    */
   async _closeBrowser() {
-    const pid = this._browser && this._browser.process && this._browser.process()
-      ? this._browser.process().pid : null;
-
-    // Mark intentional close so the disconnected handler doesn't log
-    this._browserIntentionalClose = true;
-
     if (this._page) {
-      try { await this._page.close(); } catch (e) { /* ignore */ }
+      try { if (!this._page.isClosed()) await this._page.close(); } catch (e) { /* ignore */ }
       this._page = null;
-    }
-    if (this._browser) {
-      try { await this._browser.close(); } catch (e) { /* ignore */ }
-      this._browser = null;
-      console.log("🛑 Chromium browser closed");
+      _sharedBrowserPageCount = Math.max(0, _sharedBrowserPageCount - 1);
     }
     this._currentLoadedUrl = null;
 
-    // Safety: kill the entire process group so Chrome's child processes
-    // (renderer, gpu-process, zygote, utility, crashpad) are also terminated.
-    // process.kill(-pid, signal) sends to the process GROUP (PGID = pid when
-    // Chrome is a process group leader, which it always is on Linux).
-    // Killing only the parent PID leaves children reparented to init as orphans.
-    if (pid) {
-      try { process.kill(-pid, "SIGKILL"); } catch (e) { /* not a group leader or already dead */ }
-      try { process.kill(pid,  "SIGKILL"); } catch (e) { /* already dead */ }
+    // When no overlay pages remain, shut the shared browser down entirely.
+    if (_sharedBrowserPageCount === 0 && _sharedBrowser) {
+      const b = _sharedBrowser;
+      const pid = b.process && b.process() ? b.process().pid : null;
+      _sharedBrowser = null;
+      try { await b.close(); } catch (e) { /* ignore */ }
+      console.log("🛑 Shared Chromium browser closed (no overlay pages remain)");
+
+      // Safety: kill the entire process group so Chrome's child processes
+      // (renderer, gpu-process, zygote, utility, crashpad) are also terminated.
+      // process.kill(-pid, signal) sends to the process GROUP (PGID = pid when
+      // Chrome is a process group leader, which it always is on Linux).
+      // Killing only the parent PID leaves children reparented to init as orphans.
+      if (pid) {
+        try { process.kill(-pid, "SIGKILL"); } catch (e) { /* not a group leader or already dead */ }
+        try { process.kill(pid,  "SIGKILL"); } catch (e) { /* already dead */ }
+      }
     }
+
+    this._browser = null;
   }
 
   /**
