@@ -555,15 +555,17 @@ def main():
     preview_path_name       = preview_rtmp_url.rstrip('/').rsplit('/', 1)[-1] or 'preview'
 
     # Preview size/rate/bitrate — env-tunable so weaker hardware (e.g. Intel N100)
-    # can dial the WHEP monitor preview down without a code change. The preview is
-    # only an operator monitor, so it does NOT need 720p/15fps: on the N97 the
+    # can dial the WHEP monitor preview down without a code change. On the N97 the
     # preview is software x264enc (VA-API can't run a 2nd session without corrupting
-    # the main stream), and at full 720p/15fps two of them dominate CPU whenever the
-    # admin UI is open. 640×360@10 cuts that ~6× (¼ the pixels × ⅔ the frames).
-    preview_w    = int(os.environ.get('PREVIEW_WIDTH',       '640'))
-    preview_h    = int(os.environ.get('PREVIEW_HEIGHT',      '360'))
-    preview_fps  = int(os.environ.get('PREVIEW_FPS',         '10'))
-    preview_kbps = int(os.environ.get('PREVIEW_BITRATE_KBPS', '800'))
+    # the main stream), so at full 720p/15fps two of them dominate CPU whenever the
+    # admin UI is open. Keep 720p for a sharp operator view but drop the frame rate:
+    # encode cost scales with pixels × fps, so 720p@10 is ~⅓ cheaper than 720p@15
+    # with no loss of clarity. On an N100, lower PREVIEW_FPS (e.g. 6-8) or the
+    # resolution via env before touching anything else.
+    preview_w    = int(os.environ.get('PREVIEW_WIDTH',       '1280'))
+    preview_h    = int(os.environ.get('PREVIEW_HEIGHT',       '720'))
+    preview_fps  = int(os.environ.get('PREVIEW_FPS',           '10'))
+    preview_kbps = int(os.environ.get('PREVIEW_BITRATE_KBPS', '2000'))
     preview_gop  = max(10, preview_fps * 3)  # keyframe ~every 3s
 
     pipeline_str = (
