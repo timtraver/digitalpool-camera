@@ -174,11 +174,17 @@ class PuppeteerOverlay extends EventEmitter {
     // URL mode
     this._overlayUrl = null;        // Remote URL to screenshot (null = local HTML mode)
     this._refreshTimer = null;      // Periodic refresh timer for URL mode
-    // How often to re-screenshot the URL (ms). Each screenshot is a full-res
-    // 1920×1080 PNG encode with alpha; at 3s (vs the old 2s) that's a third
-    // fewer captures per camera for scoreboards that update slowly, with barely
-    // perceptible added latency. Overridable via setOverlayUrl({refreshInterval}).
-    this._refreshIntervalMs = 3000;
+    // How often to re-screenshot the URL (ms). This is a SAMPLING interval — the
+    // poller grabs whatever the page shows at each tick, it doesn't track the
+    // page's own animation. So it must be comfortably shorter than anything the
+    // overlay animates: to reproduce an N-second image rotation faithfully, sample
+    // at roughly ≤ N/2 (e.g. 2000ms for a 5s rotation) so every image is caught.
+    // Effective cadence is a bit longer than this value because each cycle waits
+    // for the previous screenshot to finish first. The tradeoff is CPU: each
+    // screenshot is a full-res 1080p PNG encode (~1-core spike), so lower = smoother
+    // animated overlays but more CPU, higher = cheaper but choppier/aliased.
+    // Tune per hardware with OVERLAY_REFRESH_MS; overridable via setOverlayUrl().
+    this._refreshIntervalMs = parseInt(process.env.OVERLAY_REFRESH_MS, 10) || 2000;
     // Wait after navigation before the first screenshot. Only applies right
     // after a switch/enable (not on every refresh), so it's pure switch latency.
     // Kept modest because the 2s periodic refresh + hot-swap self-corrects a
