@@ -458,10 +458,18 @@ class PuppeteerOverlay extends EventEmitter {
     // few seconds freezes on the first frame in the screenshot even though it
     // animates fine in a real browser tab. This fixes it at the browser level.
     try {
-      const client = await this._page.target().createCDPSession();
-      await client.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+      this._cdp = await this._page.target().createCDPSession();
+      await this._cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+      // Set a persistent TRANSPARENT default backdrop once, here on the idle
+      // about:blank page. This replaces per-screenshot omitBackground:true, whose
+      // Emulation.setDefaultBackgroundColorOverride call fires on EVERY capture and
+      // is the documented cause of the ~8s post-navigation screenshot wedge — which
+      // was making the loop re-navigate every cycle and reset the page's animation.
+      // Set once → screenshots stay transparent with no per-frame CDP round-trip.
+      await this._cdp.send("Emulation.setDefaultBackgroundColorOverride", { color: { r: 0, g: 0, b: 0, a: 0 } });
     } catch (e) {
-      console.warn(`⚠️  Could not enable focus emulation (animated overlays may freeze): ${e.message}`);
+      this._cdp = null;
+      console.warn(`⚠️  Could not set up CDP emulation (focus/transparent bg): ${e.message}`);
     }
 
     // Injected script that runs at document creation on EVERY navigation — instead
@@ -502,6 +510,7 @@ class PuppeteerOverlay extends EventEmitter {
       this._page = null;
       _sharedBrowserPageCount = Math.max(0, _sharedBrowserPageCount - 1);
     }
+    this._cdp = null; // CDP session is bound to the now-closed page
     this._currentLoadedUrl = null;
 
     // When no overlay pages remain, shut the shared browser down entirely.
@@ -569,12 +578,23 @@ class PuppeteerOverlay extends EventEmitter {
         if (_finalUrl && _finalUrl !== this._overlayUrl) {
           console.log(`↪️  Overlay page redirected to: ${_finalUrl}`);
         }
-        // No separate evaluate-probe: the first navigation to a new overlay URL
-        // reliably wedges the screenshot's Emulation.setDefaultBackgroundColorOverride
-        // call (omitBackground) for ~8s even though page.evaluate() answers fine —
-        // so an evaluate probe passes and misses it. Instead the screenshot itself
-        // is bounded by a short race below, which re-navigates on the wedge (the
-        // re-navigation clears it, typically in <1s thanks to the code cache).
+
+        // Re-assert the transparent backdrop for the freshly-loaded document
+        // (the override can reset on navigation). Best-effort + bounded so a busy
+        // post-nav renderer can't stall the loop; navigations are now rare (only
+        // on a real URL change), so this can't loop.
+        if (this._cdp) {
+          try {
+            await Promise.race([
+              this._cdp.send("Emulation.setDefaultBackgroundColorOverride", { color: { r: 0, g: 0, b: 0, a: 0 } }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error("bg override timed out")), 3000)),
+            ]);
+          } catch (e) { /* page CSS transparency still applies; keep going */ }
+        }
+        // Mark that no screenshot has succeeded yet on this freshly-loaded page,
+        // so a first-shot failure (a genuine post-nav wedge) still triggers one
+        // re-navigation — but subsequent slow shots won't.
+        this._screenshotOkSinceNav = false;
       }
 
       // Apply zoom when dirty (after nav or zoom change). Transparent background
@@ -604,23 +624,29 @@ class PuppeteerOverlay extends EventEmitter {
         this._zoomDirty = false;
       }
 
-      // Screenshot with native transparency — no ImageMagick chroma-key needed.
-      // Race against a short timeout: the first screenshot after navigating to a
-      // new overlay URL frequently wedges on Emulation.setDefaultBackgroundColor-
-      // Override (~8s to protocolTimeout). Bounding it here fails fast (~2.5s) so
-      // the catch re-navigates, which clears the wedge — usually in <1s (cached).
+      // Screenshot. Transparency comes from the persistent default-background
+      // override set in _ensureBrowser (NOT per-screenshot omitBackground, which
+      // caused the post-nav wedge); fall back to omitBackground only if the CDP
+      // override couldn't be installed. Bound it with a race so a stall can't hang
+      // the loop — but only RE-NAVIGATE on the FIRST screenshot after a navigation.
+      // Once a screenshot has succeeded on this page, a later slow one just skips
+      // the cycle and keeps the page loaded, so the page's own animation/rotation
+      // keeps running instead of being reset by a reload every cycle.
       const tempPath = this.pngPath + ".tmp";
-      await Promise.race([
-        this._page.screenshot({
-          path: tempPath,
-          type: "png",
-          omitBackground: true,
-          timeout: 10000,
-        }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("screenshot wedged after navigation — re-navigating")), 2500)
-        ),
-      ]);
+      const firstShot = !this._screenshotOkSinceNav;
+      try {
+        await Promise.race([
+          this._page.screenshot({ path: tempPath, type: "png", omitBackground: !this._cdp, timeout: 10000 }),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("screenshot timed out")), firstShot ? 6000 : 8000)
+          ),
+        ]);
+        this._screenshotOkSinceNav = true;
+      } catch (e) {
+        if (firstShot) throw e; // genuine post-nav wedge → outer catch re-navigates
+        console.warn(`⚠️  Overlay screenshot slow — skipping this cycle, page kept loaded: ${e.message}`);
+        return true; // wait the normal interval; do NOT re-navigate (keeps rotation alive)
+      }
       // Atomic rename so GStreamer never reads a partial file
       fs.renameSync(tempPath, this.pngPath);
 
