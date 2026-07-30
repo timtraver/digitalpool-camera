@@ -443,14 +443,34 @@ class PuppeteerOverlay extends EventEmitter {
     // viewport size.  A 3840×2160 PNG painted onto a 1920×1080 video frame
     // would appear 2× too large and overflow the frame.
     await this._page.setViewport({ width: this.width, height: this.height, deviceScaleFactor: 1 });
-    // Force a transparent background via an injected script that runs at document
-    // creation on EVERY navigation — instead of a post-load page.evaluate(), which
-    // intermittently wedges (Runtime.callFunctionOn hanging until protocolTimeout)
-    // when the freshly-loaded overlay page is busy or mid-redirect. Combined with
-    // the screenshot's omitBackground, this keeps overlays transparent without a
-    // hang-prone CDP round-trip on the hot path.
+
+    // Force the headless page to report itself as focused + visible.
+    // Headless Chromium otherwise treats the page as hidden
+    // (document.visibilityState === "hidden"), which pauses requestAnimationFrame
+    // and CSS animations and makes many pages gate their rotation/animation logic
+    // on the Page Visibility API — so an overlay that rotates its graphic every
+    // few seconds freezes on the first frame in the screenshot even though it
+    // animates fine in a real browser tab. This fixes it at the browser level.
+    try {
+      const client = await this._page.target().createCDPSession();
+      await client.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    } catch (e) {
+      console.warn(`⚠️  Could not enable focus emulation (animated overlays may freeze): ${e.message}`);
+    }
+
+    // Injected script that runs at document creation on EVERY navigation — instead
+    // of a post-load page.evaluate(), which intermittently wedges (Runtime.call-
+    // FunctionOn hanging until protocolTimeout) when the freshly-loaded overlay
+    // page is busy or mid-redirect. It (a) overrides the visibility properties as a
+    // belt-and-suspenders backup to the focus emulation above, and (b) forces a
+    // transparent background so the screenshot's omitBackground stays transparent
+    // without a hang-prone CDP round-trip on the hot path.
     try {
       await this._page.evaluateOnNewDocument(() => {
+        try {
+          Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+          Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+        } catch (e) { /* some pages lock these props — ignore */ }
         const makeTransparent = () => {
           if (document.documentElement) document.documentElement.style.backgroundColor = "transparent";
           if (document.body) document.body.style.backgroundColor = "transparent";
@@ -459,7 +479,7 @@ class PuppeteerOverlay extends EventEmitter {
         document.addEventListener("DOMContentLoaded", makeTransparent);
       });
     } catch (e) {
-      console.warn(`⚠️  Could not install transparent-bg script: ${e.message}`);
+      console.warn(`⚠️  Could not install page-init script: ${e.message}`);
     }
     this._currentLoadedUrl = null; // Track what URL is loaded
     console.log(`  ✅ Overlay page ready (shared Chromium, ${_sharedBrowserPageCount} page(s) open)`);
