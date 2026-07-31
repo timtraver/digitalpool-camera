@@ -922,14 +922,34 @@ class CameraController {
       await this.setControl("zoom_absolute", startupPos.zoom_absolute);
       this.currentPan = startupPos.pan_absolute;
       this.currentTilt = startupPos.tilt_absolute;
-      return { success: true, message: "Camera reset to startup position" };
+      // Return the applied position so the UI can sync its sliders (esp. zoom)
+      // to the home value — otherwise the slider stays wherever it was.
+      return {
+        success: true,
+        message: "Camera reset to startup position",
+        position: {
+          pan_absolute:  startupPos.pan_absolute,
+          tilt_absolute: startupPos.tilt_absolute,
+          zoom_absolute: startupPos.zoom_absolute,
+        },
+      };
     }
     await this.setControl("pan_absolute", 0);
     await this.setControl("tilt_absolute", 0);
     // Reset tracked positions
     this.currentPan = 0;
     this.currentTilt = 0;
-    return { success: true, message: "Camera reset to home position" };
+    // No saved home → pan/tilt go to 0 and zoom is left as-is; report the current
+    // zoom so the UI stays consistent rather than the slider drifting out of sync.
+    return {
+      success: true,
+      message: "Camera reset to home position",
+      position: {
+        pan_absolute: 0,
+        tilt_absolute: 0,
+        zoom_absolute: this.config.zoom_absolute,
+      },
+    };
   }
 }
 

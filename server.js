@@ -4455,6 +4455,11 @@ io.on("connection", (socket) => {
     const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
     const result = await getCam(camIdx).resetPosition();
     socket.emit("controlResult", result);
+    // Tell the UI the home position it landed on so it can sync its sliders
+    // (the zoom slider in particular) — broadcast so every open client updates.
+    if (result && result.success && result.position) {
+      io.emit("positionReset", { cameraIndex: camIdx, position: result.position });
+    }
   });
 
   socket.on("getCameraConfig", (data) => {

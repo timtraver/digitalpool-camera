@@ -593,6 +593,20 @@ if (zoomLevel) {
   });
 }
 
+// When PTZ "home" is pressed, the server reports the position the camera landed
+// on. Sync the zoom slider to the home zoom — otherwise the camera moves but the
+// slider stays at its previous value, misrepresenting the actual zoom.
+socket.on("positionReset", (data) => {
+  if (data.cameraIndex && data.cameraIndex !== activeCamIndex) return;
+  const pos = data.position || {};
+  if (pos.zoom_absolute !== undefined && pos.zoom_absolute !== null && zoomLevel) {
+    currentZoom = pos.zoom_absolute;
+    zoomLevel.value = pos.zoom_absolute;
+    if (zoomLevelValue) zoomLevelValue.textContent = `${_zoomPct(pos.zoom_absolute)}%`;
+    console.log(`🏠 Home applied — zoom slider synced to raw=${pos.zoom_absolute} (${_zoomPct(pos.zoom_absolute)}%)`);
+  }
+});
+
 // Startup position controls
 const setStartupBtn = document.getElementById("setStartupPosition");
 const startupPosInfo = document.getElementById("startupPosInfo");
