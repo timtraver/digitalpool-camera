@@ -1107,10 +1107,26 @@
                   <div style="display:flex;flex-direction:column;gap:8px">
                     <button class="btn-wifi-action" id="restartSoftwareBtn">🔄 Restart Software</button>
                     <div class="wifi-msg" id="restartSoftwareMsg"></div>
+                    <button class="btn-wifi-action" id="usbResetBtn">🔌 Reset Camera USB</button>
+                    <div class="wifi-msg" id="usbResetMsg"></div>
                     <button class="btn-wifi-action" id="rebootSystemBtn" style="background:rgba(220,38,38,0.25);border-color:rgba(220,38,38,0.5)">⚠️ Reboot Device</button>
                     <div class="wifi-msg" id="rebootSystemMsg"></div>
                     <button class="btn-wifi-action" id="shutdownSystemBtn" style="background:rgba(220,38,38,0.25);border-color:rgba(220,38,38,0.5)">⏻ Power Down Device</button>
                     <div class="wifi-msg" id="shutdownSystemMsg"></div>
+
+                    <!-- Timed shutdown + RTC wake — shown only on Intel/x86 boards -->
+                    <div id="timedWakeSection" style="display:none;margin-top:4px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.1)">
+                      <label style="font-size:12px;color:rgba(255,255,255,0.75);display:block;margin-bottom:4px">
+                        ⏰ Power down &amp; automatically wake at:
+                      </label>
+                      <input type="datetime-local" id="wakeAtInput"
+                             style="width:100%;box-sizing:border-box;padding:6px 8px;margin-bottom:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(0,0,0,0.3);color:#fff;font-size:13px">
+                      <button class="btn-wifi-action" id="shutdownWakeBtn" style="background:rgba(220,38,38,0.25);border-color:rgba(220,38,38,0.5)">⏻ Shut Down &amp; Wake</button>
+                      <div class="wifi-msg" id="shutdownWakeMsg"></div>
+                      <p style="font-size:11px;color:rgba(255,255,255,0.5);margin:6px 0 0">
+                        Requires the BIOS “Wake on RTC / Auto Power On” option to be enabled.
+                      </p>
+                    </div>
                   </div>
                 </div>
               </details>

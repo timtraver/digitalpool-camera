@@ -4648,6 +4648,93 @@ loadDeviceIp();
     } catch { /* device already shutting down */ }
   });
 
+  // ── Targeted USB reset of the active camera ──────────────────
+  // Unbinds/rebinds just this camera's USB port (unplug/replug in software) to
+  // clear a wedged camera, without touching the WiFi dongle or the other camera.
+  document.getElementById("usbResetBtn")?.addEventListener("click", async () => {
+    const btn = document.getElementById("usbResetBtn");
+    const msg = document.getElementById("usbResetMsg");
+    const cam = activeCamIndex;
+
+    if (!confirm(`Reset the USB connection for Camera ${cam}? It will briefly go offline (5–10 seconds) and the stream will restart automatically.`)) return;
+
+    btn.disabled = true;
+    btn.textContent = "⏳ Resetting USB…";
+    msg.textContent = `🔌 Resetting Camera ${cam} USB — reconnecting in a few seconds…`;
+    msg.style.color = "#facc15";
+
+    try {
+      const r = await fetch(`/api/camera/usb-reset?cam=${cam}`, { method: "POST" });
+      const d = await r.json();
+      if (!d.success) {
+        msg.textContent = "⚠️ " + (d.error || "USB reset failed.");
+        msg.style.color = "#f87171";
+      } else {
+        msg.textContent = `✅ Reset sent for Camera ${cam} — the camera is coming back online…`;
+        msg.style.color = "#4ade80";
+      }
+    } catch {
+      msg.textContent = "⚠️ Could not reach the device to reset USB.";
+      msg.style.color = "#f87171";
+    } finally {
+      // Re-enable after the reset window; the preview refreshes itself via socket.
+      setTimeout(() => { btn.disabled = false; btn.textContent = "🔌 Reset Camera USB"; }, 12000);
+    }
+  });
+
+  // ── Timed shutdown + RTC wake (Intel/x86 only) ───────────────
+  // Reveal the wake controls only on boards that can wake from a full power-off.
+  fetch("/api/power/capabilities").then(r => r.json()).then((d) => {
+    if (d && d.timedWake) {
+      const sec = document.getElementById("timedWakeSection");
+      if (sec) sec.style.display = "block";
+    }
+  }).catch(() => { /* leave hidden on error */ });
+
+  document.getElementById("shutdownWakeBtn")?.addEventListener("click", async () => {
+    const btn   = document.getElementById("shutdownWakeBtn");
+    const msg   = document.getElementById("shutdownWakeMsg");
+    const input = document.getElementById("wakeAtInput");
+
+    const val = input?.value;
+    if (!val) {
+      msg.textContent = "⚠️ Pick a wake date/time first.";
+      msg.style.color = "#f87171";
+      return;
+    }
+    // datetime-local has no timezone — new Date(val) parses it in the device's
+    // local time, which is what the operator picked.
+    const wakeAt = Math.floor(new Date(val).getTime() / 1000);
+    if (!Number.isFinite(wakeAt) || wakeAt <= Math.floor(Date.now() / 1000)) {
+      msg.textContent = "⚠️ Wake time must be in the future.";
+      msg.style.color = "#f87171";
+      return;
+    }
+
+    const when = new Date(wakeAt * 1000).toLocaleString();
+    if (!confirm(`Power down now and automatically wake at ${when}?\n\nThe device will be off until then. This needs the BIOS "Wake on RTC" option enabled.`)) return;
+
+    btn.disabled = true;
+    btn.textContent = "⏳ Shutting down…";
+    msg.textContent = `⏻ Powering down — the device will wake at ${when}.`;
+    msg.style.color = "#facc15";
+
+    try {
+      const r = await fetch("/api/shutdown", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wakeAt }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok === false || d.success === false) {
+        btn.disabled = false;
+        btn.textContent = "⏻ Shut Down & Wake";
+        msg.textContent = "⚠️ " + (d.error || "Could not schedule the timed shutdown.");
+        msg.style.color = "#f87171";
+      }
+    } catch { /* device is powering down */ }
+  });
+
   // ── System Image / golden clone (dpadmin only) ───────────────
   if (currentUser.username === "dpadmin") {
     const imgSec = document.getElementById("systemImageSection");

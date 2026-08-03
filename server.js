@@ -1584,13 +1584,124 @@ app.post("/api/reboot", requireAuth, async (req, res) => {
   }, 800);
 });
 
-// API endpoint to power down the entire device (any logged-in user)
-app.post("/api/shutdown", requireAuth, async (req, res) => {
-  res.json({ success: true });
+// API endpoint to power down the entire device (any logged-in user).
+// Optional body { wakeAt: <unix-epoch-seconds> } schedules an automatic power-on
+// via the RTC alarm — Intel/x86 (N97/N100) only; RK3588 (arm64) can't wake from
+// a full power-off, so a wake request on arm64 is rejected.
+app.post("/api/shutdown", requireAuth, express.json(), async (req, res) => {
+  const wakeAt   = parseInt(req.body?.wakeAt, 10);
+  const wantWake = Number.isFinite(wakeAt) && wakeAt > Math.floor(Date.now() / 1000);
+
+  if (wantWake && process.arch !== "x64") {
+    return res.status(400).json({ success: false, error: "Timed wake is only supported on Intel (x86) devices." });
+  }
+
+  res.json({ success: true, scheduledWake: wantWake ? wakeAt : null });
   setTimeout(() => {
-    console.log("⚡ Device power down requested via admin panel — running sudo poweroff");
-    execAsync("sudo poweroff").catch(() => {});
+    if (wantWake) {
+      console.log(`⚡ Timed shutdown requested — arming RTC wake for ${new Date(wakeAt * 1000).toISOString()}, then powering off`);
+      execAsync(`sudo /usr/bin/bash ${path.join(__dirname, "wake-shutdown.sh")} ${wakeAt}`)
+        .catch((e) => console.error("⚠️  wake-shutdown.sh failed:", e.message));
+    } else {
+      console.log("⚡ Device power down requested via admin panel — running sudo poweroff");
+      execAsync("sudo poweroff").catch(() => {});
+    }
   }, 800);
+});
+
+// GET /api/power/capabilities — which power/maintenance features this board supports,
+// so the UI can hide the ones the hardware can't do (RTC wake-from-off is x86-only).
+app.get("/api/power/capabilities", requireAuth, (req, res) => {
+  res.json({ success: true, arch: process.arch, timedWake: process.arch === "x64" });
+});
+
+// POST /api/camera/usb-reset?cam=N — targeted USB reset of one camera.
+// Unbinds/rebinds just this camera's USB bus port (not the xHCI controller), the
+// software equivalent of unplug/replug — clears a wedged UVC device without
+// disturbing the USB WiFi dongle or the other camera. Coordinates with the
+// stream/idle-preview lifecycle so nothing holds the V4L2 fd during re-enumeration,
+// then restores whatever was running (live stream or idle preview).
+app.post("/api/camera/usb-reset", requireAuth, async (req, res) => {
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  const sc  = getSC(camIdx);
+  const src = getActiveSource(camIdx);
+
+  if (src.type !== "usb") {
+    return res.status(400).json({ success: false, error: `Camera ${camIdx} is not a USB camera — nothing to reset.` });
+  }
+  const dev = src.device || (camIdx === 2 ? CAMERA_DEVICE_2 : CAMERA_DEVICE);
+
+  // Resolve the USB bus port id (e.g. "3-1") from the /dev/videoN sysfs path.
+  //   /devices/.../usb3/3-1/3-1:1.0/video4linux/video0  →  port "3-1"
+  let port = null;
+  try {
+    const { stdout } = await execAsync(`udevadm info --query=path --name=${dev} 2>/dev/null`, { timeout: 3000 });
+    const m = stdout.trim().match(/\/usb\d+\/(\d+-[\d.]+)\//);
+    if (m) port = m[1];
+  } catch (_) { /* handled by the !port guard below */ }
+
+  if (!port) {
+    return res.status(404).json({ success: false,
+      error: `Could not locate ${dev} on the USB bus — the camera may have dropped off entirely. A full reboot is needed.` });
+  }
+
+  const wasStreaming = sc.isStreaming;
+  const savedConfig  = wasStreaming ? { ...sc.streamConfig } : null;
+
+  console.log(`🔌 [Cam${camIdx}] USB reset requested — port ${port} (${dev}), wasStreaming=${wasStreaming}`);
+  // Respond immediately; the disruptive work runs after. The UI shows a "resetting…"
+  // state and reconnects on the refreshIdlePreview / streamStatus emits below.
+  res.json({ success: true, port, device: dev, wasStreaming });
+
+  // Suppress the automatic idle-preview restart that the "stopped" event would
+  // otherwise fire — we bring the camera back ourselves once it re-enumerates.
+  isRestartInProgress[camIdx] = true;
+  try {
+    if (wasStreaming) {
+      io.emit("streamStatus", { ...sc.getStatus(), status: "stopping", cameraIndex: camIdx });
+      try { await sc.stopStream(); } catch (_) { /* not streaming / already down */ }
+    }
+    // Release the V4L2 fd (tracked idle preview + any orphan holders) so the
+    // device tears down cleanly during the unbind.
+    await _killIdlePreviewForCamera(camIdx);
+
+    // Unbind/rebind the port (root, via sudoers → usb-reset.sh).
+    try {
+      const { stdout } = await execAsync(
+        `sudo /usr/bin/bash ${path.join(__dirname, "usb-reset.sh")} ${port}`,
+        { timeout: 20000 }
+      );
+      console.log(`🔌 [Cam${camIdx}] usb-reset.sh: ${stdout.trim().replace(/\n/g, " | ")}`);
+    } catch (e) {
+      console.error(`⚠️  [Cam${camIdx}] usb-reset.sh failed:`, (e.stderr || e.message || "").toString().trim());
+    }
+
+    // Wait for the device node to re-appear after re-enumeration (up to ~12 s).
+    let back = false;
+    for (let i = 0; i < 24; i++) {
+      if (fsSync.existsSync(dev)) { back = true; break; }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    console.log(`🔌 [Cam${camIdx}] ${dev} ${back ? "re-appeared" : "did NOT re-appear"} after USB reset`);
+    // Let udev finish creating the node and applying permissions before we open it.
+    await new Promise((r) => setTimeout(r, 800));
+  } finally {
+    isRestartInProgress[camIdx] = false;
+  }
+
+  // Restore: resume the live stream if it was running, otherwise the idle preview.
+  try {
+    if (wasStreaming && savedConfig) {
+      await sc.startStream(savedConfig);
+    } else {
+      await startPersistentIdlePreview(camIdx);
+    }
+  } catch (e) {
+    console.error(`⚠️  [Cam${camIdx}] failed to restore camera after USB reset:`, e.message);
+    try { await startPersistentIdlePreview(camIdx); } catch (_) { /* best effort */ }
+  }
+  io.emit("refreshIdlePreview", { cameraIndex: camIdx });
+  io.emit("streamStatus", { ...sc.getStatus(), cameraIndex: camIdx });
 });
 
 // ── System image (golden clone) API — dpadmin only ────────────────────────────

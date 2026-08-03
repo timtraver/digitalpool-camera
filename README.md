@@ -1279,6 +1279,21 @@ EOF
 sudo visudo -c -f /etc/sudoers.d/digitalpool-captive
 ```
 
+> **Power/maintenance controls** (USB camera reset, timed shutdown-with-wake) are
+> installed automatically by `migrations/0005-camera-power-controls.sh`, which drops
+> `/etc/sudoers.d/digitalpool-camera-power`:
+>
+> ```
+> dp ALL=(root) NOPASSWD: /usr/bin/bash /home/dp/digitalpool-camera/usb-reset.sh *
+> dp ALL=(root) NOPASSWD: /usr/bin/bash /home/dp/digitalpool-camera/wake-shutdown.sh *
+> ```
+>
+> The **⏻ Shut Down & Wake** button (Admin → Power) appears on **Intel/x86 boards
+> only** (N97/N100) and requires the BIOS **"Wake on RTC" / "Auto Power On"** option
+> to be enabled — without it, the RTC alarm is set but the board won't power back on.
+> Also enable **"Restore on AC Power Loss = Power On"** so it recovers from power blips.
+> RK3588 (arm64) boards can't wake from a full power-off, so the button is hidden there.
+
 **Add NetBird credentials to `.env`:**
 
 ```bash
