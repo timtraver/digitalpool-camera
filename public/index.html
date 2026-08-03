@@ -1116,11 +1116,32 @@
 
                     <!-- Timed shutdown + RTC wake — shown only on Intel/x86 boards -->
                     <div id="timedWakeSection" style="display:none;margin-top:4px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.1)">
-                      <label style="font-size:12px;color:rgba(255,255,255,0.75);display:block;margin-bottom:4px">
-                        ⏰ Power down &amp; automatically wake at:
+                      <label style="font-size:12px;color:rgba(255,255,255,0.75);display:block;margin-bottom:6px">
+                        ⏰ Power down &amp; automatically wake:
                       </label>
-                      <input type="datetime-local" id="wakeAtInput"
-                             style="width:100%;box-sizing:border-box;padding:6px 8px;margin-bottom:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(0,0,0,0.3);color:#fff;font-size:13px">
+                      <select id="wakeModeSelect"
+                              style="width:100%;box-sizing:border-box;padding:6px 8px;margin-bottom:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(0,0,0,0.3);color:#fff;font-size:13px">
+                        <option value="in">After a delay…</option>
+                        <option value="at">At a date &amp; time…</option>
+                      </select>
+
+                      <!-- Relative mode: wake after N minutes/hours -->
+                      <div id="wakeInRow" style="display:flex;gap:6px;margin-bottom:6px">
+                        <input type="number" id="wakeInAmount" min="1" step="1" value="8"
+                               style="flex:1;min-width:0;box-sizing:border-box;padding:6px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(0,0,0,0.3);color:#fff;font-size:13px">
+                        <select id="wakeInUnit"
+                                style="flex:1;min-width:0;box-sizing:border-box;padding:6px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(0,0,0,0.3);color:#fff;font-size:13px">
+                          <option value="60">minutes</option>
+                          <option value="3600" selected>hours</option>
+                        </select>
+                      </div>
+
+                      <!-- Absolute mode: wake at a specific date/time -->
+                      <div id="wakeAtRow" style="display:none;margin-bottom:6px">
+                        <input type="datetime-local" id="wakeAtInput"
+                               style="width:100%;box-sizing:border-box;padding:6px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:rgba(0,0,0,0.3);color:#fff;font-size:13px">
+                      </div>
+
                       <button class="btn-wifi-action" id="shutdownWakeBtn" style="background:rgba(220,38,38,0.25);border-color:rgba(220,38,38,0.5)">⏻ Shut Down &amp; Wake</button>
                       <div class="wifi-msg" id="shutdownWakeMsg"></div>
                       <p style="font-size:11px;color:rgba(255,255,255,0.5);margin:6px 0 0">

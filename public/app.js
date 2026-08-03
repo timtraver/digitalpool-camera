@@ -4691,20 +4691,43 @@ loadDeviceIp();
     }
   }).catch(() => { /* leave hidden on error */ });
 
-  document.getElementById("shutdownWakeBtn")?.addEventListener("click", async () => {
-    const btn   = document.getElementById("shutdownWakeBtn");
-    const msg   = document.getElementById("shutdownWakeMsg");
-    const input = document.getElementById("wakeAtInput");
+  // Toggle the relative vs absolute inputs when the mode changes.
+  document.getElementById("wakeModeSelect")?.addEventListener("change", (e) => {
+    const at = e.target.value === "at";
+    const inRow = document.getElementById("wakeInRow");
+    const atRow = document.getElementById("wakeAtRow");
+    if (inRow) inRow.style.display = at ? "none" : "flex";
+    if (atRow) atRow.style.display = at ? "block" : "none";
+  });
 
-    const val = input?.value;
-    if (!val) {
-      msg.textContent = "⚠️ Pick a wake date/time first.";
-      msg.style.color = "#f87171";
-      return;
+  document.getElementById("shutdownWakeBtn")?.addEventListener("click", async () => {
+    const btn  = document.getElementById("shutdownWakeBtn");
+    const msg  = document.getElementById("shutdownWakeMsg");
+    const mode = document.getElementById("wakeModeSelect")?.value || "in";
+
+    // Resolve the chosen mode down to an absolute epoch (seconds) the server accepts.
+    let wakeAt;
+    if (mode === "at") {
+      const val = document.getElementById("wakeAtInput")?.value;
+      if (!val) {
+        msg.textContent = "⚠️ Pick a wake date/time first.";
+        msg.style.color = "#f87171";
+        return;
+      }
+      // datetime-local has no timezone — new Date(val) parses it in the device's
+      // local time, which is what the operator picked.
+      wakeAt = Math.floor(new Date(val).getTime() / 1000);
+    } else {
+      const amount = parseInt(document.getElementById("wakeInAmount")?.value, 10);
+      const unit   = parseInt(document.getElementById("wakeInUnit")?.value, 10); // 60 or 3600
+      if (!Number.isFinite(amount) || amount < 1 || !Number.isFinite(unit)) {
+        msg.textContent = "⚠️ Enter how long to stay off (1 or more).";
+        msg.style.color = "#f87171";
+        return;
+      }
+      wakeAt = Math.floor(Date.now() / 1000) + amount * unit;
     }
-    // datetime-local has no timezone — new Date(val) parses it in the device's
-    // local time, which is what the operator picked.
-    const wakeAt = Math.floor(new Date(val).getTime() / 1000);
+
     if (!Number.isFinite(wakeAt) || wakeAt <= Math.floor(Date.now() / 1000)) {
       msg.textContent = "⚠️ Wake time must be in the future.";
       msg.style.color = "#f87171";
