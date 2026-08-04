@@ -651,15 +651,63 @@ async function ensureNetbirdUp() {
 }
 
 /**
+ * Return this device's primary local IPv4 address — the one on the interface
+ * that holds the default route (the local WAN address the camera reaches the
+ * internet through), as opposed to the NetBird/VPN IP.  Skips the NetBird
+ * tunnel (wt*), link-local (169.254.*) and secondary DHCP leases.  Resolves to
+ * "" if none can be determined.
+ */
+async function getLocalWanIp() {
+  try {
+    // Which interface holds the default route?
+    let defaultIface = null;
+    try {
+      const { stdout } = await execAsync("ip route show default 2>/dev/null");
+      const m = stdout.match(/dev\s+(\S+)/);
+      if (m) defaultIface = m[1];
+    } catch { /* fall through to first candidate */ }
+
+    const { stdout } = await execAsync("ip -4 -o addr show scope global 2>/dev/null");
+    const addrs = [];
+    for (const line of stdout.split("\n")) {
+      if (!line.trim() || line.includes(" secondary ")) continue;
+      // line format: "3: enp2s0    inet 192.168.1.170/24 brd ... scope global ..."
+      const m = line.match(/^\d+:\s+(\S+)\s+inet\s+([0-9.]+)/);
+      if (!m) continue;
+      const [, iface, address] = m;
+      if (address.startsWith("169.254.")) continue; // link-local
+      if (/^wt\d+$/.test(iface)) continue;           // NetBird tunnel
+      addrs.push({ iface, address });
+    }
+    if (defaultIface) {
+      const hit = addrs.find(a => a.iface === defaultIface);
+      if (hit) return hit.address;
+    }
+    return addrs.length ? addrs[0].address : "";
+  } catch {
+    // Fallback: os.networkInterfaces() (no way to identify the default route)
+    for (const [name, nets] of Object.entries(os.networkInterfaces())) {
+      if (/^wt\d+$/.test(name)) continue; // NetBird tunnel
+      for (const net of nets) {
+        if (!net.internal && net.family === "IPv4" && !net.address.startsWith("169.254."))
+          return net.address;
+      }
+    }
+    return "";
+  }
+}
+
+/**
  * Call the cloud function's `assign` action and, on success, persist the device
  * as registered (venue id/name, device id, NetBird IP).  Sends the HTTP response.
  * The password is used only for this call and never written to disk.
  */
 async function finalizeRegistration(res, { email, password, venueId, venueName, venueSlug, deviceName, ip }) {
   const macAddress = getPrimaryMac();
+  const localIp    = await getLocalWanIp();
   let assign;
   try {
-    assign = await callDigitalPoolRegister({ action: "assign", email, password, venueId, deviceName, macAddress, netbirdIp: ip });
+    assign = await callDigitalPoolRegister({ action: "assign", email, password, venueId, deviceName, macAddress, netbirdIp: ip, local_ip: localIp });
   } catch (e) {
     return res.status(502).json({ error: `Could not reach DigitalPool registration service: ${e.message}` });
   }
@@ -933,9 +981,10 @@ app.post("/api/setup/register", requireAdmin, express.json(), async (req, res) =
   saveRemoteConfig(cfg);
 
   // 2. Verify credentials + fetch venues.
+  const localIp = await getLocalWanIp();
   let verify;
   try {
-    verify = await callDigitalPoolRegister({ action: "verify", email, password, deviceName, macAddress, netbirdIp: ip });
+    verify = await callDigitalPoolRegister({ action: "verify", email, password, deviceName, macAddress, netbirdIp: ip, local_ip: localIp });
   } catch (e) {
     return res.status(502).json({ error: `Could not reach DigitalPool registration service: ${e.message}` });
   }
