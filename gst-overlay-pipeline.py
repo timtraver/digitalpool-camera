@@ -390,10 +390,43 @@ def main():
         #   For Rockchip (NV12 HW buffers) we must go through a software videoconvert
         #   first so that videoscale has access to system-memory buffers.
         #   For Intel VA-API we use vapostproc which handles format+scale natively.
+        # ── Conversion backend: measured, not assumed ────────────────────────
+        # The rationale above (offload to the GPU, save CPU memory bandwidth) is
+        # sound in isolation but optimises the wrong resource on this hardware.
+        # The Intel iGPU has ONE fixed-function video-processing unit, and
+        # vah264enc is already using that same GPU to encode.  Two 1080p
+        # conversions plus an encode per frame serialise through it and cap the
+        # pipeline at ~30 fps — measured directly: 1080p60 with the overlay
+        # enabled delivered 28.7 fps, with it disabled 58.3 fps.  Splitting the
+        # work across threads changed nothing (431 → 433 frames) and freeing a
+        # whole core changed nothing, which is the signature of a single
+        # serialised hardware unit rather than a CPU shortage.
+        #
+        # Benchmarked on the N97 (600 frames, 1080p, videotestsrc → fakesink):
+        #   baseline, no conversion ............  1.99 s
+        #   videoconvert n-threads=4, both ways   4.49 s  → 4.2 ms/frame
+        #   vapostproc, both ways ..............  crashed in negotiation
+        #
+        # 4.2 ms/frame against a 16.7 ms budget, costing ~0.9 of one core, on a
+        # box with three cores idle.  Software conversion parallelises across
+        # those cores; the VPP cannot be parallelised at all.
+        #
+        # OVERLAY_CONVERT=gpu restores the vapostproc path if a future device
+        # has a faster VPP or a slower CPU.  Rockchip is untouched — its
+        # videoconvert is RGA-backed and has not been measured here.
+        convert_threads = int(os.environ.get('VIDEOCONVERT_THREADS', '4'))
+        use_gpu_convert = os.environ.get('OVERLAY_CONVERT', 'cpu').lower() == 'gpu'
+        va_encoder      = encoder in ('vah264enc', 'vah265enc')
+
         if has_any_overlay:
-            if encoder in ('vah264enc', 'vah265enc'):
+            if va_encoder and use_gpu_convert:
                 bgra_convert = (
                     f'! vapostproc ! videoscale '
+                    f'! video/x-raw,format=BGRA,width={overlay_width},height={overlay_height} '
+                )
+            elif va_encoder:
+                bgra_convert = (
+                    f'! videoconvert n-threads={convert_threads} ! videoscale '
                     f'! video/x-raw,format=BGRA,width={overlay_width},height={overlay_height} '
                 )
             else:
@@ -407,15 +440,16 @@ def main():
             else:
                 bgra_convert = '! videoconvert ! video/x-raw,format=BGRA '
 
-        # Post-overlay BGRA→NV12 (feeds the encoder):
-        # For Intel VA-API encoders use vapostproc — it's in the same
-        # gstreamer1.0-plugins-bad 'va' plugin as vah264enc and guaranteed
-        # present.  vapostproc offloads the conversion to the GPU's fixed-function
-        # video engine and may keep the output in VA-API (GPU) memory so
-        # vah264enc reads directly without a system-memory download (zero-copy).
-        # For everything else keep software videoconvert.
-        if encoder in ('vah264enc', 'vah265enc'):
+        # Post-overlay BGRA→NV12 (feeds the encoder).
+        # Same backend choice as bgra_convert above — threaded software convert by
+        # default on Intel, vapostproc only under OVERLAY_CONVERT=gpu.  Note that
+        # the zero-copy argument for vapostproc never actually applied here: the
+        # explicit 'video/x-raw,format=NV12' capsfilter forces system memory, so
+        # vah264enc re-uploaded to the GPU regardless.
+        if va_encoder and use_gpu_convert:
             encode_convert = '! vapostproc ! video/x-raw,format=NV12 '
+        elif va_encoder:
+            encode_convert = f'! videoconvert n-threads={convert_threads} ! video/x-raw,format=NV12 '
         else:
             encode_convert = '! videoconvert ! video/x-raw,format=NV12 '
 
