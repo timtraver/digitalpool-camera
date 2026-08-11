@@ -101,6 +101,11 @@ class StreamController extends EventEmitter {
       bitrate: 5000000, // 5 Mbps
       encoder: "mpph264enc", // Rockchip MPP hardware encoder (Orange Pi 5 / RK3588)
       codec: "h264", // 'h264' or 'h265' — h265 not supported with RTMP
+      // Keyframe (IDR) interval in SECONDS — converted to a frame count against the
+      // configured framerate at pipeline-build time. Trade-off: shorter means a new
+      // RTSP/SRT reader gets its first picture sooner, longer means more of the
+      // bitrate goes to detail instead of re-sending whole frames.
+      keyframeInterval: 1,
       autoStart: false, // Auto-start streaming on server startup
       // Overlay settings
       overlayEnabled: true,
@@ -1565,6 +1570,9 @@ class StreamController extends EventEmitter {
       // Active encoder (arg 29) — e.g. mpph264enc, vaapih264enc, x264enc
       // Lets gst-overlay-pipeline.py select the right encoder and JPEG decoder
       this.streamConfig.encoder || "mpph264enc",              // arg 29
+      // Keyframe interval in seconds (arg 30) — the script converts it to a frame
+      // count using arg 4 (framerate). Optional; the script defaults to 1s.
+      (this.streamConfig.keyframeInterval || 1).toString(),   // arg 30
     ];
 
     return {
@@ -1636,6 +1644,18 @@ class StreamController extends EventEmitter {
 
     // H.265 is incompatible with RTMP (FLV container only supports H.264)
     const codec = (this.streamConfig.codec === "h265" && protocol !== "rtmp") ? "h265" : "h264";
+
+    // Keyframe (IDR) interval derived from the configured framerate — see the matching
+    // block in gst-overlay-pipeline.py. Previously hard-coded to 15 frames (mpp: 5),
+    // values chosen for a 30fps target; at 60fps they produced 4 (resp. 12) IDRs per
+    // second, burning most of the bitrate on full frames instead of detail.
+    const keyframeSecs = parseFloat(this.streamConfig.keyframeInterval) || 1;
+    const gopFrames = Math.max(1, Math.round(framerate * keyframeSecs));
+
+    // VBR target as a percentage of the bitrate ceiling for the VA-API encoders.
+    // The va plugin defaults to CBR, which wastes bitrate on a static table and then
+    // has nothing left for the break — see the matching note in gst-overlay-pipeline.py.
+    const vaTargetPct = parseInt(process.env.VA_TARGET_PERCENTAGE || "80", 10);
 
     // Check if graphics overlay is needed:
     // - Legacy: skiaGraphicsEnabled checkbox (being removed from UI)
@@ -1927,7 +1947,9 @@ class StreamController extends EventEmitter {
           "videoconvert", "!", "video/x-raw,format=NV12", "!",
           "vah265enc",
           `bitrate=${bitrate_kbps}`,
-          "key-int-max=15",
+          `key-int-max=${gopFrames}`,
+          "rate-control=vbr",              // see gst-overlay-pipeline.py for why not CBR
+          `target-percentage=${vaTargetPct}`,
           "!",
           "video/x-h265,stream-format=byte-stream",
           "!",
@@ -1944,7 +1966,7 @@ class StreamController extends EventEmitter {
           "vaapih265enc",
           `bitrate=${bitrate_kbps}`,
           "rate-control=vbr",
-          "keyframe-period=5",  // Keyframe every ~167ms at 30fps
+          `keyframe-period=${gopFrames}`,
           "!",
           "video/x-h265,stream-format=byte-stream",
           "!",
@@ -1962,7 +1984,7 @@ class StreamController extends EventEmitter {
           `bps=${bitrate}`,
           `bps-max=${Math.round(bitrate * 1.6)}`,
           "rc-mode=vbr",
-          "gop=5",                // Keyframe every ~167ms at 30fps, ~83ms at 60fps
+          `gop=${gopFrames}`,
           "header-mode=each-idr", // VPS/SPS/PPS prepended to every IDR in the bitstream
           "!",
           "video/x-h265,stream-format=byte-stream",
@@ -1981,7 +2003,9 @@ class StreamController extends EventEmitter {
         "videoconvert", "!", "video/x-raw,format=NV12", "!",
         "vah264enc",
         `bitrate=${bitrate_kbps}`,
-        "key-int-max=15",
+        `key-int-max=${gopFrames}`,
+        "rate-control=vbr",                // see gst-overlay-pipeline.py for why not CBR
+        `target-percentage=${vaTargetPct}`,
         "!",
         "video/x-h264,stream-format=byte-stream",
         "!",
@@ -2000,7 +2024,7 @@ class StreamController extends EventEmitter {
         "vaapih264enc",
         `bitrate=${bitrate_kbps}`,
         "rate-control=vbr",
-        "keyframe-period=5",    // Keyframe every ~167ms at 30fps
+        `keyframe-period=${gopFrames}`,
         "!",
         "video/x-h264,stream-format=byte-stream",
         "!",
@@ -2022,7 +2046,7 @@ class StreamController extends EventEmitter {
         // pixelation. SRT latency=500ms absorbs short bursts; average stays at target bps.
         `bps-max=${Math.round(bitrate * 1.6)}`,
         "rc-mode=vbr",          // VBR with bps-max cap = constrained VBR — best quality/stability tradeoff
-        "gop=5",                // Keyframe every ~167ms — fast recovery from any dropped frame
+        `gop=${gopFrames}`,
         "header-mode=each-idr", // SPS/PPS prepended to every IDR in the bitstream
         "profile=baseline", // No B-frames — required for RTMP/FLV and better for low-latency
         "!",
@@ -2049,7 +2073,7 @@ class StreamController extends EventEmitter {
         `speed-preset=ultrafast`,
         `tune=zerolatency`,
         `bitrate=${bitrate_kbps}`,
-        "key-int-max=30",
+        `key-int-max=${gopFrames}`,
         "threads=0",
         "sliced-threads=true",
         "!",

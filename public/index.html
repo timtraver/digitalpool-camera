@@ -617,7 +617,17 @@
               <label>Codec:</label>
               <select id="streamCodec">
                 <option value="h264" selected>H.264 (all protocols)</option>
-                <option value="h265">H.265 / HEVC (SRT &amp; RTSP only)</option>
+                <option value="h265">H.265 / HEVC (SRT only)</option>
+              </select>
+            </div>
+
+            <div class="control-item">
+              <label>Keyframe Interval:</label>
+              <select id="streamKeyframeInterval">
+                <option value="0.5">0.5 s (fastest connect)</option>
+                <option value="1" selected>1 s (recommended)</option>
+                <option value="2">2 s (best quality / HLS)</option>
+                <option value="4">4 s</option>
               </select>
             </div>
 

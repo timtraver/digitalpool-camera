@@ -1384,6 +1384,7 @@ const streamBitrate = document.getElementById("streamBitrate");
 const streamResolution = document.getElementById("streamResolution");
 const streamFramerate = document.getElementById("streamFramerate");
 const streamCodec = document.getElementById("streamCodec");
+const streamKeyframeInterval = document.getElementById("streamKeyframeInterval");
 // audioEnabledCheckbox, audioSourceRow, audioSourceTypeSelect,
 // audioDeviceRow, audioDeviceSelect, refreshAudioDevicesBtn
 // are declared before the initCameraInput IIFE above.
@@ -1652,6 +1653,7 @@ startStreamBtn.addEventListener("click", async () => {
       height: resH,
       framerate: parseInt(streamFramerate.value),
       codec: streamCodec.value,
+      keyframeInterval: parseFloat(streamKeyframeInterval.value),
       // flip settings are NOT included here — they are persisted independently
       // via saveFlipConfig() → POST /api/stream/config, so the server always has
       // the current value in streamConfig. Sending them here would cause a race
@@ -1674,6 +1676,7 @@ startStreamBtn.addEventListener("click", async () => {
       height: resH,
       framerate: parseInt(streamFramerate.value),
       codec: streamCodec.value,
+      keyframeInterval: parseFloat(streamKeyframeInterval.value),
       // flip settings omitted — server uses its persisted streamConfig values
     };
     console.log("Starting stream with config:", config);
@@ -3755,6 +3758,7 @@ async function loadStreamConfig() {
       _pendingFramerate = data.config.framerate || 30;
       streamFramerate.value = String(_pendingFramerate);
       streamCodec.value = data.config.codec || "h264";
+      streamKeyframeInterval.value = String(data.config.keyframeInterval || 1);
       const w = data.config.width || 1920, h = data.config.height || 1080;
       const resKey = `${w}x${h}`;
       _pendingResolution = resKey;
@@ -3870,6 +3874,7 @@ async function saveFlipConfig() {
         height:       resH,
         framerate:    parseInt(streamFramerate.value),
         codec:        streamCodec.value,
+        keyframeInterval: parseFloat(streamKeyframeInterval.value),
       };
       socket.emit("restartStream", { ...config, cameraIndex: activeCamIndex });
     }

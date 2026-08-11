@@ -105,6 +105,9 @@ def main():
     # Passed from streamController.js so this script can select the matching JPEG decoder and
     # H.264/H.265 encoder without any platform-detection logic here.
     encoder = sys.argv[29] if len(sys.argv) > 29 else "mpph264enc"
+    # Keyframe (IDR) interval in seconds (arg 30) — converted to a frame count against
+    # the framerate in arg 4.  Set from the "Keyframe Interval" stream setting.
+    keyframe_secs = float(sys.argv[30]) if len(sys.argv) > 30 else 1.0
     # JPEG decoder selected to match the encoder family:
     #   mppjpegdec  : Rockchip MPP hardware (mpp* encoders) — requires jpegparse upstream
     #   vajpegdec   : Intel VA-API hardware (vah264enc / vah265enc, Ubuntu 24.04 va plugin)
@@ -568,6 +571,41 @@ def main():
     preview_kbps = int(os.environ.get('PREVIEW_BITRATE_KBPS', '2000'))
     preview_gop  = max(10, preview_fps * 3)  # keyframe ~every 3s
 
+    # Main-stream keyframe (IDR) interval — derived from the actual framerate.
+    #
+    # This was previously hard-coded to 15 frames (mpp: gop=5), a value chosen back
+    # when the target was 30 fps.  At 60 fps that becomes an IDR every 250 ms — four
+    # per second — and on the MPP path gop=5 meant twelve per second.  An IDR costs
+    # roughly 5-10x a P-frame, so at low bitrates most of the budget was being spent
+    # re-sending whole frames instead of detail, which shows up as blockiness and
+    # periodic quality pulsing on the client.
+    #
+    # The interval comes from the "Keyframe Interval" stream setting (arg 30, seconds).
+    # It is a genuine trade-off, not a free win: a new RTSP/SRT reader shows nothing
+    # until the next IDR arrives, so 1 s costs up to a second of join latency while
+    # still being 4x cheaper than the old 15-frame constant at 60 fps.  Raise it to 2 s
+    # if a downstream HLS packager wants 2 s segments and join latency doesn't matter.
+    gop_frames = max(1, round(framerate * keyframe_secs))
+
+    # Rate control for the Intel VA-API encoders (vah264enc / vah265enc).
+    #
+    # The va plugin defaults to CBR, which is the wrong shape for billiards: the
+    # table is near-static for most of a match, so CBR spends the full bitrate on
+    # frames that need almost none, then has nothing banked when the break happens
+    # and crushes the quantizer exactly when detail matters.
+    #
+    # In VBR mode 'bitrate' is the ceiling and 'target-percentage' sets the average
+    # as a fraction of it, so 80% keeps the average near the configured number while
+    # leaving 25% burst headroom for high-motion frames.  (mpph26xenc and the legacy
+    # vaapih26xenc paths below already run VBR with their own burst headroom.)
+    #
+    # NOTE: verify the achieved average with the bitrate readout after changing this
+    # — if the va plugin on a given build treats 'bitrate' as the target rather than
+    # the ceiling, the average lands ~25% above the configured value instead of at it.
+    va_target_pct   = int(os.environ.get('VA_TARGET_PERCENTAGE', '80'))
+    VA_RATE_CONTROL = f'rate-control=vbr target-percentage={va_target_pct}'
+    print(f"Keyframe interval: {gop_frames} frames ({keyframe_secs}s @ {framerate}fps)", file=sys.stderr)
+
     pipeline_str = (
         f'{source_str}'
         # Thread boundary: isolate overlay compositing (or just buffering) from capture.
@@ -591,11 +629,11 @@ def main():
         + (
             # H.265 (HEVC) — Rockchip MPP or Intel VA-API hardware encoder, SRT/RTSP only.
             # RTMP (FLV) only supports H.264 so codec is forced to h264 for RTMP above.
-            (f'! mpph265enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr '
+            (f'! mpph265enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop={gop_frames} header-mode=each-idr '
              if encoder.startswith('mpp') else
-             f'! vah265enc bitrate={bitrate_kbps} key-int-max=15 '
+             f'! vah265enc bitrate={bitrate_kbps} key-int-max={gop_frames} {VA_RATE_CONTROL} '
              if encoder == 'vah264enc' else
-             f'! vaapih265enc bitrate={bitrate_kbps} keyframe-period=15 ')
+             f'! vaapih265enc bitrate={bitrate_kbps} keyframe-period={gop_frames} ')
             + f'! video/x-h265,stream-format=byte-stream '
             + f'! h265parse config-interval=-1 '
             if codec == "h265" else
@@ -604,13 +642,13 @@ def main():
             #   vah264enc   : Intel VA-API hardware, GStreamer va plugin (Ubuntu 24.04+)
             #   vaapih264enc: Intel VA-API hardware, GStreamer vaapi plugin (legacy)
             #   x264enc     : software fallback (bitrate in kbps, ultrafast/zerolatency)
-            (f'! mpph264enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop=5 header-mode=each-idr profile=baseline '
+            (f'! mpph264enc bps={bitrate} bps-max={round(bitrate * 1.6)} rc-mode=vbr gop={gop_frames} header-mode=each-idr profile=baseline '
              if encoder == 'mpph264enc' else
-             f'! vah264enc bitrate={bitrate_kbps} key-int-max=15 '
+             f'! vah264enc bitrate={bitrate_kbps} key-int-max={gop_frames} {VA_RATE_CONTROL} '
              if encoder == 'vah264enc' else
-             f'! vaapih264enc bitrate={bitrate_kbps} keyframe-period=15 '
+             f'! vaapih264enc bitrate={bitrate_kbps} keyframe-period={gop_frames} '
              if encoder == 'vaapih264enc' else
-             f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max=15 ')
+             f'! x264enc bitrate={bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max={gop_frames} ')
             # Cap filter then h264parse.
             # RTMP+audio hybrid: config-interval=0 — SPS/PPS go only into the MPEG-TS PMT.
             # ffmpeg reads them once at startup and writes ONE AVC sequence header in FLV.
