@@ -28,6 +28,22 @@ except ImportError:
     _cairo = None
     _CAIRO_OK = False
 
+# GstVideo provides GstVideoOverlayComposition / VideoOverlayRectangle, which let
+# the PNG be attached to each frame as METADATA instead of being painted into it.
+# The blend then happens in C inside overlaycomposition, on whatever format the
+# frame already is — so the NV12→BGRA→NV12 round-trip disappears AND there is no
+# per-frame Python call.  Measured cost of the old cairooverlay path on the N97:
+# 89.5% of a core in the compositing thread at 1080p60, essentially all of it
+# PyGObject marshalling + pycairo, since textoverlay/clockoverlay benchmarked at
+# zero and the conversions were only 29%/18% in their own threads.
+try:
+    gi.require_version('GstVideo', '1.0')
+    from gi.repository import GstVideo
+    _GSTVIDEO_OK = True
+except (ValueError, ImportError):
+    GstVideo = None
+    _GSTVIDEO_OK = False
+
 Gst.init(None)
 
 # ── Force the global system clock to CLOCK_REALTIME immediately after init ──
@@ -340,13 +356,35 @@ def main():
     # which requires D-Bus and fails in a systemd service.  Use cairooverlay
     # instead — Cairo draws the PNG via a Python callback, bypassing the broken
     # sandbox entirely.  Falls back to gdkpixbufoverlay only when pycairo is absent.
+    # Compositing backend for the PNG overlay:
+    #
+    #   'composition' (default) — overlaycomposition + a GstVideoOverlayComposition
+    #     rebuilt only when the PNG's mtime changes.  The per-frame draw callback
+    #     returns that cached object and the blend runs in C, so the frame never
+    #     leaves NV12: no BGRA round-trip, no per-frame Python.
+    #   'cairo' — the previous path.  Correct, but costs ~89% of a core at 1080p60
+    #     because every frame crosses into Python and drives pycairo under the GIL.
+    #
+    # The fast path needs cairo (only to DECODE the PNG, once per change), GstVideo,
+    # and no flip: videoflip is documented as unreliable on NV12 here, and the cairo
+    # path only got away with it by flipping on BGRA.  Set OVERLAY_MODE=cairo to revert.
+    overlay_mode    = os.environ.get('OVERLAY_MODE', 'composition').lower()
+    use_composition = (has_png_overlay and _CAIRO_OK and _GSTVIDEO_OK
+                       and overlay_mode == 'composition' and not flip_str)
+
     png_overlay_element = (
+        f'! overlaycomposition name=pngoverlay '
+        if use_composition else
         f'! cairooverlay name=pngoverlay '
         if has_png_overlay and _CAIRO_OK else
         f'! gdkpixbufoverlay name=overlay location={png_path} '
         f'overlay-width={overlay_width} overlay-height={overlay_height} '
         if has_png_overlay else ''
     )
+    if has_png_overlay:
+        print(f"🎨 Overlay compositing backend: "
+              f"{'overlaycomposition (NV12, cached)' if use_composition else 'cairooverlay (BGRA, per-frame Python)'}",
+              file=sys.stderr)
 
     # When overlays are present we must convert to BGRA for compositing, then
     # back to NV12 for the hardware encoder. When there are no overlays, skip
@@ -418,7 +456,25 @@ def main():
         use_gpu_convert = os.environ.get('OVERLAY_CONVERT', 'cpu').lower() == 'gpu'
         va_encoder      = encoder in ('vah264enc', 'vah265enc')
 
-        if has_any_overlay:
+        # ── NV12 fast path: no colour conversion at all ──────────────────────
+        # Reachable when nothing in the overlay chain needs BGRA:
+        #   • the PNG goes through overlaycomposition (metadata, blends in NV12), or
+        #     there is no PNG overlay at all, AND
+        #   • no flip (videoflip is unreliable on NV12 on this stack).
+        # textoverlay and clockoverlay both accept NV12 directly — verified by
+        # negotiation test, and benchmarked at zero measurable cost either way.
+        # This removes ~23 MB/frame of memory traffic (1.4 GB/s at 1080p60).
+        nv12_overlay_path = (has_any_overlay and not flip_str
+                             and (use_composition or not has_png_overlay))
+
+        if nv12_overlay_path:
+            # Only normalise the size, and only if the source needs it (>1080p).
+            bgra_convert = (
+                f'! videoscale '
+                f'! video/x-raw,format=NV12,width={overlay_width},height={overlay_height} '
+                if (overlay_width, overlay_height) != (width, height) else ''
+            )
+        elif has_any_overlay:
             if va_encoder and use_gpu_convert:
                 bgra_convert = (
                     f'! vapostproc ! videoscale '
@@ -446,7 +502,9 @@ def main():
         # the zero-copy argument for vapostproc never actually applied here: the
         # explicit 'video/x-raw,format=NV12' capsfilter forces system memory, so
         # vah264enc re-uploaded to the GPU regardless.
-        if va_encoder and use_gpu_convert:
+        if nv12_overlay_path:
+            encode_convert = ''          # already NV12 — nothing to convert
+        elif va_encoder and use_gpu_convert:
             encode_convert = '! vapostproc ! video/x-raw,format=NV12 '
         elif va_encoder:
             encode_convert = f'! videoconvert n-threads={convert_threads} ! video/x-raw,format=NV12 '
@@ -1350,12 +1408,96 @@ def main():
         print(f"🕒 Pipeline clock attached via set_clock() (clock-type={_system_clock.get_property('clock-type')}) [use_clock() unavailable]", file=sys.stderr)
 
     # ── PNG overlay setup ────────────────────────────────────────────────────────
-    # Two paths depending on whether pycairo is available:
-    #   A) cairooverlay (preferred, Ubuntu 24.04 safe): draws PNG via Cairo callback.
-    #   B) gdkpixbufoverlay (legacy fallback): polls mtime and sets location property.
+    # Three paths, in order of preference:
+    #   A) overlaycomposition: PNG attached as metadata, blended in C, frame stays NV12.
+    #   B) cairooverlay: Python draw callback per frame (correct but ~89% of a core).
+    #   C) gdkpixbufoverlay (legacy fallback): polls mtime and sets location property.
     overlay_element = None  # kept for the overlay_msg line below
 
-    if has_png_overlay and _CAIRO_OK:
+    if use_composition:
+        # ── Path A: overlaycomposition + cached GstVideoOverlayComposition ────
+        # The expensive part of the old path was never the pixels — it was calling
+        # into Python 60x/second.  Here the composition is rebuilt ONLY when the PNG
+        # changes (~every 2 s), and the per-frame callback just hands back the cached
+        # object; the actual blend happens inside the element, in C, directly on NV12.
+        ocomp_el = pipeline.get_by_name("pngoverlay")
+        if not ocomp_el:
+            print("❌ Could not find overlaycomposition element 'pngoverlay' in pipeline", file=sys.stderr)
+            sys.exit(1)
+
+        _comp        = [None]   # cached GstVideoOverlayComposition (or None)
+        _comp_mtime  = [0]
+        _comp_logged = [None]
+
+        def _build_composition():
+            """Decode the PNG and build an overlay composition. Called on mtime change."""
+            try:
+                if not os.path.exists(png_path) or os.path.getsize(png_path) < 100:
+                    _comp[0] = None
+                    return
+                surf   = _cairo.ImageSurface.create_from_png(png_path)
+                w, h   = surf.get_width(), surf.get_height()
+                stride = surf.get_stride()
+                data   = bytes(surf.get_data())
+
+                # Crop to the non-transparent horizontal band so the blend touches
+                # only the scoreboard, not all 2M pixels.  Cairo ARGB32 is
+                # premultiplied BGRA byte-order on little-endian, so alpha is byte 3.
+                alpha = data[3::4]
+                head  = alpha.lstrip(b"\x00")
+                if not head:
+                    _comp[0] = None          # fully transparent — nothing to draw
+                    return
+                first = len(alpha) - len(head)
+                last  = len(alpha.rstrip(b"\x00")) - 1
+                top   = first // w
+                bh    = (last // w) - top + 1
+
+                rows = data[top * stride : (top + bh) * stride]
+                if stride != w * 4:
+                    # GstVideoMeta below assumes the default tightly-packed stride.
+                    rows = b"".join(rows[y * stride : y * stride + w * 4] for y in range(bh))
+
+                buf = Gst.Buffer.new_wrapped(rows)
+                GstVideo.buffer_add_video_meta(
+                    buf, GstVideo.VideoFrameFlags.NONE,
+                    GstVideo.VideoFormat.BGRA, w, bh)
+                rect = GstVideo.VideoOverlayRectangle.new_raw(
+                    buf, 0, top, w, bh,
+                    GstVideo.VideoOverlayFormatFlags.PREMULTIPLIED_ALPHA)
+                _comp[0]       = GstVideo.VideoOverlayComposition.new(rect)
+                _comp_mtime[0] = os.path.getmtime(png_path)
+
+                if (w, bh, top) != _comp_logged[0]:
+                    _comp_logged[0] = (w, bh, top)
+                    pct = 100.0 * bh / max(1, h)
+                    print(f"🧮 Overlay composition {w}×{bh}@(0,{top}) — {pct:.0f}% of frame", file=sys.stderr)
+            except Exception as exc:
+                # Degrade to "no overlay" rather than killing the stream.
+                print(f"⚠️  Overlay composition build failed: {exc}", file=sys.stderr)
+                _comp[0] = None
+
+        _build_composition()
+
+        def on_ocomp_draw(overlay, sample):
+            """Per-frame — must stay trivial. Returns the cached composition."""
+            return _comp[0]
+
+        ocomp_el.connect("draw", on_ocomp_draw)
+        overlay_element = ocomp_el
+
+        def check_png_update_comp():
+            try:
+                mtime = os.path.getmtime(png_path) if os.path.exists(png_path) else 0
+                if mtime != _comp_mtime[0]:
+                    _build_composition()
+            except OSError:
+                pass
+            return True  # keep timer running
+
+        GLib.timeout_add(2000, check_png_update_comp)
+
+    elif has_png_overlay and _CAIRO_OK:
         # ── Path A: cairooverlay + Cairo draw callback ────────────────────────
         pngoverlay_el = pipeline.get_by_name("pngoverlay")
         if not pngoverlay_el:
