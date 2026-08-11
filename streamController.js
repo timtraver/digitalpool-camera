@@ -812,10 +812,15 @@ class StreamController extends EventEmitter {
           ];
 
         // ── Part 2: Output args (built now) ─────────────────────────────────
+        // RTSP publish transport is chosen by codec — see the matching comment in
+        // _buildPNGOverlayPipeline().  h264 keeps the RTMP/FLV publish; h265 needs
+        // the RTSP/RTP publish because FLV cannot carry HEVC.
+        const rtspPublishesHevc =
+          protocol === "rtsp" && this.streamConfig.codec === "h265";
         const ffmpegOutputArgs = [
           "-map", "1:v",         // video from GStreamer (input 1)
           "-map", "0:a",         // audio from ALSA     (input 0)
-          "-c:v", "copy",        // pass H.264 through unchanged
+          "-c:v", "copy",        // pass the encoded video through unchanged (H.264 or H.265)
           // RTMP+audio hybrid: two BSFs chained with a comma:
           //
           //  1. filter_units=remove_types=7-8
@@ -848,12 +853,18 @@ class StreamController extends EventEmitter {
           //     all subsequent DTS values away from audio, causing severe A/V delay.
           //     Uses the identity max(a,b) = (a+b+|a-b|)/2 to avoid commas inside the
           //     BSF option string (ffmpeg's BSF parser treats commas as chain delimiters).
-          ...(protocol === "rtmp" || protocol === "rtsp"
+          //  NOTE: filter_units=remove_types=7-8 is H.264-specific — NAL types 7 and 8
+          //  are SPS and PPS in H.264, but mean something entirely different in HEVC
+          //  (where the parameter sets are types 32/33/34).  Applying it to an H.265
+          //  stream would strip the wrong NAL units, so the HEVC publish uses the
+          //  same setts-only filter as SRT.  RTP carries parameter sets in the SDP
+          //  and inline, so nothing needs stripping there anyway.
+          ...(protocol === "rtmp" || (protocol === "rtsp" && !rtspPublishesHevc)
             ? ["-bsf:v",
                "filter_units=remove_types=7-8,setts=" +
                "dts=(DTS+PREV_OUTDTS+100+abs(DTS-PREV_OUTDTS-100))/2:" +
                "pts=(PTS+PREV_OUTPTS+100+abs(PTS-PREV_OUTPTS-100))/2"]
-            : protocol === "srt"
+            : protocol === "srt" || rtspPublishesHevc
             ? ["-bsf:v",
                "setts=" +
                "dts=(DTS+PREV_OUTDTS+100+abs(DTS-PREV_OUTDTS-100))/2:" +
@@ -886,7 +897,12 @@ class StreamController extends EventEmitter {
           ...(protocol === "srt"
             ? ["-f", "mpegts", `srt://0.0.0.0:${this.srtDefaultPort}?mode=listener&latency=200000`]
             : protocol === "rtsp"
-            ? ["-f", "flv", `rtmp://localhost:1935${this.rtspPath}`]
+            // HEVC publishes over RTSP (ANNOUNCE/RECORD) because FLV cannot carry it.
+            // The publish is over loopback, so interleaved TCP costs nothing and
+            // removes any chance of local UDP socket-buffer loss before MediaMTX.
+            ? (rtspPublishesHevc
+                ? ["-rtsp_transport", "tcp", "-f", "rtsp", `rtsp://localhost:8554${this.rtspPath}`]
+                : ["-f", "flv", `rtmp://localhost:1935${this.rtspPath}`])
             : ["-f", "flv", (
                 this.streamConfig.destination && this.streamConfig.destination.trim() !== ""
                   ? this.streamConfig.destination.trim()
@@ -1454,15 +1470,29 @@ class StreamController extends EventEmitter {
 
     const protocol = this.streamConfig.protocol || "srt";
 
-    // RTSP mode pushes to local MediaMTX via RTMP internally.
-    // The shell/Python scripts only understand 'srt' and 'rtmp', so we translate
-    // 'rtsp' → 'rtmp' with a fixed local destination before passing args through.
-    const scriptProtocol = protocol === "rtsp" ? "rtmp" : protocol;
+    // RTSP mode publishes into the local MediaMTX, which re-serves the stream as
+    // RTSP to every consumer (remote Wowza pull, local OBS, HLS). There are two
+    // publish transports and the CODEC picks between them:
+    //
+    //   h264 → RTMP/FLV on :1935  — the long-standing, proven path, unchanged.
+    //   h265 → RTSP/RTP on :8554  — FLV cannot carry HEVC, RTP can (RFC 7798).
+    //
+    // Before this split there was only the RTMP transport, so choosing H.265 on
+    // RTSP was silently downgraded to H.264 with no indication to the user.
+    // Keeping H.264 on RTMP means selecting H.265 is the only thing that changes
+    // behaviour — if the RTSP publish misbehaves, switching the codec back is a
+    // complete rollback.
+    const rtspPublishesHevc =
+      protocol === "rtsp" && this.streamConfig.codec === "h265";
+    const scriptProtocol =
+      protocol === "rtsp" ? (rtspPublishesHevc ? "rtsp" : "rtmp") : protocol;
 
     // Build the full destination URL based on protocol
     let effectiveDestination = destination || "";
     if (protocol === "rtsp") {
-      effectiveDestination = `rtmp://localhost:1935${this.rtspPath}`;
+      effectiveDestination = rtspPublishesHevc
+        ? `rtsp://localhost:8554${this.rtspPath}`
+        : `rtmp://localhost:1935${this.rtspPath}`;
     } else if (!effectiveDestination) {
       if (protocol === "srt") {
         effectiveDestination = `srt://:${this.srtDefaultPort}`;
@@ -1530,7 +1560,9 @@ class StreamController extends EventEmitter {
                   : (this.streamConfig.audioDevice || "plughw:2,0")))
       : "";
 
-    // H.265 is incompatible with RTMP (FLV container only supports H.264)
+    // H.265 is incompatible with RTMP (FLV container only supports H.264). It is
+    // fine on SRT (MPEG-TS) and on the RTSP publish transport (RTP) — scriptProtocol
+    // is already 'rtsp' rather than 'rtmp' in that case, per rtspPublishesHevc above.
     const scriptCodec = (this.streamConfig.codec === "h265" && scriptProtocol !== "rtmp") ? "h265" : "h264";
 
     const scriptArgs = [
@@ -2153,6 +2185,9 @@ class StreamController extends EventEmitter {
     } else if (protocol === "rtmp" || protocol === "rtsp") {
       // RTSP mode: always push to local MediaMTX, which serves the stream as RTSP.
       // RTMP mode: push to the configured destination (or local MediaMTX as fallback).
+      // Publish transport for RTSP mode is chosen by codec — h264 over RTMP/FLV
+      // (proven path), h265 over RTSP/RTP because FLV cannot carry HEVC.
+      const rtspPublishesHevc = protocol === "rtsp" && codec === "h265";
       const rtmpUrl =
         protocol === "rtsp"
           ? `rtmp://localhost:1935${this.rtspPath}`
@@ -2207,6 +2242,25 @@ class StreamController extends EventEmitter {
         // alignment=au directly with flvmux through the queue. A second parse
         // re-splits SPS+PPS+IDR into buffers with identical DTS values, causing
         // MediaMTX to drop readers with "DTS not monotonically increasing".
+        if (rtspPublishesHevc) {
+          // HEVC publish: rtspclientsink does its own RTP payloading, so the
+          // stream goes to it directly with no mux and no avc caps filter.
+          // protocols=tcp — publish is over loopback, interleaved TCP is free
+          // and rules out local UDP socket-buffer loss before MediaMTX.
+          console.log(`📡 RTSP publish (HEVC) — rtspclientsink → rtsp://localhost:8554${this.rtspPath}`);
+          pipeline.push(
+            "t2.", "!",
+            "queue",
+            "max-size-buffers=0",
+            "max-size-time=2000000000", // 2 s, non-leaky — see note below
+            "max-size-bytes=0",
+            "!",
+            "rtspclientsink",
+            `location=rtsp://localhost:8554${this.rtspPath}`,
+            "protocols=tcp",
+            "latency=0",
+          );
+        } else {
         pipeline.push(
           "t2.", "!",
           "queue",
@@ -2225,6 +2279,7 @@ class StreamController extends EventEmitter {
           `location=${rtmpUrl}`,
           "sync=false",
         );
+        }
       }
     } else {
       throw new Error(`Unsupported protocol: ${protocol}`);

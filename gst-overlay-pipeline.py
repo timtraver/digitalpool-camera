@@ -229,6 +229,34 @@ def main():
                 f'! srtsink uri="{srt_uri}" wait-for-connection=false latency=500 sync=false async=false '
             )
             audio_mux_target = 'mux.'
+    elif protocol == "rtsp":
+        # RTSP publish into the local MediaMTX — the HEVC-capable publish transport.
+        # streamController.js only selects protocol 'rtsp' (rather than translating it
+        # to 'rtmp') when the codec is h265, because FLV cannot carry HEVC but RTP can.
+        # MediaMTX then re-serves the stream as RTSP to remote and local consumers.
+        rtsp_url = destination if destination else "rtsp://localhost:8554/live"
+        if audio_device:
+            # Same hybrid split as the SRT and RTMP paths: GStreamer emits video-only
+            # MPEG-TS on stdout and ffmpeg (spawned by Node.js) captures ALSA audio,
+            # muxes it in, and performs the RTSP ANNOUNCE/RECORD publish.  Both
+            # processes stamp from CLOCK_REALTIME so no A/V drift can accumulate.
+            print(f"🎤 RTSP hybrid mode — video-only GStreamer mux, audio via ffmpeg ALSA → RTSP", file=sys.stderr)
+            output_sink = (
+                f'! mpegtsmux name=mux alignment=7 '
+                f'! fdsink fd=1 sync=false async=false '
+            )
+            audio_mux_target = None  # No audio in GStreamer mux — ffmpeg handles it
+        else:
+            # Pure GStreamer.  rtspclientsink takes the encoded elementary stream
+            # directly — it does its own RTP payloading, so there is no mux element
+            # and no separate audio mux target.
+            # protocols=tcp: the publish is over loopback, so interleaved TCP costs
+            # nothing and rules out local UDP socket-buffer loss before MediaMTX.
+            print(f"📡 RTSP publish mode — rtspclientsink → {rtsp_url}", file=sys.stderr)
+            output_sink = (
+                f'! rtspclientsink location="{rtsp_url}" protocols=tcp latency=0 '
+            )
+            audio_mux_target = None
     elif protocol == "rtmp":
         rtmp_url = destination if destination else "rtmp://localhost:1935/stream"
         if audio_device:
@@ -664,13 +692,16 @@ def main():
               f'! h264parse config-interval={"0" if protocol == "rtmp" and audio_device else "-1"} '
         )
         # Thread boundary before mux to decouple encoder from network I/O.
-        # flvmux paths (RTMP video-only, NDI, RTSP): 2 s non-leaky queue
-        # because flvmux requires strict DTS monotonicity — dropping frames would produce
-        # a DTS gap that causes MediaMTX to close the connection.
-        # mpegtsmux paths (SRT, or RTMP+ALSA hybrid): 500 ms leaky
-        # queue is safe because mpegtsmux has only one video input and never stalls on audio.
+        # flvmux / rtspclientsink paths (RTMP video-only, NDI, RTSP video-only): 2 s
+        # NON-leaky queue.  flvmux requires strict DTS monotonicity — dropping frames
+        # produces a DTS gap that makes MediaMTX close the connection.  rtspclientsink
+        # tolerates gaps better, but a dropped encoded frame still means missing slices
+        # and visible corruption until the next IDR, and the publish is over loopback
+        # so the sink should never be the bottleneck.  Backpressure beats corruption.
+        # mpegtsmux paths (SRT, or any +ALSA hybrid): 500 ms leaky queue is safe
+        # because mpegtsmux has only one video input and never stalls on audio.
         + (f'! queue max-size-buffers=0 max-size-time=2000000000 max-size-bytes=0 '
-           if protocol == "rtmp" and not audio_device else
+           if protocol in ("rtmp", "rtsp") and not audio_device else
            f'! queue max-size-buffers=0 max-size-time=500000000 max-size-bytes=0 leaky=downstream ')
         + output_sink +
         (
