@@ -426,6 +426,20 @@ def main():
             # fully supports (BGRA).  Overlays drawn after the flip are correct
             # orientation because flip_str is empty when flip_method == 0.
             f'{flip_str}'
+            # ── Thread boundary between colour conversion and compositing ──
+            # Measured on an Intel N97 at 1080p60: with the overlay enabled the
+            # stream delivered 28.7 fps; with it disabled, 58.3 fps.  Everything
+            # from bgra_convert through the last overlay element ran in a SINGLE
+            # thread (the one created by the upstream queue), so the per-frame
+            # budget was 16.67 ms for the full NV12→BGRA conversion plus Cairo
+            # compositing plus the text/clock overlays.  It did not fit, and the
+            # leaky queues silently dropped every other frame.
+            #
+            # This queue splits that work across two cores: conversion upstream,
+            # compositing downstream.  Kept small and leaky for the same reason as
+            # the other queues — never block the capture chain, since a stalled
+            # v4l2src causes kernel-level buffer overflows.
+            f'! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream '
             f'{png_overlay_element}'
             f'{text_overlay}'
             f'{timestamp_overlay}'
