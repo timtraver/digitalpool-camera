@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DigitalPool Camera — Quick Start Guide</title>
+<style>
+  @page { size: letter; margin: 0; }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --ink:      #0d1b2a;
+    --ink-soft: #4a5b6d;
+    --line:     #dbe3ec;
+    --cyan:     #12c7ff;
+    --blue:     #1890ff;
+    --deep:     #06101b;
+    --amber:    #f59e0b;
+    --green:    #10b981;
+    --red:      #ef4444;
+    --violet:   #8b5cf6;
+  }
+
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  body {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    font-size: 10.5pt;
+    line-height: 1.45;
+  }
+
+  .page {
+    width: 8.5in;
+    height: 11in;
+    padding: 0.5in 0.55in 0.42in;
+    position: relative;
+    overflow: hidden;
+    page-break-after: always;
+    background: #fff;
+  }
+  .page:last-child { page-break-after: auto; }
+
+  /* ─── Cover hero ───────────────────────────────────────────── */
+
+  .hero {
+    margin: -0.5in -0.55in 0;
+    padding: 0.55in 0.55in 0.42in;
+    background:
+      radial-gradient(900px 420px at 88% -14%, rgba(18,199,255,0.30), transparent 62%),
+      radial-gradient(700px 380px at 8% 104%, rgba(24,144,255,0.34), transparent 66%),
+      linear-gradient(150deg, #06101b 0%, #0b2036 52%, #072033 100%);
+    color: #fff;
+    position: relative;
+  }
+  .hero::after {
+    content: "";
+    position: absolute; left: 0; right: 0; bottom: 0; height: 5px;
+    background: linear-gradient(90deg, var(--cyan), var(--blue) 40%, var(--violet) 72%, var(--amber));
+  }
+  .hero img { height: 34px; display: block; margin-bottom: 26px; }
+  .hero .kicker {
+    font-size: 8.5pt; letter-spacing: 0.19em; text-transform: uppercase;
+    color: var(--cyan); font-weight: 700; margin-bottom: 8px;
+  }
+  .hero h1 {
+    font-size: 40pt; line-height: 1.02; font-weight: 800; letter-spacing: -0.02em;
+  }
+  .hero h1 em {
+    font-style: normal;
+    background: linear-gradient(92deg, var(--cyan), #7dd3fc 55%, #a78bfa);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero p {
+    margin-top: 14px; max-width: 5.1in;
+    color: rgba(255,255,255,0.74); font-size: 11pt; line-height: 1.55;
+  }
+  .hero .chips { margin-top: 22px; display: flex; gap: 7px; }
+  .hero .chip {
+    font-size: 8pt; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 5px 11px; border-radius: 20px;
+    background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.20);
+    color: rgba(255,255,255,0.88);
+  }
+
+  /* ─── Running header on continuation pages ─────────────────── */
+
+  .runhead {
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 2px solid var(--line); padding-bottom: 9px; margin-bottom: 22px;
+  }
+  .runhead .t { font-size: 9pt; font-weight: 700; letter-spacing: 0.10em; text-transform: uppercase; color: var(--ink-soft); }
+  .runhead .n { font-size: 9pt; font-weight: 800; color: var(--blue); }
+
+  /* ─── Step cards ───────────────────────────────────────────── */
+
+  .step { display: flex; gap: 15px; margin-top: 22px; }
+  .step:first-of-type { margin-top: 0; }
+
+  .num {
+    flex: 0 0 40px; height: 40px; border-radius: 11px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17pt; font-weight: 800; color: #fff; letter-spacing: -0.02em;
+  }
+  .c1 .num { background: linear-gradient(140deg, #12c7ff, #0284c7); }
+  .c2 .num { background: linear-gradient(140deg, #1890ff, #4338ca); }
+  .c3 .num { background: linear-gradient(140deg, #8b5cf6, #6d28d9); }
+  .c4 .num { background: linear-gradient(140deg, #10b981, #047857); }
+  .c5 .num { background: linear-gradient(140deg, #f59e0b, #d97706); }
+  .c6 .num { background: linear-gradient(140deg, #ef4444, #be123c); }
+
+  .body-col { flex: 1 1 auto; padding-top: 1px; }
+
+  .step h2 { font-size: 15pt; font-weight: 800; letter-spacing: -0.015em; line-height: 1.2; }
+  .step .sub { font-size: 8.5pt; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 3px; }
+  .c1 .sub { color: #0284c7; } .c2 .sub { color: #1890ff; } .c3 .sub { color: #7c3aed; }
+  .c4 .sub { color: #047857; } .c5 .sub { color: #b45309; } .c6 .sub { color: #be123c; }
+
+  .step ol, .step ul { margin: 9px 0 0 0; padding-left: 0; list-style: none; }
+  .step li { position: relative; padding-left: 19px; margin-bottom: 6px; color: var(--ink); }
+  .step li::before {
+    content: ""; position: absolute; left: 3px; top: 7px;
+    width: 6px; height: 6px; border-radius: 50%; background: var(--cyan);
+  }
+  .c2 li::before { background: var(--blue); }  .c3 li::before { background: var(--violet); }
+  .c4 li::before { background: var(--green); }  .c5 li::before { background: var(--amber); }
+  .c6 li::before { background: var(--red); }
+  .step li b { font-weight: 700; }
+
+  code {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 9.5pt; font-weight: 600;
+    background: #eef4fb; color: #0b4f78;
+    padding: 1px 5px; border-radius: 4px;
+    border: 1px solid #d5e5f4;
+    white-space: nowrap;
+  }
+
+  .ui {
+    font-weight: 700; color: #0d1b2a;
+    background: #f1f3f7; border: 1px solid #e0e4eb;
+    border-radius: 4px; padding: 1px 6px; white-space: nowrap;
+  }
+
+  /* ─── Credential / callout blocks ──────────────────────────── */
+
+  .cred {
+    margin-top: 11px; display: flex; gap: 0;
+    border: 1.5px solid #cfe6f7; border-radius: 10px; overflow: hidden;
+    background: linear-gradient(180deg, #f4fbff, #eaf5fd);
+  }
+  .cred div { flex: 1; padding: 9px 13px; }
+  .cred div.wide { flex: 1.35; }
+  .cred div + div { border-left: 1.5px solid #cfe6f7; }
+  .cred .lbl { font-size: 7.5pt; font-weight: 800; letter-spacing: 0.11em; text-transform: uppercase; color: #4a7fa5; margin-bottom: 3px; }
+  .cred .val { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 11pt; font-weight: 700; color: #06405f; }
+
+  .note {
+    margin-top: 11px; padding: 10px 13px 10px 12px;
+    border-radius: 8px; border-left: 4px solid var(--amber);
+    background: #fff8ec; font-size: 9.5pt; line-height: 1.5; color: #6b4708;
+  }
+  .note.ok    { border-left-color: var(--green); background: #eefaf5; color: #0a5c44; }
+  .note.stop  { border-left-color: var(--red);   background: #fef1f1; color: #8f1d1d; }
+  .note.info  { border-left-color: var(--blue);  background: #eff6ff; color: #0f4c81; }
+  .note b { font-weight: 800; }
+
+  /* ─── Box-contents strip ───────────────────────────────────── */
+
+  .kit { display: flex; gap: 9px; margin-top: 20px; }
+  .kit .item {
+    flex: 1; border: 1.5px solid var(--line); border-radius: 10px;
+    padding: 11px 10px 12px; text-align: center; background: #fbfcfe;
+  }
+  .kit .ico { font-size: 21pt; line-height: 1; display: block; margin-bottom: 7px; }
+  .kit .nm { font-size: 9pt; font-weight: 800; line-height: 1.25; }
+  .kit .ds { font-size: 7.5pt; color: var(--ink-soft); margin-top: 3px; line-height: 1.3; }
+
+  /* ─── Route / two-option split ─────────────────────────────── */
+
+  .split { display: flex; gap: 11px; margin-top: 11px; }
+  .opt {
+    flex: 1; border: 1.5px solid var(--line); border-radius: 10px; padding: 11px 12px 12px;
+    background: #fbfcfe;
+  }
+  .opt .oh { font-size: 9.5pt; font-weight: 800; margin-bottom: 5px; display: flex; align-items: center; gap: 6px; }
+  .opt .tag {
+    font-size: 6.5pt; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 2px 6px; border-radius: 10px; color: #fff;
+  }
+  .opt.best { border-color: #a7ddc6; background: #f4fdf9; }
+  .opt.best .tag { background: var(--green); }
+  .opt .tag.alt { background: var(--ink-soft); }
+  .opt p, .opt li { font-size: 9pt; line-height: 1.45; }
+  .opt ul { margin-top: 6px; }
+  .opt li { padding-left: 16px; margin-bottom: 4px; }
+  .opt li::before { top: 6px; width: 5px; height: 5px; }
+
+  /* ─── Troubleshooting table ────────────────────────────────── */
+
+  h3.sec {
+    margin-top: 26px; font-size: 12pt; font-weight: 800;
+    padding-bottom: 7px; border-bottom: 2px solid var(--line);
+  }
+  table.tbl { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 9.5pt; }
+  table.tbl th {
+    text-align: left; font-size: 7.5pt; letter-spacing: 0.11em; text-transform: uppercase;
+    color: var(--ink-soft); padding: 0 10px 6px 0; font-weight: 800;
+  }
+  table.tbl td { padding: 6px 10px 6px 0; border-top: 1px solid var(--line); vertical-align: top; line-height: 1.4; }
+  table.tbl td:first-child { font-weight: 700; width: 38%; }
+  table.tbl td:last-child { color: #35485c; }
+
+  /* ─── Footer ───────────────────────────────────────────────── */
+
+  .foot {
+    position: absolute; left: 0.55in; right: 0.55in; bottom: 0.30in;
+    display: flex; justify-content: space-between; align-items: center;
+    border-top: 1px solid var(--line); padding-top: 8px;
+    font-size: 7.5pt; color: #8496a8; letter-spacing: 0.05em;
+  }
+  .foot b { color: var(--blue); font-weight: 800; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════ PAGE 1 ═══════════════════════ -->
+<section class="page">
+  <div class="hero">
+    <img src="__LOGO__" alt="DigitalPool">
+    <div class="kicker">Camera &amp; Streaming Appliance</div>
+    <h1>Quick Start<br><em>Guide</em></h1>
+    <p>Six steps from a sealed box to a live, recording table stream.
+       No software to install — everything runs on the device and you drive it
+       from a browser on your laptop, tablet, or phone.</p>
+    <div class="chips">
+      <span class="chip">⏱ About 15 minutes</span>
+      <span class="chip">🔌 Plug in &amp; go</span>
+      <span class="chip">📶 Built-in WiFi</span>
+    </div>
+  </div>
+
+  <div class="kit">
+    <div class="item"><span class="ico">📦</span><span class="nm">Camera Unit</span><div class="ds">The streaming computer</div></div>
+    <div class="item"><span class="ico">🎥</span><span class="nm">PTZ Camera</span><div class="ds">USB pan / tilt / zoom</div></div>
+    <div class="item"><span class="ico">🔌</span><span class="nm">Power Supply</span><div class="ds">One per unit</div></div>
+    <div class="item"><span class="ico">📡</span><span class="nm">WiFi Antennas</span><div class="ds">Screw on before power</div></div>
+    <div class="item"><span class="ico">🔗</span><span class="nm">Ethernet Cable</span><div class="ds">Optional, recommended</div></div>
+  </div>
+
+  <div class="step c1">
+    <div class="num">1</div>
+    <div class="body-col">
+      <div class="sub">Unpack &amp; power on</div>
+      <h2>Set up the hardware</h2>
+      <ul>
+        <li><b>Screw on both WiFi antennas</b> and hand-tighten. The device hosts its own
+            WiFi network — without the antennas you will not be able to reach it.</li>
+        <li><b>Mount the camera</b> so it sees the whole table, then plug its USB cable
+            into the camera unit. A second camera goes into any other USB port.</li>
+        <li><b>Optional but recommended:</b> run an Ethernet cable from your router
+            to the unit. This is the easiest way to get it online.</li>
+        <li><b>Plug in the power supply last.</b> The unit powers on by itself —
+            there is no power button to press.</li>
+        <li><b>Wait about 60 seconds.</b> The device boots, starts its hotspot,
+            and brings the cameras up.</li>
+      </ul>
+      <div class="note info">
+        <b>Leave it plugged in.</b> This device is designed to stay powered on around the clock
+        so streams and recordings are always available. To shut it down cleanly, use
+        <span class="ui">⚡ Power</span> in the admin interface rather than pulling the plug.
+      </div>
+    </div>
+  </div>
+
+  <div class="foot"><span>DigitalPool Camera — Quick Start Guide</span><span><b>digitalpool.com</b></span><span>Page 1 of 4</span></div>
+</section>
+
+<!-- ═══════════════════════ PAGE 2 ═══════════════════════ -->
+<section class="page">
+  <div class="runhead"><span class="t">Getting connected</span><span class="n">Steps 2 – 3</span></div>
+
+  <div class="step c2">
+    <div class="num">2</div>
+    <div class="body-col">
+      <div class="sub">Connect to the device</div>
+      <h2>Join the camera's WiFi hotspot</h2>
+      <ul>
+        <li>On your laptop, tablet, or phone, open the WiFi list and join the network
+            named <code>DigitalPool-XXXX</code> — where <code>XXXX</code> is the
+            four-character code printed on your unit's label.</li>
+        <li>Enter the hotspot password shown below.</li>
+        <li>Open a browser and go to <code>http://192.168.50.1:3000</code></li>
+        <li>Sign in with the default administrator account.</li>
+        <li>You will be asked to <b>set a new password immediately</b>. Choose something
+            you will remember — this is now your admin login for this device.</li>
+      </ul>
+
+      <div class="cred">
+        <div><div class="lbl">Hotspot network</div><div class="val">DigitalPool-XXXX</div></div>
+        <div><div class="lbl">Hotspot password</div><div class="val">Digitalpool</div></div>
+        <div class="wide"><div class="lbl">Admin user / password</div><div class="val">admin / Digitalpool</div></div>
+      </div>
+
+      <div class="note">
+        <b>No internet over the hotspot.</b> The hotspot connects you <i>to the device</i>, not to the
+        internet. Your laptop may warn that the network has no connection — that is normal and expected.
+        Step 3 is what gets the device itself online.
+      </div>
+    </div>
+  </div>
+
+  <div class="step c3">
+    <div class="num">3</div>
+    <div class="body-col">
+      <div class="sub">Get the device online</div>
+      <h2>Give it an internet connection</h2>
+      <p style="margin-top:8px">In the admin interface, open the <span class="ui">📶 Network &amp; WiFi Setup</span>
+         panel and choose one of these two routes.</p>
+
+      <div class="split">
+        <div class="opt best">
+          <div class="oh">🔗 Ethernet <span class="tag">Easiest</span></div>
+          <ul>
+            <li>Plug the cable from your router into the unit.</li>
+            <li>It picks up an address automatically — nothing to configure.</li>
+            <li>The panel shows the assigned <b>IP address</b>. Write it down.</li>
+          </ul>
+        </div>
+        <div class="opt">
+          <div class="oh">📶 WiFi <span class="tag alt">No cable</span></div>
+          <ul>
+            <li>Open <span class="ui">📶 Connect to WiFi Network</span>.</li>
+            <li>Pick your venue's network, type its password, connect.</li>
+            <li>Wait for it to report connected, then note the <b>IP address</b>.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="note ok">
+        <b>Switch to the venue network now.</b> Once the device has its own IP address, reconnect
+        your laptop to that same network and browse to <code>http://&lt;device-ip&gt;:3000</code>.
+        You will get a faster, more reliable connection than over the hotspot — and the hotspot
+        stays available as a permanent backup way in.
+      </div>
+    </div>
+  </div>
+
+  <div class="foot"><span>DigitalPool Camera — Quick Start Guide</span><span><b>digitalpool.com</b></span><span>Page 2 of 4</span></div>
+</section>
+
+<!-- ═══════════════════════ PAGE 3 ═══════════════════════ -->
+<section class="page">
+  <div class="runhead"><span class="t">Register &amp; go live</span><span class="n">Steps 4 – 5</span></div>
+
+  <div class="step c4">
+    <div class="num">4</div>
+    <div class="body-col">
+      <div class="sub">Claim the device</div>
+      <h2>Register it to your venue</h2>
+      <ul>
+        <li>Scroll to the <span class="ui">Admin Settings</span> area and open
+            <span class="ui">📡 Device Registration</span>.</li>
+        <li>The <b>Device Name</b> is fixed to this unit — you do not need to change it.</li>
+        <li>Enter your <b>DigitalPool account email and password</b> — the same login you use
+            at digitalpool.com.</li>
+        <li>Press <span class="ui">🔗 Register Device</span>.</li>
+        <li>If your account has more than one venue, pick the venue this camera belongs to
+            and press <span class="ui">✅ Confirm Venue</span>.</li>
+        <li>Success looks like a green <span class="ui">✓ Registered</span> badge on the
+            section heading.</li>
+      </ul>
+      <div class="note stop">
+        <b>Streaming stays disabled until this step is finished.</b> Registration is what links the
+        camera to your venue and turns on secure remote access, so it must be completed before
+        anything will go live. It also needs a working internet connection — if you see
+        <span class="ui">🔴 No Internet Connection</span>, go back to Step 3.
+      </div>
+      <div class="note info">
+        Your DigitalPool password is used once to verify your account and is <b>never stored
+        on the device</b>.
+      </div>
+    </div>
+  </div>
+
+  <div class="step c5">
+    <div class="num">5</div>
+    <div class="body-col">
+      <div class="sub">Frame the shot</div>
+      <h2>Aim the cameras and start streaming</h2>
+      <ul>
+        <li>Use the <span class="ui">📷 Camera 1</span> / <span class="ui">📷 Camera 2</span> tabs at the
+            top to switch between cameras. The live preview appears on the left.</li>
+        <li>Open <span class="ui">🎮 PTZ Controls</span>. The outer arrows move in large steps,
+            the inner arrows in fine steps, and the slider sets zoom. Frame the full table with a
+            little room to spare.</li>
+        <li>Happy with the framing? Press <span class="ui">🏠 Set Home</span> so the camera returns to
+            this exact position every time it restarts.</li>
+        <li>If the picture needs work, open <span class="ui">⚙️ Camera Settings</span> for
+            exposure, white balance, and focus.</li>
+        <li>Open <span class="ui">🎥 Stream Server</span> and press <span class="ui">▶ Start</span>.</li>
+        <li>The status bar turns green and the live stats — FPS and bitrate — begin moving.
+            Repeat for your second camera.</li>
+      </ul>
+      <div class="note ok">
+        <b>Leave the streams running.</b> A running stream is what recording attaches to in Step 6.
+        The device restarts its streams automatically after a power cut, so this is normally a
+        one-time setup.
+      </div>
+    </div>
+  </div>
+
+  <div class="foot"><span>DigitalPool Camera — Quick Start Guide</span><span><b>digitalpool.com</b></span><span>Page 3 of 4</span></div>
+</section>
+
+<!-- ═══════════════════════ PAGE 4 ═══════════════════════ -->
+<section class="page">
+  <div class="runhead"><span class="t">Recording matches &amp; troubleshooting</span><span class="n">Step 6</span></div>
+
+  <div class="step c6">
+    <div class="num">6</div>
+    <div class="body-col">
+      <div class="sub">You're live — now record</div>
+      <h2>Scan the table QR code to record a match</h2>
+      <ul>
+        <li>Open the <b>table scoring screen</b> for your venue on digitalpool.com. Each table
+            displays its own <b>QR code</b>.</li>
+        <li>Players scan that QR code with their phone to <b>create a match on that table</b>.</li>
+        <li>Starting the match automatically tells the camera assigned to that table to
+            <b>begin recording the stream</b> — nobody has to touch the camera unit.</li>
+        <li>When the match is finished, the recording is saved and attached to the match on
+            digitalpool.com.</li>
+      </ul>
+      <div class="note ok">
+        <b>That's the whole day-to-day workflow.</b> Steps 1 – 5 are done once, at install.
+        From then on it is just: scan the table QR code, play the match, and the video takes
+        care of itself.
+      </div>
+    </div>
+  </div>
+
+  <h3 class="sec">If something isn't working</h3>
+  <table class="tbl">
+    <tr><th>Symptom</th><th>What to try</th></tr>
+    <tr>
+      <td>The <code>DigitalPool-XXXX</code> hotspot doesn't appear</td>
+      <td>Check both antennas are screwed on, then give it a full 60 seconds after power-up. If it still
+          doesn't show, unplug the power for 10 seconds and try again.</td>
+    </tr>
+    <tr>
+      <td><code>192.168.50.1:3000</code> won't load</td>
+      <td>Confirm you are actually joined to the camera's hotspot — not your phone's cellular data or
+          the venue WiFi. Include the <code>:3000</code> at the end of the address.</td>
+    </tr>
+    <tr>
+      <td>Registration says <b>No Internet Connection</b></td>
+      <td>The device itself is offline. Plug in Ethernet or connect it to WiFi in
+          <span class="ui">📶 Network &amp; WiFi Setup</span>, then press <span class="ui">🔄 Check Again</span>.</td>
+    </tr>
+    <tr>
+      <td>Registration is rejected</td>
+      <td>Confirm the email and password work at digitalpool.com, and that your account has a venue.
+          If it has none, create one there first, then register again.</td>
+    </tr>
+    <tr>
+      <td><b>Start</b> does nothing / streaming is disabled</td>
+      <td>The device is almost certainly not registered yet. Finish Step 4 and look for the green
+          <span class="ui">✓ Registered</span> badge.</td>
+    </tr>
+    <tr>
+      <td>Camera 2 tab is empty</td>
+      <td>Check the second camera's USB cable, then reload the page in your browser.</td>
+    </tr>
+    <tr>
+      <td>Preview is black but stats look healthy</td>
+      <td>Reload the page. If the preview stays black, check the camera's lens cap and USB cable —
+          the stream itself may be fine.</td>
+    </tr>
+    <tr>
+      <td>Forgot the admin password</td>
+      <td>Contact DigitalPool support — the device can be reset without losing your venue registration.</td>
+    </tr>
+  </table>
+
+  <div class="note info" style="margin-top:16px">
+    <b>Need a hand?</b> Support can connect to your device remotely once it is registered — no
+    network changes needed on your side. Reach us through your venue dashboard at
+    <b>digitalpool.com</b> and have your device name ready.
+  </div>
+
+  <div class="foot"><span>DigitalPool Camera — Quick Start Guide</span><span><b>digitalpool.com</b></span><span>Page 4 of 4</span></div>
+</section>
+
+</body>
+</html>
