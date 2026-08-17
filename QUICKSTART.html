@@ -244,7 +244,6 @@
   <div class="kit">
     <div class="item"><span class="ico">📦</span><span class="nm">Camera Unit</span><div class="ds">The streaming computer</div></div>
     <div class="item"><span class="ico">🎥</span><span class="nm">PTZ Camera</span><div class="ds">USB pan / tilt / zoom</div></div>
-    <div class="item"><span class="ico">🔧</span><span class="nm">Mounting Kit</span><div class="ds">One per camera</div></div>
     <div class="item"><span class="ico">🔌</span><span class="nm">Power Supply</span><div class="ds">One per unit</div></div>
     <div class="item"><span class="ico">🔗</span><span class="nm">Ethernet Cable</span><div class="ds">Optional, recommended</div></div>
   </div>
@@ -255,11 +254,11 @@
       <div class="sub">Unpack &amp; power on</div>
       <h2>Set up the hardware</h2>
       <ul>
-        <li><b>Position each camera</b> so it sees the whole table. Set it on a shelf or
-            mount it using the supplied mounting hardware — whatever gives the cleanest
+        <li><b>Position each camera</b> so it sees the whole table. Set it on a shelf or mount it
+            using whatever mounting hardware came with the camera — whatever gives the cleanest
             view of the playing surface.</li>
-        <li><b>Plug the camera's USB cable</b> into the camera unit. A second camera goes
-            into any other USB port.</li>
+        <li><b>If you are using USB cameras, connect their USB cables</b> to the USB ports on the
+            camera unit. Either port works, and a second camera goes into any free one.</li>
         <li><b>Optional but recommended:</b> run an Ethernet cable from your router
             to the unit. This is the easiest way to get it online.</li>
         <li><b>Plug in the power supply last.</b> The unit powers on by itself —
@@ -292,7 +291,9 @@
             named <code>DigitalPool-XXXX</code>, where <code>XXXX</code> is four characters
             unique to your unit. Join it.</li>
         <li>Enter the hotspot password shown below.</li>
-        <li>Open a browser and go to <code>http://192.168.50.1:3000</code></li>
+        <li><b>The admin screen opens by itself</b> a moment after you connect — there is no
+            address to type in. If it doesn't appear, open a browser and go to
+            <code>http://192.168.50.1:3000</code></li>
         <li>Sign in with the default administrator account.</li>
         <li>You will be asked to <b>set a new password immediately</b>. Choose something
             you will remember — this is now your admin login for this device.</li>
@@ -452,9 +453,9 @@
           show, unplug the power for 10 seconds and try again.</td>
     </tr>
     <tr>
-      <td><code>192.168.50.1:3000</code> won't load</td>
-      <td>Confirm you are actually joined to the camera's hotspot — not your phone's cellular data or
-          the venue WiFi. Include the <code>:3000</code> at the end of the address.</td>
+      <td>The admin screen didn't open on its own</td>
+      <td>Open a browser and go to <code>http://192.168.50.1:3000</code> — include the <code>:3000</code>.
+          Also confirm you are joined to the camera's hotspot, not cellular data or the venue WiFi.</td>
     </tr>
     <tr>
       <td>Registration says <b>No Internet Connection</b></td>
