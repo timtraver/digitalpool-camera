@@ -167,12 +167,18 @@
 
   /* ─── Box-contents strip ───────────────────────────────────── */
 
-  .kit { display: flex; gap: 9px; margin-top: 20px; }
+  .kitlabel {
+    margin-top: 20px; font-size: 8pt; font-weight: 800;
+    letter-spacing: 0.13em; text-transform: uppercase; color: var(--ink-soft);
+  }
+  .kit { display: flex; gap: 9px; margin-top: 8px; }
   .kit .item {
     flex: 1; border: 1.5px solid var(--line); border-radius: 10px;
     padding: 11px 10px 12px; text-align: center; background: #fbfcfe;
     display: flex; flex-direction: column;
   }
+  .kit .item.byo { border-style: dashed; border-color: #c8d3e0; background: #fafbfd; }
+  .kit .item.byo .ds { color: #8496a8; font-style: italic; }
   .kit .ico { font-size: 21pt; line-height: 1; display: block; margin-bottom: 7px; }
   .kit .nm { font-size: 9pt; font-weight: 800; line-height: 1.25; }
   .kit .ds { font-size: 7.5pt; color: var(--ink-soft); margin-top: auto; padding-top: 3px; line-height: 1.3; }
@@ -241,11 +247,12 @@
     </div>
   </div>
 
+  <div class="kitlabel">What you'll need</div>
   <div class="kit">
     <div class="item"><span class="ico">📦</span><span class="nm">Camera Unit</span><div class="ds">The streaming computer</div></div>
     <div class="item"><span class="ico">🎥</span><span class="nm">PTZ Camera</span><div class="ds">USB pan / tilt / zoom</div></div>
     <div class="item"><span class="ico">🔌</span><span class="nm">Power Supply</span><div class="ds">One per unit</div></div>
-    <div class="item"><span class="ico">🔗</span><span class="nm">Ethernet Cable</span><div class="ds">Optional, recommended</div></div>
+    <div class="item byo"><span class="ico">🔗</span><span class="nm">Ethernet Cable</span><div class="ds">Not included</div></div>
   </div>
 
   <div class="step c1">
@@ -259,8 +266,8 @@
             view of the playing surface.</li>
         <li><b>If you are using USB cameras, connect their USB cables</b> to the USB ports on the
             camera unit. Either port works, and a second camera goes into any free one.</li>
-        <li><b>Optional but recommended:</b> run an Ethernet cable from your router
-            to the unit. This is the easiest way to get it online.</li>
+        <li><b>Optional but recommended:</b> run an Ethernet cable from your router to the unit —
+            any standard network cable works. This is the easiest way to get it online.</li>
         <li><b>Plug in the power supply last.</b> The unit powers on by itself —
             there is no power button to press.</li>
         <li><b>Wait about 60 seconds.</b> The device boots, starts its hotspot,
