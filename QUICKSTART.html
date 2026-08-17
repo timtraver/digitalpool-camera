@@ -171,10 +171,11 @@
   .kit .item {
     flex: 1; border: 1.5px solid var(--line); border-radius: 10px;
     padding: 11px 10px 12px; text-align: center; background: #fbfcfe;
+    display: flex; flex-direction: column;
   }
   .kit .ico { font-size: 21pt; line-height: 1; display: block; margin-bottom: 7px; }
   .kit .nm { font-size: 9pt; font-weight: 800; line-height: 1.25; }
-  .kit .ds { font-size: 7.5pt; color: var(--ink-soft); margin-top: 3px; line-height: 1.3; }
+  .kit .ds { font-size: 7.5pt; color: var(--ink-soft); margin-top: auto; padding-top: 3px; line-height: 1.3; }
 
   /* ─── Route / two-option split ─────────────────────────────── */
 
@@ -199,10 +200,10 @@
   /* ─── Troubleshooting table ────────────────────────────────── */
 
   h3.sec {
-    margin-top: 26px; font-size: 12pt; font-weight: 800;
+    margin-top: 18px; font-size: 12pt; font-weight: 800;
     padding-bottom: 7px; border-bottom: 2px solid var(--line);
   }
-  table.tbl { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 9.5pt; }
+  table.tbl { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 9.5pt; }
   table.tbl th {
     text-align: left; font-size: 7.5pt; letter-spacing: 0.11em; text-transform: uppercase;
     color: var(--ink-soft); padding: 0 10px 6px 0; font-weight: 800;
@@ -243,8 +244,8 @@
   <div class="kit">
     <div class="item"><span class="ico">📦</span><span class="nm">Camera Unit</span><div class="ds">The streaming computer</div></div>
     <div class="item"><span class="ico">🎥</span><span class="nm">PTZ Camera</span><div class="ds">USB pan / tilt / zoom</div></div>
+    <div class="item"><span class="ico">🔧</span><span class="nm">Mounting Kit</span><div class="ds">One per camera</div></div>
     <div class="item"><span class="ico">🔌</span><span class="nm">Power Supply</span><div class="ds">One per unit</div></div>
-    <div class="item"><span class="ico">📡</span><span class="nm">WiFi Antennas</span><div class="ds">Screw on before power</div></div>
     <div class="item"><span class="ico">🔗</span><span class="nm">Ethernet Cable</span><div class="ds">Optional, recommended</div></div>
   </div>
 
@@ -254,10 +255,11 @@
       <div class="sub">Unpack &amp; power on</div>
       <h2>Set up the hardware</h2>
       <ul>
-        <li><b>Screw on both WiFi antennas</b> and hand-tighten. The device hosts its own
-            WiFi network — without the antennas you will not be able to reach it.</li>
-        <li><b>Mount the camera</b> so it sees the whole table, then plug its USB cable
-            into the camera unit. A second camera goes into any other USB port.</li>
+        <li><b>Position each camera</b> so it sees the whole table. Set it on a shelf or
+            mount it using the supplied mounting hardware — whatever gives the cleanest
+            view of the playing surface.</li>
+        <li><b>Plug the camera's USB cable</b> into the camera unit. A second camera goes
+            into any other USB port.</li>
         <li><b>Optional but recommended:</b> run an Ethernet cable from your router
             to the unit. This is the easiest way to get it online.</li>
         <li><b>Plug in the power supply last.</b> The unit powers on by itself —
@@ -286,9 +288,9 @@
       <div class="sub">Connect to the device</div>
       <h2>Join the camera's WiFi hotspot</h2>
       <ul>
-        <li>On your laptop, tablet, or phone, open the WiFi list and join the network
-            named <code>DigitalPool-XXXX</code> — where <code>XXXX</code> is the
-            four-character code printed on your unit's label.</li>
+        <li>On your laptop, tablet, or phone, open the WiFi list and look for a network
+            named <code>DigitalPool-XXXX</code>, where <code>XXXX</code> is four characters
+            unique to your unit. Join it.</li>
         <li>Enter the hotspot password shown below.</li>
         <li>Open a browser and go to <code>http://192.168.50.1:3000</code></li>
         <li>Sign in with the default administrator account.</li>
@@ -423,18 +425,20 @@
       <div class="sub">You're live — now record</div>
       <h2>Scan the table QR code to record a match</h2>
       <ul>
-        <li>Open the <b>table scoring screen</b> for your venue on digitalpool.com. Each table
-            displays its own <b>QR code</b>.</li>
-        <li>Players scan that QR code with their phone to <b>create a match on that table</b>.</li>
+        <li>Sign in at <b>digitalpool.com</b> and go to your <b>venue settings</b> area. This is
+            where each of your tables and its <b>QR code</b> lives.</li>
+        <li><b>Get the QR codes for your tables</b> from there — print them and put one at each
+            table so players can reach them easily. You only have to do this once.</li>
+        <li>Players <b>scan the QR code at their table</b> with their phone, which opens that
+            table's scoring screen and lets them <b>create a match on that table</b>.</li>
         <li>Starting the match automatically tells the camera assigned to that table to
             <b>begin recording the stream</b> — nobody has to touch the camera unit.</li>
         <li>When the match is finished, the recording is saved and attached to the match on
             digitalpool.com.</li>
       </ul>
       <div class="note ok">
-        <b>That's the whole day-to-day workflow.</b> Steps 1 – 5 are done once, at install.
-        From then on it is just: scan the table QR code, play the match, and the video takes
-        care of itself.
+        <b>That's the whole day-to-day workflow.</b> Steps 1 – 5 happen once, at install.
+        After that: scan, play, done.
       </div>
     </div>
   </div>
@@ -444,8 +448,8 @@
     <tr><th>Symptom</th><th>What to try</th></tr>
     <tr>
       <td>The <code>DigitalPool-XXXX</code> hotspot doesn't appear</td>
-      <td>Check both antennas are screwed on, then give it a full 60 seconds after power-up. If it still
-          doesn't show, unplug the power for 10 seconds and try again.</td>
+      <td>Give it a full 60 seconds after power-up, then refresh your WiFi list. If it still doesn't
+          show, unplug the power for 10 seconds and try again.</td>
     </tr>
     <tr>
       <td><code>192.168.50.1:3000</code> won't load</td>
@@ -482,7 +486,7 @@
     </tr>
   </table>
 
-  <div class="note info" style="margin-top:16px">
+  <div class="note info" style="margin-top:12px">
     <b>Need a hand?</b> Support can connect to your device remotely once it is registered — no
     network changes needed on your side. Reach us through your venue dashboard at
     <b>digitalpool.com</b> and have your device name ready.
