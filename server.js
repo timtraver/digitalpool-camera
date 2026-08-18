@@ -3278,7 +3278,9 @@ app.post("/api/camera/reset", async (req, res) => {
 // can explain the Auto choice. POST stores the operator's decision in the camera
 // source file, where it survives restarts and stays tied to the slot the camera
 // is plugged into.
-app.get("/api/camera/capabilities", requireAuth, async (req, res) => {
+// NOTE: deliberately NOT /api/camera/capabilities — that path is already taken
+// by the resolution/framerate query above, which the stream-settings menus use.
+app.get("/api/camera/features", requireAuth, async (req, res) => {
   const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
   // Detect on first ask so a fresh boot doesn't report "not yet detected".
   if (!Object.keys(_detection[camIdx]).length && getActiveSource(camIdx).type === "usb") {
@@ -3287,7 +3289,7 @@ app.get("/api/camera/capabilities", requireAuth, async (req, res) => {
   res.json({ success: true, capabilities: resolveCapabilities(camIdx) });
 });
 
-app.post("/api/camera/capabilities", requireAuth, async (req, res) => {
+app.post("/api/camera/features", requireAuth, async (req, res) => {
   const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
   const { feature, mode } = req.body || {};
   if (!CAPABILITIES[feature]) {

@@ -639,6 +639,12 @@
 
             <div class="control-item">
               <label>Bitrate:</label>
+              <!-- Placeholder list. applyBitrateOptions() in app.js rebuilds this from
+                   the selected resolution + framerate, adding 30/40 Mbps once the
+                   pixel rate exceeds 4K30 (i.e. 4K above 30 fps), where 20 Mbps is
+                   too thin to hold detail. Those high rates target a LOCAL receiver
+                   such as an OBS instance on the same network — not the remote WAN
+                   pull, which is limited by upstream bandwidth. -->
               <select id="streamBitrate">
                 <option value="1000000">1 Mbps</option>
                 <option value="2000000">2 Mbps</option>

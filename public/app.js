@@ -868,7 +868,7 @@ function applyCapabilities(capabilities) {
 /** Persist an override for one feature. */
 async function setCapabilityMode(feature, mode) {
   try {
-    const res = await fetch(`/api/camera/capabilities?cam=${activeCamIndex}`, {
+    const res = await fetch(`/api/camera/features?cam=${activeCamIndex}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ feature, mode }),
@@ -4030,7 +4030,11 @@ async function loadStreamConfig() {
       } else {
         streamDestination.value = savedDestination;
       }
-      streamBitrate.value = data.config.bitrate || 5000000;
+      // Best-effort for the moment before applyBitrateOptions() rebuilds the menu;
+      // _pendingBitrate is what actually survives, since 30/40 Mbps only exist as
+      // options once a high-throughput resolution/framerate is selected.
+      _pendingBitrate = data.config.bitrate || 5000000;
+      streamBitrate.value = String(_pendingBitrate);
       // Stash the saved framerate/resolution so loadCameraCapabilities() honors
       // them when it rebuilds the menus from the camera's real capabilities —
       // even for values not in the static fallback lists (e.g. a 100 fps camera
@@ -4191,6 +4195,7 @@ let cameraFramerates = {};
 // or previous-camera) option list yet — we can't just set select.value.
 let _pendingResolution = null;
 let _pendingFramerate  = null;
+let _pendingBitrate    = null;
 
 // Fallbacks used when there is no camera capability data (network source, or
 // the capability query failed). Match the original static HTML menus.
@@ -4238,19 +4243,93 @@ function rebuildCustomDropdown(selectEl, items, preferredValue) {
   createCustomDropdown(selectEl);
 }
 
+// ── Bitrate menu ─────────────────────────────────────────────────────────────
+//
+// The base set covers every ordinary case. The high options exist because 20 Mbps
+// at 4K60 is only ~0.04 bits/pixel — too thin to hold detail — so offering 4K60
+// without them is close to pointless.
+//
+// They are intended for a LOCAL receiver: an OBS instance on the same network
+// pulling SRT/RTSP can absorb 40 Mbps comfortably. They are NOT realistic for the
+// remote WAN pull, which is bound by upstream bandwidth, so they stay out of the
+// menu until the selected format actually warrants them.
+const BASE_BITRATES_MBPS = [1, 2, 4, 5, 8, 10, 15, 20];
+const HIGH_BITRATES_MBPS = [30, 40];
+
+// Threshold expressed as a pixel RATE rather than a resolution test, because
+// that's the thing that actually consumes bitrate. Set just above 4K30
+// (3840×2160×30 ≈ 249 Mpx/s) so 4K30 keeps the base list and 4K above 30 fps
+// unlocks the extras.
+const HIGH_THROUGHPUT_PPS = 3840 * 2160 * 30;
+
+function bitratesFor(res, fps) {
+  const pixelsPerSecond = _resArea(res) * (Number.isFinite(fps) ? fps : 30);
+  return pixelsPerSecond > HIGH_THROUGHPUT_PPS
+    ? BASE_BITRATES_MBPS.concat(HIGH_BITRATES_MBPS)
+    : BASE_BITRATES_MBPS;
+}
+
+// Rebuild the bitrate menu for the current resolution + framerate. Runs after the
+// framerate menu is settled, since the offered set depends on the chosen fps.
+function applyBitrateOptions() {
+  if (!streamBitrate) return;
+  const res = streamResolution ? streamResolution.value : "";
+  const fps = streamFramerate ? parseInt(streamFramerate.value, 10) : 30;
+  const allowed = bitratesFor(res, fps);
+  const maxBps = Math.max(...allowed) * 1000000;
+
+  let desired = _pendingBitrate != null ? _pendingBitrate : parseInt(streamBitrate.value, 10);
+  _pendingBitrate = null;
+  if (!Number.isFinite(desired)) desired = 5000000;
+
+  // Clamp when the high options are withdrawn — e.g. dropping from 4K60 back to
+  // 1080p30 with 40 Mbps selected. rebuildCustomDropdown falls back to items[0]
+  // for an unknown value, which here would silently drop the stream to 1 Mbps.
+  if (desired > maxBps) {
+    console.log(`ℹ️  Bitrate ${desired / 1e6} Mbps isn't offered at ${res}@${fps} — using ${maxBps / 1e6} Mbps`);
+    desired = maxBps;
+  } else if (!allowed.includes(desired / 1000000)) {
+    // A saved value that was never in the list (hand-edited config) — snap to the
+    // nearest offered rather than to whichever option happens to be first.
+    const nearest = allowed.reduce(
+      (best, v) => (Math.abs(v * 1e6 - desired) < Math.abs(best * 1e6 - desired) ? v : best),
+      allowed[0]);
+    desired = nearest * 1000000;
+  }
+
+  const items = allowed.map((mbps) => ({ value: String(mbps * 1000000), text: `${mbps} Mbps` }));
+  rebuildCustomDropdown(streamBitrate, items, String(desired));
+}
+
 // Rebuild the framerate menu for the currently-selected resolution. Called after
 // the resolution list is (re)built and whenever the user changes resolution.
-// The 4K→30fps cap is an Orange Pi 5 encoder limit, applied on top of the
-// camera's advertised rates.
+//
+// The menu offers exactly what the camera advertises for the chosen resolution in
+// the format the pipeline captures in (from /api/camera/capabilities, which parses
+// `v4l2-ctl --list-formats-ext`). There is deliberately NO 4K framerate cap:
+//
+//   A `rates.filter(r => r <= 30)` used to sit here, attributed to an Orange Pi 5
+//   encoder limit, but it was applied on every platform regardless of encoder and
+//   regardless of whether the second camera was even in use — discarding rates the
+//   camera genuinely offers (the ELP 4K U3 does 4K60 in MJPG). It was removed
+//   deliberately; do not reinstate it as a blanket rule.
+//
+// What actually limits 4K60 in practice, none of which a fixed fps filter models:
+//   • the NV12↔BGRA vapostproc round-trip used for overlay compositing — the
+//     dominant cost on N97-class hardware, and 4K60 is ~8× the pixel throughput
+//     of 1080p30 through it (vacompositor won't negotiate as an alternative);
+//   • two simultaneous streams contending for the same media engine;
+//   • the bitrate ceiling (4K60 needs far more than 1080p to look equivalent);
+//   • upstream bandwidth, since delivery is a remote server pulling RTSP.
+// streamController._clampFramerateToCamera() still clamps at start time if the
+// saved rate isn't one the camera advertises for the configured resolution.
 function applyResolutionConstraints() {
   if (!streamFramerate) return;
   const res = streamResolution ? streamResolution.value : "";
-  const is4K = res === "3840x2160";
 
   let rates = (cameraFramerates[res] && cameraFramerates[res].length)
     ? cameraFramerates[res].slice()
     : DEFAULT_FRAMERATES.slice();
-  if (is4K) rates = rates.filter((r) => r <= 30);
   if (!rates.length) rates = [30];
   rates.sort((a, b) => a - b);
 
@@ -4268,6 +4347,9 @@ function applyResolutionConstraints() {
 
   const items = rates.map((f) => ({ value: String(f), text: `${f} fps` }));
   rebuildCustomDropdown(streamFramerate, items, String(desired));
+
+  // The bitrate menu depends on the framerate that just settled.
+  applyBitrateOptions();
 }
 
 // Query the backend for what the active source can deliver and rebuild the
@@ -4302,6 +4384,11 @@ async function loadCameraCapabilities() {
 
 if (streamResolution) {
   streamResolution.addEventListener("change", applyResolutionConstraints);
+}
+// Changing framerate alone (without touching resolution) also changes whether the
+// high bitrates apply — e.g. 4K 30 → 60.
+if (streamFramerate) {
+  streamFramerate.addEventListener("change", applyBitrateOptions);
 }
 
 // Load stream config on page load
