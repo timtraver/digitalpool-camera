@@ -94,12 +94,12 @@ class CameraController {
         default: 330,
       },
       // Whether the sensor may lengthen the frame interval to honor a long
-      // exposure.  When 0 (the default, and what constant-framerate streaming
-      // needs) any exposure_time_absolute above the frame period is silently
-      // truncated to it — 330 units (33 ms) at 30 fps, 167 (16.7 ms) at 60 fps.
-      // That makes GAIN the only remaining brightness lever, which is why the
-      // gain slider must span the camera's real range.  Not every camera exposes
-      // this control; it's applied before exposure_time_absolute when present.
+      // exposure.  Pinned to 0 for this appliance — see FORCED_CONTROLS below.
+      // With it off, any exposure_time_absolute above the frame period is
+      // silently truncated to it — 330 units (33 ms) at 30 fps, 167 (16.7 ms) at
+      // 60 fps.  That makes GAIN the only remaining brightness lever, which is
+      // why the gain slider must span the camera's real range.  Not every camera
+      // exposes this control; it's applied before exposure_time_absolute.
       exposure_dynamic_framerate: {
         id: "0x009a0903",
         type: "bool",
@@ -462,6 +462,50 @@ class CameraController {
   }
 
   /**
+   * Work out whether this camera can ACTUALLY autofocus.
+   *
+   * Focus is mechanical, so it has the same problem as PTZ: the ELP 4K U3 is a
+   * manual-focus lens yet advertises both focus_absolute and
+   * focus_automatic_continuous, and marks focus_absolute `inactive` while auto
+   * focus is "on" — the driver-level plumbing is all present and behaves
+   * correctly, there is simply no motor behind it.
+   *
+   * Detection here is weaker than for PTZ, because the fixed-lens descriptor
+   * field only describes focal length (zoom), not focus, and a manual-focus lens
+   * has a perfectly good focus ring. So the only confident answer available is
+   * the negative one: the camera doesn't advertise focus at all. Everything else
+   * defaults to trusting the camera and relies on the operator's override.
+   *
+   * (Deliberately NOT attempted: sampling focus_absolute over time to see if auto
+   * focus hunts. A correctly-focused real AF camera doesn't move either, so that
+   * test hides working controls — the failure mode worth avoiding most.)
+   *
+   * @returns {Promise<{focus: boolean, confident: boolean, reason: string}>}
+   */
+  async detectFocusCapability() {
+    const hw = this.discoveredControls || {};
+    const hasAuto = !!hw.focus_automatic_continuous;
+    const hasAbsolute = !!hw.focus_absolute;
+
+    if (!hasAuto && !hasAbsolute) {
+      return { focus: false, confident: true, reason: "camera exposes no focus controls" };
+    }
+    // A relative focus control implies a driven focus group rather than a lens
+    // the firmware merely knows how to describe.
+    if (hw.focus_relative) {
+      return { focus: true, confident: true, reason: "camera implements relative focus control" };
+    }
+    if (hasAuto && !hasAbsolute) {
+      return { focus: true, confident: false, reason: "auto focus advertised without a manual focus control" };
+    }
+    return {
+      focus: true,
+      confident: false,
+      reason: "focus controls advertised, but a manual-focus lens cannot be told apart from a motorised one — set this manually if wrong",
+    };
+  }
+
+  /**
    * Read wObjectiveFocalLengthMin/Max from the camera's UVC Camera Terminal
    * descriptor.  Needs the USB vendor:product id, which udev knows for the
    * /dev/video node, and root — lsusb only prints descriptors as root, the same
@@ -582,17 +626,35 @@ class CameraController {
       // Never apply rate/action controls (e.g. zoom_continuous) from config — a
       // fixed nonzero value would make the camera zoom continuously on its own.
       if (CameraController.NEVER_APPLY_CONTROLS.has(controlName)) continue;
+      const forced = CameraController.FORCED_CONTROLS.has(controlName)
+        ? CameraController.FORCED_CONTROLS.get(controlName)
+        : value;
+      if (forced !== value) {
+        console.log(`  📌 ${controlName} pinned to ${forced} (config had ${value})`);
+        this.config[controlName] = forced;
+      }
       if (ptzControls.includes(controlName)) {
-        ptzSettings.push([controlName, value]);
+        ptzSettings.push([controlName, forced]);
       } else if (autoModeControls.includes(controlName)) {
-        autoControls.push([controlName, value]);
+        autoControls.push([controlName, forced]);
       } else {
-        otherControls.push([controlName, value]);
+        otherControls.push([controlName, forced]);
       }
     }
 
     // Use discovered hardware controls if available, fall back to static map.
     const hwControls = this.discoveredControls || this.controls;
+
+    // Older config files predate the pinned controls and simply lack the key, so
+    // the loop above never queued them. Add any that are missing.
+    for (const [name, forcedValue] of CameraController.FORCED_CONTROLS) {
+      if (name in this.config) continue;
+      if (!hwControls[name]) continue;
+      console.log(`  📌 ${name} missing from config — applying pinned value ${forcedValue}`);
+      this.config[name] = forcedValue;
+      if (autoModeControls.includes(name)) autoControls.push([name, forcedValue]);
+      else otherControls.push([name, forcedValue]);
+    }
 
     // Apply auto-mode controls first (disable auto before setting manual values)
     let configCorrected = false;
@@ -1220,6 +1282,20 @@ CameraController.ENV_DEFAULT_CONTROLS = new Set([
 // Positional zoom is done via zoom_absolute instead.
 CameraController.NEVER_APPLY_CONTROLS = new Set([
   'zoom_continuous',
+]);
+
+// Controls pinned to a fixed value regardless of what config says, because this
+// appliance's pipeline depends on it.
+//
+// exposure_dynamic_framerate=1 lets the sensor stretch the frame interval to
+// honor a long exposure. On a live stream that means a variable frame rate: the
+// output stutters, and it undermines the wall-clock timestamping that
+// gst-overlay-pipeline.py forces CLOCK_REALTIME for — long-term A/V sync assumes
+// a steady capture rate, and the FPS/drift monitors in streamController read a
+// dropping frame rate as a failing pipeline. A brighter picture is not worth
+// either, so this is not offered as a user setting; brighten with gain instead.
+CameraController.FORCED_CONTROLS = new Map([
+  ['exposure_dynamic_framerate', 0],
 ]);
 
 module.exports = CameraController;

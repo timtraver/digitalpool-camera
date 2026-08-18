@@ -348,9 +348,9 @@ socket.on("cameraConfig", (data) => {
       // live while the camera is metering for itself and ignoring it.
       updateExposureControlsState();
     }
-    // Coarse camera-level PTZ gate, applied after the per-control pass above so
-    // it wins over the rows that pass re-enabled.
-    applyPtzCapability(data.ptzCapability);
+    // Coarse camera-level gates (PTZ, autofocus), applied after the per-control
+    // pass above so they win over the rows that pass re-enabled.
+    applyCapabilities(data.capabilities);
 
     // Update PTZ hardware state for percentage/step calculations.
     // ptzRanges: { pan_absolute, tilt_absolute, zoom_absolute } each {min, max, step}
@@ -397,7 +397,7 @@ socket.on("cameraConfigReset", (data) => {
       applyControlAvailability(data.supportedControls);
       updateExposureControlsState();
     }
-    applyPtzCapability(data.ptzCapability);
+    applyCapabilities(data.capabilities);
     // Clear the startup/home position display since it was also reset
     const startupPosInfo = document.getElementById("startupPosInfo");
     if (startupPosInfo) {
@@ -687,15 +687,31 @@ const _exposureLabel = (v) => `${v} (${(v / 10).toFixed(1)} ms)`;
  * Priority. Listing all four meant two of them silently failed to apply, so the
  * options come from the camera's own menu items, with its own labels.
  */
+function exposureModeLabel(value, offeredValues) {
+  // V4L2: 0=Auto, 1=Manual, 2=Shutter Priority, 3=Aperture Priority.
+  // Modes 0 and 3 both meter automatically. When a camera offers 3 but not 0 —
+  // as the ELP 4K U3 does — mode 3 IS its automatic mode and must say so, or it
+  // reads as a manual setting and nobody finds the auto option.
+  switch (value) {
+    case 0: return "Auto";
+    case 1: return "Manual";
+    case 2: return "Shutter Priority (manual exposure)";
+    case 3: return offeredValues.includes(0) ? "Aperture Priority (auto exposure)" : "Auto (aperture priority)";
+    default: return `Mode ${value}`;
+  }
+}
+
 function rebuildExposureModeOptions(menuItems) {
   const sel = document.getElementById("exposureAuto");
   if (!sel || !Array.isArray(menuItems) || menuItems.length === 0) return;
   const prev = sel.value;
+  const offered = menuItems.map((i) => i.value);
   sel.innerHTML = "";
   for (const item of menuItems) {
     const opt = document.createElement("option");
     opt.value = String(item.value);
-    opt.text = item.label;
+    opt.text = exposureModeLabel(item.value, offered);
+    opt.title = item.label; // the camera's own wording, for reference
     sel.appendChild(opt);
   }
   // Keep the current selection when this camera still offers that mode.
@@ -744,93 +760,136 @@ function applyControlRanges(controlRanges) {
   );
 }
 
-// ── PTZ capability gating ────────────────────────────────────────────────────
+// ── Mechanical capability gating ─────────────────────────────────────────────
 //
-// A camera advertising pan/tilt/zoom does not mean it can perform them: UVC
-// firmware exposes the Camera Terminal controls regardless of the mechanics, so
-// fixed cameras like the ELP 4K U3 present a full D-pad that does nothing. The
-// server sends a resolved verdict (detection heuristic, overridden by the
-// operator's choice) and the entire PTZ card is dimmed when it says no.
-let _ptzSupported = true;
+// A camera advertising pan/tilt/zoom or autofocus does not mean it can perform
+// them: UVC firmware exposes the Camera Terminal controls regardless of the
+// mechanics, so the fixed, manual-focus ELP 4K U3 presents a full D-pad AND an
+// autofocus toggle, and even behaves correctly at the driver level — writes are
+// retained, focus_absolute is properly marked inactive while "auto focus" is on.
+// There is simply nothing behind either one.
+//
+// Only MECHANICAL features need this. Auto exposure and auto white balance are
+// computed in the camera's image pipeline, so advertising them is implementing
+// them — they are trusted as reported and are not gated here.
+//
+// The server sends a resolved verdict per feature (detection heuristic, overridden
+// by the operator's choice) and the matching section is dimmed when it says no.
+const CAPABILITY_TARGETS = {
+  // feature → the elements that make up its section
+  ptz:   { selectId: "ptzMode",   header: "ptzToggle", body: "ptzBody" },
+  focus: { selectId: "focusMode", sectionOf: "focusAuto" },
+};
 
-/**
- * Show or dim the whole PTZ card — pad, zoom, Set Home and invert-pan alike.
- * applyControlAvailability() handles individual rows by v4l2 control name; this
- * is the coarser, camera-level gate that sits on top of it.
- */
-function applyPtzCapability(capability) {
+let _capabilities = {};
+
+/** Dim (or restore) one feature's whole section. */
+function applyCapability(feature, capability) {
   if (!capability) return;
-  _ptzSupported = capability.supported !== false;
-
-  const header = document.getElementById("ptzToggle");
-  const body = document.getElementById("ptzBody");
+  const target = CAPABILITY_TARGETS[feature];
+  if (!target) return;
+  const supported = capability.supported !== false;
   const reason = capability.reason || "";
 
-  for (const el of [header, body]) {
-    if (!el) continue;
-    el.style.opacity = _ptzSupported ? "" : "0.35";
-    // The header keeps its pointer events so the card can still be expanded to
-    // see WHY it's dimmed; only the controls inside go inert.
-    if (el === body) el.style.pointerEvents = _ptzSupported ? "" : "none";
-    el.title = _ptzSupported ? "" : `PTZ unavailable — ${reason}`;
+  // Two shapes of section: the PTZ card (its own header + body) and the Focus
+  // sub-section inside Camera Settings, located via one of its controls.
+  const parts = [];
+  if (target.header) parts.push({ el: document.getElementById(target.header), inert: false });
+  if (target.body) parts.push({ el: document.getElementById(target.body), inert: true });
+  if (target.sectionOf) {
+    const anchor = document.getElementById(target.sectionOf);
+    const section = anchor && anchor.closest("details.cam-subsection");
+    if (section) {
+      // Keep the summary clickable so the section can be opened to read why.
+      const body = section.querySelector(".cam-subsection-body");
+      parts.push({ el: section.querySelector("summary"), inert: false });
+      parts.push({ el: body, inert: true });
+    }
   }
 
-  // Badge the header so a collapsed card still explains itself.
-  if (header) {
-    let badge = header.querySelector(".ptz-unsupported-badge");
-    if (_ptzSupported) {
+  for (const { el, inert } of parts) {
+    if (!el) continue;
+    el.style.opacity = supported ? "" : "0.35";
+    if (inert) el.style.pointerEvents = supported ? "" : "none";
+    el.title = supported ? "" : `Not available — ${reason}`;
+  }
+
+  // Badge the heading so a collapsed section still explains itself.
+  const heading = target.header
+    ? document.getElementById(target.header)
+    : (document.getElementById(target.sectionOf)?.closest("details.cam-subsection")?.querySelector("summary"));
+  if (heading) {
+    let badge = heading.querySelector(".capability-badge");
+    if (supported) {
       if (badge) badge.remove();
     } else {
       if (!badge) {
         badge = document.createElement("span");
-        badge.className = "ptz-unsupported-badge";
+        badge.className = "capability-badge";
         badge.style.cssText = "font-size:10px;opacity:0.7;margin-left:6px;font-weight:normal";
-        header.querySelector("span").after(badge);
+        (heading.querySelector("span") || heading).after(badge);
       }
       badge.textContent = capability.mode === "off" ? "(turned off)" : "(not supported)";
     }
   }
 
   // Keep the selector in sync with the stored mode.
-  const sel = document.getElementById("ptzMode");
+  const sel = document.getElementById(target.selectId);
   if (sel) {
     sel.value = capability.mode || "auto";
     updateCustomDropdownDisplay(sel);
   }
-  // Say what was decided and why, including how much to trust it. `confident` is
-  // absent when an override is in force — there is no guess to qualify then.
-  const info = document.getElementById("ptzModeInfo");
-  if (info && reason) {
-    const hedge = capability.confident === false ? " (best guess — set this manually if wrong)" : "";
-    info.textContent = `${_ptzSupported ? "PTZ enabled" : "PTZ hidden"}: ${reason}${hedge}.`;
+
+  console.log(`🔧 ${feature} ${supported ? "enabled" : "disabled"} (mode=${capability.mode}) — ${reason}`);
+}
+
+/** Apply every feature's verdict and summarise it under the selectors. */
+function applyCapabilities(capabilities) {
+  if (!capabilities) return;
+  _capabilities = capabilities;
+  for (const feature of Object.keys(CAPABILITY_TARGETS)) {
+    applyCapability(feature, capabilities[feature]);
   }
-
-  console.log(`🎮 PTZ ${_ptzSupported ? "enabled" : "disabled"} (mode=${capability.mode}) — ${reason}`);
-}
-
-const ptzModeSelect = document.getElementById("ptzMode");
-if (ptzModeSelect) {
-  ptzModeSelect.addEventListener("change", async (e) => {
-    const mode = e.target.value;
-    try {
-      const res = await fetch(`/api/camera/ptz-capability?cam=${activeCamIndex}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
-      });
-      const data = await res.json();
-      if (data.success) applyPtzCapability(data);
-      else console.error("❌ Failed to set PTZ mode:", data.error);
-    } catch (err) {
-      console.error("❌ Failed to set PTZ mode:", err.message);
+  // Report what was decided and how much to trust it. `confident` is absent when
+  // an override is in force — there is no guess to qualify then.
+  const info = document.getElementById("capabilityInfo");
+  if (info) {
+    const lines = [];
+    for (const [feature, cap] of Object.entries(capabilities)) {
+      if (!cap?.reason) continue;
+      const name = feature === "ptz" ? "PTZ" : "Autofocus";
+      const hedge = cap.confident === false ? " (best guess)" : "";
+      lines.push(`${name}: ${cap.supported ? "on" : "off"} — ${cap.reason}${hedge}`);
     }
-  });
+    if (lines.length) info.textContent = lines.join(" · ");
+  }
 }
 
-// Another tab changed the override — re-gate here too.
-socket.on("ptzCapability", (data) => {
+/** Persist an override for one feature. */
+async function setCapabilityMode(feature, mode) {
+  try {
+    const res = await fetch(`/api/camera/capabilities?cam=${activeCamIndex}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ feature, mode }),
+    });
+    const data = await res.json();
+    if (data.success) applyCapabilities(data.capabilities);
+    else console.error(`❌ Failed to set ${feature} mode:`, data.error);
+  } catch (err) {
+    console.error(`❌ Failed to set ${feature} mode:`, err.message);
+  }
+}
+
+for (const [feature, target] of Object.entries(CAPABILITY_TARGETS)) {
+  const sel = document.getElementById(target.selectId);
+  if (sel) sel.addEventListener("change", (e) => setCapabilityMode(feature, e.target.value));
+}
+
+// Another tab changed an override — re-gate here too.
+socket.on("cameraCapabilities", (data) => {
   if (data.cameraIndex && data.cameraIndex !== activeCamIndex) return;
-  applyPtzCapability(data);
+  applyCapabilities(data.capabilities);
 });
 
 // Helper function to create control handlers
@@ -938,16 +997,6 @@ createSliderControl(
 );
 createSliderControl("gain", "gain", "gainValue");
 
-const exposureDynamicFramerate = document.getElementById("exposureDynamicFramerate");
-if (exposureDynamicFramerate) {
-  exposureDynamicFramerate.addEventListener("change", (e) => {
-    socket.emit("setControl", {
-      control: "exposure_dynamic_framerate",
-      value: e.target.checked ? 1 : 0,
-      cameraIndex: activeCamIndex,
-    });
-  });
-}
 createSliderControl(
   "backlight_compensation",
   "backlightCompensation",
@@ -1042,10 +1091,6 @@ function loadCameraConfigToUI(config) {
     document.getElementById("backlightCompensationValue").textContent =
       config.backlight_compensation;
   }
-  if (config.exposure_dynamic_framerate !== undefined) {
-    const dynFps = document.getElementById("exposureDynamicFramerate");
-    if (dynFps) dynFps.checked = config.exposure_dynamic_framerate === 1;
-  }
 
   // White Balance controls
   if (config.white_balance_automatic !== undefined) {
@@ -1113,7 +1158,6 @@ function applyControlAvailability(supportedControls) {
     exposure_time_absolute:     "exposureAbsolute",
     gain:                       "gain",
     backlight_compensation:     "backlightCompensation",
-    exposure_dynamic_framerate: "exposureDynamicFramerate",
     white_balance_automatic:    "whiteBalanceAuto",
     white_balance_temperature:  "whiteBalanceTemp",
     focus_automatic_continuous: "focusAuto",
@@ -2230,9 +2274,9 @@ const exposureAutoSelect = document.getElementById("exposureAuto");
 if (exposureAutoSelect) {
   createCustomDropdown(exposureAutoSelect);
 }
-const ptzModeSelectEl = document.getElementById("ptzMode");
-if (ptzModeSelectEl) {
-  createCustomDropdown(ptzModeSelectEl);
+for (const id of ["ptzMode", "focusMode"]) {
+  const el = document.getElementById(id);
+  if (el) createCustomDropdown(el);
 }
 
 console.log("✅ Custom dropdowns initialized");

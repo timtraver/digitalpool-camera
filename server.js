@@ -2677,11 +2677,22 @@ function getActiveSource(idx) { return idx === 2 ? activeCameraSource2 : activeC
 // guess; the operator's choice, stored per camera slot, overrides it.
 //
 // ptzMode: "auto" (trust detection) | "on" (force shown) | "off" (force hidden).
-const _ptzDetection = { 1: null, 2: null }; // last detectPtzCapability() result
+// Only MECHANICAL capabilities need this treatment. Pan, tilt, optical zoom and
+// focus all need a motor that the firmware advertises whether or not it exists.
+// The ELECTRONIC ones — auto exposure, auto white balance, brightness, gain — are
+// computed in the camera's own image pipeline, so advertising them IS implementing
+// them; they need no detection and get none.
+const CAPABILITIES = {
+  ptz:   { key: "ptzMode",   label: "PTZ",       icon: "🎮" },
+  focus: { key: "focusMode", label: "Autofocus", icon: "🔍" },
+};
 
-/** The operator's stored preference for a camera slot, defaulting to "auto". */
-function getPtzMode(idx) {
-  const mode = getActiveSource(idx).ptzMode;
+// Last detection result per feature per camera: _detection[idx][feature].
+const _detection = { 1: {}, 2: {} };
+
+/** The operator's stored preference for a feature, defaulting to "auto". */
+function getCapabilityMode(idx, feature) {
+  const mode = getActiveSource(idx)[CAPABILITIES[feature].key];
   return mode === "on" || mode === "off" ? mode : "auto";
 }
 
@@ -2690,38 +2701,56 @@ function getPtzMode(idx) {
  * Kept out of the detection path so the reported reason always explains the
  * decision that was made, not the one detection would have made alone.
  */
-function resolvePtzCapability(idx) {
-  const mode = getPtzMode(idx);
-  const detected = _ptzDetection[idx];
+function resolveCapability(idx, feature) {
+  const mode = getCapabilityMode(idx, feature);
+  const detected = _detection[idx][feature];
   const source = getActiveSource(idx);
+  const found = detected ? (feature === "ptz" ? detected.ptz : detected.focus) : null;
 
-  // PTZ is meaningless for network sources — there's no camera to command.
+  // Meaningless for network sources — there's no camera to command.
   if (source.type !== "usb") {
-    return { supported: false, mode, detected: null,
+    return { feature, supported: false, mode, detected: null,
              reason: `${source.type.toUpperCase()} sources have no camera controls` };
   }
-  if (mode === "on")  return { supported: true,  mode, detected: detected?.ptz ?? null, reason: "forced on by user" };
-  if (mode === "off") return { supported: false, mode, detected: detected?.ptz ?? null, reason: "turned off by user" };
-  if (!detected)      return { supported: true,  mode, detected: null, reason: "not yet detected — assuming PTZ" };
-  return { supported: detected.ptz, mode, detected: detected.ptz,
+  if (mode === "on")  return { feature, supported: true,  mode, detected: found, reason: "forced on by user" };
+  if (mode === "off") return { feature, supported: false, mode, detected: found, reason: "turned off by user" };
+  if (!detected)      return { feature, supported: true,  mode, detected: null,
+                               reason: `not yet detected — assuming ${CAPABILITIES[feature].label}` };
+  return { feature, supported: found, mode, detected: found,
            reason: detected.reason, confident: detected.confident };
 }
 
-/** Re-run PTZ detection for a slot and cache it. Safe to call on any source. */
-async function refreshPtzDetection(idx) {
+/** Every feature's resolved state, as the UI consumes it. */
+function resolveCapabilities(idx) {
+  const out = {};
+  for (const feature of Object.keys(CAPABILITIES)) out[feature] = resolveCapability(idx, feature);
+  return out;
+}
+
+/** Re-run detection for one feature and cache it. Safe to call on any source. */
+async function refreshDetection(idx, feature) {
   const source = getActiveSource(idx);
-  if (source.type !== "usb") { _ptzDetection[idx] = null; return null; }
+  if (source.type !== "usb") { _detection[idx][feature] = null; return null; }
+  const cam = getCam(idx);
   try {
-    const result = await getCam(idx).detectPtzCapability(source.device);
-    _ptzDetection[idx] = result;
-    console.log(`🎮 [Cam${idx}] PTZ detection: ${result.ptz ? "supported" : "not supported"}` +
-                `${result.confident ? "" : " (low confidence)"} — ${result.reason}`);
+    const result = feature === "ptz"
+      ? await cam.detectPtzCapability(source.device)
+      : await cam.detectFocusCapability(source.device);
+    _detection[idx][feature] = result;
+    const found = feature === "ptz" ? result.ptz : result.focus;
+    console.log(`${CAPABILITIES[feature].icon} [Cam${idx}] ${CAPABILITIES[feature].label} detection: ` +
+                `${found ? "supported" : "not supported"}${result.confident ? "" : " (low confidence)"} — ${result.reason}`);
     return result;
   } catch (e) {
-    console.warn(`⚠️  [Cam${idx}] PTZ detection failed: ${e.message}`);
-    _ptzDetection[idx] = null;
+    console.warn(`⚠️  [Cam${idx}] ${CAPABILITIES[feature].label} detection failed: ${e.message}`);
+    _detection[idx][feature] = null;
     return null;
   }
+}
+
+/** Re-run detection for every feature on a camera slot. */
+async function refreshAllDetection(idx) {
+  for (const feature of Object.keys(CAPABILITIES)) await refreshDetection(idx, feature);
 }
 
 // List available V4L2 video capture devices
@@ -3012,11 +3041,11 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     cam.currentTilt = 0;
     cam.discoveredControls = null;
     cam._ptzQueue = Promise.resolve();
-    _ptzDetection[camIdx] = null;
+    _detection[camIdx] = {};
 
     saveCameraSource(newSource, camIdx);
     io.emit("refreshIdlePreview", { cameraIndex: camIdx });
-    io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: [], ptzRanges: {}, controlRanges: {}, ptzCapability: resolvePtzCapability(camIdx) });
+    io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: [], ptzRanges: {}, controlRanges: {}, capabilities: resolveCapabilities(camIdx) });
     io.emit("streamStatus", { ...sc.getStatus(), cameraIndex: camIdx });
     console.log(`📷 [Cam${camIdx}] Camera source set to "No Camera" — device released`);
     return res.json({ success: true, source: newSource, wasStreaming, streamRestarted: false });
@@ -3058,7 +3087,7 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     console.log(`📹 [Cam${camIdx}] New USB camera: format=${fmt.toUpperCase()}, controls=${Object.keys(cam.discoveredControls || {}).join(", ")}`);
     // A different camera means a different PTZ verdict — and a stale "auto"
     // result from the previous device would gate the wrong controls.
-    await refreshPtzDetection(camIdx);
+    await refreshAllDetection(camIdx);
   } else if (type === "rtmp") {
     const newSource = { type: "rtmp", device: defaultDevice, rtspUrl: "", rtmpUrl, ndiName: "" };
     if (camIdx === 2) activeCameraSource2 = newSource; else activeCameraSource = newSource;
@@ -3125,7 +3154,7 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
       if (camIdx === 2) cameraFormat2 = fmt; else cameraFormat = fmt;
       sc.captureFormat = fmt;
       console.log(`📹 [Cam${camIdx}] Reverted USB camera: format=${fmt.toUpperCase()}`);
-      await refreshPtzDetection(camIdx);
+      await refreshAllDetection(camIdx);
     }
     sc.setInputSource(getActiveSource(camIdx));
     try { await startPersistentIdlePreview(camIdx); } catch (_) {}
@@ -3136,7 +3165,7 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
       const hwControls = cam.discoveredControls || cam.controls;
       const ptzRanges = buildPtzRanges(hwControls);
       const controlRanges = buildControlRanges(hwControls);
-      io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: Object.keys(hwControls), ptzRanges, controlRanges, ptzCapability: resolvePtzCapability(camIdx) });
+      io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: Object.keys(hwControls), ptzRanges, controlRanges, capabilities: resolveCapabilities(camIdx) });
     }
 
     // Restart the stream on the reverted source if it was running before.
@@ -3173,7 +3202,7 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     const hwControls = cam.discoveredControls || cam.controls;
     const ptzRanges = buildPtzRanges(hwControls);
     const controlRanges = buildControlRanges(hwControls);
-    io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: Object.keys(hwControls), ptzRanges, controlRanges, ptzCapability: resolvePtzCapability(camIdx) });
+    io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: Object.keys(hwControls), ptzRanges, controlRanges, capabilities: resolveCapabilities(camIdx) });
   }
 
   // ── Step 5: Restart the stream on the new source (if it was running) ────
@@ -3228,7 +3257,7 @@ app.post("/api/camera/reset", async (req, res) => {
   const cam = getCam(camIdx);
   const result = await cam.resetToDefaults();
   // resetToDefaults re-reads the control set, so re-run the PTZ guess with it.
-  await refreshPtzDetection(camIdx);
+  await refreshAllDetection(camIdx);
   const hwControls = cam.discoveredControls || cam.controls;
   const ptzRanges = buildPtzRanges(hwControls);
   const controlRanges = buildControlRanges(hwControls);
@@ -3239,42 +3268,47 @@ app.post("/api/camera/reset", async (req, res) => {
     supportedControls: Object.keys(hwControls),
     ptzRanges,
     controlRanges,
-    ptzCapability: resolvePtzCapability(camIdx),
+    capabilities: resolveCapabilities(camIdx),
   });
 });
 
-// Get / set the PTZ capability override for a camera.
+// Get / set the mechanical-capability overrides (PTZ, autofocus) for a camera.
 //
-// GET returns the resolved state plus what detection thinks, so the UI can label
-// the "Auto" choice with the actual finding. POST stores the operator's decision
-// in the camera source file, where it survives restarts and stays tied to the
-// slot the camera is plugged into.
-app.get("/api/camera/ptz-capability", requireAuth, async (req, res) => {
+// GET returns each feature's resolved state plus what detection thinks, so the UI
+// can explain the Auto choice. POST stores the operator's decision in the camera
+// source file, where it survives restarts and stays tied to the slot the camera
+// is plugged into.
+app.get("/api/camera/capabilities", requireAuth, async (req, res) => {
   const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
   // Detect on first ask so a fresh boot doesn't report "not yet detected".
-  if (!_ptzDetection[camIdx] && getActiveSource(camIdx).type === "usb") {
-    await refreshPtzDetection(camIdx);
+  if (!Object.keys(_detection[camIdx]).length && getActiveSource(camIdx).type === "usb") {
+    await refreshAllDetection(camIdx);
   }
-  res.json({ success: true, ...resolvePtzCapability(camIdx) });
+  res.json({ success: true, capabilities: resolveCapabilities(camIdx) });
 });
 
-app.post("/api/camera/ptz-capability", requireAuth, async (req, res) => {
+app.post("/api/camera/capabilities", requireAuth, async (req, res) => {
   const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
-  const mode = req.body?.mode;
+  const { feature, mode } = req.body || {};
+  if (!CAPABILITIES[feature]) {
+    return res.status(400).json({ success: false, error: `feature must be one of: ${Object.keys(CAPABILITIES).join(", ")}` });
+  }
   if (!["auto", "on", "off"].includes(mode)) {
     return res.status(400).json({ success: false, error: "mode must be auto, on or off" });
   }
   const source = getActiveSource(camIdx);
-  source.ptzMode = mode;
+  source[CAPABILITIES[feature].key] = mode;
   saveCameraSource(source, camIdx);
-  // Returning to "auto" means the stored verdict is what decides — make sure
-  // there is a current one rather than whatever was cached before the override.
-  if (mode === "auto") await refreshPtzDetection(camIdx);
-  const capability = resolvePtzCapability(camIdx);
-  console.log(`🎮 [Cam${camIdx}] PTZ mode set to "${mode}" → ${capability.supported ? "shown" : "hidden"} (${capability.reason})`);
-  // Broadcast so every open tab re-gates its PTZ section immediately.
-  io.emit("ptzCapability", { cameraIndex: camIdx, ...capability });
-  res.json({ success: true, ...capability });
+  // Returning to "auto" means detection decides again — make sure there is a
+  // current verdict rather than whatever was cached before the override.
+  if (mode === "auto") await refreshDetection(camIdx, feature);
+  const capabilities = resolveCapabilities(camIdx);
+  const resolved = capabilities[feature];
+  console.log(`${CAPABILITIES[feature].icon} [Cam${camIdx}] ${CAPABILITIES[feature].label} mode set to "${mode}" ` +
+              `→ ${resolved.supported ? "shown" : "hidden"} (${resolved.reason})`);
+  // Broadcast so every open tab re-gates immediately.
+  io.emit("cameraCapabilities", { cameraIndex: camIdx, capabilities });
+  res.json({ success: true, capabilities });
 });
 
 // ============ STREAMING API ENDPOINTS ============
@@ -4789,7 +4823,7 @@ io.on("connection", (socket) => {
       supportedControls: Object.keys(hwControls),
       ptzRanges,
       controlRanges,
-      ptzCapability: resolvePtzCapability(camIdx),
+      capabilities: resolveCapabilities(camIdx),
       cameraPresent,
     });
   });
@@ -4825,7 +4859,7 @@ io.on("connection", (socket) => {
       supportedControls: Object.keys(hwControls),
       ptzRanges,
       controlRanges,
-      ptzCapability: resolvePtzCapability(camIdx),
+      capabilities: resolveCapabilities(camIdx),
     });
   });
 
@@ -5328,7 +5362,7 @@ server.listen(PORT, async () => {
     streamController.captureFormat = cameraFormat;
     console.log(`📹 Camera capture format detected: ${cameraFormat.toUpperCase()}`);
     // Runs after activateCamera() because the heuristic reads discoveredControls.
-    await refreshPtzDetection(1);
+    await refreshAllDetection(1);
   } catch (error) {
     console.error("❌ Error detecting camera format:", error.message);
     cameraFormat = "mjpeg"; // safe fallback
@@ -5448,7 +5482,7 @@ server.listen(PORT, async () => {
         cameraFormat2 = await camera2.detectCaptureFormat(camera2.device || CAMERA_DEVICE_2);
         streamController2.captureFormat = cameraFormat2;
         console.log(`📹 [Cam2] Capture format: ${cameraFormat2.toUpperCase()}`);
-        await refreshPtzDetection(2);
+        await refreshAllDetection(2);
       } catch (e) {
         console.error("⚠️  [Cam2] Format detection failed:", e.message);
         cameraFormat2 = "mjpeg";
