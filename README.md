@@ -1771,6 +1771,9 @@ dp ALL=(ALL) NOPASSWD: /usr/bin/systemctl reload NetworkManager
 dp ALL=(ALL) NOPASSWD: /usr/bin/iptables -t nat *
 # v4l2-ctl — camera format queries, PTZ controls, and image controls
 dp ALL=(ALL) NOPASSWD: /usr/bin/v4l2-ctl *
+# lsusb — read UVC descriptors to detect whether a camera physically has PTZ
+# (also installed automatically by migrations/0006-lsusb-sudoers.sh)
+dp ALL=(ALL) NOPASSWD: /usr/bin/lsusb -v -d *
 EOF
 
 # Validate syntax before applying

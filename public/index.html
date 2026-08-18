@@ -144,6 +144,19 @@
                     <select id="cameraUsbDevice" style="flex:1"><option value="">Scanning…</option></select>
                     <button id="refreshCameraDevices" class="btn-icon-small" title="Refresh device list">🔄</button>
                   </div>
+                  <div class="control-item" style="margin-top:6px">
+                    <label for="ptzMode">Pan/Tilt/Zoom</label>
+                    <select id="ptzMode" style="flex:1">
+                      <option value="auto">Auto-detect</option>
+                      <option value="on">Yes — camera has PTZ</option>
+                      <option value="off">No — fixed camera</option>
+                    </select>
+                  </div>
+                  <p id="ptzModeInfo" style="font-size:10px;color:rgba(255,255,255,0.5);margin:4px 0 0">
+                    Many fixed cameras advertise PTZ controls they can't actually perform, so
+                    auto-detection is a best guess. Set this manually if the PTZ section is
+                    hidden on a camera that does move — or shown on one that doesn't.
+                  </p>
                 </div>
                 <div id="cameraInputRtsp" style="display:none">
                   <div class="control-item" style="margin-top:6px">
@@ -214,6 +227,11 @@
                   <input type="range" id="sharpness" min="0" max="100" value="50" />
                   <span class="value-display" id="sharpnessValue">50</span>
                 </div>
+                <div class="control-item">
+                  <label for="gamma">Gamma</label>
+                  <input type="range" id="gamma" min="0" max="100" value="50" />
+                  <span class="value-display" id="gammaValue">50</span>
+                </div>
               </div>
             </details>
 
@@ -221,6 +239,12 @@
             <details class="cam-subsection">
               <summary><span class="cam-subsection-title">☀️ Exposure</span></summary>
               <div class="cam-subsection-body">
+                <!-- The min/max/step on every slider below is a PLACEHOLDER.
+                     applyControlRanges() in app.js replaces them with the
+                     attached camera's real hardware range when the cameraConfig
+                     event arrives, and the Auto Exposure options are rebuilt
+                     from the modes that camera actually reports. Do not treat
+                     these numbers as the usable range for any given camera. -->
                 <div class="control-item">
                   <label for="exposureAuto">Auto Exposure</label>
                   <select id="exposureAuto">
@@ -245,6 +269,17 @@
                   <input type="range" id="backlightCompensation" min="0" max="18" value="9" />
                   <span class="value-display" id="backlightCompensationValue">9</span>
                 </div>
+                <div class="control-item">
+                  <label for="exposureDynamicFramerate">Long Exposure</label>
+                  <input type="checkbox" id="exposureDynamicFramerate" />
+                </div>
+                <p style="font-size:10px;color:rgba(255,255,255,0.5);margin:6px 0 0">
+                  With <strong>Long Exposure</strong> off, exposure is capped at the frame
+                  period — about 33&nbsp;ms (330) at 30&nbsp;fps, 17&nbsp;ms (167) at
+                  60&nbsp;fps — and raising the slider past that has no effect. Use
+                  <strong>Gain</strong> to brighten instead. Turning it on lets the camera
+                  drop framerate for a brighter picture, which will make the stream stutter.
+                </p>
               </div>
             </details>
 

@@ -36,6 +36,7 @@ class CameraController {
       contrast: { id: "0x00980901", min: 0, max: 100, step: 1, default: 50 },
       saturation: { id: "0x00980902", min: 0, max: 100, step: 1, default: 50 },
       hue: { id: "0x00980903", min: 0, max: 100, step: 1, default: 50 },
+      gamma: { id: "0x00980910", min: 0, max: 100, step: 1, default: 50 },
       white_balance_automatic: {
         id: "0x0098090c",
         type: "bool",
@@ -55,7 +56,7 @@ class CameraController {
         step: 1,
         default: 1024,
       },
-      gain: { id: "0x00980913", min: 1, max: 64, step: 1, default: 1 },
+      gain: { id: "0x00980913", min: 1, max: 128, step: 1, default: 1 },
       power_line_frequency: {
         id: "0x00980918",
         type: "menu",
@@ -91,6 +92,18 @@ class CameraController {
         max: 2500,  // units = 100 µs; 167=60fps ceiling, 333=30fps ceiling, 2500=4fps (camera drops framerate for longer exposures)
         step: 1,
         default: 330,
+      },
+      // Whether the sensor may lengthen the frame interval to honor a long
+      // exposure.  When 0 (the default, and what constant-framerate streaming
+      // needs) any exposure_time_absolute above the frame period is silently
+      // truncated to it — 330 units (33 ms) at 30 fps, 167 (16.7 ms) at 60 fps.
+      // That makes GAIN the only remaining brightness lever, which is why the
+      // gain slider must span the camera's real range.  Not every camera exposes
+      // this control; it's applied before exposure_time_absolute when present.
+      exposure_dynamic_framerate: {
+        id: "0x009a0903",
+        type: "bool",
+        default: 0,
       },
       pan_absolute: {
         id: "0x009a0908",
@@ -129,14 +142,76 @@ class CameraController {
   }
 
   /**
-   * Get default values for all controls
+   * Get default values for all controls.
+   *
+   * Prefers the values the ATTACHED camera reports as its own defaults, falling
+   * back to the static OBSBot map only for controls discovery didn't cover.
+   * Without this, "Reset All" pushed OBSBot numbers onto every camera — on the
+   * ELP 4K U3 that meant gain=1 (its own default is 140 of 0-190) and
+   * backlight_compensation=9 (its own default is 48 of 0-160), i.e. reset made
+   * the picture darker instead of returning it to the manufacturer's baseline.
    */
   getDefaults() {
+    const hw = this.discoveredControls;
     const defaults = {};
     for (const [name, control] of Object.entries(this.controls)) {
-      defaults[name] = control.default;
+      const hwControl = hw && hw[name];
+      if (!hwControl || CameraController.ENV_DEFAULT_CONTROLS.has(name)) {
+        defaults[name] = control.default;
+        continue;
+      }
+      if (CameraController.PERCENTAGE_CONTROLS.has(name)) {
+        // These are stored as 0-100 and scaled at apply time, so express the
+        // camera's own default as a percentage of ITS range rather than assuming
+        // the midpoint — e.g. ELP saturation defaults to 100 of 0-128 (78%), and
+        // a blind 50% left every stream noticeably washed out.
+        const { min = 0, max = 100 } = hwControl;
+        const d = hwControl.default;
+        defaults[name] = (max > min && Number.isFinite(d))
+          ? Math.round(((d - min) / (max - min)) * 100)
+          : control.default;
+      } else if (hwControl.type === 'menu') {
+        defaults[name] = this._coerceMenuValue(
+          name, hwControl.default ?? control.default, hwControl);
+      } else {
+        defaults[name] = Number.isFinite(hwControl.default)
+          ? hwControl.default
+          : control.default;
+      }
     }
     return defaults;
+  }
+
+  /**
+   * Map a requested menu value onto one this camera actually offers.
+   *
+   * A menu control's min/max spans the whole V4L2 enum, not the subset the
+   * camera implements, so the item list is the only reliable guide.  Returns the
+   * value unchanged when the camera's items are unknown (no discovery yet).
+   */
+  _coerceMenuValue(controlName, value, hwControl) {
+    const items = hwControl && hwControl.menuItems;
+    if (!Array.isArray(items) || items.length === 0) return value;
+    const values = items.map((i) => i.value);
+    if (values.includes(value)) return value;
+
+    // auto_exposure needs INTENT preserved, not numeric proximity. V4L2 modes:
+    // 0=Auto, 1=Manual, 2=Shutter Priority, 3=Aperture Priority. Modes 0 and 3
+    // both let the camera choose the exposure time; 1 and 2 both set it by hand.
+    // The ELP 4K U3 offers only 1 and 3, so a request for "Auto" (0) must become
+    // 3 — picking the numerically nearest value would give 1 (Manual), the exact
+    // opposite of what was asked for, and leave the sensor dark.
+    if (controlName === 'auto_exposure') {
+      const wantAuto = CameraController.isAutoExposureMode(value);
+      const sameIntent = values.filter(
+        (v) => CameraController.isAutoExposureMode(v) === wantAuto);
+      if (sameIntent.length) return sameIntent[0];
+    }
+
+    if (values.includes(hwControl.default)) return hwControl.default;
+    return values.reduce(
+      (best, v) => (Math.abs(v - value) < Math.abs(best - value) ? v : best),
+      values[0]);
   }
 
   /**
@@ -150,33 +225,28 @@ class CameraController {
         console.log("✅ Loaded camera config from file:", this.configFile);
         // console.log("📋 Config contents:", JSON.stringify(config, null, 2));
 
-        // Validate and fix invalid values
+        // Validate and fix invalid values.
+        //
+        // Only the percentage controls can be checked here: they are 0-100 on
+        // every camera by definition.  Everything else stores RAW hardware units
+        // whose valid range belongs to the attached camera, and discovery hasn't
+        // run yet (this is called from the constructor) — so the only range
+        // available would be the static OBSBot fallback, which is simply wrong
+        // for another camera.  Validating against it actively destroyed good
+        // values: a saved gain of 140 (perfectly valid on the ELP 4K U3's 0-190)
+        // is above the OBSBot's max of 128 and was silently reset to 1 on every
+        // restart.  setControl() clamps these to the REAL discovered range at
+        // apply time instead, and menu values are coerced to a supported item.
         let needsSave = false;
         for (const [controlName, value] of Object.entries(config)) {
-          // Absolute PTZ values are raw, camera-specific units — don't validate
-          // them against the static fallback range (that would wrongly reset a
-          // large-zoom camera's saved value). setControl() clamps at apply time.
-          if (CameraController.ABSOLUTE_PTZ_CONTROLS.has(controlName)) continue;
-          if (this.controls[controlName]) {
-            const control = this.controls[controlName];
-            // Check if value is out of range
-            if (control.type !== "bool" && control.type !== "menu") {
-              if (value < control.min || value > control.max) {
-                console.log(
-                  `⚠️  Invalid value for ${controlName}: ${value} (range: ${control.min}-${control.max}), using default: ${control.default}`,
-                );
-                config[controlName] = control.default;
-                needsSave = true;
-              }
-            } else if (control.type === "menu") {
-              if (value < control.min || value > control.max) {
-                console.log(
-                  `⚠️  Invalid value for ${controlName}: ${value} (range: ${control.min}-${control.max}), using default: ${control.default}`,
-                );
-                config[controlName] = control.default;
-                needsSave = true;
-              }
-            }
+          if (!CameraController.PERCENTAGE_CONTROLS.has(controlName)) continue;
+          if (value < 0 || value > 100) {
+            const fallback = this.controls[controlName]?.default ?? 50;
+            console.log(
+              `⚠️  Invalid value for ${controlName}: ${value} (must be 0-100), using default: ${fallback}`,
+            );
+            config[controlName] = fallback;
+            needsSave = true;
           }
         }
 
@@ -247,18 +317,39 @@ class CameraController {
   async discoverControls(device) {
     const dev = device || this.device;
     try {
+      // --list-ctrls-menus (not --list-ctrls) so the valid ITEMS of each menu
+      // control come back too.  A menu's min/max is not a usable range: the ELP
+      // 4K U3 reports auto_exposure min=0 max=3 but only offers items 1 (Manual)
+      // and 3 (Aperture Priority) — writing 0 or 2 fails.  Only the item list
+      // tells us what the camera will actually accept.
       const { stdout } = await execAsync(
-        `v4l2-ctl -d ${dev} --list-ctrls 2>/dev/null`,
+        `v4l2-ctl -d ${dev} --list-ctrls-menus 2>/dev/null`,
         { timeout: 5000 }
       );
       const discovered = {};
       // Example line:
       //   brightness 0x00980900 (int)    : min=0 max=14 step=1 default=7 value=7
       const lineRe = /^\s+(\w+)\s+0x[0-9a-f]+\s+\((\w+)\)\s*:(.+)$/;
+      // Menu items are indented lines under their menu control, e.g.
+      //   				1: Manual Mode
+      const menuItemRe = /^\s+(\d+):\s*(\S.*?)\s*$/;
+      let lastMenu = null; // control name whose items we're currently collecting
       for (const line of stdout.split('\n')) {
         const m = line.match(lineRe);
-        if (!m) continue;
+        if (!m) {
+          // Not a control line — may be a menu item belonging to the previous
+          // menu control (or a blank/section-header line, which we ignore).
+          const item = lastMenu && line.match(menuItemRe);
+          if (item) {
+            discovered[lastMenu].menuItems.push({
+              value: parseInt(item[1], 10),
+              label: item[2],
+            });
+          }
+          continue;
+        }
         const [, name, type, attrs] = m;
+        lastMenu = null;
         const num = (key) => {
           const hit = attrs.match(new RegExp(`${key}=(-?\\d+)`));
           return hit ? parseInt(hit[1], 10) : undefined;
@@ -273,8 +364,9 @@ class CameraController {
         } else if (type === 'menu') {
           discovered[name] = {
             type: 'menu', min: num('min') ?? 0, max: num('max') ?? 0,
-            step: 1, default: num('default') ?? 0,
+            step: 1, default: num('default') ?? 0, menuItems: [],
           };
+          lastMenu = name;
         }
       }
       console.log(`📷 Camera controls discovered: ${Object.keys(discovered).join(', ')}`);
@@ -285,10 +377,112 @@ class CameraController {
         const c = discovered[name];
         if (c) console.log(`   ↳ ${name}: min=${c.min} max=${c.max} step=${c.step}`);
       }
+      // Log the brightness-related ranges too — these differ hugely between
+      // cameras (OBSBot gain 1-128 vs ELP 4K 0-190) and a UI slider clamped to
+      // the wrong maximum is indistinguishable from "the camera is just dark".
+      for (const name of ['gain', 'exposure_time_absolute', 'backlight_compensation']) {
+        const c = discovered[name];
+        if (c) console.log(`   ↳ ${name}: min=${c.min} max=${c.max} default=${c.default}`);
+      }
+      for (const [name, c] of Object.entries(discovered)) {
+        if (c.type === 'menu' && c.menuItems.length) {
+          console.log(`   ↳ ${name} accepts: ${c.menuItems.map((i) => `${i.value}=${i.label}`).join(', ')}`);
+        }
+      }
       this.discoveredControls = discovered;
       return discovered;
     } catch (err) {
       console.warn('⚠️  Could not discover camera controls:', err.message);
+      return null;
+    }
+  }
+
+  /**
+   * Work out whether this camera can ACTUALLY pan/tilt/zoom, as opposed to
+   * merely advertising the controls.
+   *
+   * UVC firmware routinely exposes the whole Camera Terminal control set
+   * regardless of what is mechanically present, and uvcvideo dutifully creates a
+   * v4l2 control for each — so the ELP 4K U3, a fixed camera, offers
+   * pan_absolute/tilt_absolute/zoom_absolute and even retains values written to
+   * them.  Writing and reading back therefore proves nothing, and neither does
+   * the reported range (the ELP's ±648000 is just a generic ±180°).
+   *
+   * Two signals are worth something:
+   *
+   *   1. wObjectiveFocalLengthMin/Max in the USB Camera Terminal descriptor.
+   *      Per the UVC spec a fixed-focal-length lens reports these equal (often
+   *      both 0), so this is a real, spec-backed answer for OPTICAL zoom.  It
+   *      lives in the USB descriptor, invisible to v4l2-ctl — hence lsusb.
+   *   2. Relative/speed motion controls (pan_speed, tilt_speed, zoom_continuous).
+   *      Motorised units generally implement them; the OBSBot does, the ELP does
+   *      not.  Correlation only — some genuine PTZ cameras are absolute-only.
+   *
+   * Neither is conclusive, so this is a DEFAULT, not a verdict: it biases toward
+   * keeping PTZ visible and only reports "fixed" on positive evidence.  The user
+   * override in the camera source config always wins — see server.js.
+   *
+   * @returns {Promise<{ptz: boolean, confident: boolean, reason: string}>}
+   */
+  async detectPtzCapability(device) {
+    const dev = device || this.device;
+    const hw = this.discoveredControls || {};
+
+    // No absolute pan/tilt/zoom at all → nothing to argue about.
+    const hasAbsolute = !!(hw.pan_absolute || hw.tilt_absolute || hw.zoom_absolute);
+    if (!hasAbsolute) {
+      return { ptz: false, confident: true, reason: "camera exposes no pan/tilt/zoom controls" };
+    }
+
+    // Signal 2 — relative motion controls.
+    const hasRelative = !!(hw.pan_speed || hw.tilt_speed || hw.zoom_continuous);
+    if (hasRelative) {
+      return { ptz: true, confident: true, reason: "camera implements relative motion controls (pan_speed/tilt_speed/zoom_continuous)" };
+    }
+
+    // Signal 1 — the objective focal length range from the USB descriptor.
+    const focal = await this._readObjectiveFocalLength(dev);
+    if (focal && focal.min === focal.max) {
+      return {
+        ptz: false,
+        confident: false,
+        reason: `fixed lens (wObjectiveFocalLength min=max=${focal.min}) and no relative motion controls`,
+      };
+    }
+
+    // Absolute controls but no corroborating evidence either way. Assume the
+    // camera means it — hiding a working D-pad is worse than showing a dead one.
+    return {
+      ptz: true,
+      confident: false,
+      reason: focal
+        ? `variable lens (wObjectiveFocalLength ${focal.min}-${focal.max}) but no relative motion controls`
+        : "absolute PTZ controls present; USB descriptor unreadable, assuming PTZ",
+    };
+  }
+
+  /**
+   * Read wObjectiveFocalLengthMin/Max from the camera's UVC Camera Terminal
+   * descriptor.  Needs the USB vendor:product id, which udev knows for the
+   * /dev/video node, and root — lsusb only prints descriptors as root, the same
+   * reason the v4l2-ctl calls here are sudo'd.  Returns null when unavailable.
+   */
+  async _readObjectiveFocalLength(dev) {
+    try {
+      const { stdout: props } = await execAsync(
+        `udevadm info -q property -n ${dev} 2>/dev/null`, { timeout: 3000 });
+      const vid = props.match(/ID_VENDOR_ID=([0-9a-fA-F]{4})/)?.[1];
+      const pid = props.match(/ID_MODEL_ID=([0-9a-fA-F]{4})/)?.[1];
+      if (!vid || !pid) return null;
+
+      const { stdout } = await execAsync(
+        `sudo lsusb -v -d ${vid}:${pid} 2>/dev/null`, { timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
+      const min = stdout.match(/wObjectiveFocalLengthMin\s+(\d+)/)?.[1];
+      const max = stdout.match(/wObjectiveFocalLengthMax\s+(\d+)/)?.[1];
+      if (min === undefined || max === undefined) return null;
+      return { min: parseInt(min, 10), max: parseInt(max, 10) };
+    } catch (err) {
+      console.warn(`⚠️  Could not read USB descriptor for ${dev}: ${err.message}`);
       return null;
     }
   }
@@ -372,9 +566,13 @@ class CameraController {
     // E.g., white_balance_automatic=0 must be set before red_balance, blue_balance,
     // white_balance_temperature. auto_exposure must be set to manual before
     // exposure_time_absolute. focus_automatic_continuous=0 before focus_absolute.
+    // exposure_dynamic_framerate belongs here too: it decides whether a long
+    // exposure_time_absolute is honored or truncated to the frame period, so it
+    // has to be in place before the exposure time is written.
     const autoModeControls = [
       "white_balance_automatic",
       "auto_exposure",
+      "exposure_dynamic_framerate",
       "focus_automatic_continuous",
     ];
     const autoControls = [];
@@ -397,11 +595,21 @@ class CameraController {
     const hwControls = this.discoveredControls || this.controls;
 
     // Apply auto-mode controls first (disable auto before setting manual values)
+    let configCorrected = false;
     for (const [controlName, value] of autoControls) {
       if (hwControls[controlName]) {
         try {
           const result = await this.setControl(controlName, value, false);
           results.push({ control: controlName, ...result });
+          // A menu value the camera doesn't offer gets remapped to one it does.
+          // Store what actually took effect, otherwise config keeps describing a
+          // mode this camera has never been in — and the UI, which builds its
+          // dropdown from the camera's real modes, cannot represent the stale
+          // value and silently displays the wrong one.
+          if (result.success && result.value !== value) {
+            this.config[controlName] = result.value;
+            configCorrected = true;
+          }
           await new Promise((resolve) => setTimeout(resolve, 100));
         } catch (error) {
           console.error(`❌ Failed to apply ${controlName}:`, error.message);
@@ -423,8 +631,13 @@ class CameraController {
       skipControls.add("white_balance_temperature");
       console.log("  ℹ️  Auto white balance ON — skipping manual WB controls");
     }
-    // auto_exposure: 0=Auto, 1=Manual, 3=Aperture Priority
-    if (expAuto === 0 || expAuto === 3) {
+    // Decide against the mode the camera will ACTUALLY be in, not the one stored
+    // in config.  A config asking for mode 0 (Auto) on a camera that only offers
+    // 1 and 3 gets coerced to 3 by setControl, and testing the raw stored value
+    // would have made this branch disagree with the hardware.
+    const expMode = this._coerceMenuValue(
+      "auto_exposure", expAuto, hwControls.auto_exposure);
+    if (CameraController.isAutoExposureMode(expMode)) {
       skipControls.add("exposure_time_absolute");
       console.log("  ℹ️  Auto exposure ON — skipping manual exposure controls");
     }
@@ -513,6 +726,11 @@ class CameraController {
       }
     }
 
+    if (configCorrected) {
+      console.log("💾 Persisting values the camera remapped…");
+      this.saveConfig();
+    }
+
     console.log("✅ Camera configuration applied");
     return results;
   }
@@ -579,9 +797,21 @@ class CameraController {
         };
       }
 
+      // Menu controls only accept the items the camera implements, so remap an
+      // unsupported request onto the closest equivalent this camera does offer
+      // (see _coerceMenuValue) rather than letting v4l2-ctl reject it outright.
+      let requested = value;
+      if (hwControl.type === 'menu') {
+        requested = this._coerceMenuValue(controlName, value, hwControl);
+        if (requested !== value) {
+          const label = hwControl.menuItems?.find((i) => i.value === requested)?.label || requested;
+          console.log(`    ↷ ${controlName}=${value} not offered by this camera — using ${requested} (${label})`);
+        }
+      }
+
       // Translate the stored UI value (0-100 for percentage controls, raw for
       // PTZ controls) to the camera's actual hardware range.
-      const hwValue = this.translateValue(controlName, value, hwControl);
+      const hwValue = this.translateValue(controlName, requested, hwControl);
 
       const command = `sudo v4l2-ctl -d ${this.device} --set-ctrl=${controlName}=${hwValue}`;
       const note = hwValue !== value ? ` (scaled from ${value})` : '';
@@ -600,17 +830,19 @@ class CameraController {
         console.log(`    📤 stdout: ${stdout}`);
       }
 
-      // Save the original UI value (not the translated hw value) to config
-      // so the slider position is preserved across reboots.
+      // Save the UI-level value (not the translated hw value) to config so the
+      // slider position is preserved across reboots.  For a coerced menu this is
+      // the value the camera actually took, so the dropdown reflects reality
+      // instead of a mode this camera doesn't have.
       if (saveToConfig) {
-        this.config[controlName] = value;
+        this.config[controlName] = requested;
         this.saveConfig();
       }
 
       return {
         success: true,
         control: controlName,
-        value,
+        value: requested,
         hwValue,
         message: stdout || "Control set successfully",
       };
@@ -955,21 +1187,31 @@ class CameraController {
 
 // Controls where the config/UI stores a 0-100 percentage value that must be
 // scaled to the camera's actual hardware range before applying via v4l2-ctl.
-// The absolute PTZ controls (pan_absolute, tilt_absolute, zoom_absolute) are NOT
-// in this set — they store RAW camera-unit values and are clamped/step-snapped
-// to the hardware range. Zoom is raw so the slider can move in the camera's
-// actual zoom increments; a forced 0-100 percentage produced dead zones on
-// small-range cameras and skipped real stops on coarse-step ones.
+// Every OTHER control stores RAW camera-unit values, clamped and step-snapped to
+// the discovered hardware range at apply time — that includes the absolute PTZ
+// controls and the exposure/gain/white-balance group. Raw is what lets a slider
+// move in the camera's own increments: a forced 0-100 percentage produced dead
+// zones on small-range cameras and skipped real stops on coarse-step ones.
+// The browser sizes each raw slider from the ranges buildControlRanges() sends,
+// so this set is also what tells the UI which sliders stay 0-100.
 CameraController.PERCENTAGE_CONTROLS = new Set([
   'brightness', 'contrast', 'saturation', 'hue', 'sharpness', 'gamma',
 ]);
 
-// Absolute PTZ controls store raw, camera-specific hardware units. Their valid
-// range depends on the attached camera, so loadConfig() must not reset them
-// against the static fallback range — setControl() clamps them to the real
-// discovered range at apply time instead.
-CameraController.ABSOLUTE_PTZ_CONTROLS = new Set([
-  'pan_absolute', 'tilt_absolute', 'zoom_absolute',
+// V4L2 auto_exposure modes: 0=Auto, 1=Manual, 2=Shutter Priority,
+// 3=Aperture Priority. Modes 0 and 3 let the camera pick the exposure time;
+// 1 and 2 take it from exposure_time_absolute. Cameras implement different
+// subsets — the OBSBot offers 0/1/3, the ELP 4K U3 only 1/3 — so never test for
+// a specific number when what you mean is "is the camera metering for itself".
+CameraController.isAutoExposureMode = (mode) => mode === 0 || mode === 3;
+
+// Controls whose default describes the ENVIRONMENT rather than the camera, so
+// getDefaults() keeps this app's value instead of adopting the hardware's.
+// power_line_frequency exists to cancel mains flicker: the ELP 4K U3 ships
+// defaulted to 50 Hz, and inheriting that would make every North American venue
+// flicker under artificial light. The app targets 60 Hz deliberately.
+CameraController.ENV_DEFAULT_CONTROLS = new Set([
+  'power_line_frequency',
 ]);
 
 // Rate/action controls that must never be applied from saved config at startup.

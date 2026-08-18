@@ -334,12 +334,23 @@ socket.on("cameraConfig", (data) => {
 
   if (data.success && data.config) {
     console.log(`📸 [Cam${data.cameraIndex || 1}] Received camera configuration:`, data.config);
+
+    // Size the sliders to this camera FIRST — loadCameraConfigToUI assigns saved
+    // values, and a value above a stale max would be silently clamped down.
+    applyControlRanges(data.controlRanges);
     loadCameraConfigToUI(data.config);
 
     // Dim controls that the attached camera doesn't support.
     if (data.supportedControls) {
       applyControlAvailability(data.supportedControls);
+      // applyControlAvailability re-enables every supported row, so re-assert the
+      // exposure-mode gating afterwards — otherwise the exposure slider looks
+      // live while the camera is metering for itself and ignoring it.
+      updateExposureControlsState();
     }
+    // Coarse camera-level PTZ gate, applied after the per-control pass above so
+    // it wins over the rows that pass re-enabled.
+    applyPtzCapability(data.ptzCapability);
 
     // Update PTZ hardware state for percentage/step calculations.
     // ptzRanges: { pan_absolute, tilt_absolute, zoom_absolute } each {min, max, step}
@@ -377,12 +388,16 @@ socket.on("cameraConfigReset", (data) => {
   if (data.cameraIndex && data.cameraIndex !== activeCamIndex) return;
   if (data.success && data.config) {
     console.log(`🔄 [Cam${data.cameraIndex || 1}] Reset to defaults — capabilities re-read`);
+    // Ranges before values, for the same reason as in the cameraConfig handler.
+    applyControlRanges(data.controlRanges);
     loadCameraConfigToUI(data.config);
     // Re-apply availability with the freshly-discovered hardware controls so
     // newly-supported rows un-dim and unsupported rows dim, all in one pass.
     if (data.supportedControls) {
       applyControlAvailability(data.supportedControls);
+      updateExposureControlsState();
     }
+    applyPtzCapability(data.ptzCapability);
     // Clear the startup/home position display since it was also reset
     const startupPosInfo = document.getElementById("startupPosInfo");
     if (startupPosInfo) {
@@ -634,8 +649,192 @@ socket.on("startupPosition", (data) => {
   }
 });
 
+// ── Camera control ranges ─────────────────────────────────────────────────────
+//
+// Every non-PTZ slider takes its min/max/step from the ATTACHED camera, sent by
+// the server as `controlRanges` in the cameraConfig event. The values baked into
+// index.html are only placeholders for the moment before that arrives.
+//
+// This matters far more than it looks: the placeholders are OBSBot ranges, and on
+// a camera with a wider range they used to cap the slider partway up. On the ELP
+// 4K U3 the gain slider ended at 64 of a real 0-190 and exposure at 2500 of
+// 10000 — every brightness control could be pegged in the UI while the camera sat
+// at a third of its actual capability, with nothing on screen to explain it.
+const RANGE_SLIDER_MAP = {
+  brightness:                "brightness",
+  contrast:                  "contrast",
+  saturation:                "saturation",
+  sharpness:                 "sharpness",
+  gamma:                     "gamma",
+  exposure_time_absolute:    "exposureAbsolute",
+  gain:                      "gain",
+  backlight_compensation:    "backlightCompensation",
+  white_balance_temperature: "whiteBalanceTemp",
+  focus_absolute:            "focusAbsolute",
+};
+
+/**
+ * Exposure is expressed in units of 100 µs, which is unreadable as a bare
+ * number, so the label carries the millisecond equivalent as well.
+ */
+const _exposureLabel = (v) => `${v} (${(v / 10).toFixed(1)} ms)`;
+
+/**
+ * Rebuild the Auto Exposure dropdown from the modes the camera reports.
+ *
+ * Cameras implement different subsets of the V4L2 exposure enum — the OBSBot
+ * offers Auto/Manual/Aperture Priority, the ELP 4K U3 only Manual and Aperture
+ * Priority. Listing all four meant two of them silently failed to apply, so the
+ * options come from the camera's own menu items, with its own labels.
+ */
+function rebuildExposureModeOptions(menuItems) {
+  const sel = document.getElementById("exposureAuto");
+  if (!sel || !Array.isArray(menuItems) || menuItems.length === 0) return;
+  const prev = sel.value;
+  sel.innerHTML = "";
+  for (const item of menuItems) {
+    const opt = document.createElement("option");
+    opt.value = String(item.value);
+    opt.text = item.label;
+    sel.appendChild(opt);
+  }
+  // Keep the current selection when this camera still offers that mode.
+  if (Array.from(sel.options).some((o) => o.value === prev)) sel.value = prev;
+  // The custom dropdown is a static clone of the <option> list, so it has to be
+  // torn down and rebuilt whenever the option set changes.
+  const existing = sel.parentElement.querySelector(".custom-dropdown");
+  if (existing) existing.remove();
+  createCustomDropdown(sel);
+  updateExposureControlsState();
+}
+
+/**
+ * Size every slider to the attached camera's real hardware range.
+ * Must run BEFORE loadCameraConfigToUI() — assigning a value to a slider whose
+ * max is still the old camera's would clamp it, and the clamped number is what
+ * gets sent back on the next change.
+ */
+function applyControlRanges(controlRanges) {
+  if (!controlRanges) return;
+  for (const [controlName, elementId] of Object.entries(RANGE_SLIDER_MAP)) {
+    const el = document.getElementById(elementId);
+    const r = controlRanges[controlName];
+    if (!el || !r) continue;
+    if (r.percentage) {
+      // The server scales these from 0-100 into the camera's real range, so the
+      // slider stays 0-100 no matter what the underlying hardware range is.
+      el.min = 0;
+      el.max = 100;
+      el.step = 1;
+    } else if (Number.isFinite(r.min) && Number.isFinite(r.max)) {
+      el.min = r.min;
+      el.max = r.max;
+      el.step = Number.isFinite(r.step) && r.step > 0 ? r.step : 1;
+    }
+  }
+  if (controlRanges.auto_exposure && controlRanges.auto_exposure.menuItems) {
+    rebuildExposureModeOptions(controlRanges.auto_exposure.menuItems);
+  }
+  const g = controlRanges.gain;
+  const e = controlRanges.exposure_time_absolute;
+  console.log(
+    `📐 Control ranges applied — ` +
+    `gain: ${g ? `${g.min}-${g.max} (default ${g.default})` : "n/a"} | ` +
+    `exposure: ${e ? `${e.min}-${e.max} (default ${e.default})` : "n/a"}`
+  );
+}
+
+// ── PTZ capability gating ────────────────────────────────────────────────────
+//
+// A camera advertising pan/tilt/zoom does not mean it can perform them: UVC
+// firmware exposes the Camera Terminal controls regardless of the mechanics, so
+// fixed cameras like the ELP 4K U3 present a full D-pad that does nothing. The
+// server sends a resolved verdict (detection heuristic, overridden by the
+// operator's choice) and the entire PTZ card is dimmed when it says no.
+let _ptzSupported = true;
+
+/**
+ * Show or dim the whole PTZ card — pad, zoom, Set Home and invert-pan alike.
+ * applyControlAvailability() handles individual rows by v4l2 control name; this
+ * is the coarser, camera-level gate that sits on top of it.
+ */
+function applyPtzCapability(capability) {
+  if (!capability) return;
+  _ptzSupported = capability.supported !== false;
+
+  const header = document.getElementById("ptzToggle");
+  const body = document.getElementById("ptzBody");
+  const reason = capability.reason || "";
+
+  for (const el of [header, body]) {
+    if (!el) continue;
+    el.style.opacity = _ptzSupported ? "" : "0.35";
+    // The header keeps its pointer events so the card can still be expanded to
+    // see WHY it's dimmed; only the controls inside go inert.
+    if (el === body) el.style.pointerEvents = _ptzSupported ? "" : "none";
+    el.title = _ptzSupported ? "" : `PTZ unavailable — ${reason}`;
+  }
+
+  // Badge the header so a collapsed card still explains itself.
+  if (header) {
+    let badge = header.querySelector(".ptz-unsupported-badge");
+    if (_ptzSupported) {
+      if (badge) badge.remove();
+    } else {
+      if (!badge) {
+        badge = document.createElement("span");
+        badge.className = "ptz-unsupported-badge";
+        badge.style.cssText = "font-size:10px;opacity:0.7;margin-left:6px;font-weight:normal";
+        header.querySelector("span").after(badge);
+      }
+      badge.textContent = capability.mode === "off" ? "(turned off)" : "(not supported)";
+    }
+  }
+
+  // Keep the selector in sync with the stored mode.
+  const sel = document.getElementById("ptzMode");
+  if (sel) {
+    sel.value = capability.mode || "auto";
+    updateCustomDropdownDisplay(sel);
+  }
+  // Say what was decided and why, including how much to trust it. `confident` is
+  // absent when an override is in force — there is no guess to qualify then.
+  const info = document.getElementById("ptzModeInfo");
+  if (info && reason) {
+    const hedge = capability.confident === false ? " (best guess — set this manually if wrong)" : "";
+    info.textContent = `${_ptzSupported ? "PTZ enabled" : "PTZ hidden"}: ${reason}${hedge}.`;
+  }
+
+  console.log(`🎮 PTZ ${_ptzSupported ? "enabled" : "disabled"} (mode=${capability.mode}) — ${reason}`);
+}
+
+const ptzModeSelect = document.getElementById("ptzMode");
+if (ptzModeSelect) {
+  ptzModeSelect.addEventListener("change", async (e) => {
+    const mode = e.target.value;
+    try {
+      const res = await fetch(`/api/camera/ptz-capability?cam=${activeCamIndex}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      const data = await res.json();
+      if (data.success) applyPtzCapability(data);
+      else console.error("❌ Failed to set PTZ mode:", data.error);
+    } catch (err) {
+      console.error("❌ Failed to set PTZ mode:", err.message);
+    }
+  });
+}
+
+// Another tab changed the override — re-gate here too.
+socket.on("ptzCapability", (data) => {
+  if (data.cameraIndex && data.cameraIndex !== activeCamIndex) return;
+  applyPtzCapability(data);
+});
+
 // Helper function to create control handlers
-function createSliderControl(controlName, elementId, valueDisplayId) {
+function createSliderControl(controlName, elementId, valueDisplayId, format) {
   const slider = document.getElementById(elementId);
   const valueDisplay = document.getElementById(valueDisplayId);
 
@@ -648,7 +847,7 @@ function createSliderControl(controlName, elementId, valueDisplayId) {
 
   slider.addEventListener("input", (e) => {
     const value = parseInt(e.target.value);
-    valueDisplay.textContent = value;
+    valueDisplay.textContent = format ? format(value) : value;
   });
 
   slider.addEventListener("change", (e) => {
@@ -663,6 +862,7 @@ createSliderControl("brightness", "brightness", "brightnessValue");
 createSliderControl("contrast", "contrast", "contrastValue");
 createSliderControl("saturation", "saturation", "saturationValue");
 createSliderControl("sharpness", "sharpness", "sharpnessValue");
+createSliderControl("gamma", "gamma", "gammaValue");
 
 // Exposure Controls
 const exposureAuto = document.getElementById("exposureAuto");
@@ -673,7 +873,13 @@ const gainValue = document.getElementById("gainValue");
 
 // Function to enable/disable manual exposure controls based on auto mode
 function updateExposureControlsState() {
-  const isAuto = exposureAuto.value !== "1"; // 1 = Manual, anything else = Auto
+  // V4L2 exposure modes: 0=Auto, 1=Manual, 2=Shutter Priority, 3=Aperture
+  // Priority. Modes 0 and 3 let the camera pick the exposure time; 1 and 2 take
+  // it from the slider. Treating everything but "1" as auto wrongly disabled the
+  // exposure slider in Shutter Priority, where it is exactly what you set.
+  if (!exposureAuto) return; // camera panel absent — nothing to gate
+  const mode = parseInt(exposureAuto.value, 10);
+  const isAuto = mode === 0 || mode === 3;
 
   // Disable manual controls when auto is enabled
   if (exposureAbsoluteSlider) {
@@ -694,21 +900,18 @@ function updateExposureControlsState() {
     }
   }
 
+  // Gain stays live in every exposure mode. It is a UVC *User* Control, not part
+  // of the exposure-mode group, and when exposure_dynamic_framerate is off the
+  // exposure time is capped at the frame period (33 ms at 30 fps) — so gain is
+  // often the only lever left for a brighter picture. Disabling it alongside the
+  // exposure slider removed the one control that could still help.
   if (gainSlider) {
-    gainSlider.disabled = isAuto;
-    gainSlider.style.opacity = isAuto ? "0.5" : "1";
-    gainSlider.style.cursor = isAuto ? "not-allowed" : "pointer";
-
-    // Find and dim the label
+    gainSlider.disabled = false;
+    gainSlider.style.opacity = "1";
+    gainSlider.style.cursor = "pointer";
     const gainLabel = gainSlider.parentElement.querySelector("label");
-    if (gainLabel) {
-      gainLabel.style.opacity = isAuto ? "0.5" : "1";
-    }
-
-    // Dim the value display
-    if (gainValue) {
-      gainValue.style.opacity = isAuto ? "0.5" : "1";
-    }
+    if (gainLabel) gainLabel.style.opacity = "1";
+    if (gainValue) gainValue.style.opacity = "1";
   }
 
   console.log(
@@ -731,8 +934,20 @@ createSliderControl(
   "exposure_time_absolute",
   "exposureAbsolute",
   "exposureAbsoluteValue",
+  _exposureLabel,
 );
 createSliderControl("gain", "gain", "gainValue");
+
+const exposureDynamicFramerate = document.getElementById("exposureDynamicFramerate");
+if (exposureDynamicFramerate) {
+  exposureDynamicFramerate.addEventListener("change", (e) => {
+    socket.emit("setControl", {
+      control: "exposure_dynamic_framerate",
+      value: e.target.checked ? 1 : 0,
+      cameraIndex: activeCamIndex,
+    });
+  });
+}
 createSliderControl(
   "backlight_compensation",
   "backlightCompensation",
@@ -790,11 +1005,24 @@ function loadCameraConfigToUI(config) {
     document.getElementById("sharpness").value = config.sharpness;
     document.getElementById("sharpnessValue").textContent = config.sharpness;
   }
+  if (config.gamma !== undefined) {
+    const gammaEl = document.getElementById("gamma");
+    if (gammaEl) {
+      gammaEl.value = config.gamma;
+      document.getElementById("gammaValue").textContent = config.gamma;
+    }
+  }
 
   // Exposure controls
   if (config.auto_exposure !== undefined) {
     const exposureAutoSelect = document.getElementById("exposureAuto");
     exposureAutoSelect.value = config.auto_exposure;
+    if (exposureAutoSelect.selectedIndex < 0 && exposureAutoSelect.options.length) {
+      // Saved mode isn't offered by this camera (the options come from the
+      // camera itself) — show a mode that exists rather than nothing.
+      console.warn(`⚠️ Saved exposure mode ${config.auto_exposure} not offered by this camera`);
+      exposureAutoSelect.selectedIndex = 0;
+    }
     updateCustomDropdownDisplay(exposureAutoSelect);
     updateExposureControlsState();
   }
@@ -802,7 +1030,7 @@ function loadCameraConfigToUI(config) {
     document.getElementById("exposureAbsolute").value =
       config.exposure_time_absolute;
     document.getElementById("exposureAbsoluteValue").textContent =
-      config.exposure_time_absolute;
+      _exposureLabel(config.exposure_time_absolute);
   }
   if (config.gain !== undefined) {
     document.getElementById("gain").value = config.gain;
@@ -813,6 +1041,10 @@ function loadCameraConfigToUI(config) {
       config.backlight_compensation;
     document.getElementById("backlightCompensationValue").textContent =
       config.backlight_compensation;
+  }
+  if (config.exposure_dynamic_framerate !== undefined) {
+    const dynFps = document.getElementById("exposureDynamicFramerate");
+    if (dynFps) dynFps.checked = config.exposure_dynamic_framerate === 1;
   }
 
   // White Balance controls
@@ -881,6 +1113,7 @@ function applyControlAvailability(supportedControls) {
     exposure_time_absolute:     "exposureAbsolute",
     gain:                       "gain",
     backlight_compensation:     "backlightCompensation",
+    exposure_dynamic_framerate: "exposureDynamicFramerate",
     white_balance_automatic:    "whiteBalanceAuto",
     white_balance_temperature:  "whiteBalanceTemp",
     focus_automatic_continuous: "focusAuto",
@@ -1996,6 +2229,10 @@ createCustomDropdown(streamCodec);
 const exposureAutoSelect = document.getElementById("exposureAuto");
 if (exposureAutoSelect) {
   createCustomDropdown(exposureAutoSelect);
+}
+const ptzModeSelectEl = document.getElementById("ptzMode");
+if (ptzModeSelectEl) {
+  createCustomDropdown(ptzModeSelectEl);
 }
 
 console.log("✅ Custom dropdowns initialized");

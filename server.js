@@ -135,6 +135,37 @@ function buildPtzRanges(hwControls) {
   return ranges;
 }
 
+/**
+ * Every control's real min/max/step/default (plus the accepted items of a menu
+ * control) so the browser can size each slider to the ATTACHED camera.
+ *
+ * The image/exposure/white-balance sliders in index.html used to carry hardcoded
+ * OBSBot ranges, which silently amputated other cameras: on the ELP 4K U3 the
+ * gain slider stopped at 64 of a real 0-190 and the exposure slider at 2500 of
+ * 10000, so a user could peg every brightness control in the UI and still have a
+ * dark picture with no indication why.  Those attributes are now placeholders
+ * that applyControlRanges() overwrites as soon as this data arrives.
+ *
+ * `percentage: true` marks the controls whose stored value is a 0-100 percentage
+ * that cameraController scales into the hardware range — their sliders must stay
+ * 0-100 on every camera.
+ */
+function buildControlRanges(hwControls) {
+  const ranges = {};
+  for (const [name, c] of Object.entries(hwControls || {})) {
+    ranges[name] = {
+      type: c.type || "int",
+      min: c.min,
+      max: c.max,
+      step: c.step,
+      default: c.default,
+      percentage: CameraController.PERCENTAGE_CONTROLS.has(name),
+    };
+    if (c.menuItems) ranges[name].menuItems = c.menuItems;
+  }
+  return ranges;
+}
+
 // WiFi Manager — the hotspot is started by digitalpool-hotspot.service (systemd)
 // before this process launches.  Here we only start the interface monitor so
 // the /api/wifi/* endpoints and the 30-second AP health-check work correctly.
@@ -2637,6 +2668,62 @@ let activeCameraSource2 = _savedSource2 || { type: "usb", device: CAMERA_DEVICE_
 /** Return the active source object for camera index 1 or 2. */
 function getActiveSource(idx) { return idx === 2 ? activeCameraSource2 : activeCameraSource; }
 
+// ── PTZ capability ───────────────────────────────────────────────────────────
+//
+// Whether a camera can really pan/tilt/zoom cannot be determined reliably: UVC
+// firmware advertises the Camera Terminal controls whether or not the mechanics
+// exist (the ELP 4K U3 is fixed yet offers all three and retains values written
+// to them).  cameraController.detectPtzCapability() makes an evidence-based
+// guess; the operator's choice, stored per camera slot, overrides it.
+//
+// ptzMode: "auto" (trust detection) | "on" (force shown) | "off" (force hidden).
+const _ptzDetection = { 1: null, 2: null }; // last detectPtzCapability() result
+
+/** The operator's stored preference for a camera slot, defaulting to "auto". */
+function getPtzMode(idx) {
+  const mode = getActiveSource(idx).ptzMode;
+  return mode === "on" || mode === "off" ? mode : "auto";
+}
+
+/**
+ * Resolve detection + override into what the UI should actually do.
+ * Kept out of the detection path so the reported reason always explains the
+ * decision that was made, not the one detection would have made alone.
+ */
+function resolvePtzCapability(idx) {
+  const mode = getPtzMode(idx);
+  const detected = _ptzDetection[idx];
+  const source = getActiveSource(idx);
+
+  // PTZ is meaningless for network sources — there's no camera to command.
+  if (source.type !== "usb") {
+    return { supported: false, mode, detected: null,
+             reason: `${source.type.toUpperCase()} sources have no camera controls` };
+  }
+  if (mode === "on")  return { supported: true,  mode, detected: detected?.ptz ?? null, reason: "forced on by user" };
+  if (mode === "off") return { supported: false, mode, detected: detected?.ptz ?? null, reason: "turned off by user" };
+  if (!detected)      return { supported: true,  mode, detected: null, reason: "not yet detected — assuming PTZ" };
+  return { supported: detected.ptz, mode, detected: detected.ptz,
+           reason: detected.reason, confident: detected.confident };
+}
+
+/** Re-run PTZ detection for a slot and cache it. Safe to call on any source. */
+async function refreshPtzDetection(idx) {
+  const source = getActiveSource(idx);
+  if (source.type !== "usb") { _ptzDetection[idx] = null; return null; }
+  try {
+    const result = await getCam(idx).detectPtzCapability(source.device);
+    _ptzDetection[idx] = result;
+    console.log(`🎮 [Cam${idx}] PTZ detection: ${result.ptz ? "supported" : "not supported"}` +
+                `${result.confident ? "" : " (low confidence)"} — ${result.reason}`);
+    return result;
+  } catch (e) {
+    console.warn(`⚠️  [Cam${idx}] PTZ detection failed: ${e.message}`);
+    _ptzDetection[idx] = null;
+    return null;
+  }
+}
+
 // List available V4L2 video capture devices
 app.get("/api/camera/devices", requireAuth, (req, res) => {
   const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
@@ -2925,10 +3012,11 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     cam.currentTilt = 0;
     cam.discoveredControls = null;
     cam._ptzQueue = Promise.resolve();
+    _ptzDetection[camIdx] = null;
 
     saveCameraSource(newSource, camIdx);
     io.emit("refreshIdlePreview", { cameraIndex: camIdx });
-    io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: [], ptzRanges: {} });
+    io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: [], ptzRanges: {}, controlRanges: {}, ptzCapability: resolvePtzCapability(camIdx) });
     io.emit("streamStatus", { ...sc.getStatus(), cameraIndex: camIdx });
     console.log(`📷 [Cam${camIdx}] Camera source set to "No Camera" — device released`);
     return res.json({ success: true, source: newSource, wasStreaming, streamRestarted: false });
@@ -2968,6 +3056,9 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     if (camIdx === 2) cameraFormat2 = fmt; else cameraFormat = fmt;
     sc.captureFormat = fmt;
     console.log(`📹 [Cam${camIdx}] New USB camera: format=${fmt.toUpperCase()}, controls=${Object.keys(cam.discoveredControls || {}).join(", ")}`);
+    // A different camera means a different PTZ verdict — and a stale "auto"
+    // result from the previous device would gate the wrong controls.
+    await refreshPtzDetection(camIdx);
   } else if (type === "rtmp") {
     const newSource = { type: "rtmp", device: defaultDevice, rtspUrl: "", rtmpUrl, ndiName: "" };
     if (camIdx === 2) activeCameraSource2 = newSource; else activeCameraSource = newSource;
@@ -3034,6 +3125,7 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
       if (camIdx === 2) cameraFormat2 = fmt; else cameraFormat = fmt;
       sc.captureFormat = fmt;
       console.log(`📹 [Cam${camIdx}] Reverted USB camera: format=${fmt.toUpperCase()}`);
+      await refreshPtzDetection(camIdx);
     }
     sc.setInputSource(getActiveSource(camIdx));
     try { await startPersistentIdlePreview(camIdx); } catch (_) {}
@@ -3043,7 +3135,8 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
     {
       const hwControls = cam.discoveredControls || cam.controls;
       const ptzRanges = buildPtzRanges(hwControls);
-      io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: Object.keys(hwControls), ptzRanges });
+      const controlRanges = buildControlRanges(hwControls);
+      io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: Object.keys(hwControls), ptzRanges, controlRanges, ptzCapability: resolvePtzCapability(camIdx) });
     }
 
     // Restart the stream on the reverted source if it was running before.
@@ -3079,7 +3172,8 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
   {
     const hwControls = cam.discoveredControls || cam.controls;
     const ptzRanges = buildPtzRanges(hwControls);
-    io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: Object.keys(hwControls), ptzRanges });
+    const controlRanges = buildControlRanges(hwControls);
+    io.emit("cameraConfig", { cameraIndex: camIdx, success: true, config: cam.config, supportedControls: Object.keys(hwControls), ptzRanges, controlRanges, ptzCapability: resolvePtzCapability(camIdx) });
   }
 
   // ── Step 5: Restart the stream on the new source (if it was running) ────
@@ -3133,15 +3227,54 @@ app.post("/api/camera/reset", async (req, res) => {
   const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
   const cam = getCam(camIdx);
   const result = await cam.resetToDefaults();
+  // resetToDefaults re-reads the control set, so re-run the PTZ guess with it.
+  await refreshPtzDetection(camIdx);
   const hwControls = cam.discoveredControls || cam.controls;
   const ptzRanges = buildPtzRanges(hwControls);
+  const controlRanges = buildControlRanges(hwControls);
   res.json({
     success: true,
     results: result,
     config: cam.config,
     supportedControls: Object.keys(hwControls),
     ptzRanges,
+    controlRanges,
+    ptzCapability: resolvePtzCapability(camIdx),
   });
+});
+
+// Get / set the PTZ capability override for a camera.
+//
+// GET returns the resolved state plus what detection thinks, so the UI can label
+// the "Auto" choice with the actual finding. POST stores the operator's decision
+// in the camera source file, where it survives restarts and stays tied to the
+// slot the camera is plugged into.
+app.get("/api/camera/ptz-capability", requireAuth, async (req, res) => {
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  // Detect on first ask so a fresh boot doesn't report "not yet detected".
+  if (!_ptzDetection[camIdx] && getActiveSource(camIdx).type === "usb") {
+    await refreshPtzDetection(camIdx);
+  }
+  res.json({ success: true, ...resolvePtzCapability(camIdx) });
+});
+
+app.post("/api/camera/ptz-capability", requireAuth, async (req, res) => {
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  const mode = req.body?.mode;
+  if (!["auto", "on", "off"].includes(mode)) {
+    return res.status(400).json({ success: false, error: "mode must be auto, on or off" });
+  }
+  const source = getActiveSource(camIdx);
+  source.ptzMode = mode;
+  saveCameraSource(source, camIdx);
+  // Returning to "auto" means the stored verdict is what decides — make sure
+  // there is a current one rather than whatever was cached before the override.
+  if (mode === "auto") await refreshPtzDetection(camIdx);
+  const capability = resolvePtzCapability(camIdx);
+  console.log(`🎮 [Cam${camIdx}] PTZ mode set to "${mode}" → ${capability.supported ? "shown" : "hidden"} (${capability.reason})`);
+  // Broadcast so every open tab re-gates its PTZ section immediately.
+  io.emit("ptzCapability", { cameraIndex: camIdx, ...capability });
+  res.json({ success: true, ...capability });
 });
 
 // ============ STREAMING API ENDPOINTS ============
@@ -4632,6 +4765,7 @@ io.on("connection", (socket) => {
     // Send the actual hardware min/max/step for pan and tilt so the client can
     // compute step sizes that match this camera's range and minimum motor step.
     const ptzRanges = buildPtzRanges(hwControls);
+    const controlRanges = buildControlRanges(hwControls);
 
     // Determine whether the camera hardware is actually present so the UI can
     // show "No Camera" instead of "Connected" when no device is plugged in.
@@ -4654,6 +4788,8 @@ io.on("connection", (socket) => {
       config: cam.config,
       supportedControls: Object.keys(hwControls),
       ptzRanges,
+      controlRanges,
+      ptzCapability: resolvePtzCapability(camIdx),
       cameraPresent,
     });
   });
@@ -4678,6 +4814,7 @@ io.on("connection", (socket) => {
     // control set and PTZ ranges so the UI refreshes its dim state too.
     const hwControls = cam.discoveredControls || cam.controls;
     const ptzRanges = buildPtzRanges(hwControls);
+    const controlRanges = buildControlRanges(hwControls);
     // Broadcast to all clients so other tabs/devices viewing the same camera
     // pick up the refreshed capabilities, mirroring the source-switch handler.
     io.emit("cameraConfigReset", {
@@ -4687,6 +4824,8 @@ io.on("connection", (socket) => {
       config: cam.config,
       supportedControls: Object.keys(hwControls),
       ptzRanges,
+      controlRanges,
+      ptzCapability: resolvePtzCapability(camIdx),
     });
   });
 
@@ -5188,6 +5327,8 @@ server.listen(PORT, async () => {
     cameraFormat = await camera.detectCaptureFormat(CAMERA_DEVICE);
     streamController.captureFormat = cameraFormat;
     console.log(`📹 Camera capture format detected: ${cameraFormat.toUpperCase()}`);
+    // Runs after activateCamera() because the heuristic reads discoveredControls.
+    await refreshPtzDetection(1);
   } catch (error) {
     console.error("❌ Error detecting camera format:", error.message);
     cameraFormat = "mjpeg"; // safe fallback
@@ -5307,6 +5448,7 @@ server.listen(PORT, async () => {
         cameraFormat2 = await camera2.detectCaptureFormat(camera2.device || CAMERA_DEVICE_2);
         streamController2.captureFormat = cameraFormat2;
         console.log(`📹 [Cam2] Capture format: ${cameraFormat2.toUpperCase()}`);
+        await refreshPtzDetection(2);
       } catch (e) {
         console.error("⚠️  [Cam2] Format detection failed:", e.message);
         cameraFormat2 = "mjpeg";
