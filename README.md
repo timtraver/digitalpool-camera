@@ -1517,9 +1517,30 @@ OOMScoreAdjust=-900
 
 No extra steps are needed — the service file is already set.
 
-### Layer 2 — Network watchdog (reboots if all interfaces are unreachable)
+### Layer 2 — Network watchdog (reboots if every uplink is unreachable)
 
-The repository includes `network-watchdog.sh`, `network-watchdog.service`, and `network-watchdog.timer`. The timer runs every 10 minutes; if both Ethernet and WiFi have been unreachable for 20 consecutive minutes the script reboots the device cleanly.
+The repository includes `network-watchdog.sh`, `network-watchdog.service`, and `network-watchdog.timer`. The timer runs every 10 minutes; if every *uplink* has been unreachable for 20 consecutive minutes the script reboots the device cleanly.
+
+**"Uplink" excludes the hotspot.** Each check classifies every interface that is UP:
+
+| Kind | Detection | Counts toward health? |
+|---|---|---|
+| Virtual — NetBird `wt0`, `tun*`, `wg*`, bridges, `veth`, docker | no backing device in `/sys/class/net/<if>/device` | No — it rides on a real uplink and can't prove connectivity |
+| WiFi AP / hotspot (`wlp1s0`) | `iw dev <if> info` reports `type AP` | No — logged for context only |
+| Physical NIC with carrier (Ethernet, client WiFi dongle) | `carrier == 1` | Yes — this is an uplink candidate |
+
+The device is healthy if any candidate pings its own default gateway, **or** the box can reach the internet at all (ICMP to `1.1.1.1` / `8.8.8.8`, falling back to a DNS lookup of `digitalpool.com` for venues that filter ICMP). Gateway-reachable-but-no-internet still counts as healthy — a WAN outage upstream isn't something a reboot fixes.
+
+> Earlier versions treated the AP interface as "reachable" because the device *is* the gateway there. Since the hotspot is always on, that made the watchdog permanently satisfied and the reboot path could never fire: devices were found sitting with dead Ethernet, dead client WiFi and `ERR_NAME_NOT_RESOLVED` on every overlay fetch, indefinitely.
+
+Two safeguards keep it from rebooting pointlessly:
+
+- **No uplink provisioned** (hotspot-only device at a venue with no internet): if there is no uplink candidate *and* none has been healthy within the last 24 h (`/var/lib/network-watchdog/uplink-last-ok`), the check logs and exits. If a candidate *was* healthy recently, its disappearance is the OOM-broke-the-network-stack case and does count as a failure.
+- **Reboot cool-down**: no second watchdog reboot within 30 minutes (`/var/lib/network-watchdog/last-reboot`), so a device that can't recover doesn't reboot-loop.
+
+Before counting a failure, the script still attempts the `rtw_8822bu` USB rebind when the kernel log shows stuck-queue errors, then re-tests — a rebind that fixes things costs no failure count.
+
+> **Already-provisioned devices don't need these steps.** The watchdog script and its units ship via `migrations/0007-network-watchdog-uplinks.sh`, so they install themselves when you press **Update Software** in the admin UI (or at the next boot). The steps below are for first-time provisioning only.
 
 ```bash
 # Copy the watchdog script
@@ -1599,7 +1620,7 @@ Sample output every 5 minutes:
 | Layer | Catches | Action |
 |---|---|---|
 | `MemoryMax=2500M` | Memory leak before it gets dangerous | Restarts the service cleanly |
-| `network-watchdog.timer` (every 10 min) | All interfaces unreachable for 20+ min | Clean system reboot |
+| `network-watchdog.timer` (every 10 min) | All uplinks unreachable for 20+ min (hotspot doesn't count) | Clean system reboot |
 | Hardware watchdog (`RuntimeWatchdogSec=60`) | Complete kernel freeze | Hardware-forced board reset |
 | `monitor-camera.timer` (every 5 min) | Per-process memory trend | Logs to `/var/log/digitalpool-monitor.log` |
 
@@ -2099,7 +2120,7 @@ digitalpool-camera/
 ├── mediamtx-update-hosts.sh        # Updates WebRTC ICE hosts in mediamtx.yml at startup
 ├── mediamtx-update-hosts.service   # Systemd unit for ICE host update
 ├── mediamtx-update-hosts.timer     # Systemd timer — re-runs update every 60 seconds
-├── network-watchdog.sh             # Network-health watchdog (reboots if offline 20 min)
+├── network-watchdog.sh             # Uplink watchdog (reboots if no uplink for 20 min)
 ├── network-watchdog.service        # Systemd unit for watchdog
 ├── network-watchdog.timer          # Systemd timer — runs every 10 minutes
 ├── monitor-camera.sh               # Memory flight recorder (logs RSS every 5 min)

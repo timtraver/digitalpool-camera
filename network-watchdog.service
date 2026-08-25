@@ -1,7 +1,9 @@
 [Unit]
-Description=Network watchdog — reboot if all interfaces are unreachable
+Description=Network watchdog — reboot if every uplink is unreachable
 After=network.target
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/network-watchdog.sh
+# /var/lib/network-watchdog — last-known-good uplink + last-reboot markers
+StateDirectory=network-watchdog
