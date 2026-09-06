@@ -4631,13 +4631,33 @@ async function startPersistentIdlePreview(camIdx = 1) {
         else              _idlePreviewFailStreak  = 0;
       }
 
-      const startingNow = camIdx === 2 ? _idlePreviewStarting2 : _idlePreviewStarting;
-      if (!sc.isStreaming && !startingNow && !isRestartInProgress[camIdx] && bootComplete) {
-        console.log(`📹 [Cam${camIdx}] Idle preview died — scheduling auto-restart...`);
-        startPersistentIdlePreview(camIdx)
-          .then(() => { io.emit("refreshIdlePreview", { cameraIndex: camIdx }); })
-          .catch((err) => { console.error(`⚠️  [Cam${camIdx}] Idle preview auto-restart failed:`, err.message); });
-      }
+      // A deliberate kill (overlay rebuild, source switch) is followed by a fresh
+      // spawn from the same call — nothing to restart here.
+      if (gst._intentionalKill) return;
+
+      // Re-arm the retry AFTER any in-flight start has released the mutex.
+      //
+      // This used to read _idlePreviewStarting synchronously and bail when it was
+      // set.  But the invocation that spawned THIS process holds that flag until
+      // 800ms past spawn, so a preview dying inside that window read as "another
+      // start is already running" and silently cancelled the retry chain — no
+      // further attempt was ever scheduled.  A camera that has dropped off the USB
+      // bus fails to reach PLAYING in ~180ms, i.e. always inside the window, so the
+      // one failure mode that most needs retrying was the one that disabled it.
+      // Observed in the wild: a camera re-enumerated 12s after dropping and the
+      // stream stayed down indefinitely because the single retry fired 6s too early.
+      const inFlight = camIdx === 2 ? _idlePreviewStartQueue2 : _idlePreviewStartQueue;
+      Promise.resolve(inFlight)
+        .then(() => {
+          // Re-check on the far side of the wait — the world may have moved on.
+          if (sc.isStreaming || isRestartInProgress[camIdx] || !bootComplete) return;
+          const liveProc = camIdx === 2 ? currentIdlePreviewProcess2 : currentIdlePreviewProcess;
+          if (liveProc && !liveProc.killed) return; // something already brought one back
+          console.log(`📹 [Cam${camIdx}] Idle preview died — scheduling auto-restart...`);
+          return startPersistentIdlePreview(camIdx)
+            .then(() => { io.emit("refreshIdlePreview", { cameraIndex: camIdx }); });
+        })
+        .catch((err) => { console.error(`⚠️  [Cam${camIdx}] Idle preview auto-restart failed:`, err.message); });
     });
 
     gst.on("error", (err) => {
@@ -5744,6 +5764,90 @@ streamController2.on("preparing", async () => {
   }
 });
 
+// ── Stream auto-resume after an unexpected source loss ──────────────────────
+// Backoff schedule for resume attempts (ms).  Deliberately bounded: the observed
+// failure is a camera that drops off the USB bus and re-enumerates ~12s later, so
+// ~2 minutes of trying covers it with wide margin.  Beyond that the outage is
+// something a person is dealing with, and silently resurrecting a stream long
+// afterwards would be surprising rather than helpful.
+const _RESUME_BACKOFF_MS = [5000, 10000, 15000, 30000, 30000, 30000];
+const _streamResumeActive = { 1: false, 2: false };
+
+/**
+ * Attempt to bring a stream back after it died on its own (camera dropped off the
+ * bus, encoder crash) rather than being stopped deliberately.
+ *
+ * Mirrors the guard sequence in the socket "startStream" handler: hold
+ * isRestartInProgress so the idle preview's close handler doesn't race us for the
+ * camera, tear the preview down, start, and restore the preview if the start fails.
+ * @param {number} camIdx Camera index (1 or 2)
+ */
+async function _attemptStreamAutoResume(camIdx) {
+  const sc = getSC(camIdx);
+  if (_streamResumeActive[camIdx]) return;      // one loop per camera
+  _streamResumeActive[camIdx] = true;
+
+  try {
+    for (let attempt = 0; attempt < _RESUME_BACKOFF_MS.length; attempt++) {
+      await new Promise((r) => setTimeout(r, _RESUME_BACKOFF_MS[attempt]));
+
+      // Bail on anything that means we no longer own this decision: the operator
+      // started or stopped it themselves, a source switch is running, or the slot
+      // was cleared.  Re-read every iteration — these change under us.
+      const source = getActiveSource(camIdx);
+      if (sc.isStreaming || sc._stopRequested || isRestartInProgress[camIdx] || source.type === "none") {
+        console.log(`ℹ️  [Cam${camIdx}] Auto-resume abandoned — stream state changed`);
+        return;
+      }
+
+      // For a USB source, don't burn an attempt while the device node is still
+      // absent — startStream() would fail slowly and kill the idle preview for
+      // nothing.  A re-enumerating camera reappears within seconds.
+      if (source.type === "usb") {
+        const dev = source.device || sc.cameraDevice;
+        if (dev && !fsSync.existsSync(dev)) {
+          console.log(`⏳ [Cam${camIdx}] Auto-resume attempt ${attempt + 1}/${_RESUME_BACKOFF_MS.length} — ${dev} not back yet`);
+          continue;
+        }
+      }
+
+      console.log(`🔁 [Cam${camIdx}] Auto-resume attempt ${attempt + 1}/${_RESUME_BACKOFF_MS.length} — restarting stream after unexpected stop`);
+      isRestartInProgress[camIdx] = true;
+      let started = false;
+      try {
+        await _killIdlePreviewForCamera(camIdx);
+        io.emit("streamStatus", { ...sc.getStatus(), status: "starting", cameraIndex: camIdx });
+        const result = await sc.startStream();
+        started = result.success;
+        if (!started) console.warn(`⚠️  [Cam${camIdx}] Auto-resume attempt failed: ${result.error}`);
+      } catch (err) {
+        console.warn(`⚠️  [Cam${camIdx}] Auto-resume attempt threw: ${err.message}`);
+      }
+
+      if (started) {
+        // Release the guard from the "started" event, NOT from here: in hybrid
+        // ffmpeg mode startStream() resolves before sc.isStreaming flips (it is
+        // set ~2s later, when ffmpeg reports a connection), so clearing on this
+        // side would let the idle preview grab the camera mid-handshake — the
+        // exact race the guard exists to prevent.
+        console.log(`✅ [Cam${camIdx}] Auto-resume succeeded`);
+        return;
+      }
+
+      isRestartInProgress[camIdx] = false;
+      // Put the preview back so the operator still sees the camera between tries.
+      startPersistentIdlePreview(camIdx)
+        .then(() => io.emit("refreshIdlePreview", { cameraIndex: camIdx }))
+        .catch(() => {});
+    }
+    console.warn(`❌ [Cam${camIdx}] Auto-resume gave up after ${_RESUME_BACKOFF_MS.length} attempts — manual start required`);
+  } catch (err) {
+    console.error(`⚠️  [Cam${camIdx}] Auto-resume error:`, err.message);
+  } finally {
+    _streamResumeActive[camIdx] = false;
+  }
+}
+
 // Helper: restart idle preview after stream stops (shared by both cameras)
 async function _handleStreamStopped(camIdx) {
   const sc = getSC(camIdx);
@@ -5775,6 +5879,15 @@ async function _handleStreamStopped(camIdx) {
     console.warn(`⚠️  [Cam${camIdx}] Idle preview RTMP publisher not ready after ${idleTimeoutMs / 1000}s — clients will retry`);
   }
   io.emit("refreshIdlePreview", { cameraIndex: camIdx });
+
+  // The stream died without anyone asking it to — the camera dropped off the bus
+  // or the pipeline crashed.  Try to bring it back.  Deliberate stops set
+  // _stopRequested and are left alone.  Not awaited: the resume loop runs for up
+  // to ~2 minutes and must not block this handler.
+  if (!sc._stopRequested) {
+    console.warn(`⚠️  [Cam${camIdx}] Stream stopped unexpectedly — attempting auto-resume`);
+    _attemptStreamAutoResume(camIdx);
+  }
 }
 
 // When stream stops, restart the persistent idle preview and manage Puppeteer refresh

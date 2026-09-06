@@ -86,6 +86,13 @@ class StreamController extends EventEmitter {
     this.gstProcess = null;
     this.ffmpegProcess = null; // Separate ffmpeg process for SRT+audio hybrid
     this.isStreaming = false;
+    // Intent flag: true only while an explicit stopStream() is in flight.  The
+    // GStreamer 'close' handler emits 'stopped' for BOTH a deliberate stop and a
+    // pipeline that died on its own (camera dropped off the USB bus, encoder
+    // crash), and the two are otherwise indistinguishable to listeners.  Set
+    // here rather than inferred from streamConfig.autoStart because stopStream()
+    // only clears autoStart ~2.5s after the close event has already fired.
+    this._stopRequested = false;
     this._fpsInterval = null;
     this._bitrateInterval = null;
     // Separate config file per stream so each camera persists its own settings.
@@ -380,6 +387,9 @@ class StreamController extends EventEmitter {
     if (this.isStreaming) {
       return { success: false, error: "Stream already running" };
     }
+
+    // New run — any stop intent from the previous one is spent.
+    this._stopRequested = false;
 
     // Merge config
     this.streamConfig = { ...this.streamConfig, ...config };
@@ -1141,6 +1151,11 @@ class StreamController extends EventEmitter {
     if (!this.isStreaming || !this.gstProcess) {
       return { success: false, error: "No stream running" };
     }
+
+    // Mark BEFORE killing: the kill below makes GStreamer's 'close' handler fire
+    // (and emit 'stopped') while this function is still in its 2s settle wait, so
+    // the flag must already be set when listeners read it.
+    this._stopRequested = true;
 
     try {
       this.gstProcess.kill("SIGINT");
