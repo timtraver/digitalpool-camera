@@ -21,6 +21,25 @@ let _sharedBrowserPageCount = 0;    // live overlay pages; browser closes at 0
 // overlays by half an interval keeps the peak at ~1 core instead of ~2.
 let _overlayStartOrder = 0;
 
+// ── Capture supervision tunables ─────────────────────────────────────────────
+// How long a single page.screenshot() may take before this loop gives up on it.
+// Sized for the worst case on a busy N97 (two 1080p pages, software raster, two
+// GStreamer pipelines competing for CPU) — a capture that is merely slow should
+// still be allowed to land, because abandoning a capture is far more expensive
+// than waiting for one (see the notes in _renderUrlOverlay).
+const SHOT_TIMEOUT_MS = parseInt(process.env.OVERLAY_SHOT_TIMEOUT_MS, 10) || 15000;
+// Budget for the first capture after a navigation. Shorter, because a miss there
+// is the classic wedged-renderer signature and is worth catching fast.
+const FIRST_SHOT_TIMEOUT_MS = 10000;
+// Puppeteer's browser-wide CDP ceiling. It MUST sit above the capture budget:
+// when the two were equal, CDP killed captures at exactly the moment this loop
+// gave up on them, so a capture could never simply be slow — it was always fatal.
+const PROTOCOL_TIMEOUT_MS = SHOT_TIMEOUT_MS + 15000;
+// Consecutive over-budget captures before the page is thrown away and reloaded,
+// and page reloads before the whole browser is relaunched.
+const SHOT_FAILURES_BEFORE_PAGE_RESET = 3;
+const PAGE_RESETS_BEFORE_BROWSER_RESET = 3;
+
 // Version-agnostic connectivity check.
 // Puppeteer 20.x exposes Browser.isConnected() (a method); v22 deprecated it in
 // favour of the `connected` getter and v23 removed the method entirely. Support
@@ -74,12 +93,15 @@ async function _acquireSharedBrowser() {
       executablePath: chromiumPath,
       headless: true,
       pipe: false,
-      // The freshly-loaded overlay page intermittently leaves the renderer
-      // unresponsive to CDP (screenshot / Emulation / evaluate all hang) for a
-      // while after navigation — a re-navigation clears it. Keep this timeout
-      // short so a wedged call fails fast and the loop re-navigates, instead of
-      // stalling for Puppeteer's 180s default (or a long 30s).
-      protocolTimeout: 8000,
+      // Backstop only — every call that can realistically hang (capture, zoom,
+      // background override, page close) is individually bounded at the call
+      // site, so this just replaces Puppeteer's 180s default with something
+      // survivable. It deliberately sits ABOVE the capture budget: when this was
+      // 8000 and the capture race was also 8000, the two fired together, so a
+      // capture that needed 8.5s on a loaded box was killed by CDP rather than
+      // allowed to finish — which is how the renderer ended up permanently
+      // backlogged and the overlay PNG stopped updating for hours at a time.
+      protocolTimeout: PROTOCOL_TIMEOUT_MS,
       args: [
         "--no-sandbox",
         "--disable-gpu",
@@ -151,6 +173,36 @@ async function _acquireSharedBrowser() {
 }
 
 /**
+ * Tear the shared Chromium down unconditionally, whoever still has pages open,
+ * and make sure its whole process group dies with it.
+ *
+ * process.kill(-pid, signal) sends to the process GROUP (PGID = pid, since Chrome
+ * is always a process group leader on Linux); killing only the parent leaves the
+ * renderer / gpu-process / zygote / utility / crashpad children reparented to
+ * init as orphans.
+ *
+ * Used both for the ordinary "last page closed" shutdown and for last-resort
+ * recovery, where the fault is below the page and the other camera's page must
+ * go too — that camera re-acquires a fresh browser on its next render cycle.
+ */
+async function _forceCloseSharedBrowser() {
+  const b = _sharedBrowser;
+  if (!b) return;
+  const pid = b.process && b.process() ? b.process().pid : null;
+  _sharedBrowser = null;
+  _sharedBrowserPageCount = 0;
+  try {
+    // close() is a CDP round-trip and can hang on exactly the wedged browser we
+    // are trying to kill; the SIGKILL below is the real guarantee.
+    await Promise.race([b.close(), new Promise((resolve) => setTimeout(resolve, 5000))]);
+  } catch (e) { /* ignore */ }
+  if (pid) {
+    try { process.kill(-pid, "SIGKILL"); } catch (e) { /* not a group leader or already dead */ }
+    try { process.kill(pid,  "SIGKILL"); } catch (e) { /* already dead */ }
+  }
+}
+
+/**
  * HTML Overlay Generator
  * - Local mode: uses wkhtmltoimage + ImageMagick chroma-key for local HTML scoreboard
  * - URL mode: uses Puppeteer (headless Chromium) to screenshot remote pages with
@@ -199,6 +251,16 @@ class PuppeteerOverlay extends EventEmitter {
     // every hour resets that growth. The overlay is dark for ~2-3 s during restart.
     this._browserRestartIntervalMs = 60 * 60 * 1000; // 1 hour
     this._browserRestartTimer = null;
+    // Capture supervision. A capture that overruns its budget is abandoned, not
+    // cancelled (CDP has no cancel), so the renderer keeps working on it — these
+    // track that so the loop can't queue captures behind a stuck one, and can
+    // escalate instead of retrying forever. See _renderUrlOverlay.
+    this._shotInFlight = null;   // in-flight page.screenshot() promise, or null
+    this._shotSkips = 0;         // cycles skipped because a capture was still running
+    this._shotStartedAt = 0;     // when the in-flight capture began (ages out a dead one)
+    this._shotFailures = 0;      // consecutive captures that overran their budget
+    this._pageResets = 0;        // page reloads since the last good capture
+    this._lastSlowLogAt = 0;     // throttle for the "capture is getting slow" warning
   }
 
   /**
@@ -436,8 +498,16 @@ class PuppeteerOverlay extends EventEmitter {
     // Acquire (launching if needed) the single shared Chromium.
     this._browser = await _acquireSharedBrowser();
 
-    // Reuse this instance's page if it's still open.
-    if (this._page && !this._page.isClosed()) return;
+    // Reuse this instance's page if it's still open AND still belongs to the
+    // browser we just acquired — a relaunch (scheduled restart, crash, or the
+    // last-resort recovery in _renderUrlOverlay) leaves the old page object alive
+    // but orphaned, and every capture against it would fail forever.
+    if (this._page && !this._page.isClosed() && this._page.browser() === this._browser) return;
+    if (this._page) {
+      this._page = null;   // orphaned by a browser relaunch; the count was reset with it
+      this._cdp = null;
+      this._shotInFlight = null;
+    }
 
     // (Re)create this camera's own page/tab in the shared browser.
     this._page = await this._browser.newPage();
@@ -500,36 +570,47 @@ class PuppeteerOverlay extends EventEmitter {
   }
 
   /**
-   * Release this instance's page.  Closes only THIS camera's page/tab; the
-   * shared Chromium stays alive for the other camera and is shut down (with its
-   * whole process group killed) only when the last overlay page is gone.
+   * Close just THIS instance's page/tab, leaving the shared browser running for
+   * the other camera.  Also drops any abandoned capture: the page it was running
+   * against is gone, so its result (whenever it lands) is meaningless.
+   *
+   * page.close() is itself a CDP round-trip, so it is bounded — a renderer that
+   * stopped answering captures may well not answer this either, and the caller
+   * is usually mid-recovery and must not be stalled by it.  The reference is
+   * dropped either way; a page we failed to close goes with the browser at the
+   * next relaunch.
    */
-  async _closeBrowser() {
+  async _closePage() {
     if (this._page) {
-      try { if (!this._page.isClosed()) await this._page.close(); } catch (e) { /* ignore */ }
+      const page = this._page;
+      try {
+        if (!page.isClosed()) {
+          await Promise.race([
+            page.close(),
+            new Promise((resolve) => setTimeout(resolve, 3000)),
+          ]);
+        }
+      } catch (e) { /* ignore */ }
       this._page = null;
       _sharedBrowserPageCount = Math.max(0, _sharedBrowserPageCount - 1);
     }
     this._cdp = null; // CDP session is bound to the now-closed page
     this._currentLoadedUrl = null;
+    this._shotInFlight = null;
+  }
+
+  /**
+   * Release this instance's page.  Closes only THIS camera's page/tab; the
+   * shared Chromium stays alive for the other camera and is shut down (with its
+   * whole process group killed) only when the last overlay page is gone.
+   */
+  async _closeBrowser() {
+    await this._closePage();
 
     // When no overlay pages remain, shut the shared browser down entirely.
     if (_sharedBrowserPageCount === 0 && _sharedBrowser) {
-      const b = _sharedBrowser;
-      const pid = b.process && b.process() ? b.process().pid : null;
-      _sharedBrowser = null;
-      try { await b.close(); } catch (e) { /* ignore */ }
+      await _forceCloseSharedBrowser();
       console.log("🛑 Shared Chromium browser closed (no overlay pages remain)");
-
-      // Safety: kill the entire process group so Chrome's child processes
-      // (renderer, gpu-process, zygote, utility, crashpad) are also terminated.
-      // process.kill(-pid, signal) sends to the process GROUP (PGID = pid when
-      // Chrome is a process group leader, which it always is on Linux).
-      // Killing only the parent PID leaves children reparented to init as orphans.
-      if (pid) {
-        try { process.kill(-pid, "SIGKILL"); } catch (e) { /* not a group leader or already dead */ }
-        try { process.kill(pid,  "SIGKILL"); } catch (e) { /* already dead */ }
-      }
     }
 
     this._browser = null;
@@ -591,9 +672,10 @@ class PuppeteerOverlay extends EventEmitter {
             ]);
           } catch (e) { /* page CSS transparency still applies; keep going */ }
         }
-        // Mark that no screenshot has succeeded yet on this freshly-loaded page,
-        // so a first-shot failure (a genuine post-nav wedge) still triggers one
-        // re-navigation — but subsequent slow shots won't.
+        // Mark that no capture has succeeded yet on this freshly-loaded page, so
+        // the next one gets the shorter first-shot budget and reloads immediately
+        // if it misses (the classic post-nav wedge). Later misses still escalate,
+        // just after SHOT_FAILURES_BEFORE_PAGE_RESET of them rather than one.
         this._screenshotOkSinceNav = false;
       }
 
@@ -627,27 +709,95 @@ class PuppeteerOverlay extends EventEmitter {
       // Screenshot. Transparency comes from the persistent default-background
       // override set in _ensureBrowser (NOT per-screenshot omitBackground, which
       // caused the post-nav wedge); fall back to omitBackground only if the CDP
-      // override couldn't be installed. Bound it with a race so a stall can't hang
-      // the loop — but only RE-NAVIGATE on the FIRST screenshot after a navigation.
-      // Once a screenshot has succeeded on this page, a later slow one just skips
-      // the cycle and keeps the page loaded, so the page's own animation/rotation
-      // keeps running instead of being reset by a reload every cycle.
-      const tempPath = this.pngPath + ".tmp";
+      // override couldn't be installed.
+      //
+      // A single slow capture is tolerated — the page is kept loaded so its own
+      // animation/rotation isn't reset by a needless reload — but a RUN of them
+      // is not, because that is the shape of a renderer that will never answer
+      // again.
+      //
+      // Never run two captures at once. A capture that overran its budget was
+      // ABANDONED, not cancelled: CDP has no cancel, so Chromium keeps rendering
+      // it. Firing another 2s later stacked a second 1080p encode on a renderer
+      // already behind, then a third, until the backlog could never drain — every
+      // later capture overran too, the PNG stopped being written entirely, and
+      // this loop sat there logging "slow" once a cycle for hours. Waiting for the
+      // outstanding capture is what stops that from compounding.
+      if (this._shotInFlight) {
+        const outstandingMs = Date.now() - this._shotStartedAt;
+        // Waiting is only ever a bet that the capture will land. Past Puppeteer's
+        // own CDP ceiling it never will — the renderer or the connection is gone —
+        // and continuing to skip would be its own silent hang, exactly the state
+        // this supervision exists to end. Give up on it and rebuild the page.
+        if (outstandingMs > PROTOCOL_TIMEOUT_MS + 5000) {
+          throw new Error(`capture never settled after ${outstandingMs}ms`);
+        }
+        this._shotSkips++;
+        if (this._shotSkips === 1 || this._shotSkips % 15 === 0) {
+          console.warn(`⚠️  Overlay capture from an earlier cycle is still running — skipped ${this._shotSkips} cycle(s)`);
+        }
+        return true;
+      }
+      this._shotSkips = 0;
+
       const firstShot = !this._screenshotOkSinceNav;
+      const budgetMs = firstShot ? FIRST_SHOT_TIMEOUT_MS : SHOT_TIMEOUT_MS;
+      const shotStartedAt = Date.now();
+      this._shotStartedAt = shotStartedAt;
+      // No `path:` — take the buffer and write it ourselves. Letting Puppeteer
+      // write the file means an abandoned capture can still land on disk long
+      // after we gave up on it, racing the next cycle for the temp file; a
+      // returned buffer is simply discarded instead.
+      const shot = this._page.screenshot({ type: "png", omitBackground: !this._cdp });
+      this._shotInFlight = shot;
+      // Clear the marker whenever the capture settles, however late. The chained
+      // handler never rejects, so an abandoned capture that fails minutes later
+      // cannot surface as an unhandled rejection.
+      shot.then(() => {}, () => {}).then(() => {
+        if (this._shotInFlight === shot) this._shotInFlight = null;
+      });
+
+      let buf;
       try {
-        await Promise.race([
-          this._page.screenshot({ path: tempPath, type: "png", omitBackground: !this._cdp, timeout: 10000 }),
+        buf = await Promise.race([
+          shot,
           new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("screenshot timed out")), firstShot ? 6000 : 8000)
+            setTimeout(() => reject(new Error(`capture exceeded ${budgetMs}ms`)), budgetMs)
           ),
         ]);
-        this._screenshotOkSinceNav = true;
       } catch (e) {
-        if (firstShot) throw e; // genuine post-nav wedge → outer catch re-navigates
-        console.warn(`⚠️  Overlay screenshot slow — skipping this cycle, page kept loaded: ${e.message}`);
-        return true; // wait the normal interval; do NOT re-navigate (keeps rotation alive)
+        this._shotFailures++;
+        // Escalate instead of retrying forever. The old code only ever forced a
+        // reload on the FIRST capture after a navigation, so a single success
+        // bought the page permanent immunity — a renderer that wedged later was
+        // never reloaded again, and the hourly Chromium restart was the only way
+        // out. Now a run of misses always ends in a reload.
+        if (firstShot || this._shotFailures >= SHOT_FAILURES_BEFORE_PAGE_RESET) {
+          throw new Error(`${e.message} (${this._shotFailures} consecutive)`);
+        }
+        console.warn(`⚠️  Overlay capture slow (${this._shotFailures}/${SHOT_FAILURES_BEFORE_PAGE_RESET}) — skipping this cycle, page kept loaded: ${e.message}`);
+        return true; // wait the normal interval; keeps the page's own animation alive
       }
-      // Atomic rename so GStreamer never reads a partial file
+
+      // Success is otherwise completely silent, which is why a permanently
+      // frozen overlay could run for days without anything in the journal
+      // distinguishing it from a healthy one. Say so when it recovers, and warn
+      // while captures are merely creeping toward the budget.
+      const shotMs = Date.now() - shotStartedAt;
+      if (this._shotFailures > 0 || this._pageResets > 0) {
+        const via = this._pageResets > 0 ? `${this._pageResets} page reload(s)` : `${this._shotFailures} failed cycle(s)`;
+        console.log(`✅ Overlay capture recovered after ${via} (${shotMs}ms)`);
+      } else if (shotMs > budgetMs / 2 && Date.now() - this._lastSlowLogAt > 60000) {
+        this._lastSlowLogAt = Date.now();
+        console.warn(`⚠️  Overlay capture took ${shotMs}ms of a ${budgetMs}ms budget — renderer is under load`);
+      }
+      this._shotFailures = 0;
+      this._pageResets = 0;
+      this._screenshotOkSinceNav = true;
+
+      // Write + atomic rename so GStreamer never reads a partial file
+      const tempPath = this.pngPath + ".tmp";
+      fs.writeFileSync(tempPath, buf);
       fs.renameSync(tempPath, this.pngPath);
 
       // Tag the event with the URL this frame came from so the server can ignore
@@ -658,11 +808,27 @@ class PuppeteerOverlay extends EventEmitter {
     } catch (err) {
       // Always log — silently swallowing errors makes debugging impossible.
       console.error("❌ Overlay render error:", err.message);
-      // Force a fresh navigation on the next cycle regardless of the failure
-      // mode — a timed-out screenshot or a partially-loaded page should not be
-      // treated as "already loaded" (which would skip re-navigation and keep
-      // screenshotting a wedged page). The re-navigation reliably clears the
-      // post-load renderer hang.
+      // Throw the page away rather than re-navigating it in place. A renderer
+      // that has stopped answering captures often survives a navigation, and a
+      // fresh page also guarantees any abandoned capture is gone. _ensureBrowser()
+      // recreates the page and re-navigates on the next cycle (300ms away).
+      this._pageResets++;
+      if (this._pageResets >= PAGE_RESETS_BEFORE_BROWSER_RESET) {
+        // Reloading the page hasn't helped — the fault is below it. Drop the
+        // whole browser; _ensureBrowser() relaunches on the next cycle. Reset the
+        // counter so this escalates again from scratch rather than relaunching on
+        // every subsequent failure.
+        console.warn(`♻️  Overlay still stuck after ${this._pageResets} page reload(s) — relaunching Chromium`);
+        this._pageResets = 0;
+        await this._closePage();
+        // Not _closeBrowser(): with two cameras the page count never reaches zero,
+        // so it would close only this page again and the browser we are trying to
+        // replace would survive. The other camera re-acquires on its next cycle.
+        await _forceCloseSharedBrowser();
+        this._browser = null;
+      } else {
+        await this._closePage();
+      }
       this._currentLoadedUrl = null;
       if (!this._browser || !this._browserConnected()) {
         // Browser died — _ensureBrowser will relaunch on the next cycle.
