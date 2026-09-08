@@ -21,6 +21,14 @@ let _sharedBrowserPageCount = 0;    // live overlay pages; browser closes at 0
 // overlays by half an interval keeps the peak at ~1 core instead of ~2.
 let _overlayStartOrder = 0;
 
+// Only ONE capture may be in progress across all overlay pages at a time.
+// Captures must bring their page to the foreground first (see _renderUrlOverlay),
+// and foreground is a property of the whole browser — so two overlapping captures
+// would steal it from each other mid-flight and both would hang. The half-interval
+// stagger in startPeriodicRefresh usually keeps them apart, but it drifts, so this
+// is the actual guarantee. A camera that finds the flag set simply skips the cycle.
+let _captureBusy = false;
+
 // ── Capture supervision tunables ─────────────────────────────────────────────
 // How long a single page.screenshot() may take before this loop gives up on it.
 // Sized for the worst case on a busy N97 (two 1080p pages, software raster, two
@@ -740,25 +748,53 @@ class PuppeteerOverlay extends EventEmitter {
       }
       this._shotSkips = 0;
 
+      // Another camera is mid-capture and owns the foreground; try again next tick.
+      if (_captureBusy) return true;
+
       const firstShot = !this._screenshotOkSinceNav;
       const budgetMs = firstShot ? FIRST_SHOT_TIMEOUT_MS : SHOT_TIMEOUT_MS;
       const shotStartedAt = Date.now();
       this._shotStartedAt = shotStartedAt;
-      // No `path:` — take the buffer and write it ourselves. Letting Puppeteer
-      // write the file means an abandoned capture can still land on disk long
-      // after we gave up on it, racing the next cycle for the temp file; a
-      // returned buffer is simply discarded instead.
-      const shot = this._page.screenshot({ type: "png", omitBackground: !this._cdp });
-      this._shotInFlight = shot;
-      // Clear the marker whenever the capture settles, however late. The chained
-      // handler never rejects, so an abandoned capture that fails minutes later
-      // cannot surface as an unhandled rejection.
-      shot.then(() => {}, () => {}).then(() => {
-        if (this._shotInFlight === shot) this._shotInFlight = null;
-      });
 
       let buf;
+      _captureBusy = true;
       try {
+        // Bring the page to the foreground FIRST. Page.captureScreenshot waits for
+        // the compositor to produce a frame, and in new headless (Chrome 150 here)
+        // a page that isn't the foreground tab never produces one — so every
+        // capture after the page's own load frame waits forever. With one page open
+        // this is invisible, because the sole tab is always foreground; with two
+        // cameras it is total. Measured on this hardware: two pages without this
+        // call hang on 100% of captures, with it they take ~180ms.
+        //
+        // captureBeyondViewport was tried as a cheaper alternative and does NOT
+        // help — it hangs identically. Don't swap this for it.
+        try {
+          await Promise.race([
+            this._page.bringToFront(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("bringToFront timed out")), 3000)
+            ),
+          ]);
+        } catch (e) {
+          // Let the capture proceed anyway: it will most likely miss its budget
+          // and be escalated by the counter below, which is the right outcome.
+          console.warn(`⚠️  Overlay bringToFront failed — capture will probably stall: ${e.message}`);
+        }
+
+        // No `path:` — take the buffer and write it ourselves. Letting Puppeteer
+        // write the file means an abandoned capture can still land on disk long
+        // after we gave up on it, racing the next cycle for the temp file; a
+        // returned buffer is simply discarded instead.
+        const shot = this._page.screenshot({ type: "png", omitBackground: !this._cdp });
+        this._shotInFlight = shot;
+        // Clear the marker whenever the capture settles, however late. The chained
+        // handler never rejects, so an abandoned capture that fails minutes later
+        // cannot surface as an unhandled rejection.
+        shot.then(() => {}, () => {}).then(() => {
+          if (this._shotInFlight === shot) this._shotInFlight = null;
+        });
+
         buf = await Promise.race([
           shot,
           new Promise((_, reject) =>
@@ -777,6 +813,11 @@ class PuppeteerOverlay extends EventEmitter {
         }
         console.warn(`⚠️  Overlay capture slow (${this._shotFailures}/${SHOT_FAILURES_BEFORE_PAGE_RESET}) — skipping this cycle, page kept loaded: ${e.message}`);
         return true; // wait the normal interval; keeps the page's own animation alive
+      } finally {
+        // Released when OUR race settles, not when an abandoned capture finally
+        // lands — otherwise one stuck page would lock the other camera out for as
+        // long as Chromium kept working on it.
+        _captureBusy = false;
       }
 
       // Success is otherwise completely silent, which is why a permanently
