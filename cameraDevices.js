@@ -29,6 +29,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 
 const BY_ID_DIR = "/dev/v4l/by-id";
+const BY_PATH_DIR = "/dev/v4l/by-path";
 
 /**
  * Parse `udevadm info --query=property` output into a plain object.
@@ -65,28 +66,49 @@ function isStablePath(device) {
 }
 
 /**
- * Build node → stable-symlink map from the by-id directory.
- * Prefers by-id (keyed on serial, follows the camera) and never returns
- * by-path (keyed on the USB port, which is a different guarantee).
+ * Map node → stable symlinks, from one of udev's persistent-name directories.
+ * Several aliases can point at one node (udev emits both `usb-` and `usbvN-`
+ * spellings of a port), so the candidates are sorted and the first is taken —
+ * the choice only has to be deterministic.
  */
-function _readByIdLinks() {
+function _readLinkDir(dir) {
   const map = new Map();
   let names;
   try {
-    names = fs.readdirSync(BY_ID_DIR);
+    names = fs.readdirSync(dir).sort();
   } catch (_) {
-    return map; // no by-id dir on this image — callers fall back to raw nodes
+    return map; // directory absent on this image
   }
   for (const name of names) {
-    const link = path.join(BY_ID_DIR, name);
+    const link = path.join(dir, name);
     try {
       const target = fs.realpathSync(link);
-      // First link wins: udev may emit several aliases for one node and they
-      // are equivalent, so the choice only needs to be deterministic.
       if (!map.has(target)) map.set(target, link);
-    } catch (_) { /* dangling symlink — the device went away mid-scan */ }
+    } catch (_) { /* dangling symlink — device went away mid-scan */ }
   }
   return map;
+}
+
+/**
+ * Choose the stable path to address a camera by.
+ *
+ * **by-path is preferred over by-id, and that is deliberate.** by-id is built
+ * from `usb-<vendor>_<model>_<serial>` with the serial omitted when the device
+ * does not report one — and some cameras don't. An OBSBOT Tiny SE yields
+ * `usb-Remo_Tech_Co.__Ltd._OBSBOT_Tiny_SE-video-index0` with no serial at all,
+ * so two of them on one appliance generate the *same* by-id name, udev can only
+ * create one symlink for it, and both camera slots end up addressing a single
+ * physical camera. They then fight over it, each slot's cleanup killing the
+ * other's preview, forever.
+ *
+ * by-path is keyed on the USB port, so it is unique per connector by
+ * construction — there is no such thing as two devices in one port. The
+ * trade-off is the opposite failure mode: moving a camera to a different port
+ * reassigns it. For a fixed-cabling appliance that is the right trade, and it
+ * matches how slots are assigned in the first place (by port order).
+ */
+function _pickStablePath(node, byPath, byId) {
+  return byPath.get(node) || byId.get(node) || null;
 }
 
 function _readProperties(node) {
@@ -126,7 +148,8 @@ function listCaptureCameras() {
     return [];
   }
 
-  const byId = _readByIdLinks();
+  const byPath = _readLinkDir(BY_PATH_DIR);
+  const byId = _readLinkDir(BY_ID_DIR);
   const cameras = [];
 
   for (const node of nodes) {
@@ -137,7 +160,7 @@ function listCaptureCameras() {
     // USB serial and is not what this appliance drives.
     if (String(props.ID_BUS || "") !== "usb") continue;
 
-    const stablePath = byId.get(node) || null;
+    const stablePath = _pickStablePath(node, byPath, byId);
     cameras.push({
       device: stablePath || node,
       node,
@@ -149,7 +172,92 @@ function listCaptureCameras() {
   }
 
   cameras.sort(comparePortPaths);
+
+  // Two cameras must never share an address. If they did, two camera slots could
+  // resolve to one physical device and fight over it — each slot's cleanup
+  // killing the other's preview in a loop that never ends. udev can produce
+  // exactly that when a camera reports no serial (see _pickStablePath), so the
+  // invariant is enforced here rather than assumed: a collided camera falls back
+  // to its raw node, which is unstable but at least unambiguous.
+  const claimed = new Map();
+  for (const cam of cameras) {
+    const owner = claimed.get(cam.device);
+    if (owner) {
+      console.error(
+        `❌ ${cam.device} addresses two different cameras (${owner.node} and ${cam.node}) — ` +
+        `falling back to raw nodes for both. Stable paths are unusable for this hardware.`
+      );
+      owner.device = owner.node;
+      owner.stable = false;
+      cam.device = cam.node;
+      cam.stable = false;
+    } else {
+      claimed.set(cam.device, cam);
+    }
+  }
+
   return cameras;
+}
+
+/**
+ * Assign a device to each camera slot, guaranteeing the slots never collide.
+ *
+ * Resolving the slots independently is not safe: whatever the route — a stale
+ * configured value, a healed saved source, two cameras sharing a by-id name —
+ * two slots landing on one device puts the app in an unbreakable restart loop.
+ * The old hardcoded /dev/video0 and /dev/video2 defaults made that structurally
+ * impossible; this function restores that property deliberately.
+ *
+ * Per slot, in order of preference:
+ *   1. the configured override, if it names a present capture device that no
+ *      earlier slot has already claimed;
+ *   2. the first unclaimed camera in USB port order;
+ *   3. null — the slot has no camera, which the caller must treat as absent
+ *      rather than substituting a path that might collide.
+ *
+ * @param {Array<number>} slots slot indices to resolve, in priority order
+ * @param {(slot:number)=>string|undefined} configuredFor override lookup
+ * @param {Array|null} cameraList inject a camera list instead of scanning (tests)
+ * @returns {Map<number, {device: string|null, reason: string}>}
+ */
+function resolveSlots(slots, configuredFor, cameraList = null) {
+  const cameras = cameraList || listCaptureCameras();
+  const claimed = new Set();
+  const out = new Map();
+
+  for (const slot of slots) {
+    const configured = configuredFor(slot);
+    let device = null;
+    let reason = "";
+
+    if (configured) {
+      const wanted = toStablePath(configured, cameras);
+      const match = cameras.find((c) => c.device === wanted);
+      if (!match) {
+        reason = `configured ${configured} is not a present capture device`;
+      } else if (claimed.has(match.device)) {
+        reason = `configured ${configured} is already assigned to another camera slot`;
+      } else {
+        device = match.device;
+        reason = wanted === configured ? "configured" : `configured ${configured} → stable path`;
+      }
+    }
+
+    if (!device) {
+      const free = cameras.find((c) => !claimed.has(c.device));
+      if (free) {
+        device = free.device;
+        reason = reason ? `${reason}; auto-detected instead` : "auto-detected";
+      } else {
+        reason = reason ? `${reason}; no unclaimed camera available` : "no unclaimed camera available";
+      }
+    }
+
+    if (device) claimed.add(device);
+    out.set(slot, { device, reason });
+  }
+
+  return out;
 }
 
 /**
@@ -197,9 +305,16 @@ function comparePortPaths(a, b) {
  * node is not currently a capture device (in which case there is nothing
  * truthful to map it to).
  */
-function toStablePath(device) {
-  if (!device || isStablePath(device)) return device;
-  const match = listCaptureCameras().find((c) => c.node === device);
+function toStablePath(device, cameras = null) {
+  if (!device) return device;
+  const list = cameras || listCaptureCameras();
+  // An already-stable path still needs checking: a by-id path that udev has
+  // since pointed at a different camera, or one this hardware cannot address
+  // uniquely, must not be taken at face value.
+  if (isStablePath(device)) {
+    return list.some((c) => c.device === device) ? device : device;
+  }
+  const match = list.find((c) => c.node === device);
   return match ? match.device : device;
 }
 
@@ -216,6 +331,7 @@ function defaultDeviceForSlot(slotIdx) {
 
 module.exports = {
   listCaptureCameras,
+  resolveSlots,
   toStablePath,
   defaultDeviceForSlot,
   isStablePath,

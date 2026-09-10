@@ -66,18 +66,31 @@ for node in "${NODES[@]}"; do
   echo
 done
 
-echo "── For .env ──"
-echo "Point CAMERA_DEVICE / CAMERA_DEVICE_2 at a *stable* path from a CAPTURE node"
-echo "above, never at /dev/videoN. A by-id path follows the camera's serial, so it"
-echo "survives renumbering and reboots; a by-path path follows the USB port, so it"
-echo "survives swapping in a replacement camera on the same cable."
+echo "── Addressing these cameras ──"
+echo "Prefer a by-path entry. by-id is built as usb-<vendor>_<model>_<serial> and"
+echo "OMITS the serial when the camera does not report one — two identical cameras"
+echo "then share a single by-id name, udev creates only one symlink for it, and two"
+echo "camera slots can end up driving one physical camera (which deadlocks both)."
+echo "by-path is keyed on the USB port, so it is unique per connector; the trade-off"
+echo "is that moving a camera to a different port reassigns it."
+echo
+noserial=0
 for node in "${NODES[@]}"; do
   props="$(udevadm info --query=property --name="$node" 2>/dev/null)" || continue
   case "$(printf '%s\n' "$props" | sed -n 's/^ID_V4L_CAPABILITIES=//p')" in
     *:capture:*) ;;
     *) continue ;;
   esac
+  if [ -z "$(printf '%s\n' "$props" | sed -n 's/^ID_SERIAL_SHORT=//p')" ]; then
+    echo "  ⚠️  $node reports NO USB serial — its by-id name is not unique to this camera"
+    noserial=1
+  fi
   for link in ${STABLE[$node]:-}; do
-    case "$link" in */by-id/*) echo "  CAMERA_DEVICE=$link  # $node" ;; esac
+    case "$link" in */by-path/*) echo "  $node -> $link"; break ;; esac
   done
 done
+[ "$noserial" = 1 ] && echo && echo "  Because of the above, do not address these cameras by by-id."
+echo
+echo "The app assigns cameras to slots itself (by USB port order) and guarantees the"
+echo "two slots never share a device, so CAMERA_DEVICE normally stays unset. Set it"
+echo "only to force a specific camera into slot 1, using a path printed above."

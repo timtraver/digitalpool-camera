@@ -1250,13 +1250,25 @@ class StreamController extends EventEmitter {
    *   An empty `pids` only means "nothing holds the device" when `available` is
    *   true; `privileged` says whether root-owned holders were in scope too.
    */
-  async _fuser(target, kill = false) {
+  async _fuser(rawTarget, kill = false) {
+    let target = rawTarget;
     const { exec } = require("child_process");
     const util = require("util");
     const execPromise = util.promisify(exec);
     const flag = kill ? "-k " : "";
     const pids = new Set();
     let privileged = false;
+
+    // Resolve to the real /dev/videoN. The camera device is now a stable
+    // /dev/v4l/by-id/... symlink, and the sudoers grant deliberately lists fixed
+    // device-node patterns rather than a wildcard (a sudoers `*` matches `/`, so
+    // `/dev/v4l/by-id/*` would permit `by-id/../../..` and let any path be passed
+    // to `fuser -k`). Resolving here in Node keeps the grant narrow and matching.
+    // fuser follows the symlink to the same node either way, so this changes only
+    // whether the privileged pass is permitted.
+    try {
+      target = require("fs").realpathSync(target);
+    } catch (_) { /* device absent — fuser will report nothing, honestly */ }
 
     // Probe once per process — psmisc can't appear or vanish under us at runtime.
     if (StreamController._fuserAvailable === undefined) {

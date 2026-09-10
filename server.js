@@ -42,56 +42,41 @@ const io = socketIO(server, {
 const PORT = process.env.PORT || 3000;
 
 /**
- * Resolve a camera slot's device to a path that survives renumbering.
+ * Assign a device to each camera slot.
  *
  * `/dev/videoN` numbers are reassigned by any uvcvideo re-probe, with no USB
- * disconnect to signal it, so a configured or persisted `/dev/videoN` can end up
- * pointing at a metadata node, at the other camera, or at nothing. Discovery is
- * therefore the default and configuration is only a hint:
+ * disconnect to signal it, so a configured `/dev/videoN` can end up naming a
+ * metadata node, the other camera, or nothing. Discovery is therefore the
+ * default and CAMERA_DEVICE / CAMERA_DEVICE_2 are optional overrides, ignored
+ * (loudly) when they do not name a present, unclaimed capture device.
  *
- *   1. CAMERA_DEVICE / CAMERA_DEVICE_2, when set AND currently resolvable to a
- *      real capture device (normalised to its stable /dev/v4l/by-id path).
- *   2. Otherwise whatever is plugged in — slot 1 takes the camera in the
- *      lowest-numbered USB port, slot 2 the next.
- *
- * Falling back rather than trusting a stale value is what lets a device recover
- * on its own: digitalpool-camera.service still ships
- * `Environment=CAMERA_DEVICE=/dev/video0` as a legacy default (migration 0010
- * strips it from the installed unit), and on a box where the nodes have shifted
- * that value is simply wrong.
+ * resolveSlots() guarantees the two slots never receive the same device. That
+ * matters more than it sounds: two slots on one camera puts the app in an
+ * unbreakable loop, each slot's cleanup killing the other's idle preview. The
+ * old hardcoded /dev/video0 and /dev/video2 defaults made it impossible by
+ * construction, and that property has to be kept deliberately now.
  */
-function resolveCameraDevice(slotIdx) {
-  const configured = slotIdx === 2 ? process.env.CAMERA_DEVICE_2 : process.env.CAMERA_DEVICE;
-  const label = `Cam${slotIdx}`;
+const _slotAssignment = cameraDevices.resolveSlots([1, 2], (slot) =>
+  slot === 2 ? process.env.CAMERA_DEVICE_2 : process.env.CAMERA_DEVICE
+);
 
-  if (configured) {
-    const stable = cameraDevices.toStablePath(configured);
-    const present = cameraDevices.listCaptureCameras().some((c) => c.device === stable);
-    if (present) {
-      if (stable !== configured) {
-        console.log(`📷 [${label}] ${configured} → ${stable} (stable path for the same camera)`);
-      }
-      return stable;
-    }
-    console.warn(`⚠️  [${label}] configured device ${configured} is not a present capture device — auto-detecting instead`);
+function _slotDevice(slot, legacyDefault, takenByOtherSlot) {
+  const { device, reason } = _slotAssignment.get(slot);
+  if (device) {
+    console.log(`📷 [Cam${slot}] ${device} (${reason})`);
+    return device;
   }
-
-  const detected = cameraDevices.defaultDeviceForSlot(slotIdx);
-  if (detected) {
-    console.log(`📷 [${label}] auto-detected ${detected}`);
-    return detected;
-  }
-
-  // Nothing plugged in for this slot. Keep the configured value (or the
-  // conventional node) so downstream code has a string to work with; the
-  // camera-present checks will correctly report it absent.
-  const placeholder = configured || (slotIdx === 2 ? "/dev/video2" : "/dev/video0");
-  console.warn(`⚠️  [${label}] no USB capture camera found — using ${placeholder} until one appears`);
+  // No camera for this slot. Fall back to the legacy node only when it cannot
+  // collide with the other slot — a colliding placeholder is worse than no
+  // device at all, because the camera-present checks correctly report an empty
+  // or absent path as absent instead of starting a fight over a real one.
+  const placeholder = legacyDefault && legacyDefault !== takenByOtherSlot ? legacyDefault : "";
+  console.warn(`⚠️  [Cam${slot}] no camera assigned (${reason})${placeholder ? ` — using ${placeholder} until one appears` : ""}`);
   return placeholder;
 }
 
-const CAMERA_DEVICE   = resolveCameraDevice(1);
-const CAMERA_DEVICE_2 = resolveCameraDevice(2);
+const CAMERA_DEVICE   = _slotDevice(1, "/dev/video0", null);
+const CAMERA_DEVICE_2 = _slotDevice(2, "/dev/video2", CAMERA_DEVICE);
 const DEFAULT_AP_IP = process.env.AP_IP || "192.168.50.1";
 const HOTSPOT_SUBNET = process.env.HOTSPOT_SUBNET || "192.168.50.";
 
@@ -2724,31 +2709,62 @@ const _savedSource2 = loadCameraSource(2);
  * Upgrade a persisted USB source that stored an unstable `/dev/videoN`.
  *
  * Saved sources predate stable-path discovery, so an existing device has a bare
- * node on disk. Left alone it breaks on the next renumber exactly as the old
- * .env value did. Rewriting it here — and re-saving, so it is fixed once rather
- * than on every boot — heals the device with no operator action. A node that is
- * no longer a capture device cannot be mapped to anything truthful, so it is
- * replaced with the slot's resolved default instead.
+ * node on disk. Left alone it breaks on the next renumber exactly as a pinned
+ * CAMERA_DEVICE did. Rewriting it here — and re-saving, so it is fixed once
+ * rather than on every boot — heals the device with no operator action.
+ *
+ * `taken` is the device the other slot already holds. A healed value that would
+ * collide with it is refused: two slots sharing one camera is the one outcome
+ * that cannot be allowed to happen.
  */
-function _healSavedSource(saved, idx, resolvedDefault) {
+function _healSavedSource(saved, idx, resolvedDefault, taken) {
   if (!saved || saved.type !== "usb" || !saved.device) return saved;
-  if (cameraDevices.isStablePath(saved.device)) return saved;
 
-  const stable = cameraDevices.toStablePath(saved.device);
-  const healed = stable !== saved.device ? stable : resolvedDefault;
-  if (!healed || healed === saved.device) {
-    console.warn(`⚠️  [Cam${idx}] saved source ${saved.device} is an unstable node and could not be resolved`);
-    return saved;
+  let healed = saved.device;
+  if (!cameraDevices.isStablePath(saved.device)) {
+    const stable = cameraDevices.toStablePath(saved.device);
+    healed = stable !== saved.device ? stable : resolvedDefault;
   }
 
-  console.log(`📷 [Cam${idx}] saved source ${saved.device} → ${healed} (stable path)`);
+  if (healed && taken && healed === taken) {
+    console.error(
+      `❌ [Cam${idx}] saved source resolves to ${healed}, already held by the other camera slot — ` +
+      `falling back to ${resolvedDefault || "no camera"}`
+    );
+    healed = resolvedDefault && resolvedDefault !== taken ? resolvedDefault : "";
+  }
+
+  if (!healed) {
+    console.warn(`⚠️  [Cam${idx}] saved source ${saved.device} could not be resolved to a usable camera`);
+    return { ...saved, type: "none", device: "" };
+  }
+  if (healed === saved.device) return saved;
+
+  console.log(`📷 [Cam${idx}] saved source ${saved.device} → ${healed}`);
   const upgraded = { ...saved, device: healed };
   saveCameraSource(upgraded, idx);
   return upgraded;
 }
 
-let activeCameraSource  = _healSavedSource(_savedSource,  1, CAMERA_DEVICE)   || { type: "usb", device: CAMERA_DEVICE,   rtspUrl: "", rtmpUrl: "", ndiName: "" };
-let activeCameraSource2 = _healSavedSource(_savedSource2, 2, CAMERA_DEVICE_2) || { type: "usb", device: CAMERA_DEVICE_2, rtspUrl: "", rtmpUrl: "", ndiName: "" };
+let activeCameraSource  = _healSavedSource(_savedSource,  1, CAMERA_DEVICE,   null)
+  || { type: "usb", device: CAMERA_DEVICE,   rtspUrl: "", rtmpUrl: "", ndiName: "" };
+let activeCameraSource2 = _healSavedSource(_savedSource2, 2, CAMERA_DEVICE_2, activeCameraSource.type === "usb" ? activeCameraSource.device : null)
+  || { type: "usb", device: CAMERA_DEVICE_2, rtspUrl: "", rtmpUrl: "", ndiName: "" };
+
+// Hard backstop. Every path above is meant to keep the slots distinct, but the
+// consequence of getting it wrong is a restart loop that no backoff escapes and
+// that looks nothing like its cause, so the invariant is checked rather than
+// trusted. Clearing slot 2 loses one camera; leaving them to fight loses both.
+if (
+  activeCameraSource.type === "usb" && activeCameraSource2.type === "usb" &&
+  activeCameraSource.device && activeCameraSource.device === activeCameraSource2.device
+) {
+  console.error(
+    `❌ Both camera slots resolved to ${activeCameraSource.device}. Clearing camera 2 — ` +
+    `two slots cannot share one device. Check ./camera-nodes.sh and assign camera 2 in the UI.`
+  );
+  activeCameraSource2 = { type: "none", device: "", rtspUrl: "", rtmpUrl: "", ndiName: "" };
+}
 
 /** Return the active source object for camera index 1 or 2. */
 function getActiveSource(idx) { return idx === 2 ? activeCameraSource2 : activeCameraSource; }
