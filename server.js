@@ -56,8 +56,38 @@ const PORT = process.env.PORT || 3000;
  * old hardcoded /dev/video0 and /dev/video2 defaults made it impossible by
  * construction, and that property has to be kept deliberately now.
  */
+/**
+ * The USB device a slot's persisted source names, read before the controllers
+ * are built.
+ *
+ * The saved source is the operator's own choice, so it must be what the slot
+ * resolves to — not something applied afterwards. Resolving the slot to an
+ * auto-detected path and then switching to the saved one meant constructing the
+ * controllers on one path and immediately re-pointing them at a second path for
+ * the same physical camera, because a by-path and a by-id string for one camera
+ * compare unequal. That re-point re-ran camera-control discovery over USB for
+ * nothing. Feeding the saved device into resolveSlots() instead makes the later
+ * restore a no-op for USB sources.
+ *
+ * Deliberately a bare read, duplicating a little of loadCameraSource(): that
+ * function and its file constants are defined ~2600 lines below, after the
+ * controllers, and moving them up is a bigger change than this needs.
+ */
+function _savedUsbDevice(slot) {
+  const file = path.join(__dirname, slot === 2 ? "camera-source-2.json" : "camera-source.json");
+  try {
+    const saved = JSON.parse(fsSync.readFileSync(file, "utf8"));
+    return saved && saved.type === "usb" && saved.device ? saved.device : null;
+  } catch (_) {
+    return null; // absent or unparseable — fall through to env / auto-detect
+  }
+}
+
+// Preference order per slot: the persisted source, then the env override, then
+// discovery. All three go through one exclusivity pass.
 const _slotAssignment = cameraDevices.resolveSlots([1, 2], (slot) =>
-  slot === 2 ? process.env.CAMERA_DEVICE_2 : process.env.CAMERA_DEVICE
+  _savedUsbDevice(slot) ||
+  (slot === 2 ? process.env.CAMERA_DEVICE_2 : process.env.CAMERA_DEVICE)
 );
 
 function _slotDevice(slot, legacyDefault, takenByOtherSlot) {
@@ -2723,8 +2753,15 @@ const _savedSource2 = loadCameraSource(2);
 function _healSavedSource(saved, idx, resolvedDefault, taken) {
   if (!saved || saved.type !== "usb" || !saved.device) return saved;
 
+  // Canonicalise, don't just stabilise. A saved by-id path is "stable" yet is
+  // NOT the address listCaptureCameras() reports for that camera (it canonicalises
+  // to by-path), so leaving it alone left the slot holding one path while the
+  // controller held another for the same camera — two names for one device, which
+  // every string comparison downstream reads as a mismatch.
   let healed = saved.device;
-  if (!cameraDevices.isStablePath(saved.device)) {
+  if (resolvedDefault && cameraDevices.sameDevice(saved.device, resolvedDefault)) {
+    healed = resolvedDefault;
+  } else if (!cameraDevices.isStablePath(saved.device)) {
     const stable = cameraDevices.toStablePath(saved.device);
     healed = stable !== saved.device ? stable : resolvedDefault;
   }

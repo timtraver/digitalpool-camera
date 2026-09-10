@@ -259,8 +259,15 @@ function resolveSlots(slots, configuredFor, cameraList = null) {
     let reason = "";
 
     if (configured) {
+      // Match on the resolved node: a configured by-id path, a raw /dev/videoN
+      // and this camera's canonical by-path all name one device while comparing
+      // unequal as strings. Whatever matches, the slot takes the camera's
+      // canonical `device` so exactly one name for it circulates.
       const wanted = toStablePath(configured, cameras);
-      const match = cameras.find((c) => c.device === wanted);
+      const wantedNode = resolvedNode(configured) || resolvedNode(wanted);
+      const match =
+        cameras.find((c) => c.device === wanted) ||
+        (wantedNode ? cameras.find((c) => resolvedNode(c.device) === wantedNode || c.node === wantedNode) : undefined);
       if (!match) {
         reason = `configured ${configured} is not a present capture device`;
       } else if (claimed.has(key(match.device))) {
