@@ -70,7 +70,10 @@ function _slotDevice(slot, legacyDefault, takenByOtherSlot) {
   // collide with the other slot — a colliding placeholder is worse than no
   // device at all, because the camera-present checks correctly report an empty
   // or absent path as absent instead of starting a fight over a real one.
-  const placeholder = legacyDefault && legacyDefault !== takenByOtherSlot ? legacyDefault : "";
+  // Checked with sameDevice(), not string equality: the other slot may hold a
+  // by-path symlink that resolves to this very node, which compares unequal.
+  const placeholder =
+    legacyDefault && !cameraDevices.sameDevice(legacyDefault, takenByOtherSlot) ? legacyDefault : "";
   console.warn(`⚠️  [Cam${slot}] no camera assigned (${reason})${placeholder ? ` — using ${placeholder} until one appears` : ""}`);
   return placeholder;
 }
@@ -2735,8 +2738,17 @@ function _healSavedSource(saved, idx, resolvedDefault, taken) {
   }
 
   if (!healed) {
-    console.warn(`⚠️  [Cam${idx}] saved source ${saved.device} could not be resolved to a usable camera`);
-    return { ...saved, type: "none", device: "" };
+    // Keep the saved device rather than clearing the slot. USB cameras enumerate
+    // over tens of seconds — on one device the two cameras appeared 23s apart —
+    // so "not present at startup" routinely means "not present yet", and
+    // clearing the slot to type:"none" would disable that camera until someone
+    // reassigned it by hand. Leaving the path in place lets the existing
+    // camera-present checks pick the camera up when it arrives.
+    console.warn(
+      `⚠️  [Cam${idx}] saved source ${saved.device} does not resolve to a present camera — ` +
+      `keeping it in case the camera is still enumerating`
+    );
+    return saved;
   }
   if (healed === saved.device) return saved;
 
@@ -2757,7 +2769,7 @@ let activeCameraSource2 = _healSavedSource(_savedSource2, 2, CAMERA_DEVICE_2, ac
 // trusted. Clearing slot 2 loses one camera; leaving them to fight loses both.
 if (
   activeCameraSource.type === "usb" && activeCameraSource2.type === "usb" &&
-  activeCameraSource.device && activeCameraSource.device === activeCameraSource2.device
+  cameraDevices.sameDevice(activeCameraSource.device, activeCameraSource2.device)
 ) {
   console.error(
     `❌ Both camera slots resolved to ${activeCameraSource.device}. Clearing camera 2 — ` +

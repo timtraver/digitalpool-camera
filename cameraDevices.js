@@ -60,6 +60,31 @@ function isCaptureNode(props) {
   return String(props.ID_V4L_CAPABILITIES || "").includes(":capture:");
 }
 
+/**
+ * The /dev/videoN a device path actually refers to, or null if it resolves to
+ * nothing right now.
+ *
+ * Comparing device *strings* is not enough to tell whether two camera slots
+ * share a camera: a by-path symlink and a raw node can name the same device
+ * while comparing unequal. Every exclusivity check must go through this.
+ */
+function resolvedNode(device) {
+  if (!device) return null;
+  try {
+    return fs.realpathSync(device);
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Do two device paths refer to the same physical device right now? */
+function sameDevice(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const ra = resolvedNode(a), rb = resolvedNode(b);
+  return Boolean(ra && rb && ra === rb);
+}
+
 /** True for a path that survives renumbering; false for a bare /dev/videoN. */
 function isStablePath(device) {
   return typeof device === "string" && device.startsWith("/dev/v4l/");
@@ -181,7 +206,7 @@ function listCaptureCameras() {
   // to its raw node, which is unstable but at least unambiguous.
   const claimed = new Map();
   for (const cam of cameras) {
-    const owner = claimed.get(cam.device);
+    const owner = claimed.get(resolvedNode(cam.device) || cam.device);
     if (owner) {
       console.error(
         `❌ ${cam.device} addresses two different cameras (${owner.node} and ${cam.node}) — ` +
@@ -192,7 +217,7 @@ function listCaptureCameras() {
       cam.device = cam.node;
       cam.stable = false;
     } else {
-      claimed.set(cam.device, cam);
+      claimed.set(resolvedNode(cam.device) || cam.device, cam);
     }
   }
 
@@ -222,7 +247,10 @@ function listCaptureCameras() {
  */
 function resolveSlots(slots, configuredFor, cameraList = null) {
   const cameras = cameraList || listCaptureCameras();
+  // Keyed on the resolved node so a by-path symlink and a raw node naming the
+  // same camera cannot both be handed out.
   const claimed = new Set();
+  const key = (device) => resolvedNode(device) || device;
   const out = new Map();
 
   for (const slot of slots) {
@@ -235,7 +263,7 @@ function resolveSlots(slots, configuredFor, cameraList = null) {
       const match = cameras.find((c) => c.device === wanted);
       if (!match) {
         reason = `configured ${configured} is not a present capture device`;
-      } else if (claimed.has(match.device)) {
+      } else if (claimed.has(key(match.device))) {
         reason = `configured ${configured} is already assigned to another camera slot`;
       } else {
         device = match.device;
@@ -244,7 +272,7 @@ function resolveSlots(slots, configuredFor, cameraList = null) {
     }
 
     if (!device) {
-      const free = cameras.find((c) => !claimed.has(c.device));
+      const free = cameras.find((c) => !claimed.has(key(c.device)));
       if (free) {
         device = free.device;
         reason = reason ? `${reason}; auto-detected instead` : "auto-detected";
@@ -253,7 +281,7 @@ function resolveSlots(slots, configuredFor, cameraList = null) {
       }
     }
 
-    if (device) claimed.add(device);
+    if (device) claimed.add(key(device));
     out.set(slot, { device, reason });
   }
 
@@ -332,6 +360,8 @@ function defaultDeviceForSlot(slotIdx) {
 module.exports = {
   listCaptureCameras,
   resolveSlots,
+  resolvedNode,
+  sameDevice,
   toStablePath,
   defaultDeviceForSlot,
   isStablePath,
