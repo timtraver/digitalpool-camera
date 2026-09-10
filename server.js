@@ -1,4 +1,11 @@
-require("dotenv").config();
+// override: true so .env actually wins over the `Environment=` lines in
+// digitalpool-camera.service. dotenv's default is to leave any variable already
+// present in process.env alone, which made the unit's Environment=CAMERA_DEVICE
+// authoritative and every .env edit a silent no-op — the opposite of what the
+// README documents, and it cost two days of debugging when a camera's node
+// number changed and .env could not be pointed at the new one.
+require("dotenv").config({ override: true });
+const cameraDevices = require("./cameraDevices");
 const express = require("express");
 const http = require("http");
 const socketIO = require("socket.io");
@@ -33,8 +40,58 @@ const io = socketIO(server, {
 });
 
 const PORT = process.env.PORT || 3000;
-const CAMERA_DEVICE   = process.env.CAMERA_DEVICE   || "/dev/video0";
-const CAMERA_DEVICE_2 = process.env.CAMERA_DEVICE_2 || "/dev/video2";
+
+/**
+ * Resolve a camera slot's device to a path that survives renumbering.
+ *
+ * `/dev/videoN` numbers are reassigned by any uvcvideo re-probe, with no USB
+ * disconnect to signal it, so a configured or persisted `/dev/videoN` can end up
+ * pointing at a metadata node, at the other camera, or at nothing. Discovery is
+ * therefore the default and configuration is only a hint:
+ *
+ *   1. CAMERA_DEVICE / CAMERA_DEVICE_2, when set AND currently resolvable to a
+ *      real capture device (normalised to its stable /dev/v4l/by-id path).
+ *   2. Otherwise whatever is plugged in — slot 1 takes the camera in the
+ *      lowest-numbered USB port, slot 2 the next.
+ *
+ * Falling back rather than trusting a stale value is what lets a device recover
+ * on its own: digitalpool-camera.service still ships
+ * `Environment=CAMERA_DEVICE=/dev/video0` as a legacy default (migration 0010
+ * strips it from the installed unit), and on a box where the nodes have shifted
+ * that value is simply wrong.
+ */
+function resolveCameraDevice(slotIdx) {
+  const configured = slotIdx === 2 ? process.env.CAMERA_DEVICE_2 : process.env.CAMERA_DEVICE;
+  const label = `Cam${slotIdx}`;
+
+  if (configured) {
+    const stable = cameraDevices.toStablePath(configured);
+    const present = cameraDevices.listCaptureCameras().some((c) => c.device === stable);
+    if (present) {
+      if (stable !== configured) {
+        console.log(`📷 [${label}] ${configured} → ${stable} (stable path for the same camera)`);
+      }
+      return stable;
+    }
+    console.warn(`⚠️  [${label}] configured device ${configured} is not a present capture device — auto-detecting instead`);
+  }
+
+  const detected = cameraDevices.defaultDeviceForSlot(slotIdx);
+  if (detected) {
+    console.log(`📷 [${label}] auto-detected ${detected}`);
+    return detected;
+  }
+
+  // Nothing plugged in for this slot. Keep the configured value (or the
+  // conventional node) so downstream code has a string to work with; the
+  // camera-present checks will correctly report it absent.
+  const placeholder = configured || (slotIdx === 2 ? "/dev/video2" : "/dev/video0");
+  console.warn(`⚠️  [${label}] no USB capture camera found — using ${placeholder} until one appears`);
+  return placeholder;
+}
+
+const CAMERA_DEVICE   = resolveCameraDevice(1);
+const CAMERA_DEVICE_2 = resolveCameraDevice(2);
 const DEFAULT_AP_IP = process.env.AP_IP || "192.168.50.1";
 const HOTSPOT_SUBNET = process.env.HOTSPOT_SUBNET || "192.168.50.";
 
@@ -2662,8 +2719,36 @@ function saveCameraSource(source, idx = 1) {
 // Initialised from disk so the chosen source survives restarts.
 const _savedSource  = loadCameraSource(1);
 const _savedSource2 = loadCameraSource(2);
-let activeCameraSource  = _savedSource  || { type: "usb", device: CAMERA_DEVICE,   rtspUrl: "", rtmpUrl: "", ndiName: "" };
-let activeCameraSource2 = _savedSource2 || { type: "usb", device: CAMERA_DEVICE_2, rtspUrl: "", rtmpUrl: "", ndiName: "" };
+
+/**
+ * Upgrade a persisted USB source that stored an unstable `/dev/videoN`.
+ *
+ * Saved sources predate stable-path discovery, so an existing device has a bare
+ * node on disk. Left alone it breaks on the next renumber exactly as the old
+ * .env value did. Rewriting it here — and re-saving, so it is fixed once rather
+ * than on every boot — heals the device with no operator action. A node that is
+ * no longer a capture device cannot be mapped to anything truthful, so it is
+ * replaced with the slot's resolved default instead.
+ */
+function _healSavedSource(saved, idx, resolvedDefault) {
+  if (!saved || saved.type !== "usb" || !saved.device) return saved;
+  if (cameraDevices.isStablePath(saved.device)) return saved;
+
+  const stable = cameraDevices.toStablePath(saved.device);
+  const healed = stable !== saved.device ? stable : resolvedDefault;
+  if (!healed || healed === saved.device) {
+    console.warn(`⚠️  [Cam${idx}] saved source ${saved.device} is an unstable node and could not be resolved`);
+    return saved;
+  }
+
+  console.log(`📷 [Cam${idx}] saved source ${saved.device} → ${healed} (stable path)`);
+  const upgraded = { ...saved, device: healed };
+  saveCameraSource(upgraded, idx);
+  return upgraded;
+}
+
+let activeCameraSource  = _healSavedSource(_savedSource,  1, CAMERA_DEVICE)   || { type: "usb", device: CAMERA_DEVICE,   rtspUrl: "", rtmpUrl: "", ndiName: "" };
+let activeCameraSource2 = _healSavedSource(_savedSource2, 2, CAMERA_DEVICE_2) || { type: "usb", device: CAMERA_DEVICE_2, rtspUrl: "", rtmpUrl: "", ndiName: "" };
 
 /** Return the active source object for camera index 1 or 2. */
 function getActiveSource(idx) { return idx === 2 ? activeCameraSource2 : activeCameraSource; }
@@ -2753,29 +2838,24 @@ async function refreshAllDetection(idx) {
   for (const feature of Object.keys(CAPABILITIES)) await refreshDetection(idx, feature);
 }
 
-// List available V4L2 video capture devices
+// List the USB cameras that can actually be streamed from.
+//
+// Reports only capture nodes, addressed by their stable /dev/v4l/by-id path.
+// The previous implementation parsed `v4l2-ctl --list-devices`, which lists a
+// UVC camera's metadata node alongside its capture node without distinguishing
+// them — so half the offered devices could not stream — and returned bare
+// /dev/videoN paths that got persisted by /api/camera/source and then broke on
+// the next uvcvideo re-probe.
 app.get("/api/camera/devices", requireAuth, (req, res) => {
   const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
   const current = getActiveSource(camIdx);
   try {
-    const { execSync } = require("child_process");
-    const raw = execSync("v4l2-ctl --list-devices 2>/dev/null || true").toString();
-    // Output format:
-    //   Camera Model (usb-path):
-    //       /dev/video0
-    //       /dev/video1
-    const devices = [];
-    let currentName = "";
-    for (const line of raw.split("\n")) {
-      if (/^\s+/.test(line)) {
-        const dev = line.trim();
-        if (dev.startsWith("/dev/video")) {
-          devices.push({ device: dev, name: currentName });
-        }
-      } else if (line.trim()) {
-        currentName = line.replace(/:$/, "").trim();
-      }
-    }
+    const devices = cameraDevices.listCaptureCameras().map((c) => ({
+      ...c,
+      // Identical camera models are common (one per table), so the label has to
+      // carry something that distinguishes them: the serial, else the USB port.
+      label: `${c.name} — ${c.node}${c.serial ? ` · s/n ${c.serial}` : c.portPath ? ` · ${c.portPath}` : ""}`,
+    }));
     res.json({ success: true, devices, current });
   } catch (e) {
     res.json({ success: false, error: e.message, devices: [], current });

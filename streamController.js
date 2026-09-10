@@ -1224,6 +1224,91 @@ class StreamController extends EventEmitter {
   }
 
   /**
+   * Locate (and optionally SIGKILL) the processes holding a device node open.
+   *
+   * `fuser` comes from **psmisc, which is not installed on every device** — and a
+   * missing binary must never read as "nothing holds the device", because that is
+   * exactly the false "free" that turns a stale pipeline into an unexplained
+   * "Device '/dev/video0' is busy". So availability is probed explicitly and
+   * reported, rather than inferred from empty output.
+   *
+   * Two passes, because neither alone sees everything:
+   *   - **unprivileged** — `fuser` walks /proc/&ast;/fd, and as `dp` it can only see
+   *     `dp`'s own processes.  That covers every holder we create (all GStreamer /
+   *     ffmpeg children run as `dp`), so this pass does the real work.
+   *   - **`sudo -n`** — catches a root-owned holder.  `-n` is essential: without
+   *     it sudo tries to prompt, there is no tty, and PAM logs
+   *     "auth could not identify password for [dp]" once per call.  Needs the
+   *     grant from `migrations/0009-fuser-sudoers.sh`; absent that, this pass is
+   *     skipped.  Its stderr is deliberately NOT redirected — "sudo: fuser:
+   *     command not found" and "sudo: a password is required" are how we tell a
+   *     failed pass from a pass that ran and found nothing.
+   *
+   * @param {string} target  device path, e.g. /dev/video0
+   * @param {boolean} kill   pass -k, so fuser SIGKILLs the holders it finds
+   * @returns {Promise<{pids: string[], available: boolean, privileged: boolean}>}
+   *   An empty `pids` only means "nothing holds the device" when `available` is
+   *   true; `privileged` says whether root-owned holders were in scope too.
+   */
+  async _fuser(target, kill = false) {
+    const { exec } = require("child_process");
+    const util = require("util");
+    const execPromise = util.promisify(exec);
+    const flag = kill ? "-k " : "";
+    const pids = new Set();
+    let privileged = false;
+
+    // Probe once per process — psmisc can't appear or vanish under us at runtime.
+    if (StreamController._fuserAvailable === undefined) {
+      try {
+        await execPromise("command -v fuser");
+        StreamController._fuserAvailable = true;
+      } catch (_) {
+        StreamController._fuserAvailable = false;
+        console.error(
+          "❌ `fuser` (psmisc) is not installed — cannot detect which process holds " +
+          "a camera or audio device. Install it with `sudo apt-get install -y psmisc` " +
+          "or run migrations/0009-fuser-sudoers.sh."
+        );
+      }
+    }
+    if (!StreamController._fuserAvailable) {
+      return { pids: [], available: false, privileged: false };
+    }
+
+    // fuser prints PIDs on stdout, its "target:" label on stderr, and exits 1
+    // when it finds nothing — so a non-zero exit here is normal, not an error.
+    try {
+      const { stdout } = await execPromise(`fuser ${flag}${target}`);
+      for (const p of stdout.trim().split(/\s+/)) if (/^\d+$/.test(p)) pids.add(p);
+    } catch (err) {
+      for (const p of String(err.stdout || "").trim().split(/\s+/)) {
+        if (/^\d+$/.test(p)) pids.add(p);
+      }
+    }
+
+    try {
+      const { stdout } = await execPromise(`sudo -n fuser ${flag}${target}`);
+      privileged = true;
+      for (const p of stdout.trim().split(/\s+/)) if (/^\d+$/.test(p)) pids.add(p);
+    } catch (err) {
+      // Distinguish "fuser ran as root and found nothing" (exit 1, stderr holds
+      // only fuser's own label) from "sudo refused" (stderr starts with "sudo:").
+      const stderr = String(err.stderr || "");
+      if (/^\s*sudo:/m.test(stderr)) {
+        privileged = false;
+      } else {
+        privileged = true;
+        for (const p of String(err.stdout || "").trim().split(/\s+/)) {
+          if (/^\d+$/.test(p)) pids.add(p);
+        }
+      }
+    }
+
+    return { pids: [...pids], available: true, privileged };
+  }
+
+  /**
    * Kill any processes holding the camera device open, then poll until the
    * kernel confirms the device is free.
    *
@@ -1233,6 +1318,11 @@ class StreamController extends EventEmitter {
    *      need to avoid the "S_FMT busy" error that SIGTERM causes on Rockchip.
    *   2. Poll `fuser` every 300 ms (up to 3 s) to confirm the device is free
    *      before returning.  This replaces the old fixed 2-second sleep.
+   *
+   * Returns true if the device was confirmed free, false if it is still held (or
+   * could not be checked).  A false return means v4l2src is about to fail with
+   * "Device or resource busy" — a wedged USB camera whose fd the kernel will not
+   * release needs `usb-reset.sh`, not another kill.
    */
   async _killCameraProcesses() {
     const { exec } = require("child_process");
@@ -1241,48 +1331,80 @@ class StreamController extends EventEmitter {
 
     try {
       // SIGKILL every process that currently has the camera device open.
-      // fuser -k sends SIGKILL by default; || true suppresses exit-code 1
-      // when no processes are found.
       console.log(`🔪 Killing all processes using ${this.cameraDevice}...`);
-      await execPromise(`sudo fuser -k ${this.cameraDevice} 2>/dev/null || true`);
+      const killed = await this._fuser(this.cameraDevice, true);
+      if (killed.pids.length) {
+        console.log(`🔪 SIGKILLed camera holders: ${killed.pids.join(", ")}`);
+      }
 
       // Fallback: also kill any gst-launch / python3 (overlay script) processes
       // that reference THIS camera device but may not have it open yet (still starting).
       // IMPORTANT: grep for the specific device path so we never kill processes
       // belonging to a different camera controller instance.
+      // Plain `kill` (no sudo): these are our own children, so dp owns them.
       try {
         await execPromise(
-          `ps aux | grep -E '(gst-launch|gst-overlay-pipeline|png-overlay-helper|gst-idle-preview)' | grep '${this.cameraDevice}' | grep -v grep | awk '{print $2}' | xargs -r sudo kill -9 2>/dev/null || true`
+          `ps aux | grep -E '(gst-launch|gst-overlay-pipeline|png-overlay-helper|gst-idle-preview)' | grep '${this.cameraDevice}' | grep -v grep | awk '{print $2}' | xargs -r kill -9 2>/dev/null || true`
         );
       } catch (_) { /* ignore */ }
 
       // Poll until fuser reports no PIDs using the device (max 3 s, 300 ms steps).
       const deadline = Date.now() + 3000;
+      let last = killed;
       while (Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 300));
-        try {
-          const { stdout } = await execPromise(
-            `sudo fuser ${this.cameraDevice} 2>/dev/null || true`
+        last = await this._fuser(this.cameraDevice);
+        if (!last.available) {
+          // No way to check. Say so instead of reporting a clean device — the
+          // caller's log line is the only clue an operator gets when v4l2src
+          // then fails with "Device or resource busy".
+          console.warn(
+            "⚠️  Cannot confirm the camera is free (fuser not installed) — " +
+            "proceeding blind; a stale holder will surface as VIDIOC_S_FMT busy."
           );
-          // fuser prints nothing (or only the device name) when the device is free.
-          const pids = stdout.replace(this.cameraDevice, "").trim();
-          if (!pids || !/\d/.test(pids)) {
-            console.log("✅ Camera device is free");
-            return;
-          }
-          console.log(`⏳ Waiting for camera device to be released (still held by: ${pids})`);
-        } catch (_) {
-          break; // fuser not available — fall through to fixed wait
+          return false;
         }
+        if (last.pids.length === 0) {
+          if (last.privileged) {
+            console.log("✅ Camera device is free");
+          } else {
+            // Don't claim the device is free on the strength of a check that can
+            // only see dp's processes — that false "free" is what turns a wedged
+            // camera into an unexplained "Device '/dev/video0' is busy".
+            console.warn(
+              "⚠️  No dp-owned process holds the camera, but the privileged check " +
+              "could not run (missing sudoers grant — see migrations/0009-fuser-sudoers.sh). " +
+              "A root-owned holder would be invisible here."
+            );
+          }
+          return true;
+        }
+        console.log(`⏳ Waiting for camera device to be released (still held by: ${last.pids.join(", ")})`);
       }
 
       // If we reach here the device is still busy; last-ditch SIGKILL + short wait.
       console.log("⚠️  Camera still busy after 3 s — forcing release");
-      await execPromise(`sudo fuser -k ${this.cameraDevice} 2>/dev/null || true`);
+      await this._fuser(this.cameraDevice, true);
       await new Promise((resolve) => setTimeout(resolve, 500));
-      console.log("✅ Camera resources cleaned up (forced)");
+
+      const after = await this._fuser(this.cameraDevice);
+      if (after.pids.length === 0) {
+        console.log("✅ Camera resources cleaned up (forced)");
+        return true;
+      }
+
+      // SIGKILL cannot be refused, so a holder that survives it is stuck in the
+      // kernel — typically a UVC camera that dropped off the USB bus (EPROTO -71)
+      // with an in-flight ioctl, which keeps the fd open until the port is reset.
+      console.error(
+        `❌ ${this.cameraDevice} is STILL held by ${after.pids.join(", ")} after SIGKILL — ` +
+        `the device is wedged in the kernel, not held by a live process. ` +
+        `Check 'journalctl -k | grep -i uvcvideo' and reset the port with usb-reset.sh.`
+      );
+      return false;
     } catch (error) {
       console.log("Error cleaning up camera processes:", error.message);
+      return false;
     }
   }
 
@@ -1318,11 +1440,25 @@ class StreamController extends EventEmitter {
       console.log(`🎤 [Cam${this.streamId}] Checking ${pcmPath} (${audioDevice})...`);
 
       // Identify which PIDs are holding this PCM device.
-      const { stdout } = await execPromise(`sudo fuser ${pcmPath} 2>/dev/null || true`);
-      const pids = stdout.replace(pcmPath, "").trim().split(/\s+/).filter((p) => /^\d+$/.test(p));
+      const { pids, available, privileged } = await this._fuser(pcmPath);
+
+      if (!available) {
+        console.warn(
+          `⚠️  [Cam${this.streamId}] Cannot check ${pcmPath} (fuser not installed) — ` +
+          `a stale ffmpeg would surface as an ALSA "Device or resource busy"`
+        );
+        return;
+      }
 
       if (pids.length === 0) {
-        console.log(`✅ [Cam${this.streamId}] Audio device already free`);
+        if (privileged) {
+          console.log(`✅ [Cam${this.streamId}] Audio device already free`);
+        } else {
+          console.warn(
+            `⚠️  [Cam${this.streamId}] No dp-owned process holds ${pcmPath}, but the ` +
+            `privileged check could not run (see migrations/0009-fuser-sudoers.sh)`
+          );
+        }
         return;
       }
 
@@ -1338,7 +1474,9 @@ class StreamController extends EventEmitter {
         }
 
         console.log(`🔪 [Cam${this.streamId}] Killing stale audio holder PID ${pid}...`);
-        try { await execPromise(`sudo kill -9 ${pid} 2>/dev/null || true`); } catch (_) {}
+        // Plain `kill` (no sudo): the holder is one of our own ffmpeg children,
+        // so dp owns it, and `sudo kill` has no NOPASSWD grant.
+        try { await execPromise(`kill -9 ${pid} 2>/dev/null || true`); } catch (_) {}
       }
 
       // Let the ALSA kernel driver fully release the device before GStreamer opens it.

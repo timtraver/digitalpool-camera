@@ -1337,14 +1337,17 @@ let reloadCameraInput = null;
         noDev.textContent = "No devices found";
         deviceSelect.appendChild(noDev);
       } else {
-        // Deduplicate: prefer the first /dev/videoN entry per camera name
+        // Deduplicate by device path, not by name. The server now returns only
+        // capture nodes, so there is no metadata-node duplicate left to collapse
+        // — and collapsing by name would hide a second camera of the same model,
+        // which is the normal setup for a two-table venue.
         const seen = new Set();
-        data.devices.forEach(({ device, name }) => {
-          if (seen.has(name)) return;
-          seen.add(name);
+        data.devices.forEach(({ device, name, label }) => {
+          if (seen.has(device)) return;
+          seen.add(device);
           const opt = document.createElement("option");
           opt.value = device;
-          opt.textContent = `${name} (${device})`;
+          opt.textContent = label || `${name} (${device})`;
           deviceSelect.appendChild(opt);
         });
       }

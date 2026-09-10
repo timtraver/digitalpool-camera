@@ -31,7 +31,12 @@ SyslogIdentifier=digitalpool-camera
 # Environment variables
 Environment=NODE_ENV=production
 Environment=PORT=3000
-Environment=CAMERA_DEVICE=/dev/video0
+# CAMERA_DEVICE is deliberately NOT set here. The app discovers the cameras
+# that are actually plugged in and assigns them to slots by USB port order;
+# pinning /dev/video0 here used to override that with a node number that any
+# uvcvideo re-probe can invalidate. Set it in .env only to force one device, and
+# only as a /dev/v4l/by-id/... path. migrations/0010 removes this line from
+# units installed before this change.
 
 # ── Memory limits ────────────────────────────────────────────────────────────
 # Applies to the entire cgroup: Node.js + all child processes (GStreamer, ffmpeg,

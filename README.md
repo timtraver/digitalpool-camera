@@ -1256,7 +1256,30 @@ CAMERA_DEVICE=/dev/video0
 EOF
 ```
 
-Adjust `CAMERA_DEVICE` if your camera appears on a different node (check with `v4l2-ctl --list-devices`).
+**Leave `CAMERA_DEVICE` unset.** The app discovers the USB cameras that are
+actually connected and assigns them to camera slots by USB port order — slot 1
+gets the camera in the lowest-numbered port, slot 2 the next. To see what it will
+find:
+
+```bash
+cd /home/dp/digitalpool-camera && ./camera-nodes.sh
+```
+
+To pin a specific camera to a specific slot, use the UI (**Camera Input →
+Device**) rather than `.env`; that choice is stored as a stable
+`/dev/v4l/by-id/...` path and survives reboots and renumbering.
+
+Set `CAMERA_DEVICE` only to force a device, and then use a `/dev/v4l/by-id/...`
+path — **never `/dev/videoN`**. Node numbers are not stable: any uvcvideo
+re-probe (`usb-reset.sh`, USB autosuspend, a driver rebind) renumbers them with
+**no USB disconnect and no other visible symptom**. One device's camera moved
+from `/dev/video0` to `/dev/video1` while never leaving the bus, and Cam1 was
+down for two days pointing at a node that no longer existed. A value that no
+longer names a present capture device is ignored in favour of auto-detection,
+and the reason is logged.
+
+`camera-nodes.sh` also shows which node is the **capture** node: every UVC
+camera exposes a second metadata node right beside it that cannot stream.
 
 > **Note:** Values set in `.env` take effect when `server.js` reads them at startup via `dotenv`. The `Environment=` lines in the service file are the authoritative defaults; `.env` overrides them for the Node.js process only (child processes like GStreamer are not affected by `.env`).
 
@@ -1795,6 +1818,10 @@ dp ALL=(ALL) NOPASSWD: /usr/bin/v4l2-ctl *
 # lsusb — read UVC descriptors to detect whether a camera physically has PTZ
 # (also installed automatically by migrations/0006-lsusb-sudoers.sh)
 dp ALL=(ALL) NOPASSWD: /usr/bin/lsusb -v -d *
+# fuser — find/kill processes holding the camera or mic open before a stream start
+# (installed automatically by migrations/0009-fuser-sudoers.sh)
+dp ALL=(root) NOPASSWD: /usr/bin/fuser /dev/video[0-9], /usr/bin/fuser -k /dev/video[0-9]
+dp ALL=(root) NOPASSWD: /usr/bin/fuser /dev/snd/pcmC[0-9]D[0-9]c, /usr/bin/fuser -k /dev/snd/pcmC[0-9]D[0-9]c
 EOF
 
 # Validate syntax before applying
@@ -1989,7 +2016,7 @@ Stream settings are persisted automatically to `stream-config.json` via the web 
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | HTTP / Socket.IO server port |
-| `CAMERA_DEVICE` | `/dev/video0` | V4L2 camera device node |
+| `CAMERA_DEVICE` | `/dev/video0` | V4L2 camera device node — set to a `/dev/v4l/by-id/...` path, not `/dev/videoN` (see `./camera-nodes.sh`) |
 
 Key stream settings (configured via the UI, saved to `stream-config.json`):
 
