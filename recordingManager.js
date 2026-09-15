@@ -137,6 +137,7 @@ class RecordingManager extends EventEmitter {
     this._pollTimer  = null;
     this._sweepTimer = null;
     this._polling    = false;   // re-entrancy guard; a stop can take 5 s
+    this._groupGraceUntil = null;  // shared stop deadline; see _pollOnce
     this._freeGB     = null;    // cached — `df` every 3 s is not free on an N97
     this._freeGBAt   = 0;
   }
@@ -330,6 +331,36 @@ class RecordingManager extends EventEmitter {
     const now = Date.now();
     let changed = false;
 
+    const recording  = [...this.state.values()].filter((s) => s.proc);
+    const anyReader  = readers.size > 0;
+
+    // ── Shared grace window ──────────────────────────────────────────────
+    // When the consumer disappears entirely it is one event, not one per
+    // camera, so both cameras must be governed by a single deadline. Armed
+    // per-path, cam1 and cam2 each started their own clock on whichever tick
+    // first saw them reader-less, and their files ended at different moments —
+    // useless for laying two angles on one timeline.
+    //
+    // A path only falls back to its own clock when OTHER paths still have
+    // readers, which means the consumers are genuinely independent (an operator
+    // on VLC pulling one camera while Wowza pulls the other). Without that
+    // fallback, one camera losing its reader mid-match would keep recording for
+    // as long as the other kept streaming.
+    if (anyReader) {
+      if (this._groupGraceUntil !== null) { this._groupGraceUntil = null; changed = true; }
+    } else if (recording.length && this._groupGraceUntil === null) {
+      this._groupGraceUntil = now + this.config.graceSeconds * 1000;
+      console.log(
+        `🎥 All readers gone — holding ${recording.length} recording(s) for ` +
+        `${this.config.graceSeconds}s in case they reconnect`
+      );
+      changed = true;
+    }
+    const groupExpired = this._groupGraceUntil !== null && now >= this._groupGraceUntil;
+
+    // Stops are collected and run together below rather than awaited here.
+    const toStop = [];
+
     for (const s of this.state.values()) {
       const readerIp = readers.get(s.path) || null;
 
@@ -347,7 +378,7 @@ class RecordingManager extends EventEmitter {
           `🎥 [${s.label}] Stopping recording — free space ${freeGB.toFixed(1)} GB ` +
           `below floor ${this.config.minFreeGB} GB`
         );
-        await this._stopRecording(s, "low disk space");
+        toStop.push({ s, reason: "low disk space" });
         changed = true;
         continue;
       }
@@ -386,18 +417,39 @@ class RecordingManager extends EventEmitter {
       }
 
       if (!readerIp && s.proc && !s.stopping) {
-        if (!s.graceUntil) {
+        if (!anyReader) {
+          // The consumer is gone entirely — the shared deadline governs, so
+          // every camera stops on the same tick. Mirrored onto the path so the
+          // UI countdown still has something to read.
+          if (s.graceUntil !== this._groupGraceUntil) {
+            s.graceUntil = this._groupGraceUntil;
+            changed = true;
+          }
+          if (groupExpired) {
+            toStop.push({ s, reason: "all readers disconnected" });
+            changed = true;
+          }
+        } else if (!s.graceUntil) {
           s.graceUntil = now + this.config.graceSeconds * 1000;
           console.log(
-            `🎥 [${s.label}] Reader gone — holding recording for ${this.config.graceSeconds}s ` +
-            `in case it reconnects`
+            `🎥 [${s.label}] Reader gone (others still connected) — holding recording ` +
+            `for ${this.config.graceSeconds}s in case it reconnects`
           );
           changed = true;
         } else if (now >= s.graceUntil) {
-          await this._stopRecording(s, "reader disconnected");
+          toStop.push({ s, reason: "reader disconnected" });
           changed = true;
         }
       }
+    }
+
+    if (toStop.length) {
+      // Concurrently, not in series. _stopRecording waits up to 5 s for ffmpeg
+      // to flush its last fragment, so awaiting each one inside the loop put
+      // that much distance between the two cameras' final frames — the single
+      // largest contributor to the files ending out of step.
+      await Promise.all(toStop.map(({ s, reason }) => this._stopRecording(s, reason)));
+      if (groupExpired) this._groupGraceUntil = null;
     }
 
     if (changed) this._emitState();
