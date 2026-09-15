@@ -80,7 +80,9 @@ const GiB      = 1024 ** 3;
 // and the dual-camera case before the disk notices.
 const DEFAULT_CONFIG = {
   enabled:       false,  // opt-in; the UI switch owns this
-  graceSeconds:  90,     // > the 19 s Wowza took to reconnect on 2026-09-14
+  // Comfortably past the 19 s Wowza took to reconnect on 2026-09-14, without
+  // holding a file open long after a reader has genuinely finished.
+  graceSeconds:  30,
   retentionDays: 7,
   maxTotalGB:    120,
   minFreeGB:     20,
