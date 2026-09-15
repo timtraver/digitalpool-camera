@@ -2140,6 +2140,30 @@ footer {
    list. Scoped to .rec-row, not `> div`, so the "no recordings yet" message
    isn't drawn as an empty row. Padding stays inline: an inline shorthand beats
    a stylesheet longhand, so setting it here would lose. */
+/* A venue accumulates a file per match, so cap the list and let it scroll
+   rather than pushing the rest of the card off the page. Unlike the colours in
+   this card, losing this rule degrades harmlessly — every row simply shows — so
+   it can live in the stylesheet.
+
+   overscroll-behavior stops a flick at the end of the list from scrolling the
+   page behind it, which matters on the tablet the match is run from. */
+#recordingsList {
+  max-height: min(45vh, 320px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+#recordingsList::-webkit-scrollbar { width: 8px; }
+#recordingsList::-webkit-scrollbar-track { background: rgba(6,16,27,0.4); border-radius: 4px; }
+#recordingsList::-webkit-scrollbar-thumb {
+  background: rgba(18,199,255,0.35);
+  border-radius: 4px;
+}
+#recordingsList::-webkit-scrollbar-thumb:hover { background: rgba(18,199,255,0.55); }
+/* Firefox */
+#recordingsList { scrollbar-width: thin; scrollbar-color: rgba(18,199,255,0.35) rgba(6,16,27,0.4); }
+
 #recordingsList .rec-row {
   background: rgba(6, 16, 27, 0.5);
   border-radius: 4px;

@@ -6221,12 +6221,18 @@ function _recRender(st) {
                     style="${ICON_DEL};${live ? "opacity:0.3;pointer-events:none" : ""}">🗑</button>` : ""}
           </div>`;
       }).join("");
-      if (_recPerms.known && !_recPerms.canDelete) {
-        listEl.innerHTML += `<div style="${TXT_DIM};font-size:11px;padding:6px 2px">
-          Deleting recordings requires an admin account. Old ones are removed automatically by the retention settings.
-        </div>`;
-      }
     }
+  }
+
+  // Outside #recordingsList on purpose: the list scrolls, and a note that
+  // scrolls out of view is a note nobody reads.
+  const noteEl = document.getElementById("recordingsNote");
+  if (noteEl) {
+    noteEl.innerHTML = (_recPerms.known && !_recPerms.canDelete && st.recordings.length)
+      ? `<div style="${TXT_DIM};font-size:11px;padding:6px 2px">
+           Deleting recordings requires an admin account. Old ones are removed automatically by the retention settings.
+         </div>`
+      : "";
   }
 
   // Only poll while something is actually being written — the size and elapsed
