@@ -112,7 +112,12 @@ class RecordingManager extends EventEmitter {
     super();
     this.paths  = paths;
     this.config = { ...DEFAULT_CONFIG };
-    this.dirOk  = false;
+    // null = not yet checked. Deliberately not `false`: start() runs late in
+    // server.listen's callback (behind camera activation and several seconds of
+    // sleeps) while Express serves requests immediately, so a `false` default
+    // gets reported to the UI as a fact for the whole startup window and shows
+    // "not writable — run migration 0011" on a perfectly healthy device.
+    this.dirOk  = null;
 
     // Per-path recording state, keyed by MediaMTX path name.
     this.state = new Map();
@@ -138,7 +143,7 @@ class RecordingManager extends EventEmitter {
 
   async start() {
     this.loadConfig();
-    this.dirOk = this._ensureDir();
+    this._ensureDir();   // sets this.dirOk
     await this._reconcileOnBoot();
 
     this._pollTimer  = setInterval(() => this._poll().catch(() => {}), POLL_MS);
@@ -399,7 +404,7 @@ class RecordingManager extends EventEmitter {
   // ── start / stop ─────────────────────────────────────────────────────────
 
   async _startRecording(s, readerIp) {
-    if (!this.dirOk && !(this.dirOk = this._ensureDir())) {
+    if (!this._ensureDir()) {
       if (s.lastError !== "no-dir") {
         s.lastError = "no-dir";
         console.error(`🎥 [${s.label}] Cannot record — ${RECORDINGS_DIR} is not writable`);
@@ -583,9 +588,28 @@ class RecordingManager extends EventEmitter {
 
   _size(p) { try { return fs.statSync(p).size; } catch { return 0; } }
 
+  /**
+   * Check (and create) the store. Safe to call often — mkdir with recursive:true
+   * is a no-op when the directory exists. Logs only on a transition so that
+   * status(), which runs on every UI poll, cannot fill the journal.
+   */
   _ensureDir() {
-    try { fs.mkdirSync(RECORDINGS_DIR, { recursive: true }); fs.accessSync(RECORDINGS_DIR, fs.constants.W_OK); return true; }
-    catch (err) { console.error(`⚠️  Recordings directory unusable (${RECORDINGS_DIR}): ${err.message}`); return false; }
+    let ok = false, err = null;
+    try {
+      fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
+      fs.accessSync(RECORDINGS_DIR, fs.constants.W_OK);
+      ok = true;
+    } catch (e) { err = e; }
+
+    if (ok !== this.dirOk) {
+      if (ok && this.dirOk === false) {
+        console.log(`✅ Recordings directory is writable again (${RECORDINGS_DIR})`);
+      } else if (!ok) {
+        console.error(`⚠️  Recordings directory unusable (${RECORDINGS_DIR}): ${err.message}`);
+      }
+    }
+    this.dirOk = ok;
+    return ok;
   }
 
   /**
@@ -649,6 +673,10 @@ class RecordingManager extends EventEmitter {
   }
 
   async status() {
+    // Re-check rather than trusting the cached value: this is two cheap
+    // syscalls, it closes the startup window above, and it means fixing
+    // ownership on the device clears the warning without an app restart.
+    this._ensureDir();
     const items = this.list();
     const totalBytes = items.reduce((n, r) => n + r.bytes, 0);
     return {

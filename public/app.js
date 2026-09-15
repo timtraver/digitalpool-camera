@@ -6151,7 +6151,9 @@ function _recRender(st) {
       `Free disk: <strong${lowFree ? ' style="color:rgba(239,68,68,0.95)"' : ""}>${free}</strong>` +
         (lowFree ? ` — below the ${st.config.minFreeGB} GB floor, recording is blocked` : ""),
     ];
-    if (!st.dirOk) {
+    // `=== false` on purpose: a null means "not checked yet", and treating that
+    // as a failure is what made this warning flash on every restart.
+    if (st.dirOk === false) {
       parts.push(`<span style="color:rgba(239,68,68,0.95)">⚠️ ${st.dir} is not writable — run migration 0011</span>`);
     }
     statusEl.style.color = "rgba(255,255,255,0.75)";

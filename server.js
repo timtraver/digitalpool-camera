@@ -5477,6 +5477,22 @@ io.on("connection", (socket) => {
 
 server.listen(PORT, async () => {
   console.log(`Camera control server running on port ${PORT}`);
+
+  // ── Local match recording ──
+  // First, not last: everything below this awaits camera activation, idle
+  // preview startup and several seconds of sleeps, while Express is already
+  // answering requests. Recording depends on none of that, and starting it
+  // late left /api/recordings reporting an unchecked "not writable" for the
+  // whole warm-up.
+  //
+  // Relay state to every connected client so the card reflects a recording that
+  // started because Wowza connected, not because someone pressed a button here.
+  recordingManager.on("state",   (st)  => io.emit("recordingState", st));
+  recordingManager.on("started", (rec) => io.emit("recordingStarted", rec));
+  recordingManager.on("stopped", (rec) => io.emit("recordingStopped", rec));
+  recordingManager.start().catch((err) =>
+    console.error("⚠️  Failed to start recording manager:", err.message)
+  );
   console.log(`Camera device: ${CAMERA_DEVICE}`);
   console.log(`Access the interface at http://localhost:${PORT}`);
 
@@ -5809,17 +5825,6 @@ server.listen(PORT, async () => {
       }
     })();
   }
-
-  // ── Local match recording ──
-  // Relay state to every connected client so the Recording card reflects a
-  // recording that started because Wowza connected, not because someone
-  // pressed a button in this browser.
-  recordingManager.on("state",   (st)  => io.emit("recordingState", st));
-  recordingManager.on("started", (rec) => io.emit("recordingStarted", rec));
-  recordingManager.on("stopped", (rec) => io.emit("recordingStopped", rec));
-  recordingManager.start().catch((err) =>
-    console.error("⚠️  Failed to start recording manager:", err.message)
-  );
 });
 
 // Proxy routes for digitalpool.com (MUST be last to not interfere with our API routes)
