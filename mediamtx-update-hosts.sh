@@ -27,11 +27,29 @@ echo "mediamtx-update-hosts: found addresses: $(echo $ADDRS | tr '\n' ' ')"
 LIST=$(echo "$ADDRS" | awk '{printf "%s\"%s\"", (NR>1?", ":""), $0} END{print ""}')
 LIST="[$LIST]"
 
+DESIRED="webrtcAdditionalHosts: $LIST"
+CURRENT=$(grep -m1 '^webrtcAdditionalHosts:' "$CONFIG" || true)
+
+# Write ONLY when the value actually changed.
+#
+# `sed -i` writes a temp file and renames it over the original, so it changes the
+# inode whether or not any byte differs. MediaMTX watches the config file and
+# hot-reloads on that change, so the unconditional sed this replaced made
+# MediaMTX reload its entire configuration every 60 s, forever — visible in the
+# journal as an endless run of `INF reloading configuration (file changed)`
+# roughly 61 seconds apart, on a device whose address list had not changed in
+# days. Each reload restarts any path whose config differs, which is needless
+# risk underneath a live match.
+if [[ "$CURRENT" == "$DESIRED" ]]; then
+  echo "mediamtx-update-hosts: unchanged — $LIST"
+  exit 0
+fi
+
 # Replace existing webrtcAdditionalHosts line, or append if absent
-if grep -q '^webrtcAdditionalHosts:' "$CONFIG"; then
-  sed -i "s|^webrtcAdditionalHosts:.*|webrtcAdditionalHosts: $LIST|" "$CONFIG"
+if [[ -n "$CURRENT" ]]; then
+  sed -i "s|^webrtcAdditionalHosts:.*|$DESIRED|" "$CONFIG"
 else
-  echo "webrtcAdditionalHosts: $LIST" >> "$CONFIG"
+  echo "$DESIRED" >> "$CONFIG"
 fi
 
 echo "mediamtx-update-hosts: set webrtcAdditionalHosts: $LIST"

@@ -4885,7 +4885,14 @@ loadDeviceIp();
     initRemoteAccess();
     // SSH is a dpadmin-only support control — never surface it to venue admins.
     if (currentUser.username === "dpadmin") initRemoteSsh();
+
+    // Operators can list and download recordings; only admins change retention
+    // or delete footage. The API enforces the same split.
+    const recSettings = document.getElementById("recordingSettingsSection");
+    if (recSettings) recSettings.style.display = "block";
   }
+
+  initRecording();
 
   // ── Software version ─────────────────────────────────────────
   (async () => {
@@ -6042,6 +6049,7 @@ loadDeviceIp();
     { toggleId: "overlayToggle",        bodyId: "overlayBody",        chevronId: "overlayChevron" },
     { toggleId: "cameraSettingsToggle", bodyId: "cameraSettingsBody", chevronId: "cameraSettingsChevron" },
     { toggleId: "streamServerToggle",   bodyId: "streamServerBody",   chevronId: "streamServerChevron" },
+    { toggleId: "recordingToggle",      bodyId: "recordingBody",      chevronId: "recordingChevron" },
     { toggleId: "adminSettingsToggle",  bodyId: "adminSettingsBody",  chevronId: "adminSettingsChevron" },
   ];
 
@@ -6064,3 +6072,221 @@ loadDeviceIp();
 })();
 
 
+
+// ═══════════════════════════════════════════════════════════════
+//  Recording — local match capture, armed by a remote RTSP reader
+// ═══════════════════════════════════════════════════════════════
+//
+// There is deliberately no "start recording" button. Recording follows the
+// consumer: it begins when an off-box RTSP client (Wowza) starts pulling and
+// ends after the configured hold-open window. This card configures that
+// behaviour and retrieves what it produced. See recordingManager.js.
+
+let _recState = null;
+let _recTimer = null;
+
+function _recFmtBytes(n) {
+  if (!n) return "0 B";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0, v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${u[i]}`;
+}
+
+function _recFmtDuration(sec) {
+  if (sec == null) return "—";
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const p = (n) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${p(m)}:${p(s)}` : `${m}:${p(s)}`;
+}
+
+function _recFmtTime(ms) {
+  if (!ms) return "—";
+  return new Date(ms).toLocaleString([], {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+}
+
+// Deleting footage is admin-only server-side; showing operators a button that
+// can only return 403 is worse than not showing it. Download stays available to
+// everyone — an operator fetching the match they just ran is the normal case.
+function _recCanDelete() {
+  return typeof currentUser !== "undefined" && currentUser !== null &&
+         (currentUser.role === "admin" || currentUser.hotspot);
+}
+
+function _recRender(st) {
+  _recState = st;
+
+  const badge = document.getElementById("recordingLiveBadge");
+  if (badge) badge.style.display = st.active?.length ? "inline-block" : "none";
+
+  // ── Status summary ──
+  const statusEl = document.getElementById("recordingStatus");
+  if (statusEl) {
+    const free = st.freeGB == null ? "—" : `${st.freeGB.toFixed(1)} GB`;
+    const lowFree = st.freeGB != null && st.freeGB < st.config.minFreeGB;
+    const parts = [
+      st.config.enabled
+        ? `<span style="color:rgba(34,197,94,0.95)">● Enabled</span> — recording while a remote RTSP client pulls`
+        : `<span style="opacity:0.6">○ Disabled</span> — nothing is being recorded`,
+      `Stored: <strong>${_recFmtBytes(st.totalBytes)}</strong> of ${st.config.maxTotalGB} GB cap · ${st.recordings.length} file(s)`,
+      `Free disk: <strong${lowFree ? ' style="color:rgba(239,68,68,0.95)"' : ""}>${free}</strong>` +
+        (lowFree ? ` — below the ${st.config.minFreeGB} GB floor, recording is blocked` : ""),
+    ];
+    if (!st.dirOk) {
+      parts.push(`<span style="color:rgba(239,68,68,0.95)">⚠️ ${st.dir} is not writable — run migration 0011</span>`);
+    }
+    statusEl.innerHTML = parts.join("<br>");
+  }
+
+  // ── In-flight recordings ──
+  const activeEl = document.getElementById("recordingActive");
+  if (activeEl) {
+    activeEl.innerHTML = (st.active || []).map((a) => {
+      const secs = Math.round((Date.now() - a.startedAt) / 1000);
+      const grace = a.graceRemainingSec != null
+        ? `<div style="font-size:11px;color:rgba(245,158,11,0.95);margin-top:4px">
+             ⏳ Reader disconnected — holding ${a.graceRemainingSec}s for a reconnect
+           </div>`
+        : "";
+      return `
+        <div style="background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.35);border-radius:6px;padding:8px 10px;margin-bottom:6px">
+          <div style="font-size:12px;font-weight:600">● Recording ${a.label} — ${_recFmtDuration(secs)}</div>
+          <div style="font-size:11px;opacity:0.75;margin-top:2px">
+            ${a.name} · ${_recFmtBytes(a.bytes)} · reader ${a.readerIp || "—"}
+          </div>
+          ${grace}
+        </div>`;
+    }).join("");
+  }
+
+  // ── Stored files ──
+  const listEl = document.getElementById("recordingList");
+  if (listEl) {
+    if (!st.recordings.length) {
+      listEl.innerHTML = `<div style="font-size:12px;opacity:0.6;padding:6px 0">No recordings yet.</div>`;
+    } else {
+      listEl.innerHTML = st.recordings.map((r) => {
+        const live = r.recording;
+        const warn = r.interrupted
+          ? ` <span title="The service stopped while this was being written; the file is playable up to its last fragment" style="color:rgba(245,158,11,0.95)">⚠︎</span>`
+          : "";
+        return `
+          <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.07)">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                ${r.label}${warn} · ${_recFmtDuration(r.durationSec)} · ${_recFmtBytes(r.bytes)}
+              </div>
+              <div style="font-size:11px;opacity:0.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                ${_recFmtTime(r.startedAt)} · ${r.name}
+              </div>
+            </div>
+            <a class="btn-wifi-action" style="padding:4px 10px;font-size:11px;text-decoration:none;${live ? "opacity:0.4;pointer-events:none" : ""}"
+               href="/api/recordings/file/${encodeURIComponent(r.name)}" download>⬇</a>
+            ${_recCanDelete() ? `<button class="btn-wifi-action" data-rec-delete="${r.name}"
+                    style="padding:4px 10px;font-size:11px;${live ? "opacity:0.4;pointer-events:none" : ""}">🗑</button>` : ""}
+          </div>`;
+      }).join("");
+    }
+  }
+
+  // Only poll while something is actually being written — the size and elapsed
+  // time change every second, but an idle box has nothing to redraw.
+  const needsTick = (st.active || []).length > 0;
+  if (needsTick && !_recTimer) {
+    _recTimer = setInterval(() => { if (_recState) _recRender(_recState); }, 1000);
+  } else if (!needsTick && _recTimer) {
+    clearInterval(_recTimer);
+    _recTimer = null;
+  }
+}
+
+async function _recRefresh() {
+  try {
+    const r = await fetch("/api/recordings");
+    const d = await r.json();
+    if (d.success) _recRender(d);
+  } catch (_) { /* transient — the socket event will catch us up */ }
+}
+
+function _recFillForm(cfg) {
+  const set = (id, v) => { const el = document.getElementById(id); if (el && document.activeElement !== el) el.value = v; };
+  const chk = document.getElementById("recEnabled");
+  if (chk && document.activeElement !== chk) chk.checked = !!cfg.enabled;
+  set("recGraceSeconds",  cfg.graceSeconds);
+  set("recRetentionDays", cfg.retentionDays);
+  set("recMaxTotalGB",    cfg.maxTotalGB);
+  set("recMinFreeGB",     cfg.minFreeGB);
+}
+
+function initRecording() {
+  const msgEl = document.getElementById("recSettingsMsg");
+  const say = (text, ok) => {
+    if (!msgEl) return;
+    msgEl.textContent = text;
+    msgEl.style.color = ok ? "rgba(34,197,94,0.95)" : "rgba(239,68,68,0.95)";
+    setTimeout(() => { if (msgEl.textContent === text) msgEl.textContent = ""; }, 4000);
+  };
+
+  document.getElementById("recSaveBtn")?.addEventListener("click", async () => {
+    const num = (id) => Number(document.getElementById(id)?.value);
+    try {
+      const r = await fetch("/api/recordings/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled:       !!document.getElementById("recEnabled")?.checked,
+          graceSeconds:  num("recGraceSeconds"),
+          retentionDays: num("recRetentionDays"),
+          maxTotalGB:    num("recMaxTotalGB"),
+          minFreeGB:     num("recMinFreeGB"),
+        }),
+      });
+      const d = await r.json();
+      if (!d.success) return say(d.error || "Save failed", false);
+      // The server clamps out-of-range values, so echo back what it stored
+      // rather than what was typed.
+      _recFillForm(d.config);
+      say("Saved", true);
+      _recRefresh();
+    } catch (err) {
+      say(err.message, false);
+    }
+  });
+
+  document.getElementById("recSweepBtn")?.addEventListener("click", async () => {
+    try {
+      const r = await fetch("/api/recordings/sweep", { method: "POST" });
+      const d = await r.json();
+      if (!d.success) return say(d.error || "Cleanup failed", false);
+      say(d.deleted.length ? `Removed ${d.deleted.length} recording(s)` : "Nothing to remove", true);
+      _recRefresh();
+    } catch (err) {
+      say(err.message, false);
+    }
+  });
+
+  // Delegated so the handler survives every re-render of the list.
+  document.getElementById("recordingList")?.addEventListener("click", async (e) => {
+    const name = e.target?.dataset?.recDelete;
+    if (!name) return;
+    if (!confirm(`Delete ${name}? This cannot be undone.`)) return;
+    try {
+      const r = await fetch(`/api/recordings/file/${encodeURIComponent(name)}`, { method: "DELETE" });
+      const d = await r.json();
+      if (!d.success) return say(d.error || "Delete failed", false);
+      _recRefresh();
+    } catch (err) {
+      say(err.message, false);
+    }
+  });
+
+  // Pushed from the server so a recording that started because Wowza connected
+  // shows up here without anyone touching this browser.
+  socket.on("recordingState",   (st) => { _recRender(st); _recFillForm(st.config); });
+  socket.on("recordingStarted", ()   => _recRefresh());
+  socket.on("recordingStopped", ()   => _recRefresh());
+
+  _recRefresh().then(() => { if (_recState) _recFillForm(_recState.config); });
+}

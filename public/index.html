@@ -884,6 +884,69 @@
               </div><!-- /.wifi-grid -->
           </div><!-- /.wifi-panel-body / settings-card-body -->
 
+          <!-- ── Recording Card ── -->
+          <!-- Recording is armed by a remote RTSP reader (Wowza pulling), not by
+               a button here — the controls below configure it, the list retrieves
+               what it captured. See recordingManager.js. -->
+          <div class="settings-card-header" id="recordingToggle">
+            <span>🎥 Recording</span>
+            <span id="recordingLiveBadge" style="display:none;background:rgba(239,68,68,0.18);border:1px solid rgba(239,68,68,0.5);border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;color:rgba(239,68,68,0.95);margin-left:8px">● REC</span>
+            <span class="settings-card-chevron" id="recordingChevron">▶</span>
+          </div>
+          <div class="settings-card-body" id="recordingBody" style="display:none">
+
+            <div class="admin-section">
+              <div id="recordingStatus" style="font-size:12px;line-height:1.7;opacity:0.85;margin-bottom:10px">Loading…</div>
+              <div id="recordingActive"></div>
+            </div>
+
+            <!-- Settings (admin only — the API enforces this too) -->
+            <div class="admin-section" id="recordingSettingsSection" style="display:none">
+              <details class="admin-collapsible">
+                <summary class="admin-section-title">⚙️ Recording Settings</summary>
+                <div class="admin-collapsible-body wifi-form">
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                    <input type="checkbox" id="recEnabled" style="width:auto;margin:0" />
+                    <span>Record while a remote RTSP client is pulling</span>
+                  </label>
+                  <small style="opacity:0.7;display:block;margin:-4px 0 8px">
+                    Starts when Wowza (or any off-box RTSP reader) connects, stops after the hold-open window below.
+                    The browser preview and the hotspot tablet never trigger it.
+                  </small>
+
+                  <label>Hold open after reader disconnects <small>(seconds)</small></label>
+                  <input type="number" id="recGraceSeconds" min="0" max="3600" step="5" />
+                  <small style="opacity:0.7;display:block;margin:-4px 0 8px">
+                    Keeps one continuous file across a brief reconnect. On 2026-09-14 Wowza came back after 19 s.
+                  </small>
+
+                  <label>Delete recordings older than <small>(days)</small></label>
+                  <input type="number" id="recRetentionDays" min="1" max="365" step="1" />
+
+                  <label>Total storage cap <small>(GB — oldest deleted first)</small></label>
+                  <input type="number" id="recMaxTotalGB" min="1" max="10000" step="1" />
+
+                  <label>Stop recording below free space <small>(GB)</small></label>
+                  <input type="number" id="recMinFreeGB" min="1" max="1000" step="1" />
+                  <small style="opacity:0.7;display:block;margin:-4px 0 8px">
+                    A runaway recording that fills the disk takes the whole box down. This floor is the backstop.
+                  </small>
+
+                  <button class="btn-wifi-action" id="recSaveBtn">💾 Save Recording Settings</button>
+                  <button class="btn-wifi-action" id="recSweepBtn" style="margin-top:6px">🧹 Run Cleanup Now</button>
+                  <div class="wifi-msg" id="recSettingsMsg"></div>
+                </div>
+              </details>
+            </div>
+
+            <!-- Stored files -->
+            <div class="admin-section">
+              <div class="admin-section-title" style="margin-bottom:8px">📁 Stored Recordings</div>
+              <div id="recordingList" class="user-list"></div>
+            </div>
+
+          </div>
+
           <!-- ── Admin Settings Card ── -->
           <div class="settings-card-header" id="adminSettingsToggle">
             <span>🔐 Admin Settings</span>

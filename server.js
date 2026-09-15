@@ -20,6 +20,16 @@ const CameraController = require("./cameraController");
 const StreamController = require("./streamController");
 const WifiManager = require("./wifiManager");
 const authManager = require("./authManager");
+const { RecordingManager, safeRecordingName } = require("./recordingManager");
+
+// Local match recording, armed by a remote RTSP reader (i.e. Wowza pulling).
+// Paths match streamController.js:67 — camera 1 publishes to `live`, camera 2
+// to `live2`. Watching a path nothing publishes to is free: no reader, no
+// recording, so camera 2 being absent needs no special case.
+const recordingManager = new RecordingManager([
+  { path: "live",  label: "cam1", streamId: 1 },
+  { path: "live2", label: "cam2", streamId: 2 },
+]);
 
 // Try to load HTML overlay renderer (wkhtmltoimage + ImageMagick)
 let PuppeteerOverlay = null;
@@ -3807,6 +3817,70 @@ app.post("/api/stream/unban", requireAdmin, express.json(), async (req, res) => 
   res.json({ success: true, ip });
 });
 
+// ── Local match recording ────────────────────────────────────────────────────
+// Recording is armed by a remote RTSP reader (Wowza) rather than by the
+// publisher, because the publisher runs continuously — see recordingManager.js
+// for why, and for the 2026-09-14 incident that prompted it.
+//
+// Auth split: operators need to fetch the footage they just recorded, so list
+// and download take requireAuth. Anything that changes retention or destroys a
+// file takes requireAdmin.
+
+app.get("/api/recordings", requireAuth, async (req, res) => {
+  try {
+    res.json({ success: true, ...(await recordingManager.status()) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post("/api/recordings/config", requireAdmin, express.json(), (req, res) => {
+  try {
+    res.json({ success: true, config: recordingManager.saveConfig(req.body || {}) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// res.download() sets Content-Length and honours Range, so the browser shows
+// real progress and can resume — which matters for multi-GB match files pulled
+// over the hotspot.
+app.get("/api/recordings/file/:name", requireAuth, (req, res) => {
+  const name = req.params.name;
+  if (!safeRecordingName(name))
+    return res.status(400).json({ success: false, error: "bad recording name" });
+  let p;
+  try { p = recordingManager.pathFor(name); }
+  catch (err) { return res.status(400).json({ success: false, error: err.message }); }
+  if (!fsSync.existsSync(p))
+    return res.status(404).json({ success: false, error: "not found" });
+  // An in-progress fMP4 is playable, but a download would silently truncate at
+  // whatever length Content-Length claimed, so make the operator wait.
+  if (recordingManager.isRecording(name))
+    return res.status(409).json({ success: false, error: "recording is still in progress" });
+  res.download(p, name);
+});
+
+app.delete("/api/recordings/file/:name", requireAdmin, (req, res) => {
+  try {
+    recordingManager.remove(req.params.name);
+    res.json({ success: true });
+  } catch (err) {
+    const code = /in progress/.test(err.message) ? 409
+               : /bad recording/.test(err.message) ? 400 : 500;
+    res.status(code).json({ success: false, error: err.message });
+  }
+});
+
+// Manual retention run — the same sweep the 10-minute timer performs.
+app.post("/api/recordings/sweep", requireAdmin, async (req, res) => {
+  try {
+    res.json({ success: true, ...(await recordingManager.sweep()) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ── MediaMTX external authentication hook ────────────────────────────────────
 // MediaMTX calls this endpoint BEFORE accepting any connection, giving us the
 // opportunity to reject banned IPs before they ever establish a session.
@@ -5735,6 +5809,17 @@ server.listen(PORT, async () => {
       }
     })();
   }
+
+  // ── Local match recording ──
+  // Relay state to every connected client so the Recording card reflects a
+  // recording that started because Wowza connected, not because someone
+  // pressed a button in this browser.
+  recordingManager.on("state",   (st)  => io.emit("recordingState", st));
+  recordingManager.on("started", (rec) => io.emit("recordingStarted", rec));
+  recordingManager.on("stopped", (rec) => io.emit("recordingStopped", rec));
+  recordingManager.start().catch((err) =>
+    console.error("⚠️  Failed to start recording manager:", err.message)
+  );
 });
 
 // Proxy routes for digitalpool.com (MUST be last to not interfere with our API routes)
@@ -6180,13 +6265,24 @@ async function _gracefulShutdown() {
     }
   }
 
-  // ── Step 2: stop Puppeteer browsers (best-effort, capped at 3 s) ──
+  // ── Step 2: finalize recordings + stop Puppeteer (concurrent, 3 s budget) ──
+  // These are independent, and the two must share one budget rather than take
+  // 3 s each: step 3's pkill needs 2 s and the hard deadline below is 7 s, so
+  // running them in series would overshoot and force the exit(1) path.
+  //
+  // allSettled, not all: a Chrome teardown that rejects must not abandon the
+  // recording finalize (or vice versa). recordingManager caps its own wait at
+  // 2.5 s, and its output is fragmented MP4, so even losing this race costs the
+  // final fragment rather than the file.
   try {
     await Promise.race([
-      (async () => {
-        if (puppeteerOverlay)  await puppeteerOverlay.stop();
-        if (puppeteerOverlay2) await puppeteerOverlay2.stop();
-      })(),
+      Promise.allSettled([
+        recordingManager.shutdown(),
+        (async () => {
+          if (puppeteerOverlay)  await puppeteerOverlay.stop();
+          if (puppeteerOverlay2) await puppeteerOverlay2.stop();
+        })(),
+      ]),
       new Promise((resolve) => setTimeout(resolve, 3000)),
     ]);
   } catch (_) { /* ignore — we're shutting down */ }
