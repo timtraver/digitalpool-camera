@@ -6094,6 +6094,14 @@ let _recTimer = null;
 const TXT      = "color:rgba(255,255,255,0.92)";
 const TXT_DIM  = "color:rgba(255,255,255,0.6)";
 
+// .btn-wifi-action is designed as a full-width form button — it carries
+// `width:100%` and `margin-top:6px`. Dropped into a flex row unmodified, each
+// button demands the entire row, leaving nothing for the `flex:1;min-width:0`
+// text column, which then collapses to zero width and has its contents erased
+// by `overflow:hidden`. The visible result is a row of full-width blue buttons
+// and no filename at all. Reset the sizing every time the class is used inline.
+const BTN = "width:auto;flex:none;margin-top:0;padding:4px 10px;font-size:11px;text-decoration:none";
+
 function _recFmtBytes(n) {
   if (!n) return "0 B";
   const u = ["B", "KB", "MB", "GB", "TB"];
@@ -6197,10 +6205,10 @@ function _recRender(st) {
                 ${_recFmtDuration(r.durationSec)} · ${_recFmtBytes(r.bytes)} · ${r.name}
               </div>
             </div>
-            <a class="btn-wifi-action" style="padding:4px 10px;font-size:11px;text-decoration:none;${live ? "opacity:0.4;pointer-events:none" : ""}"
+            <a class="btn-wifi-action" style="${BTN};${live ? "opacity:0.4;pointer-events:none" : ""}"
                href="/api/recordings/file/${encodeURIComponent(r.name)}" download title="Download">⬇</a>
             ${_recCanDelete() ? `<button class="btn-wifi-action" data-rec-delete="${r.name}" title="Delete"
-                    style="padding:4px 10px;font-size:11px;${live ? "opacity:0.4;pointer-events:none" : ""}">🗑</button>` : ""}
+                    style="${BTN};${live ? "opacity:0.4;pointer-events:none" : ""}">🗑</button>` : ""}
           </div>`;
       }).join("");
     }
