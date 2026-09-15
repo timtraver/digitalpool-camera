@@ -709,6 +709,9 @@ class RecordingManager extends EventEmitter {
       if (s.name === name) throw new Error("recording is still in progress");
     }
     const full = path.join(RECORDINGS_DIR, name);
+    // Distinguish "already gone" from a real failure so the route can answer
+    // 404 rather than a 500 that reads like the delete broke.
+    if (!fs.existsSync(full)) throw new Error("recording not found");
     fs.unlinkSync(full);
     try { fs.unlinkSync(this._sidecarPath(full)); } catch { /* sidecar may be absent */ }
     console.log(`🎥 Deleted recording ${name}`);

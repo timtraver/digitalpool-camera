@@ -3828,7 +3828,12 @@ app.post("/api/stream/unban", requireAdmin, express.json(), async (req, res) => 
 
 app.get("/api/recordings", requireAuth, async (req, res) => {
   try {
-    res.json({ success: true, ...(await recordingManager.status()) });
+    // Report what this caller may do rather than leaving the UI to infer it
+    // from a role string. Same predicate requireAdmin uses, so the delete
+    // button and the delete endpoint cannot drift apart — a hidden button and
+    // a 403 are both confusing, and they are the two ways that drift shows up.
+    const canDelete = isHotspotRequest(req) || req.session?.user?.role === "admin";
+    res.json({ success: true, canDelete, ...(await recordingManager.status()) });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -3867,7 +3872,8 @@ app.delete("/api/recordings/file/:name", requireAdmin, (req, res) => {
     res.json({ success: true });
   } catch (err) {
     const code = /in progress/.test(err.message) ? 409
-               : /bad recording/.test(err.message) ? 400 : 500;
+               : /bad recording/.test(err.message) ? 400
+               : /not found/.test(err.message)     ? 404 : 500;
     res.status(code).json({ success: false, error: err.message });
   }
 });

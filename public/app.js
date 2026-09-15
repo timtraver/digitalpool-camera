@@ -6124,13 +6124,13 @@ function _recFmtTime(ms) {
   });
 }
 
-// Deleting footage is admin-only server-side; showing operators a button that
-// can only return 403 is worse than not showing it. Download stays available to
-// everyone — an operator fetching the match they just ran is the normal case.
-function _recCanDelete() {
-  return typeof currentUser !== "undefined" && currentUser !== null &&
-         (currentUser.role === "admin" || currentUser.hotspot);
-}
+// Whether this session may delete comes from the server (/api/recordings sets
+// `canDelete` with the same predicate requireAdmin uses), not from inspecting a
+// role string here. Inferring it client-side meant the button could disappear
+// for someone the endpoint would have accepted, with nothing on screen to say
+// why. Socket-driven re-renders reuse the last answer.
+let _recPerms = { canDelete: false, known: false };
+function _recCanDelete() { return _recPerms.canDelete; }
 
 function _recRender(st) {
   _recState = st;
@@ -6213,6 +6213,11 @@ function _recRender(st) {
                     style="${BTN};${live ? "opacity:0.4;pointer-events:none" : ""}">🗑</button>` : ""}
           </div>`;
       }).join("");
+      if (_recPerms.known && !_recPerms.canDelete) {
+        listEl.innerHTML += `<div style="${TXT_DIM};font-size:11px;padding:6px 2px">
+          Deleting recordings requires an admin account. Old ones are removed automatically by the retention settings.
+        </div>`;
+      }
     }
   }
 
@@ -6231,7 +6236,10 @@ async function _recRefresh() {
   try {
     const r = await fetch("/api/recordings");
     const d = await r.json();
-    if (d.success) _recRender(d);
+    if (d.success) {
+      _recPerms = { canDelete: !!d.canDelete, known: true };
+      _recRender(d);
+    }
   } catch (_) { /* transient — the socket event will catch us up */ }
 }
 
