@@ -6094,13 +6094,19 @@ let _recTimer = null;
 const TXT      = "color:rgba(255,255,255,0.92)";
 const TXT_DIM  = "color:rgba(255,255,255,0.6)";
 
-// .btn-wifi-action is designed as a full-width form button — it carries
-// `width:100%` and `margin-top:6px`. Dropped into a flex row unmodified, each
-// button demands the entire row, leaving nothing for the `flex:1;min-width:0`
-// text column, which then collapses to zero width and has its contents erased
-// by `overflow:hidden`. The visible result is a row of full-width blue buttons
-// and no filename at all. Reset the sizing every time the class is used inline.
-const BTN = "width:auto;flex:none;margin-top:0;padding:4px 10px;font-size:11px;text-decoration:none";
+// Bare icons, not .btn-wifi-action. That class is a full-width solid-cyan form
+// button; a 🗑 glyph sitting on that fill is genuinely hard to make out, and its
+// `width:100%` also has to be undone for every inline use. The user list already
+// does per-row actions as unfilled icons (.btn-user-delete), so follow it.
+//
+// Written inline rather than as classes because these are the pieces that decide
+// whether the control is visible at all, and this card has lost its contents to
+// a stylesheet twice already. The :hover tints in style.css are the only part
+// that needs CSS, and losing those costs nothing.
+const ICON = "background:none;border:none;cursor:pointer;font-size:16px;line-height:1;" +
+             "padding:6px 8px;border-radius:4px;flex:none;text-decoration:none;display:inline-block";
+const ICON_DL  = `${ICON};color:rgba(18,199,255,0.95)`;   // primary action, app accent
+const ICON_DEL = `${ICON};color:rgba(255,255,255,0.45)`;  // recessed until hovered
 
 function _recFmtBytes(n) {
   if (!n) return "0 B";
@@ -6207,10 +6213,12 @@ function _recRender(st) {
                 ${_recFmtDuration(r.durationSec)} · ${_recFmtBytes(r.bytes)} · ${r.name}
               </div>
             </div>
-            <a class="btn-wifi-action" style="${BTN};${live ? "opacity:0.4;pointer-events:none" : ""}"
-               href="/api/recordings/file/${encodeURIComponent(r.name)}" download title="Download">⬇</a>
-            ${_recCanDelete() ? `<button class="btn-wifi-action" data-rec-delete="${r.name}" title="Delete"
-                    style="${BTN};${live ? "opacity:0.4;pointer-events:none" : ""}">🗑</button>` : ""}
+            <a class="rec-icon rec-icon-dl" style="${ICON_DL};${live ? "opacity:0.3;pointer-events:none" : ""}"
+               href="/api/recordings/file/${encodeURIComponent(r.name)}" download
+               title="${live ? "Available when the recording finishes" : "Download"}">⬇</a>
+            ${_recCanDelete() ? `<button class="rec-icon rec-icon-del" data-rec-delete="${r.name}"
+                    title="${live ? "Cannot delete while recording" : "Delete"}"
+                    style="${ICON_DEL};${live ? "opacity:0.3;pointer-events:none" : ""}">🗑</button>` : ""}
           </div>`;
       }).join("");
       if (_recPerms.known && !_recPerms.canDelete) {

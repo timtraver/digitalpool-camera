@@ -2144,3 +2144,10 @@ footer {
   background: rgba(6, 16, 27, 0.5);
   border-radius: 4px;
 }
+
+/* Per-row actions are unfilled icons, matching .btn-user-delete in the user
+   list. Only the hover tint lives here — everything that decides whether the
+   icon is visible is set inline, so a stale stylesheet can't blank the row. */
+#recordingsList .rec-icon { transition: background 0.15s, color 0.15s; }
+#recordingsList .rec-icon-dl:hover  { background: rgba(18,199,255,0.18); color: #7dd3fc !important; }
+#recordingsList .rec-icon-del:hover { background: rgba(239,68,68,0.2);  color: #fca5a5 !important; }
