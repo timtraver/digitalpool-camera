@@ -6085,6 +6085,15 @@ loadDeviceIp();
 let _recState = null;
 let _recTimer = null;
 
+// Inline rather than left to style.css. `body` sets no colour, so anything that
+// does not declare one inherits the browser default black and vanishes against
+// the dark panel — which is exactly what happened to this card twice. A rule on
+// #recordingsBody covers the static markup, but markup built here has to stand
+// on its own: it renders identically whether or not a stale stylesheet is
+// cached, and a future restructure of the card cannot orphan it.
+const TXT      = "color:rgba(255,255,255,0.92)";
+const TXT_DIM  = "color:rgba(255,255,255,0.6)";
+
 function _recFmtBytes(n) {
   if (!n) return "0 B";
   const u = ["B", "KB", "MB", "GB", "TB"];
@@ -6137,6 +6146,7 @@ function _recRender(st) {
     if (!st.dirOk) {
       parts.push(`<span style="color:rgba(239,68,68,0.95)">⚠️ ${st.dir} is not writable — run migration 0011</span>`);
     }
+    statusEl.style.color = "rgba(255,255,255,0.75)";
     statusEl.innerHTML = parts.join("<br>");
   }
 
@@ -6152,8 +6162,8 @@ function _recRender(st) {
         : "";
       return `
         <div style="background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.35);border-radius:6px;padding:8px 10px;margin-bottom:6px">
-          <div style="font-size:12px;font-weight:600">● Recording ${a.label} — ${_recFmtDuration(secs)}</div>
-          <div style="font-size:11px;opacity:0.75;margin-top:2px">
+          <div style="${TXT};font-size:12px;font-weight:600">● Recording ${a.label} — ${_recFmtDuration(secs)}</div>
+          <div style="${TXT_DIM};font-size:11px;margin-top:2px">
             ${a.name} · ${_recFmtBytes(a.bytes)} · reader ${a.readerIp || "—"}
           </div>
           ${grace}
@@ -6165,26 +6175,31 @@ function _recRender(st) {
   const listEl = document.getElementById("recordingsList");
   if (listEl) {
     if (!st.recordings.length) {
-      listEl.innerHTML = `<div style="font-size:12px;opacity:0.6;padding:6px 0">No recordings yet.</div>`;
+      listEl.innerHTML = `<div style="${TXT_DIM};font-size:12px;padding:6px 2px">No recordings yet. One starts automatically when a remote RTSP client connects.</div>`;
     } else {
       listEl.innerHTML = st.recordings.map((r) => {
         const live = r.recording;
         const warn = r.interrupted
           ? ` <span title="The service stopped while this was being written; the file is playable up to its last fragment" style="color:rgba(245,158,11,0.95)">⚠︎</span>`
           : "";
+        // Lead with when it was recorded — that is how an operator finds the
+        // match they just ran. Size and filename are the follow-up detail.
+        const when = live
+          ? `<span style="color:rgba(239,68,68,0.95)">● recording now</span>`
+          : _recFmtTime(r.startedAt);
         return `
           <div class="rec-row" style="display:flex;align-items:center;gap:8px;padding:6px 8px">
             <div style="flex:1;min-width:0">
-              <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-                ${r.label}${warn} · ${_recFmtDuration(r.durationSec)} · ${_recFmtBytes(r.bytes)}
+              <div style="${TXT};font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                ${r.label}${warn} · ${when}
               </div>
-              <div style="font-size:11px;opacity:0.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-                ${_recFmtTime(r.startedAt)} · ${r.name}
+              <div style="${TXT_DIM};font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                ${_recFmtDuration(r.durationSec)} · ${_recFmtBytes(r.bytes)} · ${r.name}
               </div>
             </div>
             <a class="btn-wifi-action" style="padding:4px 10px;font-size:11px;text-decoration:none;${live ? "opacity:0.4;pointer-events:none" : ""}"
-               href="/api/recordings/file/${encodeURIComponent(r.name)}" download>⬇</a>
-            ${_recCanDelete() ? `<button class="btn-wifi-action" data-rec-delete="${r.name}"
+               href="/api/recordings/file/${encodeURIComponent(r.name)}" download title="Download">⬇</a>
+            ${_recCanDelete() ? `<button class="btn-wifi-action" data-rec-delete="${r.name}" title="Delete"
                     style="padding:4px 10px;font-size:11px;${live ? "opacity:0.4;pointer-events:none" : ""}">🗑</button>` : ""}
           </div>`;
       }).join("");
