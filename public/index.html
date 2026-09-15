@@ -884,24 +884,24 @@
               </div><!-- /.wifi-grid -->
           </div><!-- /.wifi-panel-body / settings-card-body -->
 
-          <!-- ── Recording Card ── -->
+          <!-- ── Recordings Card ── -->
           <!-- Recording is armed by a remote RTSP reader (Wowza pulling), not by
                a button here — the controls below configure it, the list retrieves
                what it captured. See recordingManager.js. -->
-          <div class="settings-card-header" id="recordingToggle">
-            <span>🎥 Recording</span>
-            <span id="recordingLiveBadge" style="display:none;background:rgba(239,68,68,0.18);border:1px solid rgba(239,68,68,0.5);border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;color:rgba(239,68,68,0.95);margin-left:8px">● REC</span>
-            <span class="settings-card-chevron" id="recordingChevron">▶</span>
+          <div class="settings-card-header" id="recordingsToggle">
+            <span>🎥 Recordings</span>
+            <span id="recordingsLiveBadge" style="display:none;background:rgba(239,68,68,0.18);border:1px solid rgba(239,68,68,0.5);border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;color:rgba(239,68,68,0.95);margin-left:8px">● REC</span>
+            <span class="settings-card-chevron" id="recordingsChevron">▶</span>
           </div>
-          <div class="settings-card-body" id="recordingBody" style="display:none">
+          <div class="settings-card-body" id="recordingsBody" style="display:none">
 
             <div class="admin-section">
-              <div id="recordingStatus" style="font-size:12px;line-height:1.7;opacity:0.85;margin-bottom:10px">Loading…</div>
-              <div id="recordingActive"></div>
+              <div id="recordingsStatus" style="font-size:12px;line-height:1.7;opacity:0.85;margin-bottom:10px">Loading…</div>
+              <div id="recordingsActive"></div>
             </div>
 
             <!-- Settings (admin only — the API enforces this too) -->
-            <div class="admin-section" id="recordingSettingsSection" style="display:none">
+            <div class="admin-section" id="recordingsSettingsSection" style="display:none">
               <details class="admin-collapsible">
                 <summary class="admin-section-title">⚙️ Recording Settings</summary>
                 <div class="admin-collapsible-body wifi-form">
@@ -942,7 +942,7 @@
             <!-- Stored files -->
             <div class="admin-section">
               <div class="admin-section-title" style="margin-bottom:8px">📁 Stored Recordings</div>
-              <div id="recordingList" class="user-list"></div>
+              <div id="recordingsList" class="user-list"></div>
             </div>
 
           </div>

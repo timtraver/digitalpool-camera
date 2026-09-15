@@ -4888,11 +4888,11 @@ loadDeviceIp();
 
     // Operators can list and download recordings; only admins change retention
     // or delete footage. The API enforces the same split.
-    const recSettings = document.getElementById("recordingSettingsSection");
+    const recSettings = document.getElementById("recordingsSettingsSection");
     if (recSettings) recSettings.style.display = "block";
   }
 
-  initRecording();
+  initRecordings();
 
   // ── Software version ─────────────────────────────────────────
   (async () => {
@@ -6049,7 +6049,7 @@ loadDeviceIp();
     { toggleId: "overlayToggle",        bodyId: "overlayBody",        chevronId: "overlayChevron" },
     { toggleId: "cameraSettingsToggle", bodyId: "cameraSettingsBody", chevronId: "cameraSettingsChevron" },
     { toggleId: "streamServerToggle",   bodyId: "streamServerBody",   chevronId: "streamServerChevron" },
-    { toggleId: "recordingToggle",      bodyId: "recordingBody",      chevronId: "recordingChevron" },
+    { toggleId: "recordingsToggle",      bodyId: "recordingsBody",      chevronId: "recordingsChevron" },
     { toggleId: "adminSettingsToggle",  bodyId: "adminSettingsBody",  chevronId: "adminSettingsChevron" },
   ];
 
@@ -6118,11 +6118,11 @@ function _recCanDelete() {
 function _recRender(st) {
   _recState = st;
 
-  const badge = document.getElementById("recordingLiveBadge");
+  const badge = document.getElementById("recordingsLiveBadge");
   if (badge) badge.style.display = st.active?.length ? "inline-block" : "none";
 
   // ── Status summary ──
-  const statusEl = document.getElementById("recordingStatus");
+  const statusEl = document.getElementById("recordingsStatus");
   if (statusEl) {
     const free = st.freeGB == null ? "—" : `${st.freeGB.toFixed(1)} GB`;
     const lowFree = st.freeGB != null && st.freeGB < st.config.minFreeGB;
@@ -6141,7 +6141,7 @@ function _recRender(st) {
   }
 
   // ── In-flight recordings ──
-  const activeEl = document.getElementById("recordingActive");
+  const activeEl = document.getElementById("recordingsActive");
   if (activeEl) {
     activeEl.innerHTML = (st.active || []).map((a) => {
       const secs = Math.round((Date.now() - a.startedAt) / 1000);
@@ -6162,7 +6162,7 @@ function _recRender(st) {
   }
 
   // ── Stored files ──
-  const listEl = document.getElementById("recordingList");
+  const listEl = document.getElementById("recordingsList");
   if (listEl) {
     if (!st.recordings.length) {
       listEl.innerHTML = `<div style="font-size:12px;opacity:0.6;padding:6px 0">No recordings yet.</div>`;
@@ -6173,7 +6173,7 @@ function _recRender(st) {
           ? ` <span title="The service stopped while this was being written; the file is playable up to its last fragment" style="color:rgba(245,158,11,0.95)">⚠︎</span>`
           : "";
         return `
-          <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.07)">
+          <div class="rec-row" style="display:flex;align-items:center;gap:8px;padding:6px 8px">
             <div style="flex:1;min-width:0">
               <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
                 ${r.label}${warn} · ${_recFmtDuration(r.durationSec)} · ${_recFmtBytes(r.bytes)}
@@ -6220,7 +6220,7 @@ function _recFillForm(cfg) {
   set("recMinFreeGB",     cfg.minFreeGB);
 }
 
-function initRecording() {
+function initRecordings() {
   const msgEl = document.getElementById("recSettingsMsg");
   const say = (text, ok) => {
     if (!msgEl) return;
@@ -6268,7 +6268,7 @@ function initRecording() {
   });
 
   // Delegated so the handler survives every re-render of the list.
-  document.getElementById("recordingList")?.addEventListener("click", async (e) => {
+  document.getElementById("recordingsList")?.addEventListener("click", async (e) => {
     const name = e.target?.dataset?.recDelete;
     if (!name) return;
     if (!confirm(`Delete ${name}? This cannot be undone.`)) return;

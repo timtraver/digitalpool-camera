@@ -74,12 +74,14 @@ const GiB      = 1024 ** 3;
 // already refuses to run below 4 GB free. Recordings must not be what pushes it
 // there, hence a floor well above that check.
 //
-// retentionDays is the looser of the two limits on a busy venue — the size cap
-// will normally bind first, which is the safer failure mode.
+// Whichever of the two limits is hit first wins. At 7 days, age is usually the
+// binding one — a venue running ~6 h/day on one camera reaches ~90 GiB in a
+// week, just under the cap — and the cap is there to catch the heavier weeks
+// and the dual-camera case before the disk notices.
 const DEFAULT_CONFIG = {
   enabled:       false,  // opt-in; the UI switch owns this
   graceSeconds:  90,     // > the 19 s Wowza took to reconnect on 2026-09-14
-  retentionDays: 14,
+  retentionDays: 7,
   maxTotalGB:    120,
   minFreeGB:     20,
 };

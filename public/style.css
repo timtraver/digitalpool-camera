@@ -2096,3 +2096,51 @@ footer {
   box-shadow: 0 0 5px rgba(34, 197, 94, 0.8);
   animation: pulse-dot 1.5s ease-in-out infinite;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Recordings card
+   ═══════════════════════════════════════════════════════════
+   `body` sets no color, so text here inherits the browser default black and
+   disappears against the dark panel. Every other panel in this sheet sets a
+   white explicitly; do the same once at the container so everything inside
+   inherits it, and let the inline `opacity` on individual rows do the
+   de-emphasis rather than a second colour. */
+#recordingsBody {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+#recordingsBody small {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+/* Number inputs are only styled inside .overlay-controls, so the retention
+   fields would otherwise render as default white-on-white-ish boxes. Match
+   .wifi-form's text inputs. */
+#recordingsBody input[type="number"] {
+  background: rgba(6, 16, 27, 0.9);
+  border: 1px solid rgba(18, 199, 255, 0.3);
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.9);
+  padding: 6px 9px;
+  font-size: 12px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+#recordingsBody input[type="number"]:focus {
+  outline: none;
+  border-color: rgba(18, 199, 255, 0.7);
+}
+
+#recordingsBody input[type="checkbox"] {
+  accent-color: rgba(18, 199, 255, 0.9);
+}
+
+/* Give file rows the same recessed ground as .user-row so the list reads as a
+   list. Scoped to .rec-row, not `> div`, so the "no recordings yet" message
+   isn't drawn as an empty row. Padding stays inline: an inline shorthand beats
+   a stylesheet longhand, so setting it here would lose. */
+#recordingsList .rec-row {
+  background: rgba(6, 16, 27, 0.5);
+  border-radius: 4px;
+}
