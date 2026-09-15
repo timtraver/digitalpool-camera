@@ -64,12 +64,24 @@ const POLL_MS  = 3000;            // reader poll — also the restart/space chec
 const SWEEP_MS = 10 * 60 * 1000;  // retention sweep
 const GiB      = 1024 ** 3;
 
+// Sized for the standard build: a 231 GB root volume with ~208 GB free after
+// the OS. One 5 Mbps stream plus AAC is ~2.15 GiB/hour, so 120 GiB is roughly
+// 56 hours of a single camera — or 28 hours when both cameras have a remote
+// reader, which is the case worth planning for.
+//
+// The remaining ~88 GiB of headroom is not slack: /home/dp/system-images holds
+// multi-GB capture tarballs and recovery ISOs, and /api/system/image/create
+// already refuses to run below 4 GB free. Recordings must not be what pushes it
+// there, hence a floor well above that check.
+//
+// retentionDays is the looser of the two limits on a busy venue — the size cap
+// will normally bind first, which is the safer failure mode.
 const DEFAULT_CONFIG = {
   enabled:       false,  // opt-in; the UI switch owns this
   graceSeconds:  90,     // > the 19 s Wowza took to reconnect on 2026-09-14
   retentionDays: 14,
-  maxTotalGB:    100,
-  minFreeGB:     10,
+  maxTotalGB:    120,
+  minFreeGB:     20,
 };
 
 // Path traversal guard for the download/delete endpoints. Only names this
