@@ -86,7 +86,57 @@ const DEFAULT_CONFIG = {
   retentionDays: 7,
   maxTotalGB:    120,
   minFreeGB:     20,
+
+  // Readers from these networks never arm a recording.
+  //
+  // 192.168/16 covers
+  // both the AP hotspot and the venue LAN: a laptop or tablet on the local
+  // network opening a preview or leaving VLC pointed at the stream is not a
+  // match being delivered, and should not cost 2.15 GiB/hour. 169.254/16 is
+  // link-local.
+  //
+  // Deliberately NOT excluded: 172.16/12 and 10/8. Wowza reaches this box over
+  // the VPN and presents as 172.16.0.71, indistinguishable from a LAN address
+  // from here, so blanket-blocking RFC1918 would stop recording entirely.
+  // Loopback and the AP hotspot are enforced in _isRemoteIp regardless of this
+  // list, so they are deliberately absent: showing them here would suggest they
+  // can be removed.
+  ignoredNetworks: ["192.168.0.0/16", "169.254.0.0/16"],
 };
+
+// ── IPv4 CIDR matching ───────────────────────────────────────────────────────
+// Used to decide which readers count as a real off-box consumer. Kept simple
+// and dependency-free: IPv4 only, which is what every address in play here is.
+function ipToInt(ip) {
+  const parts = String(ip).split(".");
+  if (parts.length !== 4) return null;
+  let n = 0;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const v = Number(part);
+    if (v > 255) return null;
+    n = n * 256 + v;
+  }
+  return n >>> 0;
+}
+
+function parseCidr(cidr) {
+  const [base, bitsRaw] = String(cidr).trim().split("/");
+  const addr = ipToInt(base);
+  if (addr === null) return null;
+  const bits = bitsRaw === undefined ? 32 : Number(bitsRaw);
+  if (!Number.isInteger(bits) || bits < 0 || bits > 32) return null;
+  return { addr, bits };
+}
+
+function inCidr(ip, cidr) {
+  const net = parseCidr(cidr);
+  const addr = ipToInt(ip);
+  if (!net || addr === null) return false;
+  if (net.bits === 0) return true;
+  const mask = (0xFFFFFFFF << (32 - net.bits)) >>> 0;
+  return (addr & mask) >>> 0 === (net.addr & mask) >>> 0;
+}
 
 // Path traversal guard for the download/delete endpoints. Only names this
 // module generates are addressable.
@@ -138,6 +188,7 @@ class RecordingManager extends EventEmitter {
     this._sweepTimer = null;
     this._polling    = false;   // re-entrancy guard; a stop can take 5 s
     this._groupGraceUntil = null;  // shared stop deadline; see _pollOnce
+    this._ignoredSeen = new Set();  // addresses already explained in the log
     this._freeGB     = null;    // cached — `df` every 3 s is not free on an N97
     this._freeGBAt   = 0;
   }
@@ -211,6 +262,25 @@ class RecordingManager extends EventEmitter {
     if ("maxTotalGB"    in patch) next.maxTotalGB    = n(patch.maxTotalGB,    1, 10000, next.maxTotalGB);
     if ("minFreeGB"     in patch) next.minFreeGB     = n(patch.minFreeGB,     1,  1000, next.minFreeGB);
 
+    // Accept an array or a comma/newline separated string, and keep only
+    // entries that actually parse. A typo that silently widened the filter
+    // would start recording whatever it let through, so drop bad entries and
+    // say so rather than storing them.
+    if ("ignoredNetworks" in patch) {
+      const raw = Array.isArray(patch.ignoredNetworks)
+        ? patch.ignoredNetworks
+        : String(patch.ignoredNetworks || "").split(/[,\n]/);
+      const cleaned = [], rejected = [];
+      for (const entry of raw) {
+        const t = String(entry).trim();
+        if (!t) continue;
+        (parseCidr(t) ? cleaned : rejected).push(t);
+      }
+      if (rejected.length) console.error(`⚠️  Ignoring unparseable network(s): ${rejected.join(", ")}`);
+      next.ignoredNetworks = cleaned;
+      this._ignoredSeen = new Set();   // re-explain under the new rule
+    }
+
     const wasEnabled = this.config.enabled;
     this.config = next;
 
@@ -261,22 +331,55 @@ class RecordingManager extends EventEmitter {
   }
 
   /**
-   * A reader counts only if it is genuinely off-box.
+   * A reader counts only if it is genuinely an off-box consumer.
    *
-   * Loopback is excluded because our own ffmpeg reads from 127.0.0.1 — include
-   * it and the first recording would arm the next one forever. The hotspot
-   * subnet is excluded because that is the tablet running the match, whose
-   * preview must not cost 2.25 GB/hour.
+   * The test is configurable (`ignoredNetworks`) rather than hardcoded because
+   * the heuristic has been wrong twice: first for the AP hotspot, then for a
+   * laptop on the venue LAN at 192.168.1.38, which armed a recording nobody
+   * asked for. Both are now covered by the 192.168/16 default, and a network
+   * that surprises us next can be added from the UI instead of in a release.
    *
-   * RFC1918 is deliberately NOT excluded: Wowza reaches us over the VPN and
-   * presents as 172.16.0.71, indistinguishable from a LAN address from here.
+   * Logs the first time it refuses a given address, so "why is it recording"
+   * and "why is it not recording" are both answerable from the journal.
    */
   _isRemoteIp(ip) {
     if (!ip) return false;
     const bare = ip.startsWith("::ffff:") ? ip.slice(7) : ip;
+
+    // Loopback is excluded unconditionally, never via the list. This module's
+    // own ffmpeg reads the stream over 127.0.0.1, so a list edited down to
+    // nothing would let the first recording arm the next one and never stop.
+    // That is a self-sustaining loop that fills the disk, so it is not left to
+    // configuration.
     if (bare === "::1" || bare.startsWith("127.")) return false;
+
+    // The AP hotspot is excluded unconditionally, not via the list. Its subnet
+    // is overridable in .env, so a device configured away from 192.168.50. would
+    // otherwise fall outside the 192.168/16 default and start recording the
+    // tablet the match is being run from. Recording a hotspot preview is never
+    // what anyone wants, so this one is not left to configuration.
     const hotspot = process.env.HOTSPOT_SUBNET || "192.168.50.";
-    if (bare.startsWith(hotspot)) return false;
+    if (bare.startsWith(hotspot)) {
+      if (!this._ignoredSeen.has(bare)) {
+        this._ignoredSeen.add(bare);
+        console.log(`🎥 Ignoring reader ${bare} — on the AP hotspot subnet (${hotspot})`);
+      }
+      return false;
+    }
+
+    const nets = Array.isArray(this.config.ignoredNetworks) ? this.config.ignoredNetworks : [];
+    for (const net of nets) {
+      if (inCidr(bare, net)) {
+        if (!this._ignoredSeen.has(bare)) {
+          this._ignoredSeen.add(bare);
+          console.log(`🎥 Ignoring reader ${bare} — matches ignored network ${net}`);
+        }
+        return false;
+      }
+    }
+
+    // A non-IPv4 address we cannot CIDR-match is treated as remote rather than
+    // silently dropped; failing to record is the worse error here.
     return true;
   }
 

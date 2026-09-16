@@ -932,6 +932,12 @@
                     A runaway recording that fills the disk takes the whole box down. This floor is the backstop.
                   </small>
 
+                  <label>Ignore readers from <small>(comma-separated networks)</small></label>
+                  <input type="text" id="recIgnoredNetworks" placeholder="127.0.0.0/8, 192.168.0.0/16" autocomplete="off" />
+                  <small style="opacity:0.7;display:block;margin:-4px 0 8px">
+                    Clients on these networks never start a recording. Local previews and anything on the
+                    venture LAN belong here; the datacenter encoder does not. The AP hotspot and this device itself are always ignored.
+                  </small>
                   <button class="btn-wifi-action" id="recSaveBtn">💾 Save Recording Settings</button>
                   <button class="btn-wifi-action" id="recSweepBtn" style="margin-top:6px">🧹 Run Cleanup Now</button>
                   <div class="wifi-msg" id="recSettingsMsg"></div>

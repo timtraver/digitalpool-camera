@@ -3622,6 +3622,12 @@ loadViewerConnections();
 
 // Extract just the IP address from a "host:port" remoteAddr string.
 // Handles both IPv4 ("1.2.3.4:5678") and IPv6 ("[::1]:5678").
+function isLoopback(ip) {
+  if (!ip) return false;
+  const bare = ip.startsWith("::ffff:") ? ip.slice(7) : ip;
+  return bare === "::1" || bare.startsWith("127.");
+}
+
 function extractIp(remoteAddr) {
   if (!remoteAddr) return null;
   const ipv6 = remoteAddr.match(/^\[(.+)\]:\d+$/);
@@ -3671,6 +3677,12 @@ app.get("/api/stream/viewers", requireAdmin, async (req, res) => {
       r.status === "fulfilled"
         ? r.value.items
             .filter((s) => s.path === "live" && s.state === "read")
+            // The local recorder reads rtsp://127.0.0.1:8554/live, so once a
+            // recording is running it would otherwise show up here as a viewer
+            // that nobody can account for — and one that kick/ban cannot
+            // meaningfully act on. Nothing else on this box reads RTSP over
+            // loopback, so the pairing of RTSP + loopback identifies it.
+            .filter((s) => !(r.value.type === "RTSP" && isLoopback(extractIp(s.remoteAddr))))
             .map((s) => ({ ...s, _type: r.value.type, _kickBase: r.value.kickBase }))
         : []
     );

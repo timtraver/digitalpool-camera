@@ -6265,6 +6265,7 @@ function _recFillForm(cfg) {
   set("recRetentionDays", cfg.retentionDays);
   set("recMaxTotalGB",    cfg.maxTotalGB);
   set("recMinFreeGB",     cfg.minFreeGB);
+  set("recIgnoredNetworks", (cfg.ignoredNetworks || []).join(", "));
 }
 
 function initRecordings() {
@@ -6288,6 +6289,7 @@ function initRecordings() {
           retentionDays: num("recRetentionDays"),
           maxTotalGB:    num("recMaxTotalGB"),
           minFreeGB:     num("recMinFreeGB"),
+          ignoredNetworks: document.getElementById("recIgnoredNetworks")?.value || "",
         }),
       });
       const d = await r.json();
