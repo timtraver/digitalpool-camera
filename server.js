@@ -3492,18 +3492,40 @@ app.post("/api/stream/stop", async (req, res) => {
 });
 
 // Update stream configuration
+// Settings baked into the media pipeline when it is built, and therefore only
+// in effect after a restart.
+//
+// A/V Offset was the case that exposed this: audioOffset becomes ffmpeg's
+// `-itsoffset` on the ALSA input at spawn time, so changing it while streaming
+// wrote the new value to stream-config.json and left the running ffmpeg with
+// the offset it started with. The control appeared to do nothing no matter how
+// far it was moved. (`-itsoffset` itself is fine — verified against the
+// production flag set, including `aresample=async`, it shifts audio as asked.)
+//
+// The audio device and source belong here for the same reason: both decide how
+// the ffmpeg audio input is constructed in _buildPNGOverlayPipeline().
+const PIPELINE_REBUILD_KEYS = [
+  "flipHorizontal", "flipVertical",
+  "audioOffset", "audioEnabled", "audioSource", "audioDevice",
+];
+
 app.post("/api/stream/config", async (req, res) => {
   const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
   const sc = getSC(camIdx);
   const config = req.body;
-  // Capture flip state before update to detect changes
-  const prevFlipH = sc.streamConfig.flipHorizontal;
-  const prevFlipV = sc.streamConfig.flipVertical;
+  // Capture pipeline-affecting state before the update so we can tell what changed
+  const before = {};
+  for (const k of PIPELINE_REBUILD_KEYS) before[k] = sc.streamConfig[k];
+  const prevFlipH = before.flipHorizontal;
+  const prevFlipV = before.flipVertical;
   const result = sc.updateConfig(config);
   // Restart idle preview immediately when flip orientation changes
   const flipChanged =
     (config.flipHorizontal !== undefined && config.flipHorizontal !== prevFlipH) ||
     (config.flipVertical   !== undefined && config.flipVertical   !== prevFlipV);
+  const rebuildKeysChanged = PIPELINE_REBUILD_KEYS.filter(
+    (k) => config[k] !== undefined && config[k] !== before[k]
+  );
   if (flipChanged) {
     if (sc.isStreaming) {
       console.log(`🔄 [Cam${camIdx}] Flip setting changed while streaming — client will restart stream`);
@@ -3518,7 +3540,16 @@ app.post("/api/stream/config", async (req, res) => {
     }
   }
   // Tell the client whether it needs to restart the active stream itself.
-  res.json({ ...result, restartStreamNeeded: flipChanged && sc.isStreaming });
+  // The client already has an atomic restart path for this; it just was never
+  // being asked for anything but a flip.
+  const restartStreamNeeded = rebuildKeysChanged.length > 0 && sc.isStreaming;
+  if (restartStreamNeeded) {
+    console.log(
+      `🔄 [Cam${camIdx}] Pipeline setting(s) changed while streaming ` +
+      `(${rebuildKeysChanged.join(", ")}) — client will restart stream`
+    );
+  }
+  res.json({ ...result, restartStreamNeeded, rebuildKeysChanged });
 });
 
 // Test GStreamer availability
