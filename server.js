@@ -2934,6 +2934,10 @@ async function refreshAllDetection(idx) {
 //     home either way, so there is nothing left to return.
 const AUTO_HOME_MAX_MINUTES = 240;
 const _autoHomeTimers = { 1: null, 2: null };
+// When each slot last logged an arming, so a held d-pad button — which re-arms
+// several times a second — reports once rather than hundreds of times.
+const _autoHomeLastLog = { 1: 0, 2: 0 };
+const AUTO_HOME_LOG_INTERVAL_MS = 15000;
 
 /** Configured idle timeout in minutes; 0 (absent, invalid or ≤0) = disabled. */
 function getAutoHomeMinutes(idx) {
@@ -2988,10 +2992,17 @@ function armAutoHome(idx, reason = "PTZ command") {
   _autoHomeTimers[idx] = setTimeout(() => fireAutoHome(idx), minutes * 60 * 1000);
   // A pending countdown must not hold the event loop open at shutdown.
   if (typeof _autoHomeTimers[idx].unref === "function") _autoHomeTimers[idx].unref();
-  // Only announce the transition into "armed" — held d-pad buttons re-arm this
-  // several times a second and would otherwise flood the journal.
-  if (!wasArmed) {
-    console.log(`🏠 [Cam${idx}] Auto-home armed — ${minutes} min after the last PTZ command (${reason})`);
+
+  // Re-arming is the normal case — it is what makes the countdown measure time
+  // since the camera last MOVED rather than time since the first nudge — so it
+  // has to be visible, or the journal reads as though moving the camera did
+  // nothing.  Throttled because a held d-pad button re-arms several times a
+  // second; the first arm after an idle period always prints.
+  const now = Date.now();
+  if (!wasArmed || now - _autoHomeLastLog[idx] >= AUTO_HOME_LOG_INTERVAL_MS) {
+    _autoHomeLastLog[idx] = now;
+    console.log(`🏠 [Cam${idx}] Auto-home ${wasArmed ? "re-armed" : "armed"} — ` +
+                `${minutes} min from now (${reason})`);
   }
 }
 
