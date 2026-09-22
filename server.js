@@ -2943,15 +2943,23 @@ function getAutoHomeMinutes(idx) {
 }
 
 /**
- * Whether auto-home can do anything useful for this slot right now.
- * Checks the saved-home file by existence rather than loadStartupPosition() —
+ * Why auto-home can't run for this slot right now, or "" when it can.
+ * A string rather than a bool because every one of these reads as "the feature
+ * silently did nothing" from the outside, and the journal should say which.
+ *
+ * Tests the saved-home file by existence rather than loadStartupPosition() —
  * this runs on every PTZ button repeat, and that method parses and logs.
  */
-function autoHomeEligible(idx) {
-  if (!getAutoHomeMinutes(idx)) return false;
-  if (getActiveSource(idx).type !== "usb") return false;
-  if (!resolveCapability(idx, "ptz").supported) return false;
-  return fsSync.existsSync(getCam(idx).startupConfigFile);
+function autoHomeBlockedBecause(idx) {
+  if (!getAutoHomeMinutes(idx)) return "auto-home is turned off (0 minutes)";
+  const type = getActiveSource(idx).type;
+  if (type !== "usb") return `source is ${type.toUpperCase()}, not a USB camera`;
+  const cap = resolveCapability(idx, "ptz");
+  if (!cap.supported) return `PTZ not available — ${cap.reason}`;
+  if (!fsSync.existsSync(getCam(idx).startupConfigFile)) {
+    return "no home position saved for this camera — press Set Home once";
+  }
+  return "";
 }
 
 function cancelAutoHome(idx) {
@@ -2965,7 +2973,16 @@ function cancelAutoHome(idx) {
 function armAutoHome(idx, reason = "PTZ command") {
   const wasArmed = !!_autoHomeTimers[idx];
   cancelAutoHome(idx);
-  if (!autoHomeEligible(idx)) return;
+
+  const blocked = autoHomeBlockedBecause(idx);
+  if (blocked) {
+    // Only for the once-per-event callers — a held d-pad button would repeat
+    // this several times a second.
+    if (reason === "boot" || reason === "setting changed") {
+      console.log(`🏠 [Cam${idx}] Auto-home not armed (${reason}) — ${blocked}`);
+    }
+    return;
+  }
 
   const minutes = getAutoHomeMinutes(idx);
   _autoHomeTimers[idx] = setTimeout(() => fireAutoHome(idx), minutes * 60 * 1000);
@@ -2980,13 +2997,17 @@ function armAutoHome(idx, reason = "PTZ command") {
 
 async function fireAutoHome(idx) {
   _autoHomeTimers[idx] = null;
-  if (!autoHomeEligible(idx)) {
-    console.log(`🏠 [Cam${idx}] Auto-home skipped — camera or setting changed during the countdown`);
+  const blocked = autoHomeBlockedBecause(idx);
+  if (blocked) {
+    console.log(`🏠 [Cam${idx}] Auto-home skipped — ${blocked}`);
     return;
   }
   try {
     console.log(`🏠 [Cam${idx}] Idle ${getAutoHomeMinutes(idx)} min — returning camera to home position`);
-    const result = await getCam(idx).resetPosition();
+    // forceMotion: this path exists for a camera parked somewhere its firmware
+    // doesn't admit to, where a plain absolute write to the position it already
+    // reports does nothing at all.
+    const result = await getCam(idx).resetPosition({ forceMotion: true });
     if (result && result.success && result.position) {
       // Same event the manual Home button uses, so open clients sync their
       // sliders (the zoom slider in particular) to where the camera now is.

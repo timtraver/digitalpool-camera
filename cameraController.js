@@ -1205,17 +1205,117 @@ class CameraController {
   }
 
   /**
-   * Reset camera to home position (startup position if set, otherwise 0,0,0)
+   * Read back what the camera says its pan/tilt currently are.
+   * Either field is null when the camera doesn't report it.
    */
-  async resetPosition() {
+  async _readPanTilt() {
+    const pan  = await this.getControl("pan_absolute");
+    const tilt = await this.getControl("tilt_absolute");
+    return {
+      pan:  pan.success  ? pan.value  : null,
+      tilt: tilt.success ? tilt.value : null,
+    };
+  }
+
+  /** How far a read-back may sit from the requested value and still count as "there". */
+  _ptzTolerance() {
+    const step = (this.discoveredControls?.pan_absolute?.step
+                  || this.controls?.pan_absolute?.step || 1);
+    return Math.max(step * 2, 1);
+  }
+
+  /**
+   * Drive pan and tilt away from where the camera thinks it is, so the motors
+   * physically run.
+   *
+   * Needed because an absolute write to the position the camera ALREADY reports
+   * is a no-op at the firmware level — and a gimbal whose mechanical zero has
+   * slipped (an aborted power-on self-home, a knock) reports the saved home
+   * while pointing somewhere else entirely.  Re-sending home then changes
+   * nothing, which is exactly the "commands issued, camera didn't move" case.
+   * Moving somewhere provably different first makes the follow-up home command
+   * a real move again.
+   */
+  async _nudgeOffPosition(from) {
+    const hw = this.discoveredControls || this.controls;
+    const plan = [];
+    for (const [name, current] of [["pan_absolute", from.pan], ["tilt_absolute", from.tilt]]) {
+      const ctrl = hw[name];
+      if (!ctrl || current === null) continue;
+      const span = (ctrl.max ?? 0) - (ctrl.min ?? 0);
+      if (span <= 0) continue;
+      // A tenth of full travel is enough for the motors to visibly run without
+      // swinging the camera across the room; flip direction at the end stops.
+      const delta = Math.max(Math.round(span * 0.1), ctrl.step || 1);
+      const target = current + delta > ctrl.max ? current - delta : current + delta;
+      plan.push([name, Math.max(ctrl.min, Math.min(ctrl.max, target))]);
+    }
+    if (!plan.length) return false;
+
+    console.log("🏠 Camera already reports the home position — nudging off it to force real motion: " +
+                plan.map(([n, v]) => n + "=" + v).join(", "));
+    // saveToConfig: false — the nudge is a means, not a position worth persisting.
+    for (const [name, value] of plan) await this.setControl(name, value, false);
+    await new Promise((r) => setTimeout(r, 1200));
+    const after = await this._readPanTilt();
+    const moved = after.pan !== from.pan || after.tilt !== from.tilt;
+    console.log(`🏠 Nudge read-back: pan=${after.pan}, tilt=${after.tilt} — ` +
+                (moved ? "camera accepted it" : "camera did NOT move — it is ignoring absolute PTZ writes"));
+    return moved;
+  }
+
+  /**
+   * Reset camera to home position (startup position if set, otherwise 0,0,0).
+   *
+   * @param {object}  [opts]
+   * @param {boolean} [opts.forceMotion=false] - When the camera already reports
+   *   being at home, nudge it off that position first so the home command is a
+   *   real move.  Used by the idle auto-home, whose whole job is recovering a
+   *   camera parked somewhere its firmware doesn't admit to; left off for the
+   *   manual Home button, where an unexpected jog would only confuse.
+   */
+  async resetPosition({ forceMotion = false } = {}) {
     const startupPos = this.loadStartupPosition();
     if (startupPos) {
       console.log("🏠 Resetting to startup position:", startupPos);
+
+      // Where does the camera claim to be before we touch it?  This is the only
+      // evidence separating "the write worked" from "the write was accepted and
+      // ignored", and without it a failed home is silent in the journal.
+      const before = await this._readPanTilt();
+      const tol = this._ptzTolerance();
+      const alreadyHome =
+        before.pan !== null && before.tilt !== null &&
+        Math.abs(before.pan  - startupPos.pan_absolute)  <= tol &&
+        Math.abs(before.tilt - startupPos.tilt_absolute) <= tol;
+      console.log(`🏠 Camera reports pan=${before.pan}, tilt=${before.tilt} ` +
+                  `(home is pan=${startupPos.pan_absolute}, tilt=${startupPos.tilt_absolute})` +
+                  (alreadyHome ? " — already at home" : ""));
+
+      if (forceMotion && alreadyHome) await this._nudgeOffPosition(before);
+
       await this.setControl("pan_absolute", startupPos.pan_absolute);
       await this.setControl("tilt_absolute", startupPos.tilt_absolute);
       await this.setControl("zoom_absolute", startupPos.zoom_absolute);
-      this.currentPan = startupPos.pan_absolute;
-      this.currentTilt = startupPos.tilt_absolute;
+
+      // Verify rather than assume.  A camera that swallowed the command reports
+      // the old position here, and that line is what the journal needs to show.
+      await new Promise((r) => setTimeout(r, 1200));
+      const after = await this._readPanTilt();
+      const landed =
+        after.pan !== null && after.tilt !== null &&
+        Math.abs(after.pan  - startupPos.pan_absolute)  <= tol &&
+        Math.abs(after.tilt - startupPos.tilt_absolute) <= tol;
+      if (landed) {
+        console.log(`✅ Home reached — pan=${after.pan}, tilt=${after.tilt}`);
+      } else {
+        console.log(`⚠️  Home NOT reached — camera reports pan=${after.pan}, tilt=${after.tilt}, ` +
+                    `wanted pan=${startupPos.pan_absolute}, tilt=${startupPos.tilt_absolute} — ` +
+                    `the camera accepted the v4l2 write without moving.`);
+      }
+
+      this.currentPan  = after.pan  !== null ? after.pan  : startupPos.pan_absolute;
+      this.currentTilt = after.tilt !== null ? after.tilt : startupPos.tilt_absolute;
       // Return the applied position so the UI can sync its sliders (esp. zoom)
       // to the home value — otherwise the slider stays wherever it was.
       return {
