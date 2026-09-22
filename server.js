@@ -5248,13 +5248,16 @@ io.on("connection", (socket) => {
     // return it to until it moves again.
     cancelAutoHome(camIdx);
     const result = getCam(camIdx).saveStartupPosition();
-    socket.emit("startupPositionSet", result);
+    socket.emit("startupPositionSet", { ...result, cameraIndex: camIdx });
   });
 
   socket.on("getStartupPosition", (data) => {
     const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
     const position = getCam(camIdx).loadStartupPosition();
-    socket.emit("startupPosition", { position });
+    // cameraIndex so the client can tell whose answer this is: a null position
+    // is a real answer ("no home saved"), and without the index the browser
+    // can't distinguish it from a reply about the other camera.
+    socket.emit("startupPosition", { position, cameraIndex: camIdx });
   });
 
   socket.on("resetCameraSettings", async (data) => {

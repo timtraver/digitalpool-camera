@@ -398,11 +398,9 @@ socket.on("cameraConfigReset", (data) => {
       updateExposureControlsState();
     }
     applyCapabilities(data.capabilities);
-    // Clear the startup/home position display since it was also reset
-    const startupPosInfo = document.getElementById("startupPosInfo");
-    if (startupPosInfo) {
-      startupPosInfo.textContent = "No home position set";
-    }
+    // The reset cleared the saved home too, so auto-home is inert again until
+    // a new one is set — renderHomeState says both halves of that.
+    renderHomeState(null);
     alert("All camera settings have been reset to defaults!");
   }
 });
@@ -632,21 +630,42 @@ if (setStartupBtn) {
   });
 }
 
+/**
+ * Show whether this camera has a Home position, and what that means for
+ * auto-home.
+ *
+ * Both states have to render.  Only painting the "Home: \u2026" case left the
+ * PREVIOUS camera's home on screen after a tab switch, so a camera with no home
+ * saved looked like it had one \u2014 and auto-home, which needs a saved home,
+ * looked broken when it was correctly declining to run.
+ */
+function renderHomeState(position) {
+  if (startupPosInfo) {
+    startupPosInfo.textContent = position
+      ? `Home: pan=${position.pan_absolute}, tilt=${position.tilt_absolute}, zoom=${position.zoom_absolute}`
+      : "No home position set";
+  }
+  const hint = document.getElementById("autoHomeHint");
+  if (hint) {
+    hint.textContent = position
+      ? "0 = off. Returns here after this long with no PTZ."
+      : "⚠️ Inactive — press Set Home on this camera first.";
+    hint.style.color = position ? "" : "#f0b429";
+  }
+}
+
 socket.on("startupPositionSet", (data) => {
+  if (data.cameraIndex && data.cameraIndex !== activeCamIndex) return;
   if (data.success) {
-    const pos = data.position;
-    if (startupPosInfo) {
-      startupPosInfo.textContent = `Home: pan=${pos.pan_absolute}, tilt=${pos.tilt_absolute}, zoom=${pos.zoom_absolute}`;
-    }
-    console.log("📌 Home position saved:", pos);
+    renderHomeState(data.position);
+    console.log("📌 Home position saved:", data.position);
   }
 });
 
 socket.on("startupPosition", (data) => {
-  if (data.position && startupPosInfo) {
-    const pos = data.position;
-    startupPosInfo.textContent = `Home: pan=${pos.pan_absolute}, tilt=${pos.tilt_absolute}, zoom=${pos.zoom_absolute}`;
-  }
+  if (data.cameraIndex && data.cameraIndex !== activeCamIndex) return;
+  // A null position is the answer "no home saved", not a missing reply.
+  renderHomeState(data.position || null);
 });
 
 // ── Camera control ranges ─────────────────────────────────────────────────────
