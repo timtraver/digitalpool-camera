@@ -2913,6 +2913,90 @@ async function refreshAllDetection(idx) {
   for (const feature of Object.keys(CAPABILITIES)) await refreshDetection(idx, feature);
 }
 
+// ── Auto-home ────────────────────────────────────────────────────────────────
+//
+// A PTZ camera left pointing away from the table ruins the shot, and nothing in
+// the app used to notice.  Two ways it happens: an operator nudges the d-pad to
+// look at something and never nudges back, or a boot where applyStartupPosition()
+// loses the race against the camera's own mechanical self-home and the camera
+// stays parked wherever that sweep ended.  So every PTZ command (re)arms a
+// countdown — `streamConfig.autoHomeMinutes`, per camera slot — and when it
+// expires with no further movement the camera is sent back to its saved home.
+//
+// Deliberate limits, all re-checked when the timer fires (the source or the
+// camera can change during a long countdown):
+//   • Only with a home position SAVED.  Without one, resetPosition() drives
+//     pan/tilt to 0,0 — that would yank a hand-framed camera off the table
+//     rather than restore anything.
+//   • Only USB sources whose PTZ capability resolves as supported: a network
+//     source has no camera to command, a fixed camera has nothing to move.
+//   • Disarmed once it fires, and by an explicit Home press — the camera is at
+//     home either way, so there is nothing left to return.
+const AUTO_HOME_MAX_MINUTES = 240;
+const _autoHomeTimers = { 1: null, 2: null };
+
+/** Configured idle timeout in minutes; 0 (absent, invalid or ≤0) = disabled. */
+function getAutoHomeMinutes(idx) {
+  const raw = Number(getSC(idx).streamConfig?.autoHomeMinutes);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.min(raw, AUTO_HOME_MAX_MINUTES);
+}
+
+/**
+ * Whether auto-home can do anything useful for this slot right now.
+ * Checks the saved-home file by existence rather than loadStartupPosition() —
+ * this runs on every PTZ button repeat, and that method parses and logs.
+ */
+function autoHomeEligible(idx) {
+  if (!getAutoHomeMinutes(idx)) return false;
+  if (getActiveSource(idx).type !== "usb") return false;
+  if (!resolveCapability(idx, "ptz").supported) return false;
+  return fsSync.existsSync(getCam(idx).startupConfigFile);
+}
+
+function cancelAutoHome(idx) {
+  if (_autoHomeTimers[idx]) {
+    clearTimeout(_autoHomeTimers[idx]);
+    _autoHomeTimers[idx] = null;
+  }
+}
+
+/** (Re)start the countdown for one camera. Safe to call on every PTZ command. */
+function armAutoHome(idx, reason = "PTZ command") {
+  const wasArmed = !!_autoHomeTimers[idx];
+  cancelAutoHome(idx);
+  if (!autoHomeEligible(idx)) return;
+
+  const minutes = getAutoHomeMinutes(idx);
+  _autoHomeTimers[idx] = setTimeout(() => fireAutoHome(idx), minutes * 60 * 1000);
+  // A pending countdown must not hold the event loop open at shutdown.
+  if (typeof _autoHomeTimers[idx].unref === "function") _autoHomeTimers[idx].unref();
+  // Only announce the transition into "armed" — held d-pad buttons re-arm this
+  // several times a second and would otherwise flood the journal.
+  if (!wasArmed) {
+    console.log(`🏠 [Cam${idx}] Auto-home armed — ${minutes} min after the last PTZ command (${reason})`);
+  }
+}
+
+async function fireAutoHome(idx) {
+  _autoHomeTimers[idx] = null;
+  if (!autoHomeEligible(idx)) {
+    console.log(`🏠 [Cam${idx}] Auto-home skipped — camera or setting changed during the countdown`);
+    return;
+  }
+  try {
+    console.log(`🏠 [Cam${idx}] Idle ${getAutoHomeMinutes(idx)} min — returning camera to home position`);
+    const result = await getCam(idx).resetPosition();
+    if (result && result.success && result.position) {
+      // Same event the manual Home button uses, so open clients sync their
+      // sliders (the zoom slider in particular) to where the camera now is.
+      io.emit("positionReset", { cameraIndex: idx, position: result.position, auto: true });
+    }
+  } catch (e) {
+    console.warn(`⚠️  [Cam${idx}] Auto-home failed: ${e.message}`);
+  }
+}
+
 // List the USB cameras that can actually be streamed from.
 //
 // Reports only capture nodes, addressed by their stable /dev/v4l/by-id path.
@@ -3154,6 +3238,11 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
   const previousSource    = { ...activeSource };
   const wasStreaming      = sc.isStreaming;
   const savedStreamConfig = wasStreaming ? { ...sc.streamConfig } : null;
+
+  // The slot is about to point at a different camera (or none): a countdown
+  // armed for the outgoing one would home the incoming one to a home position
+  // that was never its own.  The next PTZ command re-arms it.
+  cancelAutoHome(camIdx);
 
   // ── "No Camera" — clear this slot entirely ───────────────────────────────
   // Stops any running stream, tears down the idle preview so the physical
@@ -3539,6 +3628,10 @@ app.post("/api/stream/config", async (req, res) => {
       }
     }
   }
+  // Re-arm on the new interval so a changed setting takes effect now rather
+  // than after the next PTZ command (and a 0 disarms a pending countdown).
+  if (config.autoHomeMinutes !== undefined) armAutoHome(camIdx, "setting changed");
+
   // Tell the client whether it needs to restart the active stream itself.
   // The client already has an atomic restart path for this; it just was never
   // being asked for anything but a flip.
@@ -5031,6 +5124,11 @@ io.on("connection", (socket) => {
     }
 
     const result = await getCam(camIdx).setControl(control, value);
+    // A raw pan/tilt/zoom write counts as camera movement too — restart the
+    // auto-home countdown so it measures time since the camera last moved.
+    if (control === "pan_absolute" || control === "tilt_absolute" || control === "zoom_absolute") {
+      armAutoHome(camIdx, `setControl ${control}`);
+    }
     socket.emit("controlResult", result);
   });
 
@@ -5050,6 +5148,7 @@ io.on("connection", (socket) => {
     const effectiveSteps = panInverted ? -steps : steps;
     console.log(`📡 Client ${socket.id} sent pan [Cam${camIdx}]: ${steps} steps${panInverted ? ' (inverted → ' + effectiveSteps + ')' : ''}`);
     const result = await getCam(camIdx).pan(effectiveSteps);
+    armAutoHome(camIdx, "pan");
     socket.emit("controlResult", result);
   });
 
@@ -5058,6 +5157,7 @@ io.on("connection", (socket) => {
     const { steps } = data;
     console.log(`📡 Client ${socket.id} sent tilt [Cam${camIdx}]: ${steps} steps`);
     const result = await getCam(camIdx).tilt(steps);
+    armAutoHome(camIdx, "tilt");
     socket.emit("controlResult", result);
   });
 
@@ -5065,11 +5165,14 @@ io.on("connection", (socket) => {
     const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
     const { level } = data;
     const result = await getCam(camIdx).zoom(level);
+    armAutoHome(camIdx, "zoom");
     socket.emit("controlResult", result);
   });
 
   socket.on("resetPosition", async (data) => {
     const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
+    // Already going home — nothing for the countdown to return.
+    cancelAutoHome(camIdx);
     const result = await getCam(camIdx).resetPosition();
     socket.emit("controlResult", result);
     // Tell the UI the home position it landed on so it can sync its sliders
@@ -5120,6 +5223,9 @@ io.on("connection", (socket) => {
 
   socket.on("setStartupPosition", (data) => {
     const camIdx = parseInt(data?.cameraIndex) === 2 ? 2 : 1;
+    // Home is now wherever the camera is pointing, so there is nothing to
+    // return it to until it moves again.
+    cancelAutoHome(camIdx);
     const result = getCam(camIdx).saveStartupPosition();
     socket.emit("startupPositionSet", result);
   });
@@ -5727,6 +5833,12 @@ server.listen(PORT, async () => {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     await camera.syncPosition();
 
+    // Arm auto-home from boot as well as from operator movement: if the camera
+    // was still running its own self-home when applyStartupPosition() gave up,
+    // it is parked off-target right now and no PTZ command is coming to start
+    // the countdown.  One unattended retry fixes it.
+    armAutoHome(1, "boot");
+
     cameraInitialized = true;
     console.log("✅ Camera initialized successfully\n");
   } catch (error) {
@@ -5821,6 +5933,7 @@ server.listen(PORT, async () => {
         }
         await new Promise((resolve) => setTimeout(resolve, 1000));
         await camera2.syncPosition();
+        armAutoHome(2, "boot");
         cameraInitialized2 = true;
         console.log("✅ [Cam2] Camera 2 initialized successfully\n");
       } catch (e) {

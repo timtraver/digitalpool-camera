@@ -151,6 +151,10 @@ class StreamController extends EventEmitter {
       flipHorizontal: false, // Mirror video left-to-right
       flipVertical: false,   // Flip video upside-down
       panInverted: false,    // Invert pan direction (some cameras have reversed motor polarity)
+      // Minutes of PTZ inactivity after which the camera returns to its saved
+      // home position; 0 disables it. Enforced in server.js (armAutoHome), which
+      // also requires a saved home position and a PTZ-capable USB camera.
+      autoHomeMinutes: 2,
       // YouTube Live settings
       youtubeStreamKey: "", // YouTube stream key (stored locally, used to build RTMP destination)
     };

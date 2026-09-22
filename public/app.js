@@ -1265,6 +1265,10 @@ const flipHorizontalCheckbox = document.getElementById("flipHorizontal");
 const flipVerticalCheckbox   = document.getElementById("flipVertical");
 const panInvertedCheckbox    = document.getElementById("panInverted");
 
+// Minutes of PTZ inactivity before the camera returns to its saved Home
+// position (0 = off). Lives in streamConfig alongside panInverted.
+const autoHomeMinutesInput   = document.getElementById("autoHomeMinutes");
+
 // Exposed by the initCameraInput IIFE so switchCamera() can re-load device
 // list and current source for the newly-selected camera.
 let reloadCameraInput = null;
@@ -4109,6 +4113,10 @@ async function loadStreamConfig() {
       if (flipVerticalCheckbox)   flipVerticalCheckbox.checked   = data.config.flipVertical   || false;
       if (panInvertedCheckbox)    panInvertedCheckbox.checked    = data.config.panInverted    || false;
 
+      // Auto-home interval (0 = off). `?? 2` rather than `|| 2` so a stored 0
+      // survives the reload instead of reverting to the default.
+      if (autoHomeMinutesInput) autoHomeMinutesInput.value = data.config.autoHomeMinutes ?? 2;
+
       // Rebuild the resolution + framerate menus from the camera's actual
       // capabilities. This also honors the _pendingResolution/_pendingFramerate
       // stashed above and finalizes the dropdown selections.
@@ -4179,6 +4187,29 @@ async function saveFlipConfig() {
 if (flipHorizontalCheckbox) flipHorizontalCheckbox.addEventListener("change", saveFlipConfig);
 if (flipVerticalCheckbox)   flipVerticalCheckbox.addEventListener("change", saveFlipConfig);
 if (panInvertedCheckbox)    panInvertedCheckbox.addEventListener("change", saveFlipConfig);
+
+// Save the auto-home interval. Saved on its own rather than through
+// saveFlipConfig() because it touches nothing in the pipeline — no preview
+// restart, no stream restart, the server just re-arms its countdown.
+async function saveAutoHomeConfig() {
+  if (!autoHomeMinutesInput) return;
+  let minutes = parseInt(autoHomeMinutesInput.value, 10);
+  if (!Number.isFinite(minutes) || minutes < 0) minutes = 0;
+  minutes = Math.min(minutes, 240);
+  autoHomeMinutesInput.value = minutes; // reflect the clamp back to the user
+  try {
+    await fetch(`/api/stream/config?cam=${activeCamIndex}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ autoHomeMinutes: minutes }),
+    });
+    console.log(`🏠 Auto-home ${minutes ? `set to ${minutes} min` : "disabled"}`);
+  } catch (err) {
+    console.error("❌ Failed to save auto-home setting:", err);
+  }
+}
+
+if (autoHomeMinutesInput) autoHomeMinutesInput.addEventListener("change", saveAutoHomeConfig);
 
 // ── Data-driven resolution / framerate dropdowns ────────────────────────────
 // The resolution and framerate menus are populated from what the active camera
