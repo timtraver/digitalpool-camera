@@ -5854,17 +5854,20 @@ server.listen(PORT, async () => {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     await camera.syncPosition();
 
-    // Arm auto-home from boot as well as from operator movement: if the camera
-    // was still running its own self-home when applyStartupPosition() gave up,
-    // it is parked off-target right now and no PTZ command is coming to start
-    // the countdown.  One unattended retry fixes it.
-    armAutoHome(1, "boot");
-
     cameraInitialized = true;
     console.log("✅ Camera initialized successfully\n");
   } catch (error) {
     console.error("❌ Error initializing camera:", error.message);
     cameraInitialized = true; // Allow commands even if init failed
+  } finally {
+    // Arm auto-home from boot as well as from operator movement: if the camera
+    // was still running its own self-home when applyStartupPosition() gave up,
+    // it is parked off-target right now and no PTZ command is coming to start
+    // the countdown.  One unattended retry fixes it.
+    //
+    // In the finally, not the try: a camera that threw its way through init is
+    // the one MOST likely to be parked wrong, and arming is the whole point.
+    armAutoHome(1, "boot");
   }
 
   // ── Camera 2 boot sequence (async — does not block Camera 1) ───────────────
@@ -5954,12 +5957,13 @@ server.listen(PORT, async () => {
         }
         await new Promise((resolve) => setTimeout(resolve, 1000));
         await camera2.syncPosition();
-        armAutoHome(2, "boot");
         cameraInitialized2 = true;
         console.log("✅ [Cam2] Camera 2 initialized successfully\n");
       } catch (e) {
         console.error("❌ [Cam2] Camera init error:", e.message);
         cameraInitialized2 = true; // allow commands even if PTZ init failed
+      } finally {
+        armAutoHome(2, "boot");
       }
     } catch (err) {
       console.error("❌ [Cam2] Boot sequence error:", err.message);
