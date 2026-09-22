@@ -650,7 +650,10 @@ function renderHomeState(position) {
     hint.textContent = position
       ? "0 = off. Returns here after this long with no PTZ."
       : "⚠️ Inactive — press Set Home on this camera first.";
-    hint.style.color = position ? "" : "#f0b429";
+    // Both branches set a colour explicitly: element.style IS the inline style
+    // attribute, so clearing it here would delete the grey the span is declared
+    // with in index.html and leave default-black text on a dark panel.
+    hint.style.color = position ? "rgba(255,255,255,0.5)" : "#f0b429";
   }
 }
 
