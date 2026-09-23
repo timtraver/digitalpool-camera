@@ -1244,9 +1244,12 @@ class CameraController {
       if (!ctrl || current === null) continue;
       const span = (ctrl.max ?? 0) - (ctrl.min ?? 0);
       if (span <= 0) continue;
-      // A tenth of full travel is enough for the motors to visibly run without
-      // swinging the camera across the room; flip direction at the end stops.
-      const delta = Math.max(Math.round(span * 0.1), ctrl.step || 1);
+      // Just far enough to be unambiguous in the read-back and to make the
+      // follow-up home command a real move.  Kept small (a few degrees, not a
+      // tenth of full travel) because this can fire mid-match: what matters is
+      // that the motors ran, not how far, and the verification reads position
+      // rather than watching the picture.
+      const delta = Math.max(Math.round(span * 0.03), (ctrl.step || 1) * 5);
       const target = current + delta > ctrl.max ? current - delta : current + delta;
       plan.push([name, Math.max(ctrl.min, Math.min(ctrl.max, target))]);
     }

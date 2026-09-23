@@ -309,6 +309,11 @@ streamController.on("started", () => {
   isRestartInProgress[1] = false;
   const status = streamController.getStatus();
   io.emit("streamStatus", { ...status, status: "started", cameraIndex: 1 });
+  // Starting the pipeline reopens the V4L2 device, and these cameras run a
+  // mechanical self-home when they are opened — which is one of the ways a
+  // camera ends up parked somewhere nobody asked for, with no PTZ command
+  // coming to start a countdown.  Arm one.
+  armAutoHome(1, "stream started");
 });
 
 streamController.on("stopped", (code) => {
@@ -361,6 +366,11 @@ streamController2.on("started", () => {
   isRestartInProgress[2] = false;
   const status = streamController2.getStatus();
   io.emit("streamStatus", { ...status, status: "started", cameraIndex: 2 });
+  // Starting the pipeline reopens the V4L2 device, and these cameras run a
+  // mechanical self-home when they are opened — which is one of the ways a
+  // camera ends up parked somewhere nobody asked for, with no PTZ command
+  // coming to start a countdown.  Arm one.
+  armAutoHome(2, "stream started");
 });
 
 streamController2.on("stopped", (code) => {
@@ -3470,6 +3480,10 @@ app.post("/api/camera/source", requireAuth, async (req, res) => {
   // ── Step 4: Persist and notify clients ──────────────────────────────────
   saveCameraSource(getActiveSource(camIdx), camIdx);
   io.emit("refreshIdlePreview", { cameraIndex: camIdx });
+  // The incoming camera was just opened for the first time and may have parked
+  // wherever its self-home ended.  (The cancel at the top of this handler was
+  // for the OUTGOING camera; this arms the new one on its own terms.)
+  armAutoHome(camIdx, "camera source changed");
 
   // Broadcast updated camera capabilities (controls, PTZ ranges, format) so
   // every connected browser immediately reflects the new camera without a
