@@ -2155,6 +2155,51 @@ app.get("/api/commits", requireAdmin, async (req, res) => {
 // API endpoint to deploy a specific commit or pull latest (dpadmin only).
 // Body: { commit: "<full-hash>" }  — omit or pass "latest" to update to origin/main HEAD.
 // Uses git reset --hard so the working tree always matches the target exactly.
+/**
+ * Describe the change a deploy is about to make, from the currently checked-out
+ * HEAD to `target`.  Runs before `git reset --hard`, so HEAD is still the
+ * running version.
+ *
+ * `direction` is "forward" for the normal case, "rollback" when the target is
+ * an ancestor of HEAD (deploying an older version from the history list) — in
+ * which case `commits` lists what is being REMOVED, which is the useful thing
+ * to show, and "same" when there is nothing to install.
+ *
+ * Never throws: a deploy must not fail because its changelog couldn't be built.
+ */
+async function describeUpdate(target) {
+  const git = async (cmd) => (await execAsync(`git ${cmd}`, { cwd: __dirname })).stdout.trim();
+  const result = { from: "", to: "", direction: "same", commits: [] };
+  try {
+    result.from = await git("rev-parse --short HEAD");
+    result.to   = await git(`rev-parse --short ${target}`);
+    if (result.from === result.to) return result;
+
+    // \x1f (unit separator) can't appear in a commit subject, unlike every
+    // punctuation character a subject might legitimately contain.
+    const parse = (raw) =>
+      raw.split("\n").filter(Boolean).map((line) => {
+        const [hash, date, subject] = line.split("\x1f");
+        return { hash, date, subject };
+      });
+
+    const ahead = await git(`log --pretty=format:%h%x1f%ad%x1f%s --date=short HEAD..${target}`);
+    if (ahead) {
+      result.direction = "forward";
+      result.commits = parse(ahead);
+      return result;
+    }
+    const behind = await git(`log --pretty=format:%h%x1f%ad%x1f%s --date=short ${target}..HEAD`);
+    if (behind) {
+      result.direction = "rollback";
+      result.commits = parse(behind);
+    }
+  } catch (e) {
+    console.warn("⚠️  Could not describe update:", e.message);
+  }
+  return result;
+}
+
 app.post("/api/update", requireAdmin, async (req, res) => {
   if (req.session?.user?.username !== "dpadmin")
     return res.status(403).json({ success: false, error: "Access denied" });
@@ -2168,9 +2213,20 @@ app.post("/api/update", requireAdmin, async (req, res) => {
     // Always fetch first so we have all remote refs/objects.
     await execAsync("git fetch origin", { cwd: __dirname });
     const target = requestedCommit === "latest" ? "origin/main" : requestedCommit;
+
+    // What is this update actually going to install?  Worked out BEFORE the
+    // reset, while HEAD still points at the running version.  The UI puts this
+    // list on the restarting overlay: once that backdrop is up the admin panel
+    // behind it is unreadable, so the answer has to travel with the update.
+    const update = await describeUpdate(target);
+
     const { stdout, stderr } = await execAsync(`git reset --hard ${target}`, { cwd: __dirname });
     const output = (stdout || "").trim() || (stderr || "").trim() || "No output";
     console.log(`🔄 Deploying ${target}: ${output}`);
+    if (update.commits.length) {
+      console.log(`🔄 ${update.direction === "rollback" ? "Rolling back past" : "Installing"} ` +
+                  `${update.commits.length} commit(s): ${update.commits.map((c) => c.hash).join(", ")}`);
+    }
 
     // Apply any host-config migrations that arrived with this update (packages,
     // systemd units, /etc changes — things git alone can't do because we run as
@@ -2196,7 +2252,7 @@ app.post("/api/update", requireAdmin, async (req, res) => {
       if (runLog && runLog.trim()) migrations += "\n\n" + runLog.trim();
     } catch { /* file may not exist yet on un-bootstrapped boxes */ }
 
-    res.json({ success: true, output, migrations });
+    res.json({ success: true, output, migrations, update });
   } catch (e) {
     return res.status(500).json({ success: false, error: e.message });
   }

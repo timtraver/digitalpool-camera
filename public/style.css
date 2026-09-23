@@ -1975,6 +1975,66 @@ footer {
   line-height: 1.5;
 }
 
+/* The changelog shown while an update deploys. The admin panel that normally
+   lists this sits behind the backdrop, unreadable, so it is repeated here. */
+.restarting-details {
+  margin: 20px auto 0;
+  max-width: min(560px, 86vw);
+  max-height: 40vh;
+  overflow-y: auto;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.restarting-details-head {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.75);
+  margin-bottom: 8px;
+}
+
+.restarting-commit {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 3px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.restarting-commit:first-of-type {
+  border-top: none;
+}
+
+.restarting-commit-hash {
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: #7dd3fc;
+}
+
+.restarting-commit-subject {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.restarting-commit-date {
+  flex: none;
+  margin-left: auto;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+/* On a phone the date column costs more width than it earns — the subject is
+   what the operator is reading. */
+@media (max-width: 520px) {
+  .restarting-commit-date { display: none; }
+}
+
 
 /* ── Device registration modal ──────────────────────────────────────────── */
 .reg-modal-backdrop {

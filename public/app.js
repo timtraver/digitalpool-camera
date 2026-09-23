@@ -284,14 +284,74 @@ socket.on("controlResult", (result) => {
 // service restarts or the device reboots. Sits above every other modal/overlay
 // (z-index 100000) and is dismissed only by the automatic page reload once the
 // server is reachable again.
-function showRestartingModal(title, sub) {
+/**
+ * @param {string} title
+ * @param {string} sub
+ * @param {object} [update] - The change being deployed, from POST /api/update:
+ *   { from, to, direction: "forward"|"rollback"|"same", commits: [{hash, date, subject}] }.
+ *   Rendered inside the overlay because the version list in the admin panel is
+ *   behind the backdrop and unreadable while this is up. Omitted for restarts
+ *   that aren't software updates.
+ */
+function showRestartingModal(title, sub, update) {
   const modal = document.getElementById("restartingModal");
   if (!modal) return;
   const titleEl = document.getElementById("restartingTitle");
   const subEl = document.getElementById("restartingSub");
   if (titleEl && title) titleEl.textContent = title;
   if (subEl && sub) subEl.textContent = sub;
+  renderRestartingDetails(update);
   modal.style.display = "flex";
+}
+
+/** Fill (or clear) the changelog area of the restarting overlay. */
+function renderRestartingDetails(update) {
+  const box = document.getElementById("restartingDetails");
+  if (!box) return;
+  box.textContent = "";
+  const commits = update?.commits || [];
+  if (!commits.length) {
+    // Still say something when there's nothing to list — "already up to date"
+    // is a real outcome of pressing Update, and silence looks like a failure.
+    if (update) {
+      const head = document.createElement("div");
+      head.className = "restarting-details-head";
+      head.textContent = update.from === update.to
+        ? `Already on ${update.to} — no new versions to install`
+        : `Deploying ${update.to}`;
+      box.appendChild(head);
+      box.style.display = "block";
+    } else {
+      box.style.display = "none";
+    }
+    return;
+  }
+
+  const head = document.createElement("div");
+  head.className = "restarting-details-head";
+  const n = commits.length;
+  head.textContent = update.direction === "rollback"
+    ? `Rolling back to ${update.to} — removing ${n} change${n === 1 ? "" : "s"}:`
+    : `Installing ${n} new version${n === 1 ? "" : "s"} (${update.from} → ${update.to}):`;
+  box.appendChild(head);
+
+  for (const c of commits) {
+    const row = document.createElement("div");
+    row.className = "restarting-commit";
+    const hash = document.createElement("span");
+    hash.className = "restarting-commit-hash";
+    hash.textContent = c.hash || "";
+    const subject = document.createElement("span");
+    subject.className = "restarting-commit-subject";
+    // textContent, not innerHTML: commit subjects are arbitrary text.
+    subject.textContent = c.subject || "";
+    const date = document.createElement("span");
+    date.className = "restarting-commit-date";
+    date.textContent = c.date || "";
+    row.append(hash, subject, date);
+    box.appendChild(row);
+  }
+  box.style.display = "block";
 }
 
 function showControlError(control, message) {
@@ -5417,7 +5477,7 @@ loadDeviceIp();
       output.style.display = "block";
       msg.textContent = "🔄 Restarting service…";
       msg.style.color = "#facc15";
-      showRestartingModal("Restarting Software…", "Deploying update — this page will reload automatically.");
+      showRestartingModal("Restarting Software…", "Deploying update — this page will reload automatically.", d.update);
       pollUntilBack();
     } catch {
       // Server already restarted before it could respond — just poll
