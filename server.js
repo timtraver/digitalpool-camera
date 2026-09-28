@@ -5886,6 +5886,23 @@ io.on("connection", (socket) => {
 server.listen(PORT, async () => {
   console.log(`Camera control server running on port ${PORT}`);
 
+  // Alert here, not at the end of the boot sequence. The point of a restart
+  // alert is to say the device restarted, and the boot sequence below activates
+  // cameras, waits on idle previews and sleeps for seconds at a time — a device
+  // whose camera init hangs is exactly the one worth hearing about, and it would
+  // never have reached an alert placed after all that.
+  console.log(alerts.describe());
+  alerts.sendAlert({
+    eventClass: "service",
+    subject: "Camera service started",
+    detail: `The camera software started — a reboot, a software update, or a crash restart.\n` +
+            `Version: ${_runningVersion()}`,
+    key: "service-started",
+    // A restart is the event; two restarts ten minutes apart is itself the news,
+    // so this one is never swallowed by the cooldown.
+    force: true,
+  });
+
   // ── Local match recording ──
   // First, not last: everything below this awaits camera activation, idle
   // preview startup and several seconds of sleeps, while Express is already
@@ -6093,18 +6110,7 @@ server.listen(PORT, async () => {
   // Signal clients IMMEDIATELY so they can start showing video
   bootComplete = true;
   console.log("🏁 Boot sequence complete — idle preview is live");
-  console.log(alerts.describe());
   startCameraPresenceMonitor();
-  alerts.sendAlert({
-    eventClass: "service",
-    subject: "Camera service started",
-    detail: `The camera software started (a reboot, a crash restart, or a software update).\n` +
-            `Version: ${_runningVersion()}`,
-    key: "service-started",
-    // force: a restart is exactly the thing this is for, and two restarts ten
-    // minutes apart is itself the news.
-    force: true,
-  });
   io.emit("refreshIdlePreview");
 
   // Apply camera config and PTZ in the background — doesn't block video
