@@ -155,6 +155,9 @@ class StreamController extends EventEmitter {
       // home position; 0 disables it. Enforced in server.js (armAutoHome), which
       // also requires a saved home position and a PTZ-capable USB camera.
       autoHomeMinutes: 2,
+      // Seconds without published data before the watchdog tears the pipeline
+      // down and lets auto-resume rebuild it; 0 disables the check.
+      stallTimeoutSeconds: 45,
       // YouTube Live settings
       youtubeStreamKey: "", // YouTube stream key (stored locally, used to build RTMP destination)
     };
@@ -718,6 +721,7 @@ class StreamController extends EventEmitter {
         this.gstProcess = null;
         this._stopFpsMonitoring();
         this._stopBitrateMonitoring();
+        this._stopStallWatchdog();
 
         // When GStreamer exits its stdout pipe closes, which causes ffmpeg to see EOF
         // on stdin and exit naturally. Kill explicitly in case it hangs.
@@ -1066,6 +1070,7 @@ class StreamController extends EventEmitter {
                     this.emit("started");
                     this._startFpsMonitoring();
                     this._startBitrateMonitoring();
+                    this._startStallWatchdog();
                   }
                 }, 2000);
                 return; // do NOT kill GStreamer or emit error
@@ -1118,6 +1123,7 @@ class StreamController extends EventEmitter {
                 this.emit("started");
                 this._startFpsMonitoring();
                 this._startBitrateMonitoring();
+                this._startStallWatchdog();
               }
             }, 2000);
           }
@@ -1130,6 +1136,7 @@ class StreamController extends EventEmitter {
         this.emit("started");
         this._startFpsMonitoring();
         this._startBitrateMonitoring();
+        this._startStallWatchdog();
       }
 
       // Enable auto-start and save config
@@ -1174,6 +1181,7 @@ class StreamController extends EventEmitter {
       this.isStreaming = false;
       this._stopFpsMonitoring();
       this._stopBitrateMonitoring();
+      this._stopStallWatchdog();
 
       // Wait for process to fully exit and release the camera device
       // V4L2 devices need time to be released by the kernel after the process exits
@@ -2606,7 +2614,7 @@ class StreamController extends EventEmitter {
 
     const poll = () => {
       const req = http.get(
-        { hostname: "127.0.0.1", port: 9997, path: "/v3/paths/get/live", timeout: 2000 },
+        { hostname: "127.0.0.1", port: 9997, path: `/v3/paths/get/${this.mediamtxPathName}`, timeout: 2000 },
         (res) => {
           let body = "";
           res.on("data", (d) => { body += d; });
@@ -2647,6 +2655,157 @@ class StreamController extends EventEmitter {
       this._bitrateInterval = null;
     }
     this.emit("bitrate", null);
+  }
+
+  /** This stream's MediaMTX path name, without the leading slash ("live", "live2"). */
+  get mediamtxPathName() {
+    return this.rtspPath.replace(/^\//, "");
+  }
+
+  /**
+   * The path the stall watchdog watches: the low-fps preview ("preview",
+   * "preview2"), NOT the main stream.
+   *
+   * The main path is only on local MediaMTX for the rtsp protocol. SRT serves
+   * from the device and remote RTMP (YouTube) publishes straight out, so for
+   * those there is no local path to read and "no bytes" would mean nothing was
+   * ever going to be there — the watchdog would restart a perfectly healthy
+   * stream every time it checked.
+   *
+   * The preview branch is published to local MediaMTX unconditionally, whatever
+   * the output protocol, and it is fed from the same source tee as the encoder,
+   * so a source that stops delivering freezes both. Measured on a live device:
+   * a preview path with zero viewers still advances (~87 kbps gated), so this
+   * does not depend on anyone watching.
+   *
+   * The gap this leaves is a failure confined to the main encoder branch while
+   * the preview keeps running; the observed failures are all upstream of the
+   * tee, which this sees.
+   */
+  get watchdogPathName() {
+    return this.previewPath.replace(/^\//, "");
+  }
+
+  /**
+   * Watch for a pipeline that is alive but no longer producing.
+   *
+   * The failure this exists for, observed on a device 2026-09-27: v4l2src stopped
+   * getting frames from the camera and span at a full core instead of erroring.
+   * The GStreamer process stayed up, so nothing died, no 'stopped' fired, and the
+   * auto-resume that handles a crashed pipeline never ran. MediaMTX timed out the
+   * RTMP publisher 33s later and destroyed the path; the app went on reporting
+   * "streaming" for 20 hours while the UI showed no preview.
+   *
+   * Every signal needed to catch it was already being collected and discarded:
+   * the drift line printed a frozen pipeline position once a minute, and this
+   * same MediaMTX poll returned "path not found" once a second. So the test is
+   * simply: while we believe we are streaming, are the bytes we publish still
+   * going up?  bytesReceived (what the publisher pushed IN) is the right counter
+   * — bytesSent depends on how many viewers happen to be connected, and would
+   * read zero for a perfectly healthy stream nobody is watching.
+   *
+   * A missing path counts as no progress, because that is exactly what a torn
+   * down publisher looks like. MediaMTX being down or unreachable counts too:
+   * it is the RTMP target, so the stream really is off the air either way.
+   */
+  _startStallWatchdog() {
+    this._stopStallWatchdog();
+
+    const seconds = Number(
+      this.streamConfig.stallTimeoutSeconds === undefined ? 45 : this.streamConfig.stallTimeoutSeconds
+    );
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      console.log(`🩺 [Cam${this.streamId}] Stall watchdog disabled by config`);
+      return;
+    }
+
+    this._stallTimeoutMs   = seconds * 1000;
+    this._stallLastBytes   = null;
+    this._stallLastMovedAt = Date.now();
+    this._stallReported    = false;
+    // Poll on its own 5s cadence rather than piggybacking the 1s bitrate tick:
+    // this decides whether to tear a live stream down, and should not inherit
+    // the bitrate monitor's lifecycle or its per-second failure modes.
+    this._stallInterval = setInterval(() => this._checkForStall(), 5000);
+    console.log(`🩺 [Cam${this.streamId}] Stall watchdog armed — restart if "${this.watchdogPathName}" ` +
+                `publishes no data for ${seconds}s`);
+  }
+
+  _stopStallWatchdog() {
+    if (this._stallInterval) {
+      clearInterval(this._stallInterval);
+      this._stallInterval = null;
+    }
+  }
+
+  /** One watchdog tick. Never throws — a monitor must not take down the process. */
+  async _checkForStall() {
+    if (!this.isStreaming || this._stopRequested) return;
+
+    let bytes = null;
+    try {
+      bytes = await this._readPublishedBytes();
+    } catch (_) {
+      bytes = null; // treated as no progress, deliberately
+    }
+
+    const now = Date.now();
+    if (bytes !== null && (this._stallLastBytes === null || bytes > this._stallLastBytes)) {
+      this._stallLastBytes   = bytes;
+      this._stallLastMovedAt = now;
+      this._stallReported    = false;
+      return;
+    }
+
+    const stalledMs = now - this._stallLastMovedAt;
+    if (stalledMs < this._stallTimeoutMs || this._stallReported) return;
+
+    // Report once per stall: the listener tears the pipeline down and the
+    // 'stopped' path takes over from there, so repeating would stack restarts.
+    this._stallReported = true;
+    const detail = bytes === null
+      ? `MediaMTX path "${this.watchdogPathName}" is gone or unreachable`
+      : `published bytes frozen at ${bytes}`;
+    console.error(`🩺 [Cam${this.streamId}] Stream stalled — ${detail} for ${Math.round(stalledMs / 1000)}s ` +
+                  `while the pipeline is still running`);
+    this.emit("stalled", { seconds: Math.round(stalledMs / 1000), detail });
+  }
+
+  /** bytesReceived for the watchdog's MediaMTX path, or null if it isn't there. */
+  _readPublishedBytes() {
+    const http = require("http");
+    return new Promise((resolve) => {
+      const req = http.get(
+        { hostname: "127.0.0.1", port: 9997, path: `/v3/paths/get/${this.watchdogPathName}`, timeout: 2000 },
+        (res) => {
+          let body = "";
+          res.on("data", (d) => { body += d; });
+          res.on("end", () => {
+            if (res.statusCode !== 200) return resolve(null); // 404 = path destroyed
+            try {
+              const data = JSON.parse(body);
+              resolve(typeof data.bytesReceived === "number" ? data.bytesReceived : null);
+            } catch (_) { resolve(null); }
+          });
+        }
+      );
+      req.on("error",   () => resolve(null));
+      req.on("timeout", () => { req.destroy(); resolve(null); });
+    });
+  }
+
+  /**
+   * Kill the pipeline the way an unexpected death looks, so the existing
+   * auto-resume in server.js picks it up: _stopRequested stays false, 'stopped'
+   * fires, the idle preview is restored and the stream is brought back with
+   * backoff. Deliberately NOT stopStream(), which marks the stop as intentional
+   * and would leave the camera dark.
+   */
+  killForRecovery(reason) {
+    console.warn(`🩺 [Cam${this.streamId}] Tearing down the pipeline for recovery — ${reason}`);
+    this._stopStallWatchdog();
+    try { if (this.gstProcess) this.gstProcess.kill("SIGKILL"); } catch (_) {}
+    try { if (this.ffmpegProcess) this.ffmpegProcess.kill("SIGKILL"); } catch (_) {}
   }
 
   /**

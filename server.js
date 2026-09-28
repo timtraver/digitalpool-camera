@@ -339,6 +339,18 @@ streamController.on("error", (error) => {
   io.emit("streamError", { error, cameraIndex: 1 });
 });
 
+// The pipeline is up but nothing is coming out of it. Killing it converts a
+// stall — which no existing path recovers from, because nothing died — into the
+// unexpected-stop case that _attemptStreamAutoResume() already handles.
+streamController.on("stalled", ({ seconds, detail }) => {
+  console.error(`🩺 [Cam1] Stream stalled for ${seconds}s (${detail}) — restarting it`);
+  io.emit("streamError", {
+    error: `Stream stalled for ${seconds}s — restarting automatically`,
+    cameraIndex: 1,
+  });
+  streamController.killForRecovery(`stalled for ${seconds}s`);
+});
+
 streamController.on("log", (log) => {
   console.log("Stream log [Cam1]:", log);
 });
@@ -394,6 +406,18 @@ streamController2.on("stopped", (code) => {
 
 streamController2.on("error", (error) => {
   io.emit("streamError", { error, cameraIndex: 2 });
+});
+
+// The pipeline is up but nothing is coming out of it. Killing it converts a
+// stall — which no existing path recovers from, because nothing died — into the
+// unexpected-stop case that _attemptStreamAutoResume() already handles.
+streamController2.on("stalled", ({ seconds, detail }) => {
+  console.error(`🩺 [Cam2] Stream stalled for ${seconds}s (${detail}) — restarting it`);
+  io.emit("streamError", {
+    error: `Stream stalled for ${seconds}s — restarting automatically`,
+    cameraIndex: 2,
+  });
+  streamController2.killForRecovery(`stalled for ${seconds}s`);
 });
 
 streamController2.on("log", (log) => {
