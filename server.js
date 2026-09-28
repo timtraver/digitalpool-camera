@@ -21,6 +21,7 @@ const StreamController = require("./streamController");
 const WifiManager = require("./wifiManager");
 const authManager = require("./authManager");
 const { RecordingManager, safeRecordingName } = require("./recordingManager");
+const { AlertMailer } = require("./alertMailer");
 
 // Local match recording, armed by a remote RTSP reader (i.e. Wowza pulling).
 // Paths match streamController.js:67 — camera 1 publishes to `live`, camera 2
@@ -201,6 +202,20 @@ const _streamReachedStarted = { 1: false, 2: false };
 
 // ── Per-camera controller helpers ─────────────────────────────────────────────
 /** Return the CameraController for index 1 or 2. */
+// Email alerts. Inert unless ALERT_* is configured in .env — see alertMailer.js.
+const alerts = new AlertMailer();
+
+/** Short description of the deployed commit, for the service-started alert. */
+function _runningVersion() {
+  try {
+    return require("child_process")
+      .execSync("git log -1 --pretty=format:'%h %s' --no-color", { cwd: __dirname })
+      .toString().trim();
+  } catch (_) {
+    return "unknown";
+  }
+}
+
 function getCam(idx) { return idx === 2 ? camera2 : camera; }
 /** Return the StreamController for index 1 or 2. */
 function getSC(idx)  { return idx === 2 ? streamController2 : streamController; }
@@ -348,6 +363,13 @@ streamController.on("stalled", ({ seconds, detail }) => {
     error: `Stream stalled for ${seconds}s — restarting automatically`,
     cameraIndex: 1,
   });
+  alerts.sendAlert({
+    eventClass: "stream",
+    subject: `Camera 1 stream stalled — restarting it`,
+    detail: `The pipeline was still running but publishing nothing for ${seconds}s (${detail}).\n` +
+            `It is being torn down and restarted automatically.`,
+    key: "stream-stalled-1",
+  });
   streamController.killForRecovery(`stalled for ${seconds}s`);
 });
 
@@ -416,6 +438,13 @@ streamController2.on("stalled", ({ seconds, detail }) => {
   io.emit("streamError", {
     error: `Stream stalled for ${seconds}s — restarting automatically`,
     cameraIndex: 2,
+  });
+  alerts.sendAlert({
+    eventClass: "stream",
+    subject: `Camera 2 stream stalled — restarting it`,
+    detail: `The pipeline was still running but publishing nothing for ${seconds}s (${detail}).\n` +
+            `It is being torn down and restarted automatically.`,
+    key: "stream-stalled-2",
   });
   streamController2.killForRecovery(`stalled for ${seconds}s`);
 });
@@ -2287,6 +2316,28 @@ app.post("/api/update", requireAdmin, async (req, res) => {
   }, 800);
 });
 
+// ── Email alert test ─────────────────────────────────────────────────────────
+// Verifying alert config by waiting for a real incident is no way to find out
+// that the sender address was never verified with the provider. This sends one
+// now. The send itself is fire-and-forget, so the response reports the
+// configuration and the journal (grep 📧) reports delivery.
+app.post("/api/alerts/test", requireAdmin, (req, res) => {
+  const status = alerts.describe();
+  if (!alerts.enabled) return res.json({ success: false, status });
+  alerts.sendAlert({
+    eventClass: "service",
+    subject: "Test alert",
+    detail: "This is a test, sent from the admin panel. If you are reading it, alerts work.",
+    key: "test-alert",
+    force: true,
+  });
+  res.json({
+    success: true,
+    status,
+    message: "Test alert queued — check the inbox, and journalctl for a 📧 line if it doesn't arrive.",
+  });
+});
+
 // ── System stats API ─────────────────────────────────────────────────────────
 // GET /api/system/stats — CPU temperature, RAM usage, and Intel RAPL power draw.
 // Any authenticated user may read these (no sensitive data).
@@ -3117,6 +3168,79 @@ async function fireAutoHome(idx) {
   } catch (e) {
     console.warn(`⚠️  [Cam${idx}] Auto-home failed: ${e.message}`);
   }
+}
+
+// ── Camera presence monitor ──────────────────────────────────────────────────
+//
+// Nothing in the app watched for a camera physically going away: the device
+// node is only checked when the UI asks for config. These cameras do drop off
+// the USB bus on their own and re-enumerate ~12s later, and the node can also
+// move (see the by-path/by-id pinning), so an operator can be looking at a dead
+// slot with no indication of why.
+//
+// Two consecutive misses (≈60s) before reporting: a re-enumeration blip would
+// otherwise send a "camera gone" mail followed immediately by "camera back",
+// which trains people to ignore the alerts.
+const CAMERA_PRESENCE_POLL_MS = 30000;
+const _cameraPresence = { 1: { present: null, misses: 0 }, 2: { present: null, misses: 0 } };
+
+function _cameraDeviceFor(idx) {
+  const source = getActiveSource(idx);
+  if (source.type !== "usb") return null;   // network sources have no node to watch
+  return source.device || (idx === 2 ? CAMERA_DEVICE_2 : CAMERA_DEVICE);
+}
+
+function _pollCameraPresence() {
+  for (const idx of [1, 2]) {
+    const dev = _cameraDeviceFor(idx);
+    const state = _cameraPresence[idx];
+    if (!dev) { state.present = null; state.misses = 0; continue; }
+
+    const here = fsSync.existsSync(dev);
+    if (here) {
+      state.misses = 0;
+      if (state.present === false) {
+        console.log(`📷 [Cam${idx}] Camera is back at ${dev}`);
+        alerts.sendAlert({
+          eventClass: "camera",
+          subject: `Camera ${idx} is back`,
+          detail: `The device node ${dev} exists again.`,
+          key: `camera-back-${idx}`,
+        });
+      }
+      state.present = true;
+      continue;
+    }
+
+    state.misses += 1;
+    if (state.present !== false && state.misses >= 2) {
+      console.warn(`📷 [Cam${idx}] Camera device ${dev} has been missing for ` +
+                   `${(state.misses * CAMERA_PRESENCE_POLL_MS) / 1000}s`);
+      alerts.sendAlert({
+        eventClass: "camera",
+        subject: `Camera ${idx} has disappeared`,
+        detail: `The device node ${dev} is gone. The camera has been unplugged, has lost ` +
+                `power, or has dropped off the USB bus without re-enumerating.\n` +
+                `Any stream on this camera will be down until it returns.`,
+        key: `camera-gone-${idx}`,
+      });
+      state.present = false;
+    }
+  }
+}
+
+// Started after boot (see the boot sequence) so the first poll doesn't race
+// camera initialisation and report a slot missing while it is still coming up.
+function startCameraPresenceMonitor() {
+  const t = setInterval(_pollCameraPresence, CAMERA_PRESENCE_POLL_MS);
+  if (typeof t.unref === "function") t.unref();
+  // Seed the initial state without alerting: whatever is here at boot is the
+  // baseline, and a camera absent from the start is reported by init, not here.
+  for (const idx of [1, 2]) {
+    const dev = _cameraDeviceFor(idx);
+    _cameraPresence[idx].present = dev ? fsSync.existsSync(dev) : null;
+  }
+  console.log("📷 Camera presence monitor started");
 }
 
 // List the USB cameras that can actually be streamed from.
@@ -5773,7 +5897,33 @@ server.listen(PORT, async () => {
   // started because Wowza connected, not because someone pressed a button here.
   recordingManager.on("state",   (st)  => io.emit("recordingState", st));
   recordingManager.on("started", (rec) => io.emit("recordingStarted", rec));
-  recordingManager.on("stopped", (rec) => io.emit("recordingStopped", rec));
+  recordingManager.on("stopped", (rec) => {
+    io.emit("recordingStopped", rec);
+    // "all readers disconnected" / "reader disconnected" / "shutdown" are how a
+    // recording is SUPPOSED to end. Anything else ended it against our wishes —
+    // ffmpeg dying mid-match, or the disk filling up.
+    const expected = /readers? disconnected|shutdown|disabled|manual/i.test(rec.reason || "");
+    if (expected) return;
+    const gb = (rec.bytes / 1073741824).toFixed(2);
+    alerts.sendAlert({
+      eventClass: "recording",
+      subject: `Recording on ${rec.label} ended unexpectedly`,
+      detail: `${rec.name} stopped after ${gb} GB — reason: ${rec.reason}.\n` +
+              `If a reader is still connected the recorder will start a NEW file, ` +
+              `so the match is now split across two.`,
+      key: `recording-stopped-${rec.label}`,
+    });
+  });
+
+  recordingManager.on("failed", (rec) => {
+    alerts.sendAlert({
+      eventClass: "recording",
+      subject: `Recording on ${rec.label} is failing to start`,
+      detail: `ffmpeg produced no usable data (${rec.reason}); the file was discarded. ` +
+              `This is failure ${rec.failCount}, retrying in ${rec.retryInSec}s.`,
+      key: `recording-failed-${rec.label}`,
+    });
+  });
   recordingManager.start().catch((err) =>
     console.error("⚠️  Failed to start recording manager:", err.message)
   );
@@ -5943,6 +6093,18 @@ server.listen(PORT, async () => {
   // Signal clients IMMEDIATELY so they can start showing video
   bootComplete = true;
   console.log("🏁 Boot sequence complete — idle preview is live");
+  console.log(alerts.describe());
+  startCameraPresenceMonitor();
+  alerts.sendAlert({
+    eventClass: "service",
+    subject: "Camera service started",
+    detail: `The camera software started (a reboot, a crash restart, or a software update).\n` +
+            `Version: ${_runningVersion()}`,
+    key: "service-started",
+    // force: a restart is exactly the thing this is for, and two restarts ten
+    // minutes apart is itself the news.
+    force: true,
+  });
   io.emit("refreshIdlePreview");
 
   // Apply camera config and PTZ in the background — doesn't block video
@@ -5966,6 +6128,12 @@ server.listen(PORT, async () => {
     console.log("✅ Camera initialized successfully\n");
   } catch (error) {
     console.error("❌ Error initializing camera:", error.message);
+    alerts.sendAlert({
+      eventClass: "camera",
+      subject: "Camera 1 failed to initialize at startup",
+      detail: `The camera did not come up cleanly: ${error.message}`,
+      key: "camera-init-1",
+    });
     cameraInitialized = true; // Allow commands even if init failed
   } finally {
     // Arm auto-home from boot as well as from operator movement: if the camera
@@ -6069,6 +6237,12 @@ server.listen(PORT, async () => {
         console.log("✅ [Cam2] Camera 2 initialized successfully\n");
       } catch (e) {
         console.error("❌ [Cam2] Camera init error:", e.message);
+        alerts.sendAlert({
+          eventClass: "camera",
+          subject: "Camera 2 failed to initialize at startup",
+          detail: `The camera did not come up cleanly: ${e.message}`,
+          key: "camera-init-2",
+        });
         cameraInitialized2 = true; // allow commands even if PTZ init failed
       } finally {
         armAutoHome(2, "boot");
@@ -6361,6 +6535,12 @@ async function _attemptStreamAutoResume(camIdx) {
         // side would let the idle preview grab the camera mid-handshake — the
         // exact race the guard exists to prevent.
         console.log(`✅ [Cam${camIdx}] Auto-resume succeeded`);
+        alerts.sendAlert({
+          eventClass: "stream",
+          subject: `Camera ${camIdx} stream is back`,
+          detail: `Auto-resume restarted the stream on attempt ${attempt + 1}.`,
+          key: `stream-resumed-${camIdx}`,
+        });
         return;
       }
 
@@ -6371,6 +6551,16 @@ async function _attemptStreamAutoResume(camIdx) {
         .catch(() => {});
     }
     console.warn(`❌ [Cam${camIdx}] Auto-resume gave up after ${_RESUME_BACKOFF_MS.length} attempts — manual start required`);
+    // force: this one is worth a mail even if the cooldown would eat it — it is
+    // the point at which the device stops trying and needs a person.
+    alerts.sendAlert({
+      eventClass: "stream",
+      subject: `Camera ${camIdx} stream is DOWN — needs attention`,
+      detail: `Auto-resume tried ${_RESUME_BACKOFF_MS.length} times over ~2 minutes and gave up. ` +
+              `The stream will stay down until someone starts it.`,
+      key: `stream-gaveup-${camIdx}`,
+      force: true,
+    });
   } catch (err) {
     console.error(`⚠️  [Cam${camIdx}] Auto-resume error:`, err.message);
   } finally {
@@ -6416,6 +6606,13 @@ async function _handleStreamStopped(camIdx) {
   // to ~2 minutes and must not block this handler.
   if (!sc._stopRequested) {
     console.warn(`⚠️  [Cam${camIdx}] Stream stopped unexpectedly — attempting auto-resume`);
+    alerts.sendAlert({
+      eventClass: "stream",
+      subject: `Camera ${camIdx} stream stopped unexpectedly`,
+      detail: "Nobody asked it to stop — the pipeline died on its own. Auto-resume is " +
+              "trying to bring it back; a follow-up will say whether it worked.",
+      key: `stream-unexpected-${camIdx}`,
+    });
     _attemptStreamAutoResume(camIdx);
   }
 }
@@ -6554,6 +6751,15 @@ process.on("uncaughtException", (err) => {
 //      file gives us a 3 s margin before systemd's SIGKILL.
 async function _gracefulShutdown() {
   console.log("🛑 Shutting down — killing child processes...");
+  // Queued, not awaited: the shutdown budget is 7s and belongs to the media
+  // processes. The send either makes it out or it doesn't.
+  alerts.sendAlert({
+    eventClass: "service",
+    subject: "Camera service stopping",
+    detail: "The service received a shutdown signal (restart, update, reboot or power down).",
+    key: "service-stopping",
+    force: true,
+  });
 
   // ── Step 1: kill idle preview GStreamer processes immediately ──
   // These are gst-launch-1.0 children spawned by startPersistentIdlePreview().

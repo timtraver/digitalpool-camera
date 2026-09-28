@@ -674,6 +674,9 @@ class RecordingManager extends EventEmitter {
         `🎥 [${s.label}] Recording produced nothing (${reason}) — discarded ${name}, ` +
         `retrying in ${backoffSec}s (failure ${s.failCount})`
       );
+      this.emit("failed", {
+        label: s.label, name, reason, failCount: s.failCount, retryInSec: backoffSec,
+      });
     } else {
       s.failCount = 0;
       s.retryAfter = 0;
