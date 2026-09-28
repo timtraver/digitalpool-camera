@@ -6,14 +6,16 @@
  * Sends over a mail provider's HTTPS API rather than SMTP — no new npm
  * dependency (node:https is enough), no SMTP/TLS handshake code to maintain,
  * and a failure comes back as a status code and a body instead of a protocol
- * stall. Supports Resend, SendGrid and Postmark; they differ only in URL, auth
- * header and body shape, which is all PROVIDERS below holds.
+ * stall. Supports Resend, SendGrid, Postmark and Mailgun; what differs between
+ * them is URL, auth, content type and body shape, which is all PROVIDERS holds.
  *
  * Configure in .env (all optional — absent means alerting is simply off):
  *   ALERT_EMAIL_TO     recipient(s), comma-separated
  *   ALERT_EMAIL_FROM   sender; must be an address the provider has verified
- *   ALERT_API_KEY      provider API key
- *   ALERT_PROVIDER     resend (default) | sendgrid | postmark
+ *   ALERT_API_KEY      provider API key (Mailgun: the private API key)
+ *   ALERT_PROVIDER     resend (default) | sendgrid | postmark | mailgun
+ *   ALERT_MAILGUN_DOMAIN   mailgun only, required — the verified sending domain
+ *   ALERT_MAILGUN_REGION   mailgun only, us (default) | eu
  *   ALERT_EVENTS       comma-separated event classes to send; default "all".
  *                      Classes: stream, service, camera, recording
  *   ALERT_MIN_INTERVAL_S   per-key cooldown, default 600
@@ -28,34 +30,66 @@
 const https = require("https");
 const os = require("os");
 
+/**
+ * Per-provider differences, and nothing else.
+ *
+ * Mailgun is why this is shaped as it is rather than "same JSON, different
+ * header": it authenticates with HTTP Basic (user "api", password the key),
+ * puts the sending domain in the path, and takes form-encoded fields instead
+ * of JSON. So each provider owns its host, path, headers, content type and
+ * body serialisation, and `requires` reports config it cannot work without.
+ */
 const PROVIDERS = {
   resend: {
-    host: "api.resend.com",
-    path: "/emails",
-    headers: (key) => ({ Authorization: `Bearer ${key}` }),
-    body: ({ from, to, subject, text }) => ({ from, to, subject, text }),
+    host: () => "api.resend.com",
+    path: () => "/emails",
+    headers: (cfg) => ({ Authorization: `Bearer ${cfg.key}` }),
+    contentType: "application/json",
+    serialize: ({ from, to, subject, text }) => JSON.stringify({ from, to, subject, text }),
+    requires: () => "",
   },
+
   sendgrid: {
-    host: "api.sendgrid.com",
-    path: "/v3/mail/send",
-    headers: (key) => ({ Authorization: `Bearer ${key}` }),
-    body: ({ from, to, subject, text }) => ({
+    host: () => "api.sendgrid.com",
+    path: () => "/v3/mail/send",
+    headers: (cfg) => ({ Authorization: `Bearer ${cfg.key}` }),
+    contentType: "application/json",
+    serialize: ({ from, to, subject, text }) => JSON.stringify({
       personalizations: [{ to: to.map((a) => ({ email: a })) }],
       from: { email: from },
       subject,
       content: [{ type: "text/plain", value: text }],
     }),
+    requires: () => "",
   },
+
   postmark: {
-    host: "api.postmarkapp.com",
-    path: "/email",
-    headers: (key) => ({ "X-Postmark-Server-Token": key }),
-    body: ({ from, to, subject, text }) => ({
-      From: from,
-      To: to.join(","),
-      Subject: subject,
-      TextBody: text,
+    host: () => "api.postmarkapp.com",
+    path: () => "/email",
+    headers: (cfg) => ({ "X-Postmark-Server-Token": cfg.key }),
+    contentType: "application/json",
+    serialize: ({ from, to, subject, text }) => JSON.stringify({
+      From: from, To: to.join(","), Subject: subject, TextBody: text,
     }),
+    requires: () => "",
+  },
+
+  mailgun: {
+    // EU-region accounts are a different hostname entirely, and sending to the
+    // US host with EU credentials fails authentication in a way that reads like
+    // a bad key.
+    host: (cfg) => (cfg.mailgunRegion === "eu" ? "api.eu.mailgun.net" : "api.mailgun.net"),
+    path: (cfg) => `/v3/${encodeURIComponent(cfg.mailgunDomain)}/messages`,
+    headers: (cfg) => ({
+      Authorization: "Basic " + Buffer.from(`api:${cfg.key}`).toString("base64"),
+    }),
+    contentType: "application/x-www-form-urlencoded",
+    serialize: ({ from, to, subject, text }) => new URLSearchParams({
+      from, to: to.join(","), subject, text,
+    }).toString(),
+    // The domain is part of the URL, so there is no sensible default: without it
+    // the request is a 404 against /v3//messages.
+    requires: (cfg) => (cfg.mailgunDomain ? "" : "ALERT_MAILGUN_DOMAIN is required for mailgun"),
   },
 };
 
@@ -72,6 +106,12 @@ class AlertMailer {
     this.providerName = (env.ALERT_PROVIDER || "resend").trim().toLowerCase();
     this.provider = PROVIDERS[this.providerName] || null;
 
+    // Mailgun-specific. The domain is part of the request URL and the region
+    // decides the hostname, so both are read here and handed to the provider
+    // entry as plain config rather than being reached for from inside it.
+    this.mailgunDomain = (env.ALERT_MAILGUN_DOMAIN || "").trim();
+    this.mailgunRegion = (env.ALERT_MAILGUN_REGION || "us").trim().toLowerCase();
+
     const events = (env.ALERT_EVENTS || "all").trim().toLowerCase();
     this.events = events === "all" ? null : new Set(events.split(",").map((s) => s.trim()));
 
@@ -86,9 +126,15 @@ class AlertMailer {
     this._sentTimes = [];           // epoch ms of recent sends, for the hourly cap
   }
 
+  /** What this provider still needs, or "" when it has everything. */
+  get missingProviderConfig() {
+    return this.provider ? this.provider.requires(this) : "";
+  }
+
   /** Whether enough is configured to send anything at all. */
   get enabled() {
-    return !!(this.to.length && this.from && this.key && this.provider);
+    return !!(this.to.length && this.from && this.key && this.provider) &&
+           !this.missingProviderConfig;
   }
 
   /** One line for the boot log saying whether alerts are on, and if not, why. */
@@ -98,8 +144,12 @@ class AlertMailer {
     if (!this.to.length) return "📧 Email alerts: OFF — ALERT_EMAIL_TO is empty";
     if (!this.from) return "📧 Email alerts: OFF — ALERT_EMAIL_FROM is empty";
     if (!this.key) return "📧 Email alerts: OFF — ALERT_API_KEY is empty";
+    if (this.missingProviderConfig) return `📧 Email alerts: OFF — ${this.missingProviderConfig}`;
     const classes = this.events ? [...this.events].join(", ") : "all";
-    return `📧 Email alerts: ON via ${this.providerName} → ${this.to.join(", ")} (events: ${classes})`;
+    const via = this.providerName === "mailgun"
+      ? `mailgun (${this.mailgunDomain}, ${this.mailgunRegion} region)`
+      : this.providerName;
+    return `📧 Email alerts: ON via ${via} → ${this.to.join(", ")} (events: ${classes})`;
   }
 
   /**
@@ -174,19 +224,19 @@ class AlertMailer {
 
   /** POST to the provider, retrying transient failures on the backoff schedule. */
   _deliver(subject, text, attempt) {
-    const payload = JSON.stringify(
-      this.provider.body({ from: this.from, to: this.to, subject, text })
-    );
+    const payload = this.provider.serialize({
+      from: this.from, to: this.to, subject, text,
+    });
     const req = https.request(
       {
-        host: this.provider.host,
-        path: this.provider.path,
+        host: this.provider.host(this),
+        path: this.provider.path(this),
         method: "POST",
         timeout: 15000,
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type": this.provider.contentType,
           "Content-Length": Buffer.byteLength(payload),
-          ...this.provider.headers(this.key),
+          ...this.provider.headers(this),
         },
       },
       (res) => {
