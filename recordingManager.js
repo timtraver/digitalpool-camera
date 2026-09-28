@@ -918,6 +918,45 @@ class RecordingManager extends EventEmitter {
     return { deleted };
   }
 
+  /**
+   * Delete every stored recording.
+   *
+   * A recording that is still being written is skipped, not deleted: its ffmpeg
+   * holds the file open, and removing it would leave that process writing to an
+   * unlinked inode — the match would appear to be recording while the bytes went
+   * nowhere. The caller is told which ones were spared so the UI can say so.
+   *
+   * Errors are collected per file rather than thrown, so one undeletable file
+   * doesn't strand the rest.
+   */
+  removeAll() {
+    let files = [];
+    try { files = fs.readdirSync(RECORDINGS_DIR).filter(safeRecordingName); } catch { /* dir missing */ }
+
+    const deleted = [];
+    const skipped = [];
+    const errors = [];
+    let bytes = 0;
+
+    for (const name of files) {
+      if (this.isRecording(name)) { skipped.push(name); continue; }
+      try {
+        const full = path.join(RECORDINGS_DIR, name);
+        try { bytes += fs.statSync(full).size; } catch { /* counted as 0 */ }
+        this._unlinkPair(name);
+        deleted.push(name);
+      } catch (err) {
+        errors.push({ name, error: err.message });
+      }
+    }
+
+    console.log(`🎥 Cleared ${deleted.length} recording(s), ${(bytes / 1073741824).toFixed(2)} GB` +
+                (skipped.length ? `; kept ${skipped.length} still recording` : "") +
+                (errors.length ? `; ${errors.length} failed` : ""));
+    this._emitState();
+    return { deleted, skipped, errors, bytes };
+  }
+
   _unlinkPair(name) {
     const full = path.join(RECORDINGS_DIR, name);
     fs.unlinkSync(full);

@@ -957,7 +957,16 @@
 
             <!-- Stored files -->
             <div class="admin-section">
-              <div class="admin-section-title" style="margin-bottom:8px">📁 Stored Recordings</div>
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                <div class="admin-section-title" style="margin:0;flex:1">📁 Stored Recordings</div>
+                <!-- Shown by _recRender() only for admins, and only when there is
+                     something deletable to clear. -->
+                <button id="recordingsClearAll" style="display:none;background:rgba(220,38,38,0.22);
+                        border:1px solid rgba(220,38,38,0.5);color:#fecaca;border-radius:5px;
+                        padding:3px 9px;font-size:11px;font-weight:600;cursor:pointer;flex:none">
+                  🗑 Clear All
+                </button>
+              </div>
               <div id="recordingsList" class="user-list"></div>
               <div id="recordingsNote"></div>
             </div>

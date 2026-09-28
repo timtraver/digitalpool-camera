@@ -6337,6 +6337,17 @@ function _recRender(st) {
     }
   }
 
+  // Clear All lives in the heading, so it stays put while the list scrolls.
+  // Hidden unless there is something it could actually do: no admin rights, or
+  // nothing but in-progress recordings, and the button would only mislead.
+  const clearBtn = document.getElementById("recordingsClearAll");
+  if (clearBtn) {
+    const deletable = st.recordings.filter((r) => !r.recording).length;
+    clearBtn.style.display = (_recCanDelete() && deletable > 0) ? "" : "none";
+    clearBtn.textContent = `🗑 Clear All (${deletable})`;
+    clearBtn.dataset.count = String(deletable);
+  }
+
   // Outside #recordingsList on purpose: the list scrolls, and a note that
   // scrolls out of view is a note nobody reads.
   const noteEl = document.getElementById("recordingsNote");
@@ -6441,6 +6452,34 @@ function initRecordings() {
       _recRefresh();
     } catch (err) {
       say(err.message, false);
+    }
+  });
+
+  document.getElementById("recordingsClearAll")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const count = parseInt(btn.dataset.count || "0", 10);
+    if (!count) return;
+    // Name the number and the finality: this is the one destructive control in
+    // the recordings card that isn't scoped to a single file.
+    if (!confirm(`Delete all ${count} stored recording${count === 1 ? "" : "s"}?\n\n` +
+                 `This cannot be undone. A recording in progress is kept.`)) return;
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "Deleting…";
+    try {
+      const r = await fetch("/api/recordings", { method: "DELETE" });
+      const d = await r.json();
+      if (!d.success) return say(d.error || "Clear failed", false);
+      const parts = [`Deleted ${d.deleted.length} recording${d.deleted.length === 1 ? "" : "s"}`];
+      if (d.skipped.length) parts.push(`${d.skipped.length} still recording, kept`);
+      if (d.errors.length)  parts.push(`${d.errors.length} could not be deleted`);
+      say(parts.join(" · "), d.errors.length === 0);
+      _recRefresh();
+    } catch (err) {
+      say(err.message, false);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
     }
   });
 

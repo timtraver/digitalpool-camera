@@ -205,6 +205,19 @@ const _streamReachedStarted = { 1: false, 2: false };
 // Email alerts. Inert unless ALERT_* is configured in .env — see alertMailer.js.
 const alerts = new AlertMailer();
 
+// Where the alert came from. Read per send rather than captured here, because a
+// device can be registered (or moved to another venue) while the service runs,
+// and both helpers are hoisted function declarations so this is safe to install
+// before they appear in the file.
+alerts.setIdentity(() => {
+  const cfg = loadRemoteConfig();
+  return {
+    venueName: cfg.venueName || "",
+    deviceName: getDeviceName(),
+    ownerEmail: cfg.ownerEmail || "",
+  };
+});
+
 /** Short description of the deployed commit, for the service-started alert. */
 function _runningVersion() {
   try {
@@ -4261,6 +4274,18 @@ app.delete("/api/recordings/file/:name", requireAdmin, (req, res) => {
                : /bad recording/.test(err.message) ? 400
                : /not found/.test(err.message)     ? 404 : 500;
     res.status(code).json({ success: false, error: err.message });
+  }
+});
+
+// Delete every stored recording. In-progress recordings are kept — see
+// recordingManager.removeAll() — and named in the response so the UI can say
+// why the list isn't empty afterwards.
+app.delete("/api/recordings", requireAdmin, (req, res) => {
+  try {
+    const result = recordingManager.removeAll();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

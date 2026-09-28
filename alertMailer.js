@@ -119,11 +119,48 @@ class AlertMailer {
     this.maxPerHour = Number(env.ALERT_MAX_PER_HOUR) || 20;
 
     // Device identity, so an alert from a fleet of appliances says which one.
+    // The hostname is the fallback; setIdentity() supplies the venue and the
+    // registered device name once the app has them.
     this.deviceName = os.hostname();
+    this._identity = null;
 
     this._lastSentAt = new Map();   // dedupe key → epoch ms
     this._suppressed = new Map();   // dedupe key → count suppressed since
     this._sentTimes = [];           // epoch ms of recent sends, for the hourly cap
+  }
+
+  /**
+   * Supply a function returning { venueName, deviceName, ownerEmail } — the
+   * venue this appliance sits in, for the subject line and the body.
+   *
+   * A function, not a value, because registration can happen (or change) long
+   * after boot: an alert sent at 09:00 should carry whatever the device knew at
+   * 09:00, not whatever it knew when the process started. It is called inside a
+   * try/catch on every send, so a broken provider costs the identity, not the
+   * alert.
+   */
+  setIdentity(fn) {
+    this._identity = fn;
+  }
+
+  /** Current identity, falling back to the hostname alone. */
+  _who() {
+    let info = {};
+    try {
+      if (this._identity) info = this._identity() || {};
+    } catch (e) {
+      console.warn("📧 Alert identity lookup failed:", e.message);
+    }
+    const device = (info.deviceName || "").trim() || this.deviceName;
+    const venue = (info.venueName || "").trim();
+    return {
+      device,
+      venue,
+      owner: (info.ownerEmail || "").trim(),
+      // "Venue — device" is what an operator with several venues needs to see
+      // first in a full inbox; unregistered devices still get their hostname.
+      label: venue ? `${venue} — ${device}` : device,
+    };
   }
 
   /** What this provider still needs, or "" when it has everything. */
@@ -194,21 +231,24 @@ class AlertMailer {
       this._lastSentAt.set(dedupeKey, now);
       this._sentTimes.push(now);
 
-      const body = this._composeBody({ eventClass, detail, suppressedCount, since: last });
-      this._deliver(`[${this.deviceName}] ${subject}`, body, 0);
+      const who = this._who();
+      const body = this._composeBody({ eventClass, detail, suppressedCount, since: last, who });
+      this._deliver(`[${who.label}] ${subject}`, body, 0);
     } catch (e) {
       console.warn("📧 Alert failed to queue:", e.message);
     }
   }
 
-  _composeBody({ eventClass, detail, suppressedCount, since }) {
+  _composeBody({ eventClass, detail, suppressedCount, since, who }) {
     const lines = [];
     if (detail) lines.push(detail, "");
     if (suppressedCount > 0) {
       lines.push(`(${suppressedCount} more like this were suppressed since ` +
                  `${new Date(since).toLocaleString()})`, "");
     }
-    lines.push(`Device:  ${this.deviceName}`);
+    if (who.venue) lines.push(`Venue:   ${who.venue}`);
+    lines.push(`Device:  ${who.device}`);
+    if (who.owner) lines.push(`Owner:   ${who.owner}`);
     lines.push(`Event:   ${eventClass}`);
     lines.push(`Time:    ${new Date().toLocaleString()}`);
     const ips = [];
