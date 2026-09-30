@@ -2013,7 +2013,7 @@ startStreamBtn.addEventListener("click", async () => {
       bitrate: parseInt(streamBitrate.value),
       audioEnabled: audioEnabledCheckbox.checked,
       audioSource: audioSourceTypeSelect ? audioSourceTypeSelect.value : "video",
-      audioDevice: audioDeviceSelect ? audioDeviceSelect.value : "",
+      audioDevice: currentAudioDevice(),
       audioOffset: audioOffsetInput ? parseInt(audioOffsetInput.value, 10) || 0 : 0,
       width: resW,
       height: resH,
@@ -2036,7 +2036,7 @@ startStreamBtn.addEventListener("click", async () => {
       bitrate: parseInt(streamBitrate.value),
       audioEnabled: audioEnabledCheckbox.checked,
       audioSource: audioSourceTypeSelect ? audioSourceTypeSelect.value : "video",
-      audioDevice: audioDeviceSelect ? audioDeviceSelect.value : "",
+      audioDevice: currentAudioDevice(),
       audioOffset: audioOffsetInput ? parseInt(audioOffsetInput.value, 10) || 0 : 0,
       width: resW,
       height: resH,
@@ -4021,6 +4021,20 @@ function updateAudioDeviceRowVisibility() {
   }
 }
 
+/**
+ * The audio device to send with a start/restart.
+ *
+ * The <select> reads "" until loadAudioDevices() has populated it, so reading
+ * .value directly would send an empty audioDevice on every start from a freshly
+ * loaded page — silently wiping the saved device server-side.  dataset.savedDevice
+ * holds what loadStreamConfig() read from the server, so fall back to that
+ * whenever the list has no real selection yet.
+ */
+function currentAudioDevice() {
+  if (!audioDeviceSelect) return "";
+  return audioDeviceSelect.value || audioDeviceSelect.dataset.savedDevice || "";
+}
+
 async function loadAudioDevices() {
   if (!audioDeviceSelect) return;
   audioDeviceSelect.innerHTML = "<option>Scanning…</option>";
@@ -4246,7 +4260,7 @@ async function saveFlipConfig() {
         bitrate:      parseInt(streamBitrate.value),
         audioEnabled: audioEnabledCheckbox ? audioEnabledCheckbox.checked : true,
         audioSource:  audioSourceTypeSelect ? audioSourceTypeSelect.value : "video",
-        audioDevice:  audioDeviceSelect ? audioDeviceSelect.value : "",
+        audioDevice:  currentAudioDevice(),
         audioOffset:  audioOffsetInput ? parseInt(audioOffsetInput.value, 10) || 0 : 0,
         width:        resW,
         height:       resH,
@@ -4507,8 +4521,14 @@ if (streamFramerate) {
   streamFramerate.addEventListener("change", applyBitrateOptions);
 }
 
-// Load stream config on page load
-loadStreamConfig();
+// Load stream config on page load, then populate the ALSA device list so the
+// saved audio device is visible as the selected option.  The scan is an ordinary
+// async fetch — it does not block page startup — and without it the dropdown sits
+// on its "Click 🔄 to load devices" placeholder after every reload, making a saved
+// device look unset.
+loadStreamConfig().then(() => {
+  if (audioDeviceSelect) loadAudioDevices();
+});
 
 // Fetch and display device IP address.
 // Prefers the Ethernet IP so the streaming URL (RTSP/SRT) always shows

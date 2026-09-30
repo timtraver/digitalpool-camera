@@ -584,10 +584,20 @@ class StreamController extends EventEmitter {
       // below pick it up without needing separate detection calls.
       // When detection fails (udevadm unavailable, unexpected sysfs layout),
       // the previously configured audioDevice is used as a fallback.
+      //
+      // Only when no device has been chosen.  For a USB input the UI hides the
+      // "Audio From" selector (audioSource stays "video") and offers the ALSA
+      // device picker instead — so the picker IS the user's choice, and
+      // re-detecting over it would discard it on every start.  An explicitly
+      // configured device is therefore left alone; "" keeps its documented
+      // meaning of "auto-detect at start".  A device that has gone stale (card
+      // renumbered, dongle unplugged) is still repaired downstream by the
+      // pre-spawn ALSA probe, which rescans on "No such file"/"Invalid card".
       if (
         this.streamConfig.audioEnabled &&
         this.streamConfig.audioSource !== "external" &&
-        this.inputSource.type === "usb"
+        this.inputSource.type === "usb" &&
+        !this.streamConfig.audioDevice
       ) {
         const detected = await this._detectAlsaForVideoDevice(this.cameraDevice);
         if (detected) {
