@@ -3372,9 +3372,12 @@ app.get("/api/audio/devices", requireAuth, async (req, res) => {
       const m = re.exec(line.trim());
       if (!m) continue;
       const [, card, cardName, device, devName] = m;
-      // Use plughw: instead of hw: so the ALSA plug layer handles rate/format
-      // conversion automatically.  This is essential for USB mics (e.g. OBSBOT
-      // Tiny SE) that only support 32000 Hz natively while ffmpeg requests 48000 Hz.
+      // Use plughw: instead of hw: so the ALSA plug layer handles format and
+      // channel conversion automatically (mono dongle → stereo, S16 → float).
+      // Note that plug does NOT rescue an unsupported *rate*: the hardware's
+      // advertised rate set is still enforced, which is why the capture rate is
+      // discovered per card in streamController._detectAlsaCaptureParams()
+      // rather than hardcoded.
       const hw = `plughw:${card},${device}`;
       const label = devName ? `${cardName} — ${devName} (${hw})` : `${cardName} (${hw})`;
       devices.push({ device: hw, name: label });
@@ -6509,6 +6512,34 @@ const _RESUME_BACKOFF_MS = [5000, 10000, 15000, 30000, 30000, 30000];
 const _streamResumeActive = { 1: false, 2: false };
 
 /**
+ * Wait until a stream is actually live, not merely spawned.
+ *
+ * startStream() resolves as soon as the child processes are running.  In hybrid
+ * ffmpeg mode isStreaming only flips ~2s later, when ffmpeg reports a connection
+ * — and a start that dies in between (bad ALSA rate, camera grabbed by something
+ * else) resolves `success: true` and then exits.  Treating that as a win made the
+ * auto-resume loop declare success, release its guard, and let the death event
+ * start a brand-new loop at attempt 1: the bounded 6-attempt backoff reset
+ * forever, restarting every ~15s instead of giving up and alerting.
+ *
+ * @param {number} camIdx Camera index (1 or 2)
+ * @param {number} timeoutMs How long to give the stream to report itself live
+ * @returns {Promise<boolean>} true once sc.isStreaming, false on timeout/death
+ */
+async function _waitForStreamLive(camIdx, timeoutMs = 15000) {
+  const sc = getSC(camIdx);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (sc.isStreaming) return true;
+    // A deliberate stop or a source switch landing mid-wait means this attempt is
+    // no longer ours to judge — bail out and let the caller's own guards decide.
+    if (sc._stopRequested) return false;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return sc.isStreaming;
+}
+
+/**
  * Attempt to bring a stream back after it died on its own (camera dropped off the
  * bus, encoder crash) rather than being stopped deliberately.
  *
@@ -6553,8 +6584,13 @@ async function _attemptStreamAutoResume(camIdx) {
         await _killIdlePreviewForCamera(camIdx);
         io.emit("streamStatus", { ...sc.getStatus(), status: "starting", cameraIndex: camIdx });
         const result = await sc.startStream();
-        started = result.success;
-        if (!started) console.warn(`⚠️  [Cam${camIdx}] Auto-resume attempt failed: ${result.error}`);
+        started = result.success && await _waitForStreamLive(camIdx);
+        if (!started) {
+          console.warn(
+            `⚠️  [Cam${camIdx}] Auto-resume attempt failed: ` +
+            (result.success ? "spawned but never went live" : result.error)
+          );
+        }
       } catch (err) {
         console.warn(`⚠️  [Cam${camIdx}] Auto-resume attempt threw: ${err.message}`);
       }

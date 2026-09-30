@@ -335,6 +335,99 @@ class StreamController extends EventEmitter {
   }
 
   /**
+   * Resolve an ALSA capture device string ("plughw:0,0", "hw:CARD=Device,DEV=0")
+   * to the sample rate and channel count ffmpeg should ask for.
+   *
+   * Why this is not a constant: the rate ffmpeg requests must be one the hardware
+   * actually offers.  ALSA's plug plugin resamples between *supported* rates, but
+   * `snd_pcm_hw_params` still returns EINVAL when the requested rate is outside
+   * the endpoint's advertised set — ffmpeg then reports
+   *   "cannot set parameters (Invalid argument)" → "Error opening input" → exit 251
+   * and, in hybrid mode, takes the whole stream down with it.  A hardcoded 32 kHz
+   * (the OBSBOT Tiny SE's native rate) does exactly that on a C-Media USB PnP
+   * dongle, which offers only 48000/44100.
+   *
+   * Reads /proc/asound/card<N>/stream0 — present for USB-Audio cards, which is
+   * what every mic on these builds is.  Returns null when the card is not a USB
+   * card or the file cannot be parsed; the caller then omits -ar/-ac and lets
+   * ffmpeg negotiate with the device.
+   *
+   * @param {string} device ALSA device string from streamConfig.audioDevice
+   * @returns {{rate: number, channels: number}|null}
+   */
+  _detectAlsaCaptureParams(device) {
+    try {
+      if (!device) return null;
+
+      // Card index: "plughw:0,0" / "hw:1" give it directly; "hw:CARD=Device"
+      // needs a name lookup in /proc/asound/cards ("  0 [Device         ]: ...").
+      let cardIdx = null;
+      const byNum = device.match(/^(?:plug)?hw:(\d+)/);
+      if (byNum) {
+        cardIdx = byNum[1];
+      } else {
+        const byName = device.match(/CARD=([^,\s]+)/);
+        if (byName) {
+          const cards = fs.readFileSync("/proc/asound/cards", "utf8");
+          const escaped = byName[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const m = cards.match(
+            new RegExp(`^\\s*(\\d+)\\s+\\[${escaped}\\s*\\]`, "m")
+          );
+          if (m) cardIdx = m[1];
+        }
+      }
+      if (cardIdx === null) return null;
+
+      const streamFile = `/proc/asound/card${cardIdx}/stream0`;
+      if (!fs.existsSync(streamFile)) return null;
+
+      // The file lists Playback: and Capture: sections, each with one block per
+      // USB altsetting.  Take the Capture section only — a headset's playback
+      // endpoint often supports rates its mic does not.
+      const text = fs.readFileSync(streamFile, "utf8");
+      const capture = text.split(/^Capture:$/m)[1];
+      if (!capture) return null;
+      const section = capture.split(/^Playback:$/m)[0];
+
+      const rates = new Set();
+      for (const line of section.split("\n")) {
+        const m = line.match(/^\s*Rates:\s*(.+)$/);
+        if (!m) continue;
+        // "48000, 44100" (discrete) or "8000 - 48000" (continuous range)
+        const range = m[1].match(/^(\d+)\s*-\s*(\d+)$/);
+        if (range) {
+          // Continuous: anything in [lo, hi] is legal, so keep our preference.
+          const [lo, hi] = [Number(range[1]), Number(range[2])];
+          for (const r of [48000, 44100, 32000]) if (r >= lo && r <= hi) rates.add(r);
+          rates.add(hi);
+        } else {
+          for (const r of m[1].split(/[,\s]+/)) if (/^\d+$/.test(r)) rates.add(Number(r));
+        }
+      }
+      let channels = 0;
+      for (const line of section.split("\n")) {
+        const m = line.match(/^\s*Channels:\s*(\d+)/);
+        if (m) channels = Math.max(channels, Number(m[1]));
+      }
+      if (rates.size === 0) return null;
+
+      // 48 kHz first: it is what the AAC encoder resamples to anyway
+      // (-af aresample=48000), so picking it avoids a conversion entirely.
+      const rate = [48000, 44100, 32000].find((r) => rates.has(r))
+        || Math.max(...rates);
+
+      // A "plughw:" device converts channel counts for us (mono mic → stereo,
+      // or a downmix), so asking for 2 is always safe there and gives every
+      // destination the stereo track it expects.  A raw "hw:" device does no
+      // conversion and must be asked for exactly what it has.
+      const isPlug = /^plug/.test(device);
+      return { rate, channels: isPlug ? 2 : (channels || 2) };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /**
    * Given a V4L2 video device path (e.g. /dev/video0), locate the ALSA capture
    * device that shares the same USB bus port and return its plughw: string.
    *
@@ -537,6 +630,10 @@ class StreamController extends EventEmitter {
       // Python script had already been spawned, so GStreamer's alsasrc lost the race.
       let _preProbeAudioDevice = this.streamConfig.audioDevice || "plughw:2,0";
       let _preProbeAudioDeviceBusy = false;
+      // Sample rate / channel count ffmpeg will ask this device for — discovered,
+      // never assumed.  See _detectAlsaCaptureParams(); null means "let ffmpeg
+      // negotiate" (non-USB card, or /proc layout we do not recognise).
+      let _preProbeAudioParams = null;
       // RTSP-protocol streams ALSO use the ffmpeg hybrid path when audioSource
       // is "video" on a USB cam (see useFfmpegAudio below), so the probe must
       // run for them too — otherwise a missing audioDevice goes straight to
@@ -578,6 +675,21 @@ class StreamController extends EventEmitter {
                   this.streamConfig.audioDevice = detected;
                 }
               }
+            }
+            // Read the final device's real capabilities — this runs for the
+            // fallback device too, so the rate always matches the card we ended
+            // up with rather than the one that was configured.
+            _preProbeAudioParams = this._detectAlsaCaptureParams(_preProbeAudioDevice);
+            if (_preProbeAudioParams) {
+              console.log(
+                `🎤 [Cam${this.streamId}] ALSA capture params for "${_preProbeAudioDevice}": ` +
+                `${_preProbeAudioParams.rate} Hz, ${_preProbeAudioParams.channels} ch`
+              );
+            } else {
+              console.log(
+                `🎤 [Cam${this.streamId}] Could not read capture params for "${_preProbeAudioDevice}" — ` +
+                `letting ffmpeg negotiate the rate`
+              );
             }
             resolve();
           });
@@ -817,10 +929,17 @@ class StreamController extends EventEmitter {
             // aresample=async=10000 below handles any residual USB clock rate drift.
             ...(audioOffsetSec !== 0 ? ["-itsoffset", String(audioOffsetSec)] : []),
             "-f", "alsa",
-            // Capture at the OBSBOT's confirmed native rate (32 kHz, S16_LE stereo).
-            // Specifying it explicitly avoids negotiation uncertainty.
-            "-ar", "32000",
-            "-ac", "2",
+            // Capture at the rate the card actually advertises, discovered by the
+            // pre-spawn probe.  Do NOT hardcode one here: ALSA rejects an
+            // unsupported rate outright (EINVAL) even through plughw, ffmpeg exits
+            // 251, and in hybrid mode that kills the whole stream.  The OBSBOT
+            // Tiny SE runs at 32 kHz; a C-Media USB PnP dongle offers only
+            // 48000/44100 and dies on 32 kHz.  When the probe could not read the
+            // card, omit both flags and let ffmpeg negotiate with the device.
+            ...(_preProbeAudioParams
+              ? ["-ar", String(_preProbeAudioParams.rate),
+                 "-ac", String(_preProbeAudioParams.channels)]
+              : []),
             // Large input queue: ALSA delivers audio in potentially uneven bursts
             // (especially after long runtimes when the USB oscillator has drifted).
             // A deep queue prevents ffmpeg from stalling its read thread while the
