@@ -6540,6 +6540,39 @@ async function _waitForStreamLive(camIdx, timeoutMs = 15000) {
 }
 
 /**
+ * Wait out a resume backoff — but no longer than it takes an absent camera to return.
+ *
+ * The backoff schedule is a guess at how long a re-enumerating camera needs; the
+ * device node reappearing is the real signal that a restart can succeed.  Sleeping
+ * the window blind lands the restart up to a full step late (5s in the observed
+ * drop), so when the node is missing we poll for it and go the moment it is back.
+ *
+ * Only the absent case is accelerated.  If the device is already there the failure
+ * was the pipeline, not the bus, and the full spacing is kept — otherwise a
+ * pipeline that dies on contact would burn all six attempts in seconds instead of
+ * over ~2 minutes, and give up long before a person could notice.
+ *
+ * @param {number} camIdx Camera index (1 or 2)
+ * @param {number} backoffMs Longest time to wait
+ */
+async function _awaitResumeBackoff(camIdx, backoffMs) {
+  const source = getActiveSource(camIdx);
+  const dev = source.type === "usb" ? (source.device || getSC(camIdx).cameraDevice) : null;
+
+  // No node to watch (non-USB source), or the camera never left — wait it out.
+  if (!dev || fsSync.existsSync(dev)) {
+    await new Promise((r) => setTimeout(r, backoffMs));
+    return;
+  }
+
+  const deadline = Date.now() + backoffMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, Math.min(250, deadline - Date.now())));
+    if (fsSync.existsSync(dev)) return;   // back early — stop waiting
+  }
+}
+
+/**
  * Attempt to bring a stream back after it died on its own (camera dropped off the
  * bus, encoder crash) rather than being stopped deliberately.
  *
@@ -6555,7 +6588,7 @@ async function _attemptStreamAutoResume(camIdx) {
 
   try {
     for (let attempt = 0; attempt < _RESUME_BACKOFF_MS.length; attempt++) {
-      await new Promise((r) => setTimeout(r, _RESUME_BACKOFF_MS[attempt]));
+      await _awaitResumeBackoff(camIdx, _RESUME_BACKOFF_MS[attempt]);
 
       // Bail on anything that means we no longer own this decision: the operator
       // started or stopped it themselves, a source switch is running, or the slot
@@ -6651,6 +6684,37 @@ async function _handleStreamStopped(camIdx) {
     console.log(`ℹ️  [Cam${camIdx}] Stream stopped, remote overlay active — keeping refresh`);
   }
 
+  // The stream died without anyone asking it to — the camera dropped off the bus
+  // or the pipeline crashed.  Go straight at the restart and skip the idle preview
+  // below: it wants the very camera we are about to reclaim, and while the device
+  // is absent every step of it is guaranteed to fail — the settle delay, a preview
+  // that cannot open a missing node, then a 5s wait for an RTMP publisher that
+  // never appears.  That sequence ran to completion before the first resume attempt
+  // and put ~13s on the critical path: long enough to hide a camera that had
+  // already come back, so recovery took ~21s no matter how fast it returned.  The
+  // resume loop restores the preview itself between attempts and after it gives
+  // up, so leaving it out here loses nothing.
+  //
+  // Deliberate stops (_stopRequested) keep the old path: there the preview IS the
+  // intended end state, and its delay exists to outlast stopStream()'s own 2000ms
+  // + _killCameraProcesses() + 500ms, which races this handler.  That race belongs
+  // to that path alone — on an unexpected stop the GStreamer 'close' handler has
+  // already awaited its cleanup before emitting 'stopped'.
+  //
+  // Not awaited: the resume loop runs for up to ~2 minutes and must not block.
+  if (!sc._stopRequested) {
+    console.warn(`⚠️  [Cam${camIdx}] Stream stopped unexpectedly — attempting auto-resume`);
+    alerts.sendAlert({
+      eventClass: "stream",
+      subject: `Camera ${camIdx} stream stopped unexpectedly`,
+      detail: "Nobody asked it to stop — the pipeline died on its own. Auto-resume is " +
+              "trying to bring it back; a follow-up will say whether it worked.",
+      key: `stream-unexpected-${camIdx}`,
+    });
+    _attemptStreamAutoResume(camIdx);
+    return;
+  }
+
   console.log(`📹 [Cam${camIdx}] Stream stopped — restarting persistent idle preview...`);
   // USB cameras need 3500ms: stopStream() calls _killCameraProcesses() ~2000ms after
   // the GStreamer close event fires _handleStreamStopped(). Without enough delay the
@@ -6666,22 +6730,6 @@ async function _handleStreamStopped(camIdx) {
     console.warn(`⚠️  [Cam${camIdx}] Idle preview RTMP publisher not ready after ${idleTimeoutMs / 1000}s — clients will retry`);
   }
   io.emit("refreshIdlePreview", { cameraIndex: camIdx });
-
-  // The stream died without anyone asking it to — the camera dropped off the bus
-  // or the pipeline crashed.  Try to bring it back.  Deliberate stops set
-  // _stopRequested and are left alone.  Not awaited: the resume loop runs for up
-  // to ~2 minutes and must not block this handler.
-  if (!sc._stopRequested) {
-    console.warn(`⚠️  [Cam${camIdx}] Stream stopped unexpectedly — attempting auto-resume`);
-    alerts.sendAlert({
-      eventClass: "stream",
-      subject: `Camera ${camIdx} stream stopped unexpectedly`,
-      detail: "Nobody asked it to stop — the pipeline died on its own. Auto-resume is " +
-              "trying to bring it back; a follow-up will say whether it worked.",
-      key: `stream-unexpected-${camIdx}`,
-    });
-    _attemptStreamAutoResume(camIdx);
-  }
 }
 
 // When stream stops, restart the persistent idle preview and manage Puppeteer refresh
