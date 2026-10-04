@@ -36,6 +36,46 @@ proc_vsz_mb() {
     [ -z "$kb" ] && echo "-" || echo $(( kb / 1024 ))
 }
 
+# ── Helper: temperature in C for the thermal zone of a given type ────────────
+# Zone *indices* are not stable across boards, so always look a zone up by its
+# type (x86_pkg_temp = CPU package, acpitz = board/ambient) rather than by number.
+zone_temp_c() {
+    local want="$1" z m
+    for z in /sys/class/thermal/thermal_zone*; do
+        if [ "$(cat "$z/type" 2>/dev/null)" = "$want" ]; then
+            m=$(cat "$z/temp" 2>/dev/null)
+            [ -n "$m" ] && { echo $(( m / 1000 )); return; }
+        fi
+    done
+    echo "-"
+}
+
+# ── Helper: thermal-throttle events per second since the PREVIOUS sample ─────
+# package_throttle_count is cumulative since boot, which hides WHEN throttling
+# started: a box that spent one hot afternoon at its limit reads the same days
+# later as one that is throttling right now.  Only the per-sample delta shows a
+# box crossing into sustained thermal limiting, which is the thing worth seeing
+# in the minutes before a reset.  Keep the baseline next to the migration state
+# so it survives log rotation.
+THROTTLE_STATE=/var/lib/digitalpool-camera/last-throttle
+throttle_rate() {
+    local now ts prev_c prev_t
+    now=$(cat /sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count 2>/dev/null)
+    [ -z "$now" ] && { echo "-"; return; }
+    ts=$(date +%s)
+    if [ -r "$THROTTLE_STATE" ]; then
+        read -r prev_c prev_t < "$THROTTLE_STATE" 2>/dev/null || true
+    fi
+    mkdir -p "$(dirname "$THROTTLE_STATE")" 2>/dev/null
+    echo "$now $ts" > "$THROTTLE_STATE" 2>/dev/null
+    # No baseline yet (first sample after a boot or a lost state file).
+    if [ -z "${prev_c:-}" ] || [ -z "${prev_t:-}" ] || [ "$ts" -le "${prev_t:-0}" ] || [ "$now" -lt "${prev_c:-0}" ]; then
+        echo "?"
+        return
+    fi
+    echo $(( (now - prev_c) / (ts - prev_t) ))
+}
+
 # ── Helper: first PID whose full cmdline contains the pattern ─────────────────
 find_pid() { pgrep -f "$1" 2>/dev/null | head -1; }
 
@@ -88,6 +128,11 @@ log_proc_all() {
     # ── Cgroup memory for the whole service ───────────────────────────────────
     systemctl status digitalpool-camera 2>/dev/null \
         | awk '/Memory:/ { printf "  CGROUP      %s\n", $0 }'
+
+    # ── Thermal / CPU throttling ──────────────────────────────────────────────
+    printf "  THERMAL      pkg=%-4s board=%-4s throttle=%-5s load=%s\n" \
+        "$(zone_temp_c x86_pkg_temp)C" "$(zone_temp_c acpitz)C" \
+        "$(throttle_rate)/s" "$(cut -d' ' -f1-3 /proc/loadavg)"
 
     # ── Per-process RSS / VSZ ─────────────────────────────────────────────────
     log_proc "node"        "node server.js"
