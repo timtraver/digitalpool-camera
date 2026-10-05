@@ -43,12 +43,15 @@ this normally happens automatically. If it does not:
 1. Plug the USB stick into the unit.
 2. Connect a monitor (HDMI) — you need it to read the result screen.
 3. Power the unit on.
-4. A boot menu appears with a **15-second countdown**. Do nothing; it starts on
-   its own.
-5. Progress is shown on screen. Typical time is **5–15 minutes**, depending on the
+4. A boot menu appears. **Press nothing.** It starts on its own after a short
+   countdown.
+5. A message offers **10 seconds to stop**. Press nothing here either — pressing a
+   key cancels the installation on purpose, so that the stick can be used on a
+   machine that is not meant to be erased.
+6. Progress is shown on screen. Typical time is **5–15 minutes**, depending on the
    unit's disk.
-6. The unit **powers itself off** when it is done.
-7. Remove the USB stick. The unit is installed.
+7. The unit **powers itself off** when it is done.
+8. Remove the USB stick. The unit is installed.
 
 Move the stick to the next unit and repeat. Nothing needs to be reset between
 units.
@@ -68,9 +71,15 @@ The unit stays on with the message displayed. **Set the unit aside.** Photograph
 or write down the message under the heading and report it. Then power the unit off
 by holding the power button.
 
-**Anything else** — for example, the unit shows an Ubuntu installer asking
-questions, or a boot menu that never advances, or it never powers off — treat it
-as a failure: set the unit aside and report what the screen shows.
+**Yellow — `⏸ STOPPED — nothing on this unit has been changed`**
+A key was pressed during the 10-second window. Nothing was installed and nothing
+was damaged. Power the unit off (hold the power button) and start again from
+step 1, this time without touching the keyboard.
+
+**Anything else** — for example, the unit shows an Ubuntu installer asking for a
+language, a name or a password, or a boot menu that never advances, or it never
+powers off — treat it as a failure: set the unit aside and report what the screen
+shows.
 
 ## Common causes of a red screen
 

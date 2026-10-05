@@ -96,31 +96,42 @@ Bake everything into **one bootable `.iso`** — the Ubuntu live environment, yo
 image, the restore scripts, and the flashing tools as offline `.deb`s — so the
 target needs **no network** and there is nothing else to copy.
 
-**The ISO installs itself.** Its boot menu's default entry is
-`DigitalPool Camera — AUTOMATIC INSTALL`, which starts after a **15-second
-countdown**, images the internal disk, and powers the unit off. That removes the
-step where a person had to intercept the Ubuntu installer and run a script by
-hand. The menu still offers:
+**The ISO installs itself — from any boot entry.** Boot it, touch nothing, and the
+unit images its internal disk and powers off. That removes the step where a person
+had to intercept the Ubuntu installer and run a script by hand.
 
-| Entry | Does |
-|-------|------|
-| `AUTOMATIC INSTALL` (default, 15s) | unattended: pick disk → flash → verify → power off |
-| `manual restore shell` | boots the live environment and erases nothing until you run `dp-flash.sh` |
-| the stock Ubuntu entries | untouched |
+How it works, in order of what actually carries the install:
 
-How it works: the automatic entry adds `autoinstall ds=nocloud\;s=file:///cdrom/dp/seed/`
-to the kernel command line. The seed's `early-commands` runs
-`dp-factory-install.sh` — which subiquity executes *before it probes or touches any
-block device* — and that script never returns (it powers the unit off), so the
-Ubuntu install that would otherwise follow never happens. As a backstop the seed
-marks `storage` as an interactive section: if the flasher ever did return, the
-installer stops at a screen waiting for a human instead of installing Ubuntu over
-the fresh clone.
+1. **`/autoinstall.yaml` at the root of the ISO.** subiquity looks for autoinstall
+   config in four places and the root of the installation medium is one of them, so
+   this is found **whichever entry boots, with nothing on the kernel command line**.
+   Its `early-commands` runs `dp-factory-install.sh`, which subiquity executes
+   *before it probes or touches any block device*, and that script never returns
+   (it powers the unit off) — so the Ubuntu install that would otherwise follow
+   never happens.
+2. **The boot menu** adds a labelled `AUTOMATIC INSTALL` default with a 15-second
+   countdown, a `manual restore shell` entry (which passes `dp.manual`), and the
+   `dp.*` overrides below. This part is a convenience: if the replaced `grub.cfg`
+   is not the config the firmware reads — which is what happened on the first
+   factory ISO, where the menu came up stock — the install still runs unattended
+   from (1), just on Ubuntu's own 30-second timeout. The builder reads the file
+   back out of the finished ISO and says which of the two you got.
+
+Two backstops, because every boot of this medium erases a disk:
+
+- A **10-second abort window** at the start of `dp-factory-install.sh`: press any
+  key and it stands down without touching the disk, handing the machine to the
+  Ubuntu installer (Ctrl+Alt+F2 for the manual flow). `dp.manual` skips the wait.
+  The factory simply lets it elapse.
+- The autoinstall config marks `storage` as an **interactive section**: if the
+  flasher ever did return, the installer stops at a screen waiting for a human
+  instead of installing Ubuntu over the fresh clone.
 
 Kernel command-line overrides, if a unit needs one (press `e` on the menu entry):
 
 | Option | Effect |
 |--------|--------|
+| `dp.manual` | don't install; hand the machine straight to the Ubuntu installer |
 | `dp.disk=/dev/nvme0n1` | flash this disk instead of auto-selecting |
 | `dp.end=reboot` / `dp.end=halt` | reboot, or stay powered on, instead of powering off |
 | `dp.tty=4` | show progress on a different virtual console |
@@ -167,9 +178,11 @@ whenever you make a new golden image.
 ### Before handing an ISO to the factory
 
 Flash it and run **one** unit end to end (§"Caveats / validation"). The failure
-mode to watch for is the unit sitting in the ordinary Ubuntu installer instead of
-flashing: that means the autoinstall seed was not picked up, and nothing will have
-been erased.
+mode to watch for is the unit sitting in the ordinary Ubuntu installer asking for
+a language or a username instead of flashing: that means the autoinstall config
+was not picked up at all, and nothing will have been erased. A *stock-looking boot
+menu* on its own is not that failure — check the builder's verification lines, and
+see whether the install starts by itself after Ubuntu's own 30-second timeout.
 
 ### Alternative: plain boot stick + separate image drive
 
@@ -273,7 +286,9 @@ the WiFi AP profile, and the systemd hardening.
      every shipped unit carries.
   4. Check the *manual* entry still works too, since field recovery depends on it.
 
-  The failure mode worth rehearsing is the autoinstall seed not being picked up
-  (cloud-init has changed its NoCloud seed handling before): the unit then sits in
-  the ordinary Ubuntu installer and nothing is erased — safe, but useless on a
-  factory line, and it needs a rebuilt ISO rather than a factory workaround.
+  The first ISO built this way did hit the failure worth rehearsing: it booted a
+  **stock GRUB menu**, so nothing we put on the kernel command line reached
+  subiquity and the unit sat in the interactive installer. Nothing was erased. The
+  fix was to stop depending on the boot menu at all — `/autoinstall.yaml` at the
+  ISO root is found whichever entry boots — and to have the builder read both files
+  back out of the finished ISO and report which mechanism you actually got.

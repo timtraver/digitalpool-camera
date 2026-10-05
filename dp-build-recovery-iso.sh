@@ -105,6 +105,29 @@ autoinstall:
 SEED_EOF
 : > "$PAYLOAD/seed/meta-data"      # NoCloud requires the file to exist, empty is fine
 
+# The SAME config at the ISO root, which is what actually makes this work.
+# subiquity looks for autoinstall config in four places, and the root of the
+# installation medium is one of them — no kernel command line involved. That
+# matters because the first factory ISO booted with a stock GRUB menu (our
+# replacement grub.cfg was not the config the firmware read), so nothing on the
+# kernel command line reached subiquity and it ran the interactive installer.
+# This file is found whichever menu entry boots, including Ubuntu's own.
+#
+# Bare format (no top-level `autoinstall:` key) — that is what the media path has
+# always accepted, in every subiquity version.
+#
+# Missing the `autoinstall` kernel argument only means subiquity would ask for
+# confirmation *before writing to disks*; early-commands run long before that
+# gate, and ours never comes back, so the prompt is never reached.
+cat > "$WORK/autoinstall.yaml" <<'AUTO_EOF'
+# DigitalPool Camera — unattended install. See FACTORY_INSTALL.md.
+version: 1
+interactive-sections:
+  - storage
+early-commands:
+  - /bin/bash /cdrom/dp/dp-factory-install.sh
+AUTO_EOF
+
 cat > "$PAYLOAD/dp-flash.sh" <<PAYLOAD_EOF
 #!/bin/bash
 # Auto-generated flash wrapper — run this from the Ubuntu Server installer shell:
@@ -140,7 +163,10 @@ AUTOMATIC (what the factory does)
   No network, no keyboard, no typing.
 
 MANUAL (field recovery)
-  1. At the GRUB menu pick "manual restore shell" (or any stock Ubuntu entry).
+  EVERY entry on this medium installs automatically, so stop it first:
+  1. Boot it and PRESS ANY KEY during the 10-second abort window
+     ("Press any key within 10 seconds to STOP"). If the boot menu offers
+     "manual restore shell", pick that instead and no key is needed.
   2. Get a root shell: Ctrl+Alt+F2, OR the installer's Help → Enter shell.
   3. Run:  bash /cdrom/dp/dp-flash.sh
   4. Type ERASE when prompted and pick the internal disk.
@@ -202,7 +228,7 @@ menuentry 'DigitalPool Camera — AUTOMATIC INSTALL (erases the internal disk)' 
 
 menuentry 'DigitalPool Camera — manual restore shell (erases nothing by itself)' --id dp-manual {
 	set gfxpayload=keep
-	linux	${KPATH} ${KARGS} ---
+	linux	${KPATH} ${KARGS} dp.manual ---
 	initrd	${IPATH}
 }
 
@@ -227,8 +253,31 @@ xorriso -indev "$UBUNTU_ISO" -outdev "$OUT" \
     -overwrite on \
     -map "$PAYLOAD" /dp \
     -map "$IMAGE" "/dp/$IMG_BASE" \
+    -map "$WORK/autoinstall.yaml" /autoinstall.yaml \
     "${GRUB_MAP[@]}" \
     || fatal "xorriso failed"
+
+# ── 4. Verify what actually landed on the ISO ───────────────────────────────────
+# The first factory ISO looked fine and booted a stock menu. Read the files back
+# out of the finished image rather than trusting that the maps took.
+step "Verifying the built ISO"
+CHK="$WORK/check"; mkdir -p "$CHK"
+xorriso -osirrox on -indev "$OUT" -extract /autoinstall.yaml "$CHK/autoinstall.yaml" >/dev/null 2>&1 || true
+if grep -q 'dp-factory-install.sh' "$CHK/autoinstall.yaml" 2>/dev/null; then
+    info "autoinstall.yaml is on the ISO root — this is what makes the install unattended"
+else
+    fatal "autoinstall.yaml did not land on the ISO — the result would NOT install itself"
+fi
+if $AUTO_INSTALL; then
+    xorriso -osirrox on -indev "$OUT" -extract /boot/grub/grub.cfg "$CHK/grub.cfg" >/dev/null 2>&1 || true
+    if grep -q 'dp-auto' "$CHK/grub.cfg" 2>/dev/null; then
+        info "Boot menu carries the automatic entry (15s countdown)"
+    else
+        warn "the ISO's /boot/grub/grub.cfg was NOT replaced — the menu will look stock."
+        warn "Harmless: the install still runs unattended from autoinstall.yaml, just on"
+        warn "Ubuntu's own 30s timeout and without the dp.disk= / dp.manual overrides."
+    fi
+fi
 
 rm -rf "$WORK"
 echo ""

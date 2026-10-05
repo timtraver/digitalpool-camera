@@ -22,7 +22,15 @@
 # forever — on success while the machine powers off, on failure so the red
 # screen stays up for the operator.
 #
+# It is reached from EVERY entry in the boot menu, including Ubuntu's own, because
+# subiquity finds /autoinstall.yaml at the root of the installation medium without
+# anything on the kernel command line.  That is deliberate — the first factory ISO
+# booted a stock GRUB menu, nothing on the command line reached subiquity, and the
+# unit sat in the interactive installer.  The ten-second abort window below is what
+# keeps the medium usable on a machine you only meant to look at.
+#
 # Kernel command-line overrides (add them in the GRUB menu with `e`):
+#   dp.manual              don't install; hand the machine to the Ubuntu installer
 #   dp.disk=/dev/nvme0n1   flash this disk instead of auto-selecting
 #   dp.end=reboot|halt     reboot, or stay on, instead of powering off
 #   dp.tty=4               use a different console for the progress display
@@ -80,11 +88,41 @@ die() {
     sleep infinity
 }
 
+# Stand down without touching the disk.  Unlike die() this RETURNS, handing the
+# machine back to the Ubuntu installer — which stops at its storage screen, where
+# Ctrl+Alt+F2 gets the shell the manual restore flow needs.
+bail() {
+    banner "$YEL" \
+        "⏸  STOPPED — nothing on this unit has been changed" \
+        "" \
+        "Reason: $1" \
+        "" \
+        "The Ubuntu installer is on Ctrl+Alt+F1. For a manual restore:" \
+        "  Ctrl+Alt+F2  →  bash /cdrom/dp/dp-flash.sh"
+    # Stay on this VT so the message is readable; the operator switches when ready.
+    exit 0
+}
+
 banner "$CYN" \
     "DigitalPool Camera — automatic factory install" \
     "" \
     "This unit is being imaged. It will power itself off when done." \
     "Do not unplug it. Started ${START_TS}."
+
+# ── 0. Abort window ─────────────────────────────────────────────────────────────
+# Every boot of this medium installs, so give a human ten seconds to say no.
+# The factory touches nothing and this simply elapses.
+# Bare token, so `dp.manual` and `dp.manual=1` both count.
+[[ " $CMDLINE " == *" dp.manual"* ]] && bail "dp.manual on the kernel command line"
+if [[ "$TTY" == /dev/tty[0-9]* && -r "$TTY" ]]; then
+    exec < "$TTY"
+    say ""
+    say "  ${YEL}Press any key within 10 seconds to STOP and leave this unit alone.${NC}"
+    if read -r -t 10 -n 1 _key 2>/dev/null; then
+        bail "a key was pressed during the 10-second abort window"
+    fi
+    say "  Nothing pressed — continuing."
+fi
 
 # ── 1. Flashing tools (offline, from the ISO) ───────────────────────────────────
 step "Installing bundled flashing tools (offline)"
