@@ -61,7 +61,12 @@ units.
 
 ## Reading the result
 
-The last screen before the unit powers off tells you whether the unit is good.
+**The simplest check, and the one to rely on: a unit that has POWERED ITSELF OFF
+passed. A unit still switched on did not.** You do not have to be watching at the
+right moment — a failed unit holds its message on screen indefinitely and never
+powers off, so it is still there when you come back.
+
+The last screen before the unit powers off says the same thing in words.
 
 **Green — `✔ INSTALL COMPLETE — this unit is ready to ship`**
 The unit powers off by itself a few seconds later. Remove the stick and box it.

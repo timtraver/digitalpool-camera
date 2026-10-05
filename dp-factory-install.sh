@@ -237,7 +237,7 @@ case "$END" in
     halt)   say "  dp.end=halt — holding here." ;;
     reboot) for i in 10 9 8 7 6 5 4 3 2 1; do say "  rebooting in ${i}…  REMOVE THE USB"; sleep 1; done
             systemctl reboot 2>/dev/null || reboot -f ;;
-    *)      for i in 5 4 3 2 1; do say "  powering off in ${i}…"; sleep 1; done
+    *)      for i in 10 9 8 7 6 5 4 3 2 1; do say "  powering off in ${i}…"; sleep 1; done
             systemctl poweroff 2>/dev/null || poweroff -f ;;
 esac
 
