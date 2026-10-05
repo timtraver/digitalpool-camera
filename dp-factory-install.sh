@@ -53,12 +53,34 @@ CMDLINE="$(cat /proc/cmdline 2>/dev/null || true)"
 cmdline_opt() {  # <key> → value, "" if absent
     grep -oE "(^| )$1=[^ ]+" <<<"$CMDLINE" | tail -n1 | cut -d= -f2-
 }
-VT="$(cmdline_opt dp.tty)"; [[ "$VT" =~ ^[0-9]+$ ]] || VT=3
+# VT 8, not 3: logind auto-starts a getty on any VT in 1..NAutoVTs (6 by default)
+# the moment that VT becomes active.  On the first run this painted "ubuntu login:"
+# over our progress mid-flash — the imaging carried on underneath, but the operator
+# had no way to tell, and the getty was also eating the keystrokes meant for the
+# abort window.  VT 8 is outside that range; mask the unit anyway in case a live
+# image is built with a larger NAutoVTs.
+VT="$(cmdline_opt dp.tty)"; [[ "$VT" =~ ^[0-9]+$ ]] || VT=8
 TTY="/dev/tty${VT}"
+systemctl stop "getty@tty${VT}.service" "autovt@tty${VT}.service" 2>/dev/null || true
+systemctl mask "getty@tty${VT}.service" "autovt@tty${VT}.service" 2>/dev/null || true
 [[ -w "$TTY" ]] || TTY="/dev/console"
 exec > >(tee -a "$LOG" > "$TTY") 2>&1
 chvt "$VT" 2>/dev/null || true
 printf '\033[2J\033[H' 2>/dev/null || true   # clear the screen we just took over
+
+# Hold the screen.  subiquity owns tty1 and pulls the console back when its UI
+# starts, which would hide everything below; re-assert our VT until we are done.
+# Needs fgconsole to know whether to act — without it we would fight an operator
+# who deliberately switched away, so we simply don't hold.
+VT_HOLD="/run/dp-vt-hold"
+vt_release() { rm -f "$VT_HOLD" 2>/dev/null || true; }
+if command -v fgconsole >/dev/null && command -v chvt >/dev/null; then
+    : > "$VT_HOLD"
+    ( while [[ -e "$VT_HOLD" ]]; do
+          [[ "$(fgconsole 2>/dev/null)" == "$VT" ]] || chvt "$VT" 2>/dev/null || true
+          sleep 5
+      done ) &
+fi
 
 say()  { echo -e "$*"; }
 step() { echo -e "\n${CYN}▶  $*${NC}"; }
@@ -85,6 +107,7 @@ die() {
         "Full log: ${LOG}  (Ctrl+Alt+F${VT} shows this screen)"
     say "  Started ${START_TS}, failed $(date -u +%Y-%m-%dT%H:%M:%SZ)."
     chvt "$VT" 2>/dev/null || true
+    vt_release          # stop re-asserting, so a tech can reach another console
     sleep infinity
 }
 
@@ -100,6 +123,7 @@ bail() {
         "The Ubuntu installer is on Ctrl+Alt+F1. For a manual restore:" \
         "  Ctrl+Alt+F2  →  bash /cdrom/dp/dp-flash.sh"
     # Stay on this VT so the message is readable; the operator switches when ready.
+    vt_release
     exit 0
 }
 
@@ -206,6 +230,7 @@ banner "$GRN" \
     "$NEXT"
 say "  Started ${START_TS}, finished $(date -u +%Y-%m-%dT%H:%M:%SZ)."
 chvt "$VT" 2>/dev/null || true
+vt_release
 sync
 
 case "$END" in

@@ -117,6 +117,15 @@ How it works, in order of what actually carries the install:
    from (1), just on Ubuntu's own 30-second timeout. The builder reads the file
    back out of the finished ISO and says which of the two you got.
 
+Progress is shown on **VT 8**, not on the installer's tty1. Deliberately above
+VT 6: logind auto-starts a getty on any VT in `1..NAutoVTs` as soon as that VT
+becomes active, and on the first run that painted `ubuntu login:` over the
+progress mid-flash — the imaging carried on underneath, but there was no way to
+tell from the screen, and the getty was eating the keystrokes meant for the abort
+window. The script also masks the getty unit for its VT and re-asserts the console
+every 5s while it works, because subiquity pulls the console back to tty1 when its
+UI starts.
+
 Two backstops, because every boot of this medium erases a disk:
 
 - A **10-second abort window** at the start of `dp-factory-install.sh`: press any
@@ -279,7 +288,7 @@ the WiFi AP profile, and the systemd hardening.
   that goes to an OEM who cannot debug it.** Flash the ISO to a stick and image one
   spare unit with nobody touching it, start to finish, before the stick ships:
   1. Boot it and don't press anything — the 15s countdown should start the
-     automatic entry, and progress should appear on screen (Ctrl+Alt+F3).
+     automatic entry, and progress should appear on screen (Ctrl+Alt+F8).
   2. It should end on the green `INSTALL COMPLETE` screen and power off by itself.
   3. Boot that unit and confirm `/var/lib/dp-image/factory-install.json` and
      `/var/log/dp-factory-install.log` are on it — that is the install record
