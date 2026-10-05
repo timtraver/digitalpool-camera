@@ -252,7 +252,9 @@ new `machine-id`, fresh SSH host keys, hostname `dp-stream-<last 4 of the primar
 identity, cleared app state, regenerated `SESSION_SECRET`, Ethernet → DHCP. It
 then disables itself and reboots into the finished unit. Log: `/var/log/dp-firstboot.log`.
 
-Then: connect to hotspot **DigitalPool-Camera** → `http://192.168.50.1:3000`,
+Then: connect to the unit's hotspot — the SSID is per-unit, **DigitalPool-XXXX**,
+where XXXX matches the hostname suffix (`dp-stream-b1b5` → `DigitalPool-B1B5`) —
+then `http://192.168.50.1:3000`,
 log in (`admin` / `Digitalpool`, forced password change), rename the device, and
 register it under Remote Access.
 

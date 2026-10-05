@@ -124,7 +124,10 @@ udevadm control --reload-rules || true
 cat > "$UNIT" <<'UNITEOF'
 [Unit]
 Description=Pin USB capture devices to power/control=on (anti-autosuspend)
-After=systemd-udev-settle.service multi-user.target
+# Must NOT be After=multi-user.target: this unit is WantedBy it and
+# digitalpool-camera.service is ordered after this one, which closes an ordering
+# cycle that systemd breaks by deleting a job — see migration 0017.
+After=systemd-udev-settle.service
 Before=digitalpool-camera.service
 
 [Service]
