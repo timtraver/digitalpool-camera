@@ -1948,8 +1948,9 @@ app.post("/api/camera/usb-reset", requireAuth, async (req, res) => {
 // ── System image (golden clone) API — dpadmin only ────────────────────────────
 // Captures a filesystem-level image of this device to a FILE on disk (see
 // dp-create-image.sh), which is then downloaded (resumable) and managed from the
-// UI. Flash onto a new device from a recovery USB with dp-restore.sh; sanitised
-// on first boot by dp-firstboot.sh. See SYSTEM_IMAGE.md.
+// UI. Bake it into a self-installing USB with dp-build-recovery-iso.sh (or flash
+// by hand with dp-restore.sh); sanitised on first boot by dp-firstboot.sh.
+// See SYSTEM_IMAGE.md and FACTORY_INSTALL.md.
 //
 // Requires NOPASSWD sudoers (see SYSTEM_IMAGE.md):
 //   dp ALL=(root) NOPASSWD: /usr/bin/bash /home/dp/digitalpool-camera/dp-create-image.sh *
@@ -2119,9 +2120,12 @@ app.delete("/api/system/image/file/:name", requireAdmin, (req, res) => {
   res.json({ success: true });
 });
 
-// Build an all-in-one bootable recovery ISO from a captured image (async job).
-// Automates: ensure Ubuntu base ISO (auto-download + cache), then run
-// dp-build-recovery-iso.sh. xorriso must be installed once: sudo apt install -y xorriso.
+// Build an all-in-one bootable install/recovery ISO from a captured image (async
+// job). The ISO's DEFAULT boot entry images a unit with no operator input at all
+// (that is what the OEM factory is shipped — see FACTORY_INSTALL.md); a manual
+// restore entry is still in its boot menu. Automates: ensure Ubuntu base ISO
+// (auto-download + cache), then run dp-build-recovery-iso.sh. xorriso must be
+// installed once: sudo apt install -y xorriso.
 const ISO_BUILDER = path.join(__dirname, "dp-build-recovery-iso.sh");
 app.post("/api/system/image/build-iso", requireAdmin, async (req, res) => {
   if (!isDpAdmin(req, res)) return;

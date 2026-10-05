@@ -117,5 +117,8 @@ serves SRT on **8891**, camera 2 on **8892**.
 
 `README.md` is a ~95KB step-by-step device provisioning guide (OS install → drivers → service).
 `STREAMING_ARCHITECTURE.md`, `SRT_SETUP_GUIDE.md`, `OBS_SETUP_GUIDE.md`, `DEPLOY_GRAPHICS.md`
-cover streaming/receiver setup. `.sh`/`.service`/`.timer`/`.rules` files at the repo root are
+cover streaming/receiver setup. `SYSTEM_IMAGE.md` covers golden-image capture and the
+self-installing USB built from it (`dp-create-image.sh` → `dp-build-recovery-iso.sh` →
+`dp-factory-install.sh` → `dp-restore.sh` → `dp-firstboot.sh`); `FACTORY_INSTALL.md` is the
+operator-facing copy of that flow written for the OEM factory, not for us. `.sh`/`.service`/`.timer`/`.rules` files at the repo root are
 device provisioning artifacts (hotspot, network watchdog, camera monitor, device reset).

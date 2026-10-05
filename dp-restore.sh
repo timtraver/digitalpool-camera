@@ -11,9 +11,15 @@
 # cross-arch flash will not boot.  This script refuses a mismatch.
 #
 # Usage:
-#   sudo bash dp-restore.sh <image.tar.zst> [/dev/target-disk]
+#   sudo bash dp-restore.sh [--yes] [--auto] <image.tar.zst> [/dev/target-disk]
 #
 # With no target disk, it lists candidates and prompts.
+#
+#   --yes    don't ask for the typed ERASE confirmation
+#   --auto   fully unattended: --yes, and pick the target disk automatically when
+#            none was given.  Used by the factory auto-install ISO
+#            (dp-factory-install.sh); every prompt would otherwise hang a box
+#            that nobody is sitting in front of.
 
 set -uo pipefail
 
@@ -37,10 +43,25 @@ trap cleanup EXIT
 
 # ── Preconditions ───────────────────────────────────────────────────────────────
 [[ $EUID -eq 0 ]] || fatal "run with sudo: sudo bash $0 <image> [disk]"
-IMG="${1:-}"
-[[ -n "$IMG" && -f "$IMG" ]] || fatal "usage: sudo bash $0 <image.tar.zst> [/dev/disk]"
+
+# Flags first; the positional form (image, then optional disk) is unchanged.
+ASSUME_YES=false
+AUTO_DISK=false
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -y|--yes)  ASSUME_YES=true; shift ;;
+        --auto)    ASSUME_YES=true; AUTO_DISK=true; shift ;;
+        -h|--help) echo "usage: sudo bash $0 [--yes] [--auto] <image.tar.zst> [/dev/disk]"; exit 0 ;;
+        --)        shift; break ;;
+        -*)        fatal "unknown option: $1" ;;
+        *)         POSITIONAL+=("$1"); shift ;;
+    esac
+done
+IMG="${POSITIONAL[0]:-}"
+TARGET="${POSITIONAL[1]:-}"
+[[ -n "$IMG" && -f "$IMG" ]] || fatal "usage: sudo bash $0 [--yes] [--auto] <image.tar.zst> [/dev/disk]"
 IMG="$(readlink -f "$IMG")"
-TARGET="${2:-}"
 
 for t in zstd tar sfdisk sgdisk mkfs.ext4 mkfs.vfat partprobe python3 lsblk blkid; do
     command -v "$t" >/dev/null || fatal "missing tool: $t (see SYSTEM_IMAGE.md for the recovery-USB package list)"
@@ -82,22 +103,81 @@ if [[ "$IMG_ARCH" != "$HOST_ARCH" ]]; then
 fi
 
 # ── 2. Choose + validate the target disk ────────────────────────────────────────
+whole_disk_of() {   # <file or dir> → /dev/<whole disk> backing it, "" if none
+    local src base
+    src="$(df --output=source "$1" 2>/dev/null | tail -n1)"
+    [[ "$src" == /dev/* ]] || return 0
+    base="$(lsblk -rnso NAME "$src" 2>/dev/null | tail -n1)"   # partition → parent disk
+    [[ -n "$base" ]] && echo "/dev/$base"
+}
+
+disk_mounts() {   # <disk> → "" when nothing on it is mounted
+    # Deliberately no `| grep`: with pipefail a SIGPIPE'd lsblk can outvote grep's
+    # exit status, and a missed mount here means erasing the wrong disk.
+    lsblk -no MOUNTPOINT "$1" 2>/dev/null
+}
+
+# Pick the one internal disk this image belongs on, with nothing to ask a human.
+# Refuses to guess: anything removable, read-only, USB-attached, already mounted,
+# excluded by the caller, or too small is out, and if more than one equally good
+# candidate survives we abort rather than erase a coin-flip.
+auto_pick_disk() {  # <disks to exclude…> → echoes the chosen /dev/disk
+    # Runs inside $( ), so the reason for a refusal goes to stderr — a variable
+    # set here would die with the subshell.
+    local -a excl=("$@") cands=() best=()
+    local name type rm ro tran dev rank x bestrank
+    # TRAN is last so an empty transport can only blank the final field.
+    while read -r name type rm ro tran; do
+        [[ "$type" == "disk" ]] || continue
+        dev="/dev/$name"
+        case "$name" in loop*|sr*|ram*|zram*|fd*|dm-*|md*) continue ;; esac
+        [[ "$rm" == "1" || "$ro" == "1" || "$tran" == "usb" ]] && continue
+        for x in "${excl[@]}"; do [[ -n "$x" && "$dev" == "$x" ]] && continue 2; done
+        # Anything the live environment has mounted is part of the recovery medium.
+        [[ "$(disk_mounts "$dev")" == */* ]] && continue
+        (( $(blockdev --getsize64 "$dev" 2>/dev/null || echo 0) >= SRC_DISK_BYTES )) || continue
+        case "$tran" in nvme) rank=0 ;; sata|ata) rank=1 ;; mmc) rank=2 ;; *) rank=3 ;; esac
+        cands+=("$rank $dev")
+    done < <(lsblk -dn -o NAME,TYPE,RM,RO,TRAN)
+
+    if (( ${#cands[@]} == 0 )); then
+        warn "no eligible internal disk: need a non-removable, unmounted, non-USB disk of at least ${SRC_DISK_BYTES} bytes" >&2
+        return 1
+    fi
+    # Prefer the best bus (NVMe over SATA over eMMC) — on a box with both an eMMC
+    # and an SSD the OS belongs on the SSD.
+    bestrank="$(printf '%s\n' "${cands[@]}" | cut -d' ' -f1 | sort -n | head -n1)"
+    for x in "${cands[@]}"; do [[ "${x%% *}" == "$bestrank" ]] && best+=("${x#* }"); done
+    if (( ${#best[@]} > 1 )); then
+        warn "${#best[@]} equally likely target disks (${best[*]}) — name one explicitly (dp.disk=/dev/… on the kernel command line)" >&2
+        return 1
+    fi
+    echo "${best[0]}"
+}
+
 step "Selecting target disk"
 IMG_DISK="$(df --output=source "$IMG" 2>/dev/null | tail -n1)"   # disk the image file lives on
 if [[ -z "$TARGET" ]]; then
-    echo "  Available disks:"
-    # MODEL is placed LAST so multi-word models (e.g. "Mass Storage") can't shift the
-    # columns and hide a disk from the TYPE filter. TRAN shows the transport bus.
-    lsblk -dn -o NAME,TYPE,SIZE,TRAN,MODEL \
-      | awk '$2=="disk"{name=$1; size=$3; tran=$4; $1=$2=$3=$4=""; sub(/^ +/,"");
-             printf "    /dev/%-8s %-8s %-6s %s\n", name, size, tran, $0}'
-    read -rp "  Enter target disk (e.g. /dev/sda or /dev/nvme0n1): " TARGET
+    if $AUTO_DISK; then
+        # Never offer the disk holding the image, nor the booted recovery medium.
+        TARGET="$(auto_pick_disk "$(whole_disk_of "$IMG")" "$(whole_disk_of /cdrom)")" \
+            || fatal "cannot choose a target disk automatically (reason above)"
+        info "Auto-selected target disk: $TARGET ($(lsblk -dn -o SIZE "$TARGET" | tr -d ' '), $(lsblk -dn -o TRAN "$TARGET" | tr -d ' '))"
+    else
+        echo "  Available disks:"
+        # MODEL is placed LAST so multi-word models (e.g. "Mass Storage") can't shift the
+        # columns and hide a disk from the TYPE filter. TRAN shows the transport bus.
+        lsblk -dn -o NAME,TYPE,SIZE,TRAN,MODEL \
+          | awk '$2=="disk"{name=$1; size=$3; tran=$4; $1=$2=$3=$4=""; sub(/^ +/,"");
+                 printf "    /dev/%-8s %-8s %-6s %s\n", name, size, tran, $0}'
+        read -rp "  Enter target disk (e.g. /dev/sda or /dev/nvme0n1): " TARGET
+    fi
 fi
 [[ -b "$TARGET" ]] || fatal "'$TARGET' is not a block device"
 # Guards.
 [[ "$(lsblk -no TYPE "$TARGET" | head -n1)" == "disk" ]] || fatal "'$TARGET' is not a whole disk"
 case "$IMG_DISK" in "$TARGET"*) fatal "target '$TARGET' holds the image file itself — choose another disk";; esac
-if lsblk -no MOUNTPOINT "$TARGET" | grep -q '/'; then
+if [[ "$(disk_mounts "$TARGET")" == */* ]]; then
     fatal "'$TARGET' has mounted partitions — unmount them first"
 fi
 TGT_BYTES="$(blockdev --getsize64 "$TARGET")"
@@ -108,8 +188,12 @@ fi
 echo ""
 warn "This will ERASE ALL DATA on ${TARGET} ($(lsblk -dn -o SIZE "$TARGET"))."
 warn "Source image: ${SRC_HOST} (${IMG_ARCH})."
-read -rp "  Type ERASE to proceed: " CONFIRM
-[[ "$CONFIRM" == "ERASE" ]] || { echo "  Aborted."; exit 0; }
+if $ASSUME_YES; then
+    warn "Unattended mode (--yes): erasing without confirmation."
+else
+    read -rp "  Type ERASE to proceed: " CONFIRM
+    [[ "$CONFIRM" == "ERASE" ]] || { echo "  Aborted."; exit 0; }
+fi
 
 partdev() { # <disk> <num>  → correct partition node (sda1 vs nvme0n1p1)
     local d="$1" n="$2"
@@ -268,6 +352,35 @@ if [[ -f "$UNIT_SRC" ]]; then
 else
     warn "dp-firstboot.service not found in image — you must run dp-device-reset.sh manually after boot"
 fi
+
+# ── 9b. Verify the restored system before we let go of it ───────────────────────
+# Cheap sanity checks while everything is still mounted. Unattended flashing has
+# nobody watching the scrollback, so a half-extracted root must fail loudly here
+# rather than at the customer's first power-on.
+step "Verifying the restored system"
+VERIFY_FAIL=0
+for p in /sbin/init /etc/fstab /etc/os-release /home/dp/digitalpool-camera/server.js; do
+    [[ -e "${ROOTMNT}${p}" ]] || { warn "missing ${p} in the restored root"; VERIFY_FAIL=1; }
+done
+compgen -G "${ROOTMNT}/boot/vmlinuz*" >/dev/null || compgen -G "${ROOTMNT}/boot/Image*" >/dev/null \
+    || { warn "no kernel found in /boot"; VERIFY_FAIL=1; }
+if [[ "$IMG_ARCH" == "x86_64" ]]; then
+    [[ -f "${ROOTMNT}/boot/efi/EFI/BOOT/BOOTX64.EFI" ]] \
+        || { warn "no EFI fallback loader on the ESP"; VERIFY_FAIL=1; }
+fi
+(( VERIFY_FAIL == 0 )) || fatal "verification failed — the restored disk is not trustworthy, do not ship this unit"
+info "Verification passed"
+
+# Hand the outcome to whatever drove us (dp-factory-install.sh reads this to stamp
+# the installed system with its log).
+{
+    echo "TARGET=${TARGET}"
+    echo "ROOT_DEV=${ROOT_DEV}"
+    echo "IMAGE=${IMG}"
+    echo "SOURCE_HOST=${SRC_HOST}"
+    echo "ARCH=${IMG_ARCH}"
+    echo "FINISHED=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} > /run/dp-restore-result 2>/dev/null || true
 
 # ── 10. Done ────────────────────────────────────────────────────────────────────
 step "Flushing and unmounting"

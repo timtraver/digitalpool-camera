@@ -1,29 +1,38 @@
 # System Image — clone a device from the UI
 
 Download a complete image of a running DigitalPool Camera device from the admin
-UI, flash it onto a new device from a bootable recovery USB, and have the new
-device turn itself into a unique unit on first boot.
+UI, bake it into a USB stick that **images a new unit with nobody at the keyboard**,
+and have that unit turn itself into a unique unit on first boot.
+
+That unattended path is what the OEM factory is shipped — see
+[FACTORY_INSTALL.md](FACTORY_INSTALL.md), which is written for them and is the
+document to hand over. The same stick still carries the manual restore flow for
+field recovery.
 
 This is a **filesystem-level** clone (files, not raw blocks), so the source can
 stay live and the image is only as big as the *used* data. Every filesystem UUID
 is preserved on restore, so `fstab` / GRUB / extlinux keep working untouched.
 
 ```
-┌─ source device (running) ──────────┐      ┌─ recovery USB ─┐      ┌─ new device ─────────┐
-│ UI ▸ Admin ▸ System Image          │      │ dp-restore.sh  │      │ first boot:          │
-│   → dp-create-image.sh             │ ───▶ │  partitions +  │ ───▶ │  dp-firstboot.sh     │
-│   → streams .tar.zst to browser    │ file │  mkfs -U +     │flash │  new machine-id/ssh/ │
-│                                    │      │  extract +     │      │  hostname, wiped     │
-│                                    │      │  bootloader    │      │  netbird+app state,  │
-│                                    │      │  + arm firstboot│      │  then reboots once   │
-└────────────────────────────────────┘      └────────────────┘      └──────────────────────┘
+┌─ source device (running) ─────┐   ┌─ install USB ────────────┐   ┌─ new unit ───────────┐
+│ UI ▸ Admin ▸ System Image     │   │ boot menu, 15s countdown │   │ first boot:          │
+│   → dp-create-image.sh        │──▶│   → dp-factory-install.sh│──▶│  dp-firstboot.sh     │
+│   → .tar.zst image            │   │      picks the disk      │   │  new machine-id/ssh/ │
+│   → 🏗 dp-build-recovery-iso  │   │   → dp-restore.sh --auto │   │  hostname, wiped     │
+│      image + scripts + seed   │iso│      partition, mkfs -U, │   │  netbird+app state,  │
+│      + boot menu → one .iso   │   │      extract, bootloader,│   │  then reboots once    │
+│                               │   │      verify, arm firstboot│  │                      │
+│                               │   │   → POWERS THE UNIT OFF  │   │                      │
+└───────────────────────────────┘   └──────────────────────────┘   └──────────────────────┘
+                                      (or: manual restore shell → dp-flash.sh)
 ```
 
 ## Hard constraints
 
-- **Architecture must match.** An `x86_64` image (Intel N97) will **not** boot an
-  `aarch64` device (RK3588) and vice-versa. `dp-restore.sh` refuses a mismatch.
-  Keep one image + one recovery USB per platform.
+- **Architecture must match.** An `x86_64` image (Intel N97 / N100) will **not**
+  boot an `aarch64` device (RK3588) and vice-versa. `dp-restore.sh` refuses a
+  mismatch. Keep one image + one USB per platform. N97 and N100 are both x86_64,
+  so one ISO serves both.
 - **Target disk ≥ source disk.** The partition table is replicated, so the target
   must be the same size or larger. Larger disks get the root partition grown to
   fill the extra space automatically.
@@ -37,7 +46,9 @@ is preserved on restore, so `fstab` / GRUB / extlinux keep working untouched.
 | File | Runs where | Does |
 |------|-----------|------|
 | `dp-create-image.sh` | source device (via UI) | quiesce + tar rootfs, capture bootgap/partition-table/UUIDs, stream `.tar.zst` to stdout |
-| `dp-restore.sh` | recovery USB | partition target, `mkfs -U` (preserve UUIDs), extract, fix bootloader, arm first boot |
+| `dp-restore.sh` | recovery USB | partition target, `mkfs -U` (preserve UUIDs), extract, fix bootloader, verify, arm first boot |
+| `dp-factory-install.sh` | recovery USB, unattended | picks the disk, runs the restore, stamps the unit, powers it off — never returns |
+| `dp-build-recovery-iso.sh` | source device (via UI) | bakes image + scripts + autoinstall seed + boot menu into one bootable `.iso` |
 | `dp-firstboot.sh` + `dp-firstboot.service` | new device, first boot | sanitise clone → unique unit, then self-disable |
 
 ## 1. Enable the capture endpoint (one-time, on each source device)
@@ -79,17 +90,46 @@ plain HTTP, Chrome may still show "insecure download blocked" for a file this si
 if so, use **Firefox**, which downloads from the HTTP origin without complaint. The
 resumable static download is far more reliable than the old live stream either way.
 
-## 2. Build an all-in-one recovery ISO (recommended)
+## 2. Build an all-in-one bootable ISO (recommended)
 
 Bake everything into **one bootable `.iso`** — the Ubuntu live environment, your
-image, `dp-restore.sh`, and the flashing tools as offline `.deb`s — so the target
-needs **no network** and there is nothing else to copy.
+image, the restore scripts, and the flashing tools as offline `.deb`s — so the
+target needs **no network** and there is nothing else to copy.
+
+**The ISO installs itself.** Its boot menu's default entry is
+`DigitalPool Camera — AUTOMATIC INSTALL`, which starts after a **15-second
+countdown**, images the internal disk, and powers the unit off. That removes the
+step where a person had to intercept the Ubuntu installer and run a script by
+hand. The menu still offers:
+
+| Entry | Does |
+|-------|------|
+| `AUTOMATIC INSTALL` (default, 15s) | unattended: pick disk → flash → verify → power off |
+| `manual restore shell` | boots the live environment and erases nothing until you run `dp-flash.sh` |
+| the stock Ubuntu entries | untouched |
+
+How it works: the automatic entry adds `autoinstall ds=nocloud\;s=file:///cdrom/dp/seed/`
+to the kernel command line. The seed's `early-commands` runs
+`dp-factory-install.sh` — which subiquity executes *before it probes or touches any
+block device* — and that script never returns (it powers the unit off), so the
+Ubuntu install that would otherwise follow never happens. As a backstop the seed
+marks `storage` as an interactive section: if the flasher ever did return, the
+installer stops at a screen waiting for a human instead of installing Ubuntu over
+the fresh clone.
+
+Kernel command-line overrides, if a unit needs one (press `e` on the menu entry):
+
+| Option | Effect |
+|--------|--------|
+| `dp.disk=/dev/nvme0n1` | flash this disk instead of auto-selecting |
+| `dp.end=reboot` / `dp.end=halt` | reboot, or stay powered on, instead of powering off |
+| `dp.tty=4` | show progress on a different virtual console |
 
 **From the UI (recommended):** in the image list, click **🏗** on a captured image.
 The server auto-downloads & caches the Ubuntu base ISO the first time, builds the
-recovery ISO as a background job (live progress), and drops it in the list to
-download. The **only** one-time prerequisite is `xorriso` (it needs root, so it's
-not auto-installed):
+ISO as a background job (live progress), and drops it in the list to download. The
+**only** one-time prerequisite is `xorriso` (it needs root, so it's not
+auto-installed):
 ```bash
 sudo apt install -y xorriso     # once, on the device
 ```
@@ -110,23 +150,26 @@ bash ~/digitalpool-camera/dp-build-recovery-iso.sh \
 
 The ISO lands in `system-images/`, so it appears in the UI's image list — download
 it to your Mac with **Firefox** (resumable), then **balenaEtcher** that one `.iso`
-to an **8 GB+** USB stick. Boot the target → at the GRUB menu pick **"Try or Install
-Ubuntu Server"**, then get a root shell (**Ctrl+Alt+F2**, or the installer's
-**Help → Enter shell**) and run:
+to an **16 GB+** USB stick. Boot the target and leave it alone. Rebuild the ISO
+whenever you make a new golden image.
 
-```bash
-bash /cdrom/dp/dp-flash.sh
-```
-
-That installs the bundled tools offline and launches the restore (§3). Rebuild the
-ISO whenever you make a new golden image.
-
+> **Automatic entry is x86_64 only.** It rewrites the ISO's GRUB menu, which has no
+> equivalent on RK3588; an aarch64 build still produces a working *manual* recovery
+> medium (and says so while building). N97 and N100 are both x86_64 — one ISO
+> covers both.
+>
 > **Notes.** Building needs internet on the device (to fetch the tool `.debs`) and
 > ~7 GB free. `dp-flash.sh` `dpkg -i`s only leaf tool packages (`gdisk`, `lvm2`,
 > `dosfstools`, `cloud-guest-utils`, `zstd`, `parted`) — their libraries are already
 > in the Ubuntu Server live env (the installer itself uses them), so core libs are
-> never touched. For an **aarch64 (RK3588)**
-> image, build with an **arm64** Ubuntu ISO on an aarch64 machine.
+> never touched.
+
+### Before handing an ISO to the factory
+
+Flash it and run **one** unit end to end (§"Caveats / validation"). The failure
+mode to watch for is the unit sitting in the ordinary Ubuntu installer instead of
+flashing: that means the autoinstall seed was not picked up, and nothing will have
+been erased.
 
 ### Alternative: plain boot stick + separate image drive
 
@@ -150,15 +193,35 @@ sudo apt install -y zstd gdisk cloud-guest-utils dosfstools util-linux python3 l
 
 ## 3. Flash the new device
 
+With the ISO from §2 this happens by itself — this section is the manual path
+(`manual restore shell` in the boot menu, then Ctrl+Alt+F2).
+
 ```bash
 sudo bash dp-restore.sh /path/to/dp-image-<host>-<arch>-<ts>.tar.zst
 # (omit the disk to be shown a menu, or pass it explicitly:)
 sudo bash dp-restore.sh dp-image-....tar.zst /dev/nvme0n1
+# unattended (what dp-factory-install.sh runs):
+sudo bash dp-restore.sh --auto dp-image-....tar.zst
 ```
 
 It validates arch + disk size, requires you to type **ERASE**, then partitions,
-formats (preserving UUIDs), extracts, installs the bootloader fallback (x86) and
-arms the first-boot sanitiser. On success: power off, remove the recovery media.
+formats (preserving UUIDs), extracts, installs the bootloader fallback (x86),
+**verifies the result**, and arms the first-boot sanitiser. On success: power off,
+remove the recovery media.
+
+| Flag | Effect |
+|------|--------|
+| `--yes` | skip the typed `ERASE` confirmation |
+| `--auto` | `--yes`, plus choose the target disk automatically |
+
+`--auto` only ever picks a disk it is sure of: removable, read-only, USB-attached,
+already-mounted and too-small disks are excluded, as are the disk holding the image
+and the booted recovery medium. Of what's left it prefers NVMe over SATA over eMMC,
+and if two equally good candidates remain it **refuses to guess** and fails rather
+than erase a coin-flip. The verification step (init, fstab, kernel, the app, and
+the EFI fallback loader all present) matters most here: unattended flashing has
+nobody reading the scrollback, so a bad restore has to fail loudly rather than at
+the customer's first power-on.
 
 ## 4. First boot of the new device
 
@@ -199,3 +262,18 @@ the WiFi AP profile, and the systemd hardening.
   2. Restore to a spare disk; confirm it boots, `dp-firstboot` runs (check
      `/var/log/dp-firstboot.log`), hostname/machine-id changed, UI reachable.
   3. Confirm streaming works on the clone.
+- **The unattended path has not been run on hardware either, and it is the one
+  that goes to an OEM who cannot debug it.** Flash the ISO to a stick and image one
+  spare unit with nobody touching it, start to finish, before the stick ships:
+  1. Boot it and don't press anything — the 15s countdown should start the
+     automatic entry, and progress should appear on screen (Ctrl+Alt+F3).
+  2. It should end on the green `INSTALL COMPLETE` screen and power off by itself.
+  3. Boot that unit and confirm `/var/lib/dp-image/factory-install.json` and
+     `/var/log/dp-factory-install.log` are on it — that is the install record
+     every shipped unit carries.
+  4. Check the *manual* entry still works too, since field recovery depends on it.
+
+  The failure mode worth rehearsing is the autoinstall seed not being picked up
+  (cloud-init has changed its NoCloud seed handling before): the unit then sits in
+  the ordinary Ubuntu installer and nothing is erased — safe, but useless on a
+  factory line, and it needs a rebuilt ISO rather than a factory workaround.

@@ -5341,11 +5341,11 @@ loadDeviceIp();
           if (!isIso) {
             const build = document.createElement("button");
             build.textContent = "🏗";
-            build.title = "Build a bootable recovery ISO from this image";
+            build.title = "Build a bootable ISO that installs this image automatically";
             build.disabled = jobRunning;
             build.style.cssText = "font-size:13px;padding:2px 8px;border:1px solid rgba(99,102,241,0.5);border-radius:5px;background:rgba(99,102,241,0.15);color:#c7d2fe;cursor:pointer";
             build.addEventListener("click", async () => {
-              if (!confirm("Build a bootable recovery ISO from:\n" + img.name + "\n\n• Downloads the Ubuntu Server base ISO the first time (~2.6 GB).\n• Produces a ~7 GB .iso you flash to an 8 GB+ USB with balenaEtcher.\n• Takes several minutes; runs on the device.\n\nContinue?")) return;
+              if (!confirm("Build a bootable install ISO from:\n" + img.name + "\n\n• The ISO INSTALLS ITSELF: boot a unit from it, wait, and it images the\n  internal disk and powers off — no operator, no shell, no typing.\n  (A 15s countdown and a manual-recovery entry are in the boot menu.)\n• Downloads the Ubuntu Server base ISO the first time (~2.6 GB).\n• Produces a ~7 GB .iso you flash to an 8 GB+ USB with balenaEtcher.\n• Takes several minutes; runs on the device.\n\nContinue?")) return;
               build.disabled = true;
               try {
                 const r = await fetch("/api/system/image/build-iso", {
@@ -5412,8 +5412,8 @@ loadDeviceIp();
           if (btn) { btn.disabled = false; btn.textContent = "💾 Create Image"; }
           if (msg) {
             if (job && job.error) { msg.textContent = "⚠️ " + (job.kind === "iso" ? "ISO build" : "Capture") + " failed: " + job.error; msg.style.color = "#f87171"; }
-            else if (job && job.kind === "iso") { msg.textContent = "✅ Recovery ISO ready — download it from the list below."; msg.style.color = "#4ade80"; }
-            else { msg.textContent = "✅ Image ready — download it, or click 🏗 to build a recovery ISO."; msg.style.color = "#4ade80"; }
+            else if (job && job.kind === "iso") { msg.textContent = "✅ Install ISO ready — download it, flash it to a USB stick, and boot a unit from it."; msg.style.color = "#4ade80"; }
+            else { msg.textContent = "✅ Image ready — download it, or click 🏗 to build a self-installing ISO."; msg.style.color = "#4ade80"; }
           }
           refreshImageList();
         }
