@@ -735,7 +735,12 @@
                  blocked while this is visible; a running stream is never cut. -->
             <div id="subscriptionBanner" class="subscription-banner" style="display:none">
               <span id="subscriptionBannerText"></span>
-              <button class="btn-wifi-action" id="subscriptionBannerCheckBtn" style="margin-top:8px;width:100%;font-size:11px">🔄 Re-check Subscription</button>
+              <div style="display:flex;gap:6px;margin-top:8px">
+                <a href="https://digitalpool.com" target="_blank" rel="noopener"
+                   class="btn-wifi-action" id="subscriptionBannerGetBtn"
+                   style="flex:1;text-align:center;text-decoration:none;font-size:11px">🌐 Get a Subscription</a>
+                <button class="btn-wifi-action" id="subscriptionBannerCheckBtn" style="flex:1;font-size:11px">🔄 Re-check</button>
+              </div>
             </div>
 
             <div style="display: flex; gap: 8px; margin-top: 12px">
@@ -1130,6 +1135,32 @@
                         <button class="btn-wifi-action" id="regVenueConfirmBtn" style="width:100%;margin-top:8px">
                           ✅ Confirm Venue
                         </button>
+                      </div>
+
+                      <!-- No subscription — the account is valid but has no plan.
+                           Nothing about the camera can fix this, so the only
+                           useful thing here is a way to go and buy one. -->
+                      <div id="regNoSubscriptionArea" style="display:none;margin-top:10px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:6px;padding:10px 12px">
+                        <div style="color:rgba(248,113,113,0.95);font-size:12px;font-weight:600;margin-bottom:6px">
+                          ⛔ This DigitalPool account has no subscription
+                        </div>
+                        <div style="color:rgba(255,255,255,0.62);font-size:11px;line-height:1.5;margin-bottom:8px">
+                          A subscription is required to use this camera. Any plan lets you stream to
+                          your own YouTube, Facebook or RTMP destination. The Advanced Streaming
+                          package adds streaming back to DigitalPool and your own scoreboard overlays.
+                        </div>
+                        <a href="https://digitalpool.com" target="_blank" rel="noopener"
+                           class="btn-wifi-action" id="regGetSubscriptionBtn"
+                           style="display:block;text-align:center;text-decoration:none;font-size:11px">
+                          🌐 Get a Subscription
+                        </a>
+                        <button class="btn-wifi-action" id="regSubRetryBtn" style="width:100%;margin-top:6px;font-size:11px">
+                          ✅ I&rsquo;ve Subscribed &mdash; Try Again
+                        </button>
+                        <small style="color:rgba(255,255,255,0.35);font-size:10px;display:block;margin-top:4px">
+                          Subscribe on another device if this tablet has no internet, then come back and
+                          press Try Again.
+                        </small>
                       </div>
 
                       <!-- No venue — the account owns none yet -->

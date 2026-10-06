@@ -6343,6 +6343,8 @@ loadDeviceIp();
     function hideVenueSteps() {
       if (venueArea)   venueArea.style.display   = "none";
       if (noVenueArea) noVenueArea.style.display = "none";
+      const noSub = document.getElementById("regNoSubscriptionArea");
+      if (noSub) noSub.style.display = "none";
     }
 
     // Interpret a response from /api/setup/register or /api/setup/register/venue.
@@ -6381,10 +6383,15 @@ loadDeviceIp();
         return;
       }
       // Account verified, but it has no subscription — registration is refused.
-      // Nothing about the camera can fix this; the operator has to subscribe.
+      // Nothing about the camera can fix this, so show the way out: a link to go
+      // and buy a plan, and a retry that needs no retyping.
       if (d.subscriptionRequired) {
         hideVenueSteps();
-        showRegMsg(`⛔ ${d.error || "An active DigitalPool subscription is required."}`, true);
+        const noSub = document.getElementById("regNoSubscriptionArea");
+        if (noSub) noSub.style.display = "";
+        // The block already states the problem in full — repeating the server's
+        // sentence above it just says the same thing twice.
+        if (regMsg) regMsg.textContent = "";
         registerBtn.disabled = false;
         return;
       }
@@ -6393,10 +6400,12 @@ loadDeviceIp();
       registerBtn.disabled = false;
     }
 
-    // Register button — step 1 (verify credentials, list venues)
-    registerBtn?.addEventListener("click", async () => {
-      const email    = emailInput?.value.trim();
-      const password = passwordInput?.value || "";
+    // Registration step 1 — verify credentials, list venues.  Shared by the
+    // Register button and the "I've Subscribed — Try Again" button, so a retry
+    // after buying a plan is the identical request rather than a near-copy.
+    async function runRegisterStep1() {
+      const email    = emailInput?.value.trim() || pendingEmail;
+      const password = passwordInput?.value || pendingPassword;
       if (!email)    { showRegMsg("❌ DigitalPool email is required", true); return; }
       if (!password) { showRegMsg("❌ DigitalPool password is required", true); return; }
       pendingEmail = email; pendingPassword = password;
@@ -6414,6 +6423,17 @@ loadDeviceIp();
         showRegMsg(`❌ ${e.message}`, true);
         registerBtn.disabled = false;
       }
+    }
+
+    registerBtn?.addEventListener("click", runRegisterStep1);
+
+    // "I've Subscribed — Try Again": re-runs the very same step, so a plan
+    // bought on a phone a moment ago is picked up without retyping anything.
+    document.getElementById("regSubRetryBtn")?.addEventListener("click", async () => {
+      const btn = document.getElementById("regSubRetryBtn");
+      if (btn) { btn.disabled = true; btn.textContent = "⏳ Checking…"; }
+      await runRegisterStep1();
+      if (btn) { btn.disabled = false; btn.textContent = "✅ I've Subscribed — Try Again"; }
     });
 
     // Confirm Venue button — step 2 (assign the picked venue)
