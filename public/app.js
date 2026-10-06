@@ -7,6 +7,301 @@ console.log("=".repeat(60));
 // The stream start button is kept disabled until this is true.
 let deviceRegistered = false;
 
+// ── Subscription state ────────────────────────────────────────────────────────
+// Mirrors the server's gate (subscriptionManager.gate()).  The device may only
+// start a stream while the DigitalPool account it is registered to holds a
+// subscription; the server re-checks every two weeks.  Defaults to true so a
+// transient status-fetch failure never locks an operator out of their own
+// camera — the server is the authority and refuses the start regardless.
+let subscriptionOk = true;
+// Packages the plan includes. `datacenter` covers the RTSP/SRT Server output
+// modes our datacenter pulls; `overlays` covers the venue's own graphics
+// overlay. Both default true for the same reason subscriptionOk does.
+let subscriptionFeatures = { subscribed: true, overlays: true, datacenter: true };
+// Output Mode values the plan does not include, as the server names them.
+let lockedProtocols = [];
+// The last status the server sent, kept so the plan panel can render without
+// re-fetching.
+let subscriptionStatus = null;
+
+/** Is the Output Mode currently selected one the plan does not include? */
+function selectedProtocolLocked() {
+  const sel = document.getElementById("streamProtocol");
+  return !!(sel && lockedProtocols.includes(sel.value));
+}
+
+/** Every gate the Start button answers to. */
+function canStartStream() {
+  return deviceRegistered && subscriptionOk && !selectedProtocolLocked();
+}
+
+/**
+ * Grey out the Output Modes this plan does not include and explain why, both in
+ * the native <select> and in the custom dropdown cloned from it.  Called on any
+ * subscription change and whenever the mode is switched.
+ */
+function applyProtocolLocks() {
+  const sel  = document.getElementById("streamProtocol");
+  const note = document.getElementById("protocolLockNote");
+  if (!sel) return;
+
+  let changed = false;
+  for (const opt of Array.from(sel.options)) {
+    if (!opt.dataset.baseText) opt.dataset.baseText = opt.text;
+    const lock = lockedProtocols.includes(opt.value);
+    if (opt.disabled !== lock) changed = true;
+    opt.disabled = lock;
+    // Short marker, not a sentence — a long suffix wraps the dropdown rows onto
+    // two lines. The note below the control carries the explanation.
+    opt.text = lock ? `${opt.dataset.baseText} 🔒` : opt.dataset.baseText;
+  }
+
+  // The custom dropdown is a static clone of the <option> list, so a change to
+  // the lock state means rebuilding it (same as the camera-mode dropdown).
+  if (changed && sel.parentElement) {
+    const existing = sel.parentElement.querySelector(".custom-dropdown");
+    if (existing) {
+      existing.remove();
+      createCustomDropdown(sel);
+    }
+  }
+
+  // The note holds a "check now" button, so only its text span is rewritten.
+  const noteText = document.getElementById("protocolLockText");
+  if (note && noteText) {
+    if (selectedProtocolLocked()) {
+      noteText.textContent =
+        "⛔ This output mode needs the Advanced Streaming package. Your plan can stream to "
+        + "YouTube, Facebook or your own RTMP destination — switch to one of those, or upgrade "
+        + "at digitalpool.com to stream back to DigitalPool.";
+      note.style.display = "";
+    } else if (lockedProtocols.length) {
+      noteText.textContent =
+        "RTSP and SRT Server output (streaming back to DigitalPool) need the Advanced Streaming package.";
+      note.style.display = "";
+    } else {
+      note.style.display = "none";
+    }
+  }
+}
+
+/**
+ * Tell the operator when their own overlay has been replaced by the DigitalPool
+ * branded one, so an overlay that looks "stuck" is explained rather than
+ * mysterious.
+ */
+function applyOverlayEntitlement() {
+  const note = document.getElementById("overlayPlanNote");
+  const text = document.getElementById("overlayPlanText");
+  if (!note || !text) return;
+  if (subscriptionFeatures.overlays) {
+    note.style.display = "none";
+    return;
+  }
+  text.textContent =
+    "🏷️ Your plan streams with the DigitalPool branded overlay. Custom overlays "
+    + "(scoreboards and graphics) need the Advanced Streaming package — upgrade at digitalpool.com.";
+  note.style.display = "";
+}
+
+// ── Plan status: the chip in the header and the panel behind it ─────────────
+
+/** What each package means to the operator, in the order the panel lists them. */
+const PLAN_FEATURES = [
+  { key: null, label: "Stream to YouTube, Facebook or your own RTMP destination",
+    detail: "Included with every plan" },
+  { key: "datacenter", label: "Stream back to DigitalPool (RTSP / SRT Server output)",
+    detail: "Advanced Streaming package" },
+  { key: "overlays", label: "Your own overlays — scoreboards and graphics",
+    detail: "Advanced Streaming package; without it streams carry the DigitalPool overlay" },
+];
+
+/**
+ * Render the header chip + the plan panel from a status payload.  The chip is
+ * the always-visible answer to "does this device have everything?", and it is
+ * amber the moment any package is missing rather than only when streaming is
+ * blocked outright.
+ */
+function renderPlanUi(sub) {
+  const chip = document.getElementById("planChip");
+  const f = subscriptionFeatures;
+  const missing = PLAN_FEATURES.filter((x) => x.key && !f[x.key]);
+
+  if (chip) {
+    chip.style.display = "";
+    chip.classList.remove("limited", "blocked");
+    if (!subscriptionOk) {
+      chip.classList.add("blocked");
+      chip.textContent = "⛔ No subscription";
+      chip.title = "This device cannot stream — click for details";
+    } else if (missing.length) {
+      chip.classList.add("limited");
+      chip.textContent = `⚠️ ${sub.plan || "Base"} plan — limited`;
+      chip.title = `${missing.length} feature${missing.length > 1 ? "s" : ""} not included — click for details`;
+    } else {
+      chip.textContent = `✓ ${sub.plan || "All features"}`;
+      chip.title = "Every feature is available on this device — click for details";
+    }
+  }
+
+  const planEl = document.getElementById("planModalPlan");
+  if (planEl) {
+    planEl.textContent = subscriptionOk
+      ? `${sub.plan || "Active"}${missing.length ? " (limited)" : ""}`
+      : (sub.status ? `None (${sub.status})` : "None");
+    planEl.style.color = !subscriptionOk ? "#f87171" : (missing.length ? "#fbbf24" : "#4ade80");
+  }
+  const when = (v) => (v ? new Date(v).toLocaleString() : "—");
+  const checkedEl = document.getElementById("planModalChecked");
+  if (checkedEl) {
+    checkedEl.textContent = sub.lastSuccessAt ? when(sub.lastSuccessAt)
+      : (sub.lastError ? `Failed — ${sub.lastError}` : "Not yet verified");
+  }
+  const nextEl = document.getElementById("planModalNext");
+  if (nextEl) nextEl.textContent = when(sub.nextCheckAt);
+
+  const list = document.getElementById("planFeatureList");
+  if (list) {
+    list.textContent = "";
+    for (const feat of PLAN_FEATURES) {
+      // Without a live subscription nothing is available, including the modes
+      // every plan otherwise includes.
+      const has = subscriptionOk && (!feat.key || !!f[feat.key]);
+      const row = document.createElement("div");
+      row.className = `plan-feature${has ? "" : " missing"}`;
+      const mark = document.createElement("span");
+      mark.className = "mark";
+      mark.textContent = has ? "✅" : "🔒";
+      const body = document.createElement("span");
+      body.textContent = feat.label;
+      const detail = document.createElement("span");
+      detail.className = "detail";
+      detail.textContent = feat.detail;
+      body.appendChild(detail);
+      row.appendChild(mark);
+      row.appendChild(body);
+      list.appendChild(row);
+    }
+  }
+
+  const hint = document.getElementById("planModalHint");
+  if (hint) {
+    if (!subscriptionOk) {
+      hint.textContent = sub.message || "This device needs an active DigitalPool subscription to stream.";
+      hint.style.display = "";
+    } else if (missing.length) {
+      hint.textContent = "Upgrade to the Advanced Streaming package on digitalpool.com, then click "
+                       + "Check Now — the device picks it up immediately.";
+      hint.style.display = "";
+    } else {
+      hint.style.display = "none";
+    }
+  }
+}
+
+/**
+ * Apply a subscription status ({ allowed, plan, status, message, ... } from
+ * /api/setup/status, /api/subscription/* or the `subscriptionStatus` socket
+ * event) to the UI: the blocker banner, the Admin Settings badge, the detail
+ * rows, and the Start button.
+ */
+function applySubscriptionStatus(sub) {
+  if (!sub || typeof sub !== "object") return;
+  subscriptionOk = sub.allowed !== false;
+  if (sub.features && typeof sub.features === "object") subscriptionFeatures = sub.features;
+  if (Array.isArray(sub.lockedProtocols)) lockedProtocols = sub.lockedProtocols;
+  subscriptionStatus = sub;
+  applyProtocolLocks();
+  applyOverlayEntitlement();
+  renderPlanUi(sub);
+
+  const banner     = document.getElementById("subscriptionBanner");
+  const bannerText = document.getElementById("subscriptionBannerText");
+  const badge      = document.getElementById("subRequiredBadge");
+  const planRow    = document.getElementById("regStatusSubscription");
+  const checkedRow = document.getElementById("regStatusSubChecked");
+
+  if (banner) banner.style.display = subscriptionOk ? "none" : "";
+  if (bannerText && !subscriptionOk)
+    bannerText.textContent = sub.message || "An active DigitalPool subscription is required to stream.";
+  if (badge) badge.style.display = subscriptionOk ? "none" : "";
+
+  if (planRow) {
+    if (sub.active === true) {
+      const pkg = subscriptionFeatures.datacenter ? "Advanced Streaming" : "Base";
+      planRow.textContent = `✓ ${sub.plan || "Active"} (${pkg})`;
+      planRow.style.color = "#4ade80";
+    } else if (sub.active === false) {
+      planRow.textContent = sub.status ? `⛔ ${sub.status}` : "⛔ None";
+      planRow.style.color = "#f87171";
+    } else {
+      planRow.textContent = "Not yet verified";
+      planRow.style.color = "";
+    }
+  }
+  if (checkedRow) {
+    checkedRow.textContent = sub.lastSuccessAt
+      ? new Date(sub.lastSuccessAt).toLocaleString()
+      : (sub.lastError ? `Failed — ${sub.lastError}` : "—");
+    checkedRow.style.color = (!sub.lastSuccessAt && sub.lastError) ? "#fbbf24" : "";
+  }
+
+  // Never re-enable Start while a stream is running (the button is the Restart
+  // button then) — only correct the idle state.
+  const btn = document.getElementById("startStream");
+  if (btn && !isCurrentlyStreaming) btn.disabled = !canStartStream();
+}
+
+/**
+ * Ask the server to check with DigitalPool right now — what someone clicks the
+ * moment they have bought or upgraded, instead of waiting out the fortnightly
+ * check.  Reports what actually changed, so "I just paid" gets a definite answer
+ * either way.  Returns the new status.
+ */
+async function recheckSubscription(msgEl, btnEls = []) {
+  const before = { ok: subscriptionOk, ...subscriptionFeatures };
+  for (const b of btnEls) if (b) b.disabled = true;
+  if (msgEl) { msgEl.textContent = "⏳ Checking with DigitalPool…"; msgEl.style.color = ""; }
+  try {
+    const r = await fetch("/api/subscription/check", { method: "POST" });
+    const d = await r.json();
+    applySubscriptionStatus(d);
+
+    if (msgEl) {
+      const gained = ["datacenter", "overlays"].filter((k) => !before[k] && subscriptionFeatures[k]);
+      let text, good = true;
+      if (!r.ok) {
+        text = `❌ ${d.error || `Check failed (HTTP ${r.status})`}`; good = false;
+      } else if (d.allowed === false) {
+        text = `❌ ${d.message || "No active subscription"}`; good = false;
+      } else if (d.allowed !== true) {
+        // Never announce an unlock off a response that did not state one.
+        text = "Checked — DigitalPool reported no change."; good = false;
+      } else if (!before.ok) {
+        text = `✅ Subscription active${d.plan ? ` — ${d.plan}` : ""}. Streaming is unlocked.`;
+      } else if (gained.length) {
+        text = "✅ Advanced Streaming unlocked — RTSP/SRT output and your own overlays are available now.";
+      } else if (d.throttled) {
+        text = "Checked a moment ago — showing the latest answer.";
+      } else {
+        const limited = !subscriptionFeatures.datacenter || !subscriptionFeatures.overlays;
+        text = limited
+          ? `Checked — still on ${d.plan || "your current plan"}. The Advanced Streaming package is not on this account yet.`
+          : `✅ Up to date${d.plan ? ` — ${d.plan}` : ""}.`;
+        good = !limited;
+      }
+      msgEl.textContent = text;
+      msgEl.style.color = good ? "#4ade80" : "#f87171";
+    }
+    return d;
+  } catch (e) {
+    if (msgEl) { msgEl.textContent = `❌ ${e.message}`; msgEl.style.color = "#f87171"; }
+    return null;
+  } finally {
+    for (const b of btnEls) if (b) b.disabled = false;
+  }
+}
+
 // ── Global 401 interceptor ────────────────────────────────────────────────────
 // Wraps window.fetch so that a session-expiry 401 redirects to the login page
 // instead of leaving the user staring at a UI that looks active but is actually
@@ -42,6 +337,9 @@ function createCustomDropdown(selectElement) {
     text: opt.text,
     html: opt.dataset.html || null, // optional rich HTML label (e.g. SVG logo)
     selected: opt.selected,
+    // A disabled <option> renders greyed and is not selectable. Used to lock
+    // Output Modes the account's plan does not include.
+    disabled: opt.disabled,
   }));
 
   const selectedOption = options.find((opt) => opt.selected) || options[0];
@@ -66,11 +364,16 @@ function createCustomDropdown(selectElement) {
     if (opt.value === selectedOption.value) {
       optionDiv.classList.add("selected");
     }
+    if (opt.disabled) {
+      optionDiv.classList.add("disabled");
+      optionDiv.title = "Not included in this device's DigitalPool plan";
+    }
     if (opt.html) { optionDiv.innerHTML = opt.html; }
     else { optionDiv.textContent = opt.text; }
     optionDiv.dataset.value = opt.value;
 
     optionDiv.addEventListener("click", () => {
+      if (opt.disabled) return;   // locked by the account's plan
       // Update selected display
       if (opt.html) { selected.innerHTML = opt.html; }
       else { selected.textContent = opt.text; }
@@ -1976,6 +2279,11 @@ streamProtocol.addEventListener("change", () => {
 
   // Update protocol custom dropdown display (uses innerHTML for data-html options like YouTube)
   updateCustomDropdownDisplay(streamProtocol);
+
+  // A saved config can still hold an Output Mode this plan no longer includes,
+  // so re-check the note and the Start button on every switch.
+  applyProtocolLocks();
+  if (!isCurrentlyStreaming) startStreamBtn.disabled = !canStartStream();
 });
 
 // Start/Restart stream
@@ -2063,10 +2371,26 @@ socket.on("streamResult", (result) => {
   console.log("Stream result:", result);
   if (!result.success) {
     alert(`Stream error: ${result.error}`);
-    startStreamBtn.disabled = false;
+    // A subscription refusal is not a stream error the operator can retry out
+    // of — pull the current status so the banner explains why, and leave the
+    // button disabled rather than inviting another doomed attempt.
+    if (result.subscriptionRequired || result.packageRequired) {
+      if (result.subscriptionRequired) subscriptionOk = false;
+      fetch("/api/subscription/status")
+        .then((r) => r.json())
+        .then(applySubscriptionStatus)
+        .catch(() => {});
+    }
+    startStreamBtn.disabled = !canStartStream();
     stopStreamBtn.disabled = true;
     setStreamStatus("error", "Stream Error");
   }
+});
+
+// Server-pushed subscription changes (a scheduled check flipped the state).
+socket.on("subscriptionStatus", (status) => {
+  console.log("Subscription status:", status);
+  applySubscriptionStatus(status);
 });
 
 // Idle preview refresh — server killed the preview, reconnect with updated settings
@@ -2199,8 +2523,8 @@ socket.on("streamStatus", (status) => {
     }, 2000); // 2 s grace period for GStreamer + MediaMTX to start publishing
   } else {
     // Change Restart button back to Start button
-    // Registration gate: keep disabled if device not yet registered
-    startStreamBtn.disabled = !deviceRegistered;
+    // Registration + subscription gate: keep disabled until both are satisfied
+    startStreamBtn.disabled = !canStartStream();
     startBtnIcon.textContent = "▶";
     startBtnText.textContent = "Start";
     startStreamBtn.classList.remove("btn-restart");
@@ -5017,7 +5341,7 @@ loadDeviceIp();
     await initRegistration();   // sets deviceRegistered + gates start button
     initRemoteAccess();
     // SSH is a dpadmin-only support control — never surface it to venue admins.
-    if (currentUser.username === "dpadmin") initRemoteSsh();
+    if (currentUser.username === "dpadmin") { initRemoteSsh(); initBrandedOverlay(); }
 
     // Operators can list and download recordings; only admins change retention
     // or delete footage. The API enforces the same split.
@@ -5026,6 +5350,7 @@ loadDeviceIp();
   }
 
   initRecordings();
+  initSubscription();   // banner + Start-button gate, for every role
 
   // ── Software version ─────────────────────────────────────────
   (async () => {
@@ -5687,6 +6012,114 @@ loadDeviceIp();
     }
   });
 
+  // ── Branded overlay (dpadmin) ────────────────────────────────
+  // The overlay base-tier accounts carry instead of their own.  dpadmin-only:
+  // a venue admin who could edit this could blank the branding out.
+  async function initBrandedOverlay() {
+    const section  = document.getElementById("brandedOverlaySection");
+    const urlEl    = document.getElementById("brandedOverlayUrl");
+    const enabledEl= document.getElementById("brandedOverlayEnabled");
+    const refreshEl= document.getElementById("brandedOverlayRefresh");
+    const inUseEl  = document.getElementById("brandedOverlayInUse");
+    const effEl    = document.getElementById("brandedOverlayEffective");
+    const saveBtn  = document.getElementById("brandedOverlaySaveBtn");
+    const msg      = document.getElementById("brandedOverlayMsg");
+    if (!section) return;
+
+    const render = (d) => {
+      if (urlEl)     urlEl.value       = d.overlayUrl || "";
+      if (urlEl)     urlEl.placeholder = d.defaultUrl || "(device default)";
+      if (enabledEl) enabledEl.checked = d.enabled !== false;
+      if (refreshEl) refreshEl.value   = Math.round((d.refreshMs || 300000) / 1000);
+      if (effEl)     effEl.textContent = d.effectiveUrl || "—";
+      if (inUseEl) {
+        inUseEl.textContent = d.inUse ? "Yes — this account has no custom overlays" : "No — account has custom overlays";
+        inUseEl.style.color = d.inUse ? "#fbbf24" : "rgba(255,255,255,0.6)";
+      }
+    };
+
+    try {
+      const r = await fetch("/api/branding/overlay");
+      if (r.ok) { render(await r.json()); section.style.display = "block"; }
+    } catch { /* leave hidden */ }
+
+    saveBtn?.addEventListener("click", async () => {
+      saveBtn.disabled = true;
+      if (msg) { msg.textContent = "⏳ Saving…"; msg.style.color = ""; }
+      try {
+        const r = await fetch("/api/branding/overlay", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            overlayUrl: urlEl?.value.trim() || "",
+            enabled:    !!enabledEl?.checked,
+            refreshMs:  Math.max(1, parseInt(refreshEl?.value, 10) || 300) * 1000,
+          }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        // The PUT answers with the new branded-overlay state, not the full GET
+        // shape — re-read so "in use" and the effective URL stay accurate.
+        const g = await fetch("/api/branding/overlay");
+        if (g.ok) render(await g.json());
+        if (msg) { msg.textContent = "✅ Saved"; msg.style.color = "#4ade80"; }
+      } catch (e) {
+        if (msg) { msg.textContent = `❌ ${e.message}`; msg.style.color = "#f87171"; }
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+  }
+
+  // ── Subscription ─────────────────────────────────────────────
+  // Runs for every signed-in role, unlike initRegistration() which is admin
+  // only: an operator still needs to be told why Start is disabled.
+  async function initSubscription() {
+    const msg       = document.getElementById("subscriptionMsg");
+    const panelBtn  = document.getElementById("subscriptionCheckBtn");
+    const bannerBtn = document.getElementById("subscriptionBannerCheckBtn");
+    const both      = [panelBtn, bannerBtn];
+
+    try {
+      const r = await fetch("/api/subscription/status");
+      if (r.ok) applySubscriptionStatus(await r.json());
+    } catch { /* leave the optimistic default — the server still refuses */ }
+
+    for (const btn of both)
+      btn?.addEventListener("click", () => recheckSubscription(msg, both));
+
+    // The plan panel, reachable from the header chip on every page view.
+    const planModal   = document.getElementById("planModal");
+    const planCheck   = document.getElementById("planCheckNowBtn");
+    const planMsg     = document.getElementById("planCheckMsg");
+    const openPlan = ({ keepMsg = false } = {}) => {
+      if (planMsg && !keepMsg) planMsg.textContent = "";
+      if (subscriptionStatus) renderPlanUi(subscriptionStatus);
+      if (planModal) planModal.style.display = "flex";
+    };
+    const closePlan = () => { if (planModal) planModal.style.display = "none"; };
+
+    document.getElementById("planChip")?.addEventListener("click", openPlan);
+    document.getElementById("planModalClose")?.addEventListener("click", closePlan);
+    planModal?.addEventListener("click", (e) => { if (e.target === planModal) closePlan(); });
+    planCheck?.addEventListener("click", () => recheckSubscription(planMsg, [planCheck]));
+
+    // "Upgraded? Check now" sits inside each lock note, where the limit is felt.
+    for (const btn of document.querySelectorAll("[data-plan-recheck]")) {
+      btn.addEventListener("click", async () => {
+        const all = Array.from(document.querySelectorAll("[data-plan-recheck]"));
+        const label = btn.textContent;
+        btn.textContent = "Checking…";
+        // Write the outcome into the plan panel, then open it: whatever the
+        // answer, the operator sees it spelled out next to the upgrade link
+        // rather than being left to guess why nothing changed.
+        const d = await recheckSubscription(planMsg, all);
+        btn.textContent = label;
+        if (d) openPlan({ keepMsg: true });
+      });
+    }
+  }
+
   // ── Device Registration ──────────────────────────────────────
   async function initRegistration() {
     const noInternetArea = document.getElementById("regNoInternetArea");
@@ -5773,7 +6206,9 @@ loadDeviceIp();
         regStatusDate.textContent = new Date(data.registeredAt).toLocaleDateString();
       if (regStatusIp) regStatusIp.textContent = data.netbirdIp || data.ip || "—";
       if (regBadge) regBadge.style.display = "none";
-      if (startStreamBtn && startStreamBtn.disabled) startStreamBtn.disabled = false;
+      if (data.subscription) applySubscriptionStatus(data.subscription);
+      if (startStreamBtn && startStreamBtn.disabled && canStartStream())
+        startStreamBtn.disabled = false;
     }
 
     function showUnregistered(hasInternet) {
@@ -5942,6 +6377,14 @@ loadDeviceIp();
         if (noVenueArea) noVenueArea.style.display = "none";
         if (venueArea)   venueArea.style.display   = "";
         showRegMsg("Select which venue this camera belongs to, then Confirm.");
+        registerBtn.disabled = false;
+        return;
+      }
+      // Account verified, but it has no subscription — registration is refused.
+      // Nothing about the camera can fix this; the operator has to subscribe.
+      if (d.subscriptionRequired) {
+        hideVenueSteps();
+        showRegMsg(`⛔ ${d.error || "An active DigitalPool subscription is required."}`, true);
         registerBtn.disabled = false;
         return;
       }

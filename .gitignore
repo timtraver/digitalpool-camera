@@ -140,3 +140,5 @@ vite.config.ts.timestamp-*
 
 # Runtime state written by the app (not committed)
 recording-config.json
+subscription.json
+branding.json

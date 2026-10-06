@@ -14,6 +14,9 @@
           <h1>Camera Control</h1>
         </div>
         <div class="header-user" id="headerUser">
+          <!-- Always-visible plan state. Amber/red whenever the device does not
+               have every feature; opens the plan panel (with "Check Now"). -->
+          <button id="planChip" class="plan-chip" style="display:none" title="DigitalPool plan — click for details"></button>
           <span id="headerUsername" class="header-username">…</span>
           <button id="logoutBtn" class="btn-logout" title="Sign out">⏏ Sign Out</button>
         </div>
@@ -509,6 +512,12 @@
 
             <!-- Remote Overlay -->
             <div class="overlay-section">
+              <!-- Shown when the plan does not include custom overlays: the
+                   DigitalPool branded overlay is composited instead. -->
+              <div id="overlayPlanNote" class="plan-note" style="display:none">
+                <span id="overlayPlanText"></span>
+                <button type="button" class="plan-note-action" data-plan-recheck>Upgraded? Check now</button>
+              </div>
               <div class="control-item-compact">
                 <label>
                   <input type="checkbox" id="remoteOverlayEnabled" />
@@ -572,6 +581,12 @@
                 <option value="youtube">YouTube Live</option>
                 <option value="facebook">Facebook Live</option>
               </select>
+            </div>
+            <!-- Filled by applyProtocolLocks() when the plan does not include
+                 the RTSP/SRT Server output modes. -->
+            <div id="protocolLockNote" class="plan-note" style="display:none">
+              <span id="protocolLockText"></span>
+              <button type="button" class="plan-note-action" data-plan-recheck>Upgraded? Check now</button>
             </div>
 
             <!-- Connection info — shown for RTSP and SRT server modes -->
@@ -713,6 +728,14 @@
                      style="width:70px; flex:none"
                      title="Negative = advance audio (fix audio lag). Positive = delay audio (fix audio lead)." />
               <span style="font-size:10px; color:rgba(255,255,255,0.45); margin-left:4px">− leads, + lags</span>
+            </div>
+
+            <!-- Shown when DigitalPool reports no active subscription (or the
+                 device has been unable to verify one for weeks).  Streaming is
+                 blocked while this is visible; a running stream is never cut. -->
+            <div id="subscriptionBanner" class="subscription-banner" style="display:none">
+              <span id="subscriptionBannerText"></span>
+              <button class="btn-wifi-action" id="subscriptionBannerCheckBtn" style="margin-top:8px;width:100%;font-size:11px">🔄 Re-check Subscription</button>
             </div>
 
             <div style="display: flex; gap: 8px; margin-top: 12px">
@@ -977,6 +1000,7 @@
           <div class="settings-card-header" id="adminSettingsToggle">
             <span>🔐 Admin Settings</span>
             <span id="regRequiredBadge" style="display:none;background:rgba(245,158,11,0.18);border:1px solid rgba(245,158,11,0.5);border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;color:rgba(245,158,11,0.95);margin-left:8px">⚠️ Registration Required</span>
+            <span id="subRequiredBadge" style="display:none;background:rgba(239,68,68,0.18);border:1px solid rgba(239,68,68,0.5);border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;color:rgba(248,113,113,0.95);margin-left:8px">⛔ Subscription Required</span>
             <span class="settings-card-chevron" id="adminSettingsChevron">▶</span>
           </div>
           <div class="settings-card-body" id="adminSettingsBody" style="display:none">
@@ -1147,6 +1171,21 @@
                       <span class="wifi-label">VPN IP</span>
                       <code class="wifi-value remote-ip-value" id="regStatusIp">—</code>
                     </div>
+                    <div class="wifi-info-row">
+                      <span class="wifi-label">Subscription</span>
+                      <span class="wifi-value" id="regStatusSubscription">—</span>
+                    </div>
+                    <div class="wifi-info-row">
+                      <span class="wifi-label">Verified</span>
+                      <span class="wifi-value" id="regStatusSubChecked">—</span>
+                    </div>
+                    <button class="btn-wifi-action" id="subscriptionCheckBtn" style="width:100%;margin-top:8px;font-size:11px">
+                      🔄 Re-check Subscription
+                    </button>
+                    <small style="color:rgba(255,255,255,0.35);font-size:10px;display:block;margin-top:4px">
+                      Checked with DigitalPool automatically every two weeks. Click here right after subscribing to unlock streaming immediately.
+                    </small>
+                    <div class="wifi-msg" id="subscriptionMsg"></div>
                   </div>
 
                   <!-- Connection status + De-Register — only meaningful once the
@@ -1196,6 +1235,46 @@
                     <div class="wifi-msg" id="remoteSshMsg"></div>
                   </div>
 
+                </div>
+              </details>
+            </div>
+
+            <!-- Branded overlay — dpadmin only.  Venue admins must not be able
+                 to point this at a blank page and switch the branding off. -->
+            <div class="admin-section" id="brandedOverlaySection" style="display:none">
+              <details class="admin-collapsible">
+                <summary class="admin-section-title">🏷️ Branded Overlay</summary>
+                <div class="admin-collapsible-body wifi-form">
+                  <p class="wifi-hint" style="margin-top:0">
+                    Composited into streams from accounts <strong>without</strong> the Advanced
+                    Streaming package, in place of their own overlay. Leave the URL empty to use
+                    the page this device serves at <code>/branded-overlay.html</code>.
+                  </p>
+                  <div class="wifi-info-row">
+                    <span class="wifi-label">In use now</span>
+                    <span class="wifi-value" id="brandedOverlayInUse">—</span>
+                  </div>
+                  <div class="wifi-info-row">
+                    <span class="wifi-label">Rendering</span>
+                    <code class="wifi-value remote-ip-value" id="brandedOverlayEffective">—</code>
+                  </div>
+                  <label style="margin-top:8px">
+                    <input type="checkbox" id="brandedOverlayEnabled" /> Show the branded overlay
+                  </label>
+                  <label>Overlay URL</label>
+                  <input type="text" id="brandedOverlayUrl" placeholder="(device default)"
+                         autocomplete="off" style="font-size:12px" />
+                  <label>Sample every (seconds)</label>
+                  <input type="number" id="brandedOverlayRefresh" min="1" step="1" value="300"
+                         style="font-size:12px" />
+                  <small style="color:rgba(255,255,255,0.35);font-size:10px;display:block;margin-top:2px">
+                    A static branded page needs sampling only rarely — low values burn Chromium CPU
+                    for no visible gain.
+                  </small>
+                  <button class="btn-wifi-action" id="brandedOverlaySaveBtn" style="width:100%;margin-top:10px">
+                    💾 Save Branded Overlay
+                  </button>
+                  <div class="wifi-msg" id="brandedOverlayMsg"></div>
                 </div>
               </details>
             </div>
@@ -1384,6 +1463,50 @@
             <button class="reg-modal-close" id="regModalClose" title="Close" aria-label="Close">✕</button>
           </div>
           <div class="reg-modal-body" id="regModalMount"></div>
+        </div>
+      </div>
+
+      <!-- Plan panel: what this device's subscription includes, and the button
+           that re-checks with DigitalPool immediately after an upgrade. -->
+      <div id="planModal" class="reg-modal-backdrop" style="display:none">
+        <div class="reg-modal">
+          <div class="reg-modal-header">
+            <span class="reg-modal-title">🎟️ DigitalPool Plan</span>
+            <button class="reg-modal-close" id="planModalClose" title="Close" aria-label="Close">✕</button>
+          </div>
+          <div class="reg-modal-body">
+            <div class="wifi-info-row">
+              <span class="wifi-label">Plan</span>
+              <span class="wifi-value" id="planModalPlan">—</span>
+            </div>
+            <div class="wifi-info-row">
+              <span class="wifi-label">Last verified</span>
+              <span class="wifi-value" id="planModalChecked">—</span>
+            </div>
+            <div class="wifi-info-row">
+              <span class="wifi-label">Next check</span>
+              <span class="wifi-value" id="planModalNext">—</span>
+            </div>
+
+            <div class="plan-feature-list" id="planFeatureList"></div>
+
+            <div id="planModalHint" class="plan-note" style="display:none"></div>
+
+            <button class="btn-wifi-action" id="planCheckNowBtn" style="width:100%;margin-top:10px">
+              🔄 Check Now
+            </button>
+            <small style="color:rgba(255,255,255,0.4);font-size:10px;display:block;margin-top:4px">
+              Just purchased or upgraded? Click here — the device asks DigitalPool straight away
+              instead of waiting for its next scheduled check.
+            </small>
+            <div class="wifi-msg" id="planCheckMsg"></div>
+
+            <a href="https://digitalpool.com" target="_blank" rel="noopener"
+               class="btn-wifi-action" id="planUpgradeLink"
+               style="display:block;text-align:center;text-decoration:none;margin-top:8px;font-size:11px">
+              🌐 Manage your subscription on DigitalPool
+            </a>
+          </div>
         </div>
       </div>
 

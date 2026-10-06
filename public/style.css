@@ -1583,6 +1583,109 @@ footer {
   text-align: center;
 }
 
+/* ── Subscription blocker banner ───────────────────────────────────────────── */
+.subscription-banner {
+  background: rgba(239,68,68,0.14);
+  border: 1px solid rgba(239,68,68,0.5);
+  border-radius: 7px;
+  color: #fca5a5;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 10px 14px;
+  margin-top: 12px;
+  text-align: center;
+}
+
+/* ── Plan chip (header) ────────────────────────────────────────────────────── */
+.plan-chip {
+  background: rgba(34,197,94,0.16);
+  border: 1px solid rgba(34,197,94,0.45);
+  border-radius: 999px;
+  color: #86efac;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 11px;
+  margin-right: 10px;
+  white-space: nowrap;
+  transition: background 0.15s ease;
+}
+.plan-chip:hover { background: rgba(34,197,94,0.28); }
+
+/* Amber = subscribed but missing a package; red = nothing to stream with. */
+.plan-chip.limited {
+  background: rgba(245,158,11,0.16);
+  border-color: rgba(245,158,11,0.5);
+  color: #fcd34d;
+}
+.plan-chip.limited:hover { background: rgba(245,158,11,0.3); }
+.plan-chip.blocked {
+  background: rgba(239,68,68,0.16);
+  border-color: rgba(239,68,68,0.5);
+  color: #fca5a5;
+}
+.plan-chip.blocked:hover { background: rgba(239,68,68,0.3); }
+
+/* ── Plan panel feature list ───────────────────────────────────────────────── */
+.plan-feature-list {
+  margin: 12px 0 4px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding-top: 10px;
+}
+.plan-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  padding: 5px 0;
+  color: rgba(255,255,255,0.78);
+}
+.plan-feature .mark { flex: none; font-size: 12px; }
+.plan-feature.missing { color: rgba(255,255,255,0.45); }
+.plan-feature .detail {
+  display: block;
+  font-size: 10px;
+  color: rgba(255,255,255,0.38);
+}
+
+/* Inline "check now" inside a lock note. */
+.plan-note-action {
+  display: inline-block;
+  margin-top: 6px;
+  background: rgba(245,158,11,0.18);
+  border: 1px solid rgba(245,158,11,0.45);
+  border-radius: 5px;
+  color: #fcd34d;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 9px;
+}
+.plan-note-action:hover { background: rgba(245,158,11,0.32); }
+.plan-note-action:disabled { opacity: 0.5; cursor: default; }
+
+/* ── Plan / package notes (locked Output Mode, branded overlay) ────────────── */
+.plan-note {
+  background: rgba(245,158,11,0.12);
+  border: 1px solid rgba(245,158,11,0.4);
+  border-radius: 6px;
+  color: #fcd34d;
+  font-size: 10.5px;
+  line-height: 1.5;
+  padding: 7px 10px;
+  margin: 6px 0;
+}
+
+/* An Output Mode the account's plan does not include. */
+.custom-dropdown-option.disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+.custom-dropdown-option.disabled:hover {
+  background: transparent;
+}
+
 /* ── Camera Settings inner subsections ─────────────────────────────────────── */
 .cam-subsection {
   border-bottom: 1px solid rgba(18, 199, 255, 0.08);

@@ -22,6 +22,8 @@ const WifiManager = require("./wifiManager");
 const authManager = require("./authManager");
 const { RecordingManager, safeRecordingName } = require("./recordingManager");
 const { AlertMailer } = require("./alertMailer");
+const { callDigitalPoolFunction } = require("./digitalpoolApi");
+const subscriptionManager = require("./subscriptionManager");
 
 // Local match recording, armed by a remote RTSP reader (i.e. Wowza pulling).
 // Paths match streamController.js:67 — camera 1 publishes to `live`, camera 2
@@ -188,6 +190,22 @@ let cameraInitialized2 = false;
 let cameraFormat2 = 'mjpeg';
 const streamController2 = new StreamController(CAMERA_DEVICE_2, { streamId: 2 });
 
+// Entitlements reach the pipeline builders through this: both controllers ask
+// server.js whose overlay to composite rather than reading streamConfig alone,
+// so a base-tier account gets the DigitalPool branded overlay instead of its
+// own.  effectiveOverlay() is a hoisted function declaration further down, and
+// these arrows only run at pipeline-build time, so the forward reference is safe.
+streamController.resolveOverlay  = () => effectiveOverlay(streamController);
+streamController2.resolveOverlay = () => effectiveOverlay(streamController2);
+
+// Backstop for the starts that have no user behind them — autoStart on boot, the
+// USB-reset restore, the stall watchdog's auto-resume. The user-facing paths run
+// streamStartGate() themselves (with the dpadmin bypass) and pass
+// skipEntitlementCheck, so this never double-gates them. Username is null here:
+// there is nobody to bypass for.
+streamController.startGate  = (cfg) => streamStartGate(null, cfg, streamController);
+streamController2.startGate = (cfg) => streamStartGate(null, cfg, streamController2);
+
 // ── Shared boot / restart flags ───────────────────────────────────────────────
 // Flag to prevent /video/stream from spawning idle preview during boot
 let bootComplete = false;
@@ -309,8 +327,8 @@ let gameState = {
 async function regenerateOverlay() {
   // Never render local scoreboard HTML when remote overlay is active —
   // the remote URL page handles its own rendering via Puppeteer periodic refresh
-  const isRemote = streamController.streamConfig.remoteOverlayEnabled &&
-    streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
+  const _ov = effectiveOverlay(streamController);
+  const isRemote = _ov.enabled && !!_ov.url;
   if (!isRemote && puppeteerOverlay && puppeteerOverlay.isRunning) {
     await puppeteerOverlay.updateState(gameState);
   }
@@ -767,42 +785,39 @@ function getPrimaryMac() {
  * Resolves to { statusCode, body }.  `body` is the parsed JSON response.
  */
 function callDigitalPoolRegister(payload) {
-  const base = (process.env.DIGITALPOOL_FUNCTIONS_URL
-    || "https://us-central1-digital-pool.cloudfunctions.net").replace(/\/$/, "");
-  const fn      = process.env.DIGITALPOOL_REGISTER_FUNCTION || "registerCameraDevice";
-  const fullUrl = `${base}/${fn}`;
-  const urlObj  = new URL(fullUrl);
-  const mod     = fullUrl.startsWith("https") ? require("https") : require("http");
-  const reqBody = JSON.stringify(payload);
-
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: urlObj.hostname,
-      port:     urlObj.port || (fullUrl.startsWith("https") ? 443 : 80),
-      path:     urlObj.pathname + urlObj.search,
-      method:   "POST",
-      headers: {
-        "Content-Type":   "application/json",
-        Accept:           "application/json",
-        "Content-Length": Buffer.byteLength(reqBody),
-      },
-      timeout: 20000,
-    };
-    const req = mod.request(options, (res) => {
-      let data = "";
-      res.on("data", (chunk) => { data += chunk; });
-      res.on("end", () => {
-        let body = {};
-        try { body = data ? JSON.parse(data) : {}; } catch { body = { raw: data }; }
-        resolve({ statusCode: res.statusCode, body });
-      });
-    });
-    req.on("error", reject);
-    req.on("timeout", () => { req.destroy(); reject(new Error("DigitalPool registration request timed out")); });
-    req.write(reqBody);
-    req.end();
-  });
+  const fn = process.env.DIGITALPOOL_REGISTER_FUNCTION || "registerCameraDevice";
+  return callDigitalPoolFunction(fn, payload);
 }
+
+// The recurring subscription check runs off the same cloud function under the
+// `subscription` action, using the account id recorded at registration — no
+// password is kept, so it cannot re-authenticate the operator.  Identity comes
+// from remote.json, read fresh on every check so a re-registration is picked up.
+subscriptionManager.init({
+  getIdentity: () => {
+    const cfg = loadRemoteConfig();
+    return {
+      registered: isRegistered(),
+      userId:     cfg.userId     || "",
+      ownerEmail: cfg.ownerEmail || "",
+      deviceId:   cfg.deviceId   || "",
+      deviceName: getDeviceName(),
+      macAddress: cfg.macAddress || getPrimaryMac(),
+      netbirdIp:  cfg.netbirdIp  || "",
+      venueId:    cfg.venueId    || "",
+    };
+  },
+  onChange: (status) => {
+    io.emit("subscriptionStatus", status);
+    // A package gained or lost changes whose overlay is composited.  Retarget
+    // the renderer now; a running stream hot-swaps the PNG without restarting.
+    for (const idx of [1, 2]) {
+      Promise.resolve()
+        .then(() => applyEffectiveOverlay(idx))
+        .catch((e) => console.warn(`⚠️  [Cam${idx}] overlay retarget failed:`, e.message));
+    }
+  },
+});
 
 /**
  * Bring NetBird up with this device's hostname and poll until it has an IP.
@@ -890,6 +905,30 @@ async function getLocalWanIp() {
 }
 
 /**
+ * Registration is only allowed for a DigitalPool account that holds a
+ * subscription (any plan level).  Reads the subscription the cloud function
+ * reported on a verify/assign response, records it, and — when it says the
+ * account is NOT subscribed — sends the refusal and returns true.
+ *
+ * A response that says nothing about subscriptions does not block: the device
+ * must keep registering against a cloud function that has not been updated yet
+ * (see SUBSCRIPTION_CHECK.md).
+ */
+function refusedForSubscription(res, body) {
+  const parsed = subscriptionManager.recordRegistrationResult(body);
+  if (!parsed.known || parsed.active) return false;
+  const label = parsed.plan || parsed.status || "none";
+  console.log(`⛔ Registration refused — no active DigitalPool subscription (${label})`);
+  res.status(402).json({
+    error: "This DigitalPool account does not have an active subscription. "
+         + "Subscribe at digitalpool.com, then register this camera again.",
+    subscriptionRequired: true,
+    subscription: { plan: parsed.plan, status: parsed.status, expiresAt: parsed.expiresAt },
+  });
+  return true;
+}
+
+/**
  * Call the cloud function's `assign` action and, on success, persist the device
  * as registered (venue id/name, device id, NetBird IP).  Sends the HTTP response.
  * The password is used only for this call and never written to disk.
@@ -909,9 +948,15 @@ async function finalizeRegistration(res, { email, password, venueId, venueName, 
   if (assign.statusCode >= 400)
     return res.status(502).json({ error: assign.body?.error || `Registration service error (HTTP ${assign.statusCode})` });
 
+  // Subscription gate — a device may only be registered to a subscribed account.
+  if (refusedForSubscription(res, assign.body)) return;
+
   const cfg = loadRemoteConfig();
   cfg.deviceName   = deviceName;
   cfg.ownerEmail   = email;
+  // The account id is what the recurring subscription check is keyed by — it is
+  // the one piece of the operator's identity we keep, since the password is not.
+  cfg.userId       = assign.body?.user_id || assign.body?.userId || assign.body?.uid || cfg.userId || "";
   cfg.netbirdIp    = ip;
   cfg.macAddress   = macAddress;
   cfg.venueId      = assign.body?.venue_id   || assign.body?.venueId   || venueId;
@@ -927,6 +972,7 @@ async function finalizeRegistration(res, { email, password, venueId, venueName, 
   return res.json({
     success: true, ip, deviceName, ownerEmail: email,
     venueId: cfg.venueId, venueName: cfg.venueName, venueSlug: cfg.venueSlug, deviceId: cfg.deviceId,
+    subscription: subscriptionManager.getStatus(),
   });
 }
 
@@ -1052,16 +1098,52 @@ function checkInternet() {
 }
 
 /**
- * Middleware — rejects stream-start requests when the device has not been
- * registered yet.  dpadmin bypasses the gate for support access.
+ * The single answer to "may this user start a stream right now?", shared by the
+ * REST route and both socket handlers so the three paths cannot drift apart.
+ * Three things in order: registration, a live subscription, and the package the
+ * requested output mode needs.  dpadmin bypasses all of them for support.
+ *
+ * Returns null when allowed, or a rejection payload to hand back to the client.
+ * Deliberately only consulted on START/RESTART — a running stream is never torn
+ * down by a lapse, so a match in progress survives.
+ *
+ * @param {string} username  session user
+ * @param {object} [config]  the config the client is starting with (its
+ *                           `protocol` wins over what is saved on the controller)
+ * @param {object} [sc]      the stream controller the request is for
  */
-function requireRegistered(req, res, next) {
-  if (req.session?.user?.username === "dpadmin") return next();
-  if (isRegistered()) return next();
-  return res.status(403).json({
-    error: "Device not registered. Complete registration in Admin Settings first.",
-    registrationRequired: true,
-  });
+function streamStartGate(username, config, sc) {
+  if (username === "dpadmin") return null;
+  if (!isRegistered()) {
+    return {
+      error: "Device not registered. Complete registration in Admin Settings first.",
+      registrationRequired: true,
+    };
+  }
+  const sub = subscriptionManager.gate();
+  if (!sub.allowed) {
+    console.log(`⛔ Stream start blocked — ${sub.code}`);
+    return { error: sub.message, subscriptionRequired: true, subscriptionCode: sub.code };
+  }
+  // Output mode: RTSP/SRT Server reach DigitalPool's datacenter and need the
+  // Advanced Streaming package.  RTMP push (and its YouTube/Facebook presets)
+  // goes to the venue's own destination and is fine on any plan.
+  const protocol = config?.protocol || sc?.streamConfig?.protocol || "";
+  const pkg = subscriptionManager.gateProtocol(protocol);
+  if (pkg) {
+    console.log(`⛔ Stream start blocked — ${protocol} needs the ${pkg.feature} package`);
+    return { error: pkg.message, packageRequired: pkg.feature, subscriptionCode: pkg.code };
+  }
+  return null;
+}
+
+/** Express flavour of streamStartGate(). */
+function requireActiveStream(req, res, next) {
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  const refusal = streamStartGate(req.session?.user?.username, req.body, getSC(camIdx));
+  if (!refusal) return next();
+  if (refusal.registrationRequired) return res.status(403).json(refusal);
+  return res.status(402).json(refusal);
 }
 
 /**
@@ -1127,7 +1209,196 @@ app.get("/api/setup/status", requireAdmin, async (req, res) => {
     venueSlug:    cfg.venueSlug    || "",
     registeredAt: cfg.registeredAt || null,
     netbirdIp,
+    subscription: subscriptionManager.getStatus(),
   });
+});
+
+// ── Subscription ─────────────────────────────────────────────────────────────
+// The device may only stream while the DigitalPool account it is registered to
+// holds a subscription.  State is cached locally and refreshed on a timer; these
+// routes expose it and let an operator force a refresh after subscribing.
+
+// Readable by any signed-in user (not just admins) so an operator's UI can show
+// the blocker banner and keep the Start button honest.
+app.get("/api/subscription/status", (req, res) => {
+  res.json(subscriptionManager.getStatus());
+});
+
+// POST /api/subscription/check — the "Check Now" button.  Asks DigitalPool
+// straight away rather than waiting for the next scheduled check, so a venue
+// that has just purchased or upgraded does not sit locked out for up to two
+// weeks.  Open to any signed-in user (not just admins): whoever is at the venue
+// when the upgrade is bought is the one who needs it to take effect.
+let _lastManualCheckAt = 0;
+const MANUAL_CHECK_THROTTLE_MS = 10000;
+
+app.post("/api/subscription/check", async (req, res) => {
+  // Each check is an outbound HTTPS call; a held-down button must not become a
+  // request loop.  Inside the window, answer with the state we already have.
+  const since = Date.now() - _lastManualCheckAt;
+  if (since < MANUAL_CHECK_THROTTLE_MS) {
+    return res.json({ success: true, throttled: true, ...subscriptionManager.getStatus() });
+  }
+  _lastManualCheckAt = Date.now();
+  const result = await subscriptionManager.checkNow("manual");
+  const status = subscriptionManager.getStatus();
+  if (!result.ok) return res.status(502).json({ error: result.error || "Subscription check failed", ...status });
+  res.json({ success: true, ...status });
+});
+
+// ── Branded overlay (base-tier accounts) ─────────────────────────────────────
+// An account without the Advanced Streaming package streams to its own YouTube /
+// Facebook / RTMP destination, and carries the DigitalPool branded overlay
+// instead of its own graphics overlay.  The source is a URL rendered by the same
+// headless-Chromium path the venue's own overlay uses, defaulting to the page
+// this device serves at /branded-overlay.html.
+//
+// Settable by dpadmin only, deliberately: a venue admin who could point this at
+// a blank page would simply switch the branding off.
+const BRANDING_FILE = path.join(__dirname, "branding.json");
+
+// The page is static, so it is sampled rarely — a branded overlay must not cost
+// a venue the same Chromium CPU a live scoreboard does.
+const BRANDED_REFRESH_MS = 5 * 60 * 1000;
+
+function defaultBrandedUrl() {
+  return `http://127.0.0.1:${PORT}/branded-overlay.html`;
+}
+
+// Cached: effectiveOverlay() consults this on every pipeline build AND on every
+// score update (regenerateOverlay), so it must not be a disk read each time.
+let _brandingCache = null;
+
+function loadBrandingConfig() {
+  if (_brandingCache) return _brandingCache;
+  let cfg = {};
+  try {
+    if (fsSync.existsSync(BRANDING_FILE))
+      cfg = JSON.parse(fsSync.readFileSync(BRANDING_FILE, "utf8"));
+  } catch (e) { /* fall through to defaults */ }
+  _brandingCache = cfg;
+  return cfg;
+}
+
+function saveBrandingConfig(cfg) {
+  fsSync.writeFileSync(BRANDING_FILE, JSON.stringify(cfg, null, 2));
+  _brandingCache = cfg;
+}
+
+/** The branded overlay as the renderer needs it. */
+function brandedOverlay() {
+  const cfg = loadBrandingConfig();
+  return {
+    enabled:   cfg.enabled !== false,                      // on unless switched off
+    url:       (cfg.overlayUrl || "").trim() || defaultBrandedUrl(),
+    refreshMs: parseInt(cfg.refreshMs, 10) > 0 ? parseInt(cfg.refreshMs, 10) : BRANDED_REFRESH_MS,
+    isDefault: !(cfg.overlayUrl || "").trim(),
+  };
+}
+
+/**
+ * Which graphics overlay a camera should actually render, after entitlements.
+ * Every place that starts, stops or builds an overlay goes through this, so the
+ * pipeline, the idle preview and the Puppeteer renderer can never disagree about
+ * whose overlay is on screen.
+ *
+ * Returns { enabled, url, zoom, refreshMs, branded }.  `branded: true` means the
+ * venue's own overlay was replaced by ours.
+ */
+function effectiveOverlay(sc, configOverride) {
+  const cfg = configOverride || sc.streamConfig || {};
+  const ownUrl = (cfg.overlayUrl || "").trim();
+  const own = {
+    enabled: !!(cfg.skiaGraphicsEnabled || (cfg.remoteOverlayEnabled && ownUrl)),
+    url:     ownUrl,
+    zoom:    cfg.overlayZoom || 100,
+    refreshMs: 0,          // 0 = leave the renderer's configured cadence alone
+    branded: false,
+  };
+  if (subscriptionManager.can("overlays")) return own;
+
+  const branded = brandedOverlay();
+  if (!branded.enabled) return { enabled: false, url: "", zoom: 100, refreshMs: 0, branded: false };
+  return { enabled: true, url: branded.url, zoom: 100, refreshMs: branded.refreshMs, branded: true };
+}
+
+/**
+ * Point a camera's overlay renderer at whatever effectiveOverlay() now says.
+ * Used when the branding or the subscription changes under a device that is
+ * already running: the composited PNG is hot-swapped by mtime, so this retargets
+ * a live overlay without rebuilding any pipeline.  It deliberately does NOT
+ * restart the idle preview — a camera that had no overlay element built in picks
+ * the new one up on its next start.
+ */
+async function applyEffectiveOverlay(camIdx) {
+  const sc = getSC(camIdx);
+  if (!sc) return null;
+  const want = effectiveOverlay(sc);
+  let camPuppeteer = camIdx === 2 ? puppeteerOverlay2 : puppeteerOverlay;
+
+  if (!want.enabled || !want.url) {
+    if (camPuppeteer) camPuppeteer._stopPeriodicRefresh();
+    return want;
+  }
+  if (!camPuppeteer) {
+    if (!PuppeteerOverlay) return want;
+    camPuppeteer = new PuppeteerOverlay();
+    if (camIdx === 2) puppeteerOverlay2 = camPuppeteer;
+    else puppeteerOverlay = camPuppeteer;
+  }
+  if (!camPuppeteer.isRunning) await camPuppeteer.initialize(PORT, sc.pngOverlayPath);
+  camPuppeteer.setOverlayUrl(want.url, {
+    zoom: want.zoom,
+    ...(want.refreshMs ? { refreshInterval: want.refreshMs } : {}),
+  });
+  camPuppeteer.startPeriodicRefresh();
+  console.log(`🖼️  [Cam${camIdx}] Overlay renderer → ${want.branded ? "branded" : "venue"} ${want.url}`);
+  return want;
+}
+
+// GET /api/branding/overlay — dpadmin only
+app.get("/api/branding/overlay", requireDpAdmin, (req, res) => {
+  const cfg = loadBrandingConfig();
+  const b = brandedOverlay();
+  res.json({
+    enabled:    b.enabled,
+    overlayUrl: (cfg.overlayUrl || "").trim(),
+    effectiveUrl: b.url,
+    defaultUrl: defaultBrandedUrl(),
+    refreshMs:  b.refreshMs,
+    // Whether it is actually in use right now on this device.
+    inUse:      !subscriptionManager.can("overlays"),
+  });
+});
+
+// PUT /api/branding/overlay — dpadmin only.  An empty overlayUrl restores the
+// device's own /branded-overlay.html page.
+app.put("/api/branding/overlay", requireDpAdmin, express.json(), async (req, res) => {
+  // Copy, never the cached object: a validation failure below must not leave
+  // half-applied values behind in memory.
+  const cfg = { ...loadBrandingConfig() };
+  if (req.body?.enabled !== undefined) cfg.enabled = !!req.body.enabled;
+  if (req.body?.overlayUrl !== undefined) {
+    const url = String(req.body.overlayUrl || "").trim();
+    if (url && !/^https?:\/\//i.test(url))
+      return res.status(400).json({ error: "Branded overlay URL must start with http:// or https://" });
+    cfg.overlayUrl = url;
+  }
+  if (req.body?.refreshMs !== undefined) {
+    const ms = parseInt(req.body.refreshMs, 10);
+    if (!Number.isFinite(ms) || ms < 1000)
+      return res.status(400).json({ error: "refreshMs must be at least 1000" });
+    cfg.refreshMs = ms;
+  }
+  saveBrandingConfig(cfg);
+  console.log(`🏷️  Branded overlay updated: ${brandedOverlay().url} (enabled=${brandedOverlay().enabled})`);
+  // Push it to any camera currently rendering the branded overlay.
+  for (const idx of [1, 2]) {
+    try { await applyEffectiveOverlay(idx); } catch (e) {
+      console.warn(`⚠️  [Cam${idx}] could not apply new branding:`, e.message);
+    }
+  }
+  res.json({ success: true, ...brandedOverlay() });
 });
 
 // POST /api/setup/register — step 1 of registration.
@@ -1185,6 +1456,16 @@ app.post("/api/setup/register", requireAdmin, express.json(), async (req, res) =
     return res.status(401).json({ error: verify.body?.error || "Invalid DigitalPool credentials" });
   if (verify.statusCode >= 400)
     return res.status(502).json({ error: verify.body?.error || `Registration service error (HTTP ${verify.statusCode})` });
+
+  // Credentials are good — record the account id for the recurring subscription
+  // check, then refuse the registration outright if the account has no plan.
+  const verifiedUserId = verify.body?.user_id || verify.body?.userId || verify.body?.uid || "";
+  if (verifiedUserId) {
+    const c = loadRemoteConfig();
+    c.userId = verifiedUserId;
+    saveRemoteConfig(c);
+  }
+  if (refusedForSubscription(res, verify.body)) return;
 
   // Normalise the venue list to { id, name } regardless of the field casing the
   // function returns (venue_id/venue_name or id/name).
@@ -1349,7 +1630,7 @@ app.post("/api/remote/wipe", requireAdmin, async (req, res) => {
   const log = [];
   try {
     // 0. Stop any active stream(s) first — a deregistered device must not keep
-    //    streaming, and requireRegistered only blocks NEW streams (an already-
+    //    streaming, and streamStartGate() only blocks NEW streams (an already-
     //    running one would otherwise continue after the wipe).
     if (streamController.isStreaming || streamController2.isStreaming) {
       log.push("🔄 Stopping active stream(s) before deregister…");
@@ -1420,7 +1701,11 @@ app.post("/api/remote/wipe", requireAdmin, async (req, res) => {
     cfg.venueName    = "";
     cfg.venueSlug    = "";
     cfg.deviceId     = "";
+    cfg.userId       = "";
     saveRemoteConfig(cfg);
+    // The cached subscription belonged to the previous owner's account — drop it
+    // so the next registration decides the entitlement from scratch.
+    subscriptionManager.clear();
 
     log.push("✅ Wipe complete — ready for re-registration");
     console.log(log.join("\n"));
@@ -3835,11 +4120,12 @@ app.get("/api/stream/status", (req, res) => {
   res.json(getSC(camIdx).getStatus());
 });
 
-// Start stream — blocked until device is registered
-app.post("/api/stream/start", requireRegistered, async (req, res) => {
+// Start stream — blocked unless the device is registered AND its DigitalPool
+// account holds a subscription
+app.post("/api/stream/start", requireActiveStream, async (req, res) => {
   const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
   const config = req.body;
-  const result = await getSC(camIdx).startStream(config);
+  const result = await getSC(camIdx).startStream(config, { skipEntitlementCheck: true });
   res.json(result);
 });
 
@@ -4992,7 +5278,8 @@ function buildIdlePreviewGstArgs(camIdx = 1) {
   // Check if the remote overlay PNG exists and should be shown.
   // Each camera uses its own PNG so overlays don't overwrite each other.
   const pngOverlayPath = sc.pngOverlayPath;
-  const hasRemoteOverlay = config.remoteOverlayEnabled && config.overlayUrl && config.overlayUrl.trim();
+  const _previewOverlay = effectiveOverlay(sc, config);
+  const hasRemoteOverlay = _previewOverlay.enabled && !!_previewOverlay.url;
   let pngExists = false;
   if (hasRemoteOverlay) {
     try {
@@ -5613,16 +5900,14 @@ io.on("connection", (socket) => {
   // All streaming events accept an optional `cameraIndex` (1 or 2) in the payload.
 
   socket.on("startStream", async (config) => {
-    // Registration gate — dpadmin bypasses for support access
-    if (!isRegistered() && socket.request.session?.user?.username !== "dpadmin") {
-      socket.emit("streamResult", {
-        success: false,
-        error: "Device not registered. Complete registration in Admin Settings first.",
-      });
-      return;
-    }
+    // Registration + subscription + package gate — dpadmin bypasses for support
     const camIdx = parseInt(config?.cameraIndex) === 2 ? 2 : 1;
     const sc = getSC(camIdx);
+    const refusal = streamStartGate(socket.request.session?.user?.username, config, sc);
+    if (refusal) {
+      socket.emit("streamResult", { success: false, ...refusal });
+      return;
+    }
     // Guard: prevent the idle preview's 'close' event from auto-restarting a new
     // preview process while we're still in the startStream sequence.  Without this,
     // _killCameraProcesses() inside startStream kills the idle preview, the close
@@ -5631,7 +5916,7 @@ io.on("connection", (socket) => {
     isRestartInProgress[camIdx] = true;
     await _killIdlePreviewForCamera(camIdx);
     io.emit("streamStatus", { ...sc.getStatus(), status: "starting", cameraIndex: camIdx });
-    const result = await sc.startStream(config);
+    const result = await sc.startStream(config, { skipEntitlementCheck: true });
     if (!result.success) {
       // Stream failed to start — clear the guard and restore the idle preview so
       // the user still has a live WebRTC preview.
@@ -5654,16 +5939,14 @@ io.on("connection", (socket) => {
 
   // Atomic restart: stop → start without showing the idle preview in between.
   socket.on("restartStream", async (config) => {
-    // Registration gate — dpadmin bypasses for support access
-    if (!isRegistered() && socket.request.session?.user?.username !== "dpadmin") {
-      socket.emit("streamResult", {
-        success: false,
-        error: "Device not registered. Complete registration in Admin Settings first.",
-      });
-      return;
-    }
+    // Registration + subscription + package gate — dpadmin bypasses for support
     const camIdx = parseInt(config?.cameraIndex) === 2 ? 2 : 1;
     const sc = getSC(camIdx);
+    const refusal = streamStartGate(socket.request.session?.user?.username, config, sc);
+    if (refusal) {
+      socket.emit("streamResult", { success: false, ...refusal });
+      return;
+    }
     console.log(`🔄 [Cam${camIdx}] Restarting stream...`);
     isRestartInProgress[camIdx] = true;
     try {
@@ -5676,7 +5959,7 @@ io.on("connection", (socket) => {
 
       isRestartInProgress[camIdx] = false;
       io.emit("streamStatus", { ...sc.getStatus(), status: "starting", cameraIndex: camIdx });
-      const result = await sc.startStream(config);
+      const result = await sc.startStream(config, { skipEntitlementCheck: true });
       socket.emit("streamResult", result);
     } catch (err) {
       console.error(`⚠️  [Cam${camIdx}] restartStream error:`, err.message);
@@ -5717,8 +6000,10 @@ io.on("connection", (socket) => {
 
     // Handle remote overlay enable/disable (create PuppeteerOverlay if needed)
     // Use the per-camera Puppeteer instance so each camera has an independent renderer.
-    const wantsRemote = overlayConfig.remoteOverlayEnabled &&
-      overlayConfig.overlayUrl && overlayConfig.overlayUrl.trim();
+    // What the venue asked for, after entitlements — a base-tier account keeps
+    // the branded overlay no matter what it sets here.
+    const effOverlay = effectiveOverlay(sc, { ...sc.streamConfig, ...overlayConfig });
+    const wantsRemote = effOverlay.enabled && !!effOverlay.url;
     let camPuppeteer = camIdx === 2 ? puppeteerOverlay2 : puppeteerOverlay;
     if (wantsRemote) {
       if (!camPuppeteer && PuppeteerOverlay) {
@@ -5730,8 +6015,9 @@ io.on("connection", (socket) => {
         if (!camPuppeteer.isRunning) {
           await camPuppeteer.initialize(PORT, sc.pngOverlayPath);
         }
-        camPuppeteer.setOverlayUrl(overlayConfig.overlayUrl, {
-          zoom: overlayConfig.overlayZoom,
+        camPuppeteer.setOverlayUrl(effOverlay.url, {
+          zoom: effOverlay.zoom,
+          ...(effOverlay.refreshMs ? { refreshInterval: effOverlay.refreshMs } : {}),
         });
         camPuppeteer.startPeriodicRefresh();
 
@@ -5818,7 +6104,7 @@ io.on("connection", (socket) => {
           };
         }
       }
-    } else if (overlayConfig.remoteOverlayEnabled === false && camPuppeteer) {
+    } else if (overlayConfig.remoteOverlayEnabled === false && camPuppeteer && !effOverlay.branded) {
       console.log(`🛑 [Cam${camIdx}] Remote overlay disabled — shutting down Puppeteer...`);
       await camPuppeteer.stop();
       if (camIdx === 2) puppeteerOverlay2 = null;
@@ -5976,6 +6262,8 @@ server.listen(PORT, async () => {
   recordingManager.start().catch((err) =>
     console.error("⚠️  Failed to start recording manager:", err.message)
   );
+  // Recurring subscription verification (first attempt ~90 s after boot).
+  subscriptionManager.start();
   console.log(`Camera device: ${CAMERA_DEVICE}`);
   console.log(`Access the interface at http://localhost:${PORT}`);
 
@@ -6293,8 +6581,8 @@ server.listen(PORT, async () => {
 
   // Start Puppeteer overlay ASYNCHRONOUSLY — don't block the preview
   // When the first screenshot arrives, restart the preview with the overlay
-  const hasRemoteOnBoot = streamController.streamConfig.remoteOverlayEnabled &&
-    streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
+  const bootOverlay = effectiveOverlay(streamController);
+  const hasRemoteOnBoot = bootOverlay.enabled && !!bootOverlay.url;
   if (hasRemoteOnBoot && PuppeteerOverlay) {
     // Fire and forget — this runs in the background
     (async () => {
@@ -6304,8 +6592,10 @@ server.listen(PORT, async () => {
           puppeteerOverlay = new PuppeteerOverlay();
         }
         await puppeteerOverlay.initialize(PORT, streamController.pngOverlayPath);
-        const overlayZoom = streamController.streamConfig.overlayZoom || 100;
-        puppeteerOverlay.setOverlayUrl(streamController.streamConfig.overlayUrl, { zoom: overlayZoom });
+        puppeteerOverlay.setOverlayUrl(bootOverlay.url, {
+          zoom: bootOverlay.zoom,
+          ...(bootOverlay.refreshMs ? { refreshInterval: bootOverlay.refreshMs } : {}),
+        });
         puppeteerOverlay.startPeriodicRefresh();
         console.log("✅ Remote overlay started — will restart preview when first screenshot is ready...");
         // Wait for the first screenshot, then restart preview with overlay
@@ -6422,9 +6712,9 @@ streamController.on("preparing", async () => {
     streamController.protectedAudioPid = streamController2.ffmpegProcess?.pid ?? null;
     await _killIdlePreviewForCamera(1);
 
-    const hasUrlOverlay = streamController.streamConfig.remoteOverlayEnabled &&
-      streamController.streamConfig.overlayUrl && streamController.streamConfig.overlayUrl.trim();
-    const needsGraphicsOverlay = streamController.streamConfig.skiaGraphicsEnabled || hasUrlOverlay;
+    const startOverlay = effectiveOverlay(streamController);
+    const hasUrlOverlay = startOverlay.enabled && !!startOverlay.url;
+    const needsGraphicsOverlay = startOverlay.enabled;
 
     if (needsGraphicsOverlay) {
       console.log(`🎨 [Cam1] Preparing overlay (HTML → PNG)...`);
@@ -6442,11 +6732,13 @@ streamController.on("preparing", async () => {
       try {
         if (!puppeteerOverlay) puppeteerOverlay = new PuppeteerOverlay();
         if (!puppeteerOverlay.isRunning) await puppeteerOverlay.initialize(PORT, streamController.pngOverlayPath);
-        const overlayUrl = streamController.streamConfig.overlayUrl;
-        if (overlayUrl && overlayUrl.trim()) {
-          const overlayZoom = streamController.streamConfig.overlayZoom || 100;
-          console.log(`🌍 [Cam1] Using remote overlay URL: ${overlayUrl} (zoom: ${overlayZoom}%)`);
-          puppeteerOverlay.setOverlayUrl(overlayUrl, { zoom: overlayZoom });
+        if (startOverlay.url) {
+          console.log(`🌍 [Cam1] Using ${startOverlay.branded ? "BRANDED" : "remote"} overlay URL: `
+                    + `${startOverlay.url} (zoom: ${startOverlay.zoom}%)`);
+          puppeteerOverlay.setOverlayUrl(startOverlay.url, {
+            zoom: startOverlay.zoom,
+            ...(startOverlay.refreshMs ? { refreshInterval: startOverlay.refreshMs } : {}),
+          });
           puppeteerOverlay.startPeriodicRefresh();
         }
         console.log("✅ [Cam1] Overlay PNG ready for GStreamer");
@@ -6467,9 +6759,9 @@ streamController2.on("preparing", async () => {
     streamController2.protectedAudioPid = streamController.ffmpegProcess?.pid ?? null;
     await _killIdlePreviewForCamera(2);
 
-    const hasUrlOverlay = streamController2.streamConfig.remoteOverlayEnabled &&
-      streamController2.streamConfig.overlayUrl && streamController2.streamConfig.overlayUrl.trim();
-    const needsGraphicsOverlay = streamController2.streamConfig.skiaGraphicsEnabled || hasUrlOverlay;
+    const startOverlay2 = effectiveOverlay(streamController2);
+    const hasUrlOverlay = startOverlay2.enabled && !!startOverlay2.url;
+    const needsGraphicsOverlay = startOverlay2.enabled;
 
     if (needsGraphicsOverlay) {
       console.log(`🎨 [Cam2] Preparing overlay (HTML → PNG)...`);
@@ -6487,11 +6779,13 @@ streamController2.on("preparing", async () => {
       try {
         if (!puppeteerOverlay2) puppeteerOverlay2 = new PuppeteerOverlay();
         if (!puppeteerOverlay2.isRunning) await puppeteerOverlay2.initialize(PORT, pngPath);
-        const overlayUrl = streamController2.streamConfig.overlayUrl;
-        if (overlayUrl && overlayUrl.trim()) {
-          const overlayZoom = streamController2.streamConfig.overlayZoom || 100;
-          console.log(`🌍 [Cam2] Using remote overlay URL: ${overlayUrl} (zoom: ${overlayZoom}%)`);
-          puppeteerOverlay2.setOverlayUrl(overlayUrl, { zoom: overlayZoom });
+        if (startOverlay2.url) {
+          console.log(`🌍 [Cam2] Using ${startOverlay2.branded ? "BRANDED" : "remote"} overlay URL: `
+                    + `${startOverlay2.url} (zoom: ${startOverlay2.zoom}%)`);
+          puppeteerOverlay2.setOverlayUrl(startOverlay2.url, {
+            zoom: startOverlay2.zoom,
+            ...(startOverlay2.refreshMs ? { refreshInterval: startOverlay2.refreshMs } : {}),
+          });
           puppeteerOverlay2.startPeriodicRefresh();
         }
         console.log("✅ [Cam2] Overlay PNG ready for GStreamer");
@@ -6678,8 +6972,8 @@ async function _handleStreamStopped(camIdx) {
   const activeSource = getActiveSource(camIdx);
   const previewPathName = sc.previewPath.replace(/^\//, "");
 
-  const hasRemote = sc.streamConfig.remoteOverlayEnabled &&
-    sc.streamConfig.overlayUrl && sc.streamConfig.overlayUrl.trim();
+  const _stoppedOverlay = effectiveOverlay(sc);
+  const hasRemote = _stoppedOverlay.enabled && !!_stoppedOverlay.url;
   const camPuppeteer = camIdx === 2 ? puppeteerOverlay2 : puppeteerOverlay;
   if (camPuppeteer && !hasRemote) {
     camPuppeteer._stopPeriodicRefresh();

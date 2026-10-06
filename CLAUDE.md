@@ -79,6 +79,21 @@ also killed by the service's `ExecStopPost`).
 
 **`authManager.js`** — bcrypt users persisted to `users.json`; guards `requireAuth`/`requireAdmin`.
 
+**`subscriptionManager.js`** — the device may only stream while the DigitalPool account
+it is registered to holds a subscription, and *what* it may do depends on the package:
+a base plan can push to the venue's own YouTube/Facebook/RTMP and carries the DigitalPool
+branded overlay; the **Advanced Streaming** package adds the RTSP/SRT Server output modes
+our datacenter pulls, plus the venue's own overlays. Registration is refused without any
+subscription, and the entitlement is re-verified every 14 days (identity-based — the
+password is never kept). Enforcement is one-sided on purpose: only an explicit "not
+subscribed" blocks immediately; an unreachable service changes nothing until the last good
+answer is 21 days stale; a feature flag the service does not mention is granted, not
+withheld; and a running stream is never torn down. Two single points of truth:
+`streamStartGate()` (registration + subscription + output mode) and `effectiveOverlay()`
+(whose overlay is composited), both in `server.js`. See `SUBSCRIPTION_CHECK.md` for the
+cloud-function contract — the backend half is not implemented yet, and until it reports
+subscriptions nothing is blocked.
+
 **`wifiManager.js`** — manages the always-on AP hotspot (`DigitalPool-Camera`) via `nmcli`,
 running concurrently with client WiFi (AP+STA). Onboard chip runs the AP; USB dongle is the client.
 
@@ -117,7 +132,8 @@ serves SRT on **8891**, camera 2 on **8892**.
 
 `README.md` is a ~95KB step-by-step device provisioning guide (OS install → drivers → service).
 `STREAMING_ARCHITECTURE.md`, `SRT_SETUP_GUIDE.md`, `OBS_SETUP_GUIDE.md`, `DEPLOY_GRAPHICS.md`
-cover streaming/receiver setup. `SYSTEM_IMAGE.md` covers golden-image capture and the
+cover streaming/receiver setup. `SUBSCRIPTION_CHECK.md` is the device↔cloud-function
+contract for subscription enforcement. `SYSTEM_IMAGE.md` covers golden-image capture and the
 self-installing USB built from it (`dp-create-image.sh` → `dp-build-recovery-iso.sh` →
 `dp-factory-install.sh` → `dp-restore.sh` → `dp-firstboot.sh`); `FACTORY_INSTALL.md` is the
 operator-facing copy of that flow written for the OEM factory, not for us. `.sh`/`.service`/`.timer`/`.rules` files at the repo root are

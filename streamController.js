@@ -483,9 +483,30 @@ class StreamController extends EventEmitter {
   /**
    * Start streaming with current configuration
    */
-  async startStream(config = {}) {
+  /**
+   * @param {object} config  stream settings to merge before starting
+   * @param {object} [opts]
+   * @param {boolean} [opts.skipEntitlementCheck]  the caller already ran the
+   *   user-facing gate (which knows about the dpadmin support bypass), so do not
+   *   re-run it here.  Everything else — autoStart on boot, the USB-reset
+   *   restore, the stall watchdog's auto-resume — has no user behind it and IS
+   *   checked, so a lapsed subscription cannot come back through a side door.
+   */
+  async startStream(config = {}, opts = {}) {
     if (this.isStreaming) {
       return { success: false, error: "Stream already running" };
+    }
+
+    if (!opts.skipEntitlementCheck && typeof this.startGate === "function") {
+      // The protocol being requested matters, so check against the merged view
+      // rather than what is currently saved.
+      let refusal = null;
+      try { refusal = this.startGate({ ...this.streamConfig, ...config }); }
+      catch (e) { console.warn(`⚠️  [Cam${this.streamId}] entitlement gate failed open:`, e.message); }
+      if (refusal) {
+        console.log(`⛔ [Cam${this.streamId}] Start refused: ${refusal.error}`);
+        return { success: false, ...refusal };
+      }
     }
 
     // New run — any stop intent from the previous one is spent.
@@ -1358,6 +1379,27 @@ class StreamController extends EventEmitter {
   /**
    * Update stream configuration (requires restart)
    */
+  /**
+   * Is a PNG graphics overlay composited into this stream?
+   *
+   * Sources, in order: the Skia overlay (legacy checkbox), or the remote overlay
+   * checkbox with a URL set.  server.js injects `resolveOverlay` so the answer
+   * also accounts for the account's package — an account without the Advanced
+   * Streaming package carries the DigitalPool branded overlay in place of its
+   * own, which still means "yes, composite a PNG".  Without the injection (unit
+   * use, or a build where entitlements are not wired) it falls back to the
+   * config alone.
+   */
+  _needsGraphicsOverlay() {
+    if (typeof this.resolveOverlay === "function") {
+      try { return !!this.resolveOverlay().enabled; }
+      catch (e) { console.warn(`⚠️  [Cam${this.streamId}] overlay entitlement check failed:`, e.message); }
+    }
+    return !!(this.streamConfig.skiaGraphicsEnabled ||
+      (this.streamConfig.remoteOverlayEnabled &&
+        this.streamConfig.overlayUrl && this.streamConfig.overlayUrl.trim()));
+  }
+
   updateConfig(config) {
     this.streamConfig = { ...this.streamConfig, ...config };
     this.saveConfig(); // Save to file
@@ -1764,9 +1806,7 @@ class StreamController extends EventEmitter {
     // When called purely for CLOCK_REALTIME (audio-enabled SRT/RTMP without
     // graphics), we pass an empty pngPath so gst-overlay-pipeline.py skips
     // the gdkpixbufoverlay element entirely while still applying CLOCK_REALTIME.
-    const needsGraphicsOverlay = this.streamConfig.skiaGraphicsEnabled ||
-      (this.streamConfig.remoteOverlayEnabled &&
-        this.streamConfig.overlayUrl && this.streamConfig.overlayUrl.trim());
+    const needsGraphicsOverlay = this._needsGraphicsOverlay();
 
     if (needsGraphicsOverlay) {
       console.log("🎨 Graphics overlay enabled - using PNG overlay (gdkpixbufoverlay)");
@@ -1995,12 +2035,8 @@ class StreamController extends EventEmitter {
     // has nothing left for the break — see the matching note in gst-overlay-pipeline.py.
     const vaTargetPct = parseInt(process.env.VA_TARGET_PERCENTAGE || "80", 10);
 
-    // Check if graphics overlay is needed:
-    // - Legacy: skiaGraphicsEnabled checkbox (being removed from UI)
-    // - New: Remote overlay checkbox with a URL set
-    const needsGraphicsOverlay = this.streamConfig.skiaGraphicsEnabled ||
-      (this.streamConfig.remoteOverlayEnabled &&
-        this.streamConfig.overlayUrl && this.streamConfig.overlayUrl.trim());
+    // Check if graphics overlay is needed (see _needsGraphicsOverlay).
+    const needsGraphicsOverlay = this._needsGraphicsOverlay();
 
     // Route through the Python GStreamer script when:
     //   1. Graphics overlay is needed (gdkpixbufoverlay), OR
