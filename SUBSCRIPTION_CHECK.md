@@ -20,7 +20,7 @@ exactly as it does today (see *Rollout* at the bottom).**
 
 | Moment | Behaviour |
 | --- | --- |
-| Registration (`/api/setup/register`, `/api/setup/register/venue`) | Credentials verified first. If the account has no subscription the registration is refused with HTTP 402 and the device never becomes registered. |
+| Registration (`/api/setup/register`, `/api/setup/register/venue`) | The response is classified by `subscriptionManager.classifyRegistration()` **before** it is treated as an auth failure — a refusal arrives as `ok: false` and is otherwise indistinguishable from a rejected login. No subscription → HTTP 402 with `subscriptionRequired`, and the device never becomes registered. The UI answers that with a link to the pricing page and a retry. |
 | Every ~14 days afterwards | Background check against the same cloud function, keyed by the account id stored at registration. |
 | Stream start / restart (REST + both socket events) | Refused with HTTP 402 / `subscriptionRequired: true` when the gate is closed. |
 | Starting on RTSP Server or SRT Server without the advanced package | Refused with HTTP 402 / `packageRequired: "datacenter"`. The UI greys those Output Modes out with a 🔒 and explains why. |

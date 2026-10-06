@@ -540,6 +540,42 @@ function stop() {
   if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
 }
 
+// Words a refusal uses when it names the problem instead of encoding it.
+const WORDED_REFUSAL_RE = /\bsubscriptions?\b|\bsubscribed?\b|\bplan\b/i;
+
+/**
+ * What does a verify/assign response mean for registration?
+ *
+ * A refusal legitimately arrives as `ok: false` / 4xx, which is indistinguishable
+ * from a rejected login unless the body is actually read — so this is the one
+ * place that decides, and the registration routes ask it BEFORE they treat a
+ * response as an auth failure.  Two ways a refusal is recognised:
+ *
+ *   explicit — the body carries subscription data saying "not subscribed"
+ *   worded   — the service refused and said why in prose, with no machine
+ *              readable subscription object ("This account has no active
+ *              DigitalPool camera subscription")
+ *
+ * A genuine auth error ("Invalid credentials") matches neither and falls through.
+ * Recording the parsed state is part of the job, so callers cannot forget it.
+ *
+ * @param {{statusCode?: number, body?: object}|object} resp  response, or a bare body
+ * @returns {{refused: boolean, reason: string|null, message: string, parsed: object}}
+ */
+function classifyRegistration(resp) {
+  const hasEnvelope = resp && typeof resp === "object" && ("body" in resp || "statusCode" in resp);
+  const body       = hasEnvelope ? resp.body : resp;
+  const statusCode = hasEnvelope && typeof resp.statusCode === "number" ? resp.statusCode : 200;
+
+  const parsed  = recordRegistrationResult(body);
+  const message = String(body?.error || body?.message || "");
+  const refused = statusCode >= 400 || body?.ok === false || body?.success === false;
+
+  if (parsed.known && !parsed.active) return { refused: true, reason: "explicit", message, parsed };
+  if (refused && WORDED_REFUSAL_RE.test(message)) return { refused: true, reason: "worded", message, parsed };
+  return { refused: false, reason: null, message, parsed };
+}
+
 /** Record subscription facts returned by the registration (verify/assign) call. */
 function recordRegistrationResult(body) {
   const parsed = parseSubscription(body);
@@ -584,6 +620,6 @@ function getStatus() {
 module.exports = {
   init, start, stop,
   checkNow, gate, gateProtocol, can, features, getStatus, clear,
-  recordRegistrationResult, parseSubscription,
+  recordRegistrationResult, classifyRegistration, parseSubscription,
   FEATURES, DATACENTER_PROTOCOLS, STATE_FILE,
 };

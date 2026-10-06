@@ -14,6 +14,16 @@ and deployed**. It cannot be changed from your side, and until this function
 reports subscription data nothing is enforced — every device behaves exactly as
 it does today. Your job is to start reporting it.
 
+**Base access is ANY active subscription on the account.** Not a camera-specific
+product — any plan the account holds, whatever it is called, lets the device run
+and stream to the venue's own destinations. Do not look for a camera SKU when
+answering "is this account subscribed"; look for any active subscription. What
+distinguishes the two levels is the `features` flags, not the plan name.
+
+(The live function currently refuses with "This account has no active DigitalPool
+**camera** subscription", which is the narrower check — that is the behaviour to
+change.)
+
 Two packages exist:
 
 | | Base — any plan | Advanced Streaming |
@@ -55,7 +65,9 @@ which your lookup should also accept for devices registered before this ships.
 ## Change 2 — report the subscription on `verify` and `assign`
 
 Add a `subscription` object to both responses (see **The subscription object**
-below). The device refuses to register an account that has no subscription.
+below). The device refuses to register an account that has **no subscription at
+all** — remember that `subscribed: true` means "this account holds any active
+plan", not "this account holds a camera plan".
 
 **Refuse inside `verify` wherever you can** — ideally before creating or
 updating any device record. The chooseVenue path calls `assign` in a separate
@@ -63,15 +75,26 @@ request, so `assign` needs the same check; a request that reaches `assign`
 without a subscription should be refused there rather than recording a device
 the operator will never be able to use.
 
-Either shape works for a refusal — the device parses the body before it looks at
-the status code:
+Either shape works for a refusal — the device judges the body for subscription
+content before it treats the response as an auth failure:
 
 ```json
-HTTP 200 or 402
+HTTP 200, 401 or 402
 { "ok": false,
   "error": "This account has no active subscription.",
   "subscription": { "subscribed": false, "status": "none" } }
 ```
+
+`ok: false` / `success: false` with a 4xx is fine. A refusal that only says so in
+the `error` text, with no `subscription` object, is also recognised — the device
+looks for "subscription" / "subscribed" / "plan" in the message. **Send the
+object anyway**: the wording fallback can tell the operator to go and subscribe,
+but it carries no plan or expiry for the device to record, and a refusal that
+says none of those three words reads as a plain login failure.
+
+The device shows the service's own `error` text to the operator, so write it for
+them: it appears under "This DigitalPool account has no subscription", above a
+link to the pricing page and an "I've Subscribed — Try Again" button.
 
 ## Change 3 — add the `subscription` action
 
@@ -221,6 +244,10 @@ Exercise the function directly; each line is what a device would do with it.
 **Registration**
 1. `verify` with a subscribed account → `ok: true`, `user_id` present,
    `subscription.subscribed: true`, venues listed. *Device registers.*
+1b. `verify` with an account holding a **non-camera** subscription (a league or
+   tournament plan, say) → `subscribed: true` with the advanced features false.
+   *Device registers and runs in base mode.* This is the case the current
+   "camera subscription" check gets wrong.
 2. `verify` with a valid login but no subscription → `subscription.subscribed:
    false`. *Device refuses to register and tells the operator to subscribe.*
 3. `assign` for an account that lost its subscription between the two steps →

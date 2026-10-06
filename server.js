@@ -914,14 +914,17 @@ async function getLocalWanIp() {
  * must keep registering against a cloud function that has not been updated yet
  * (see SUBSCRIPTION_CHECK.md).
  */
-function refusedForSubscription(res, body) {
-  const parsed = subscriptionManager.recordRegistrationResult(body);
-  if (!parsed.known || parsed.active) return false;
-  const label = parsed.plan || parsed.status || "none";
-  console.log(`⛔ Registration refused — no active DigitalPool subscription (${label})`);
+function refusedForSubscription(res, resp) {
+  const { refused, reason, message, parsed } = subscriptionManager.classifyRegistration(resp);
+  if (!refused) return false;
+
+  const label = parsed.plan || parsed.status || (reason === "worded" ? "stated in the error text" : "none");
+  console.log(`⛔ Registration refused — no active DigitalPool subscription [${reason}] (${label}): ${message || "no message"}`);
   res.status(402).json({
-    error: "This DigitalPool account does not have an active subscription. "
-         + "Subscribe at digitalpool.com, then register this camera again.",
+    // Prefer the service's own wording — it is more specific than anything we
+    // can say from here, and it is what the operator reads.
+    error: message || "This DigitalPool account does not have an active subscription. "
+                    + "Subscribe at digitalpool.com, then register this camera again.",
     subscriptionRequired: true,
     subscription: { plan: parsed.plan, status: parsed.status, expiresAt: parsed.expiresAt },
   });
@@ -943,13 +946,14 @@ async function finalizeRegistration(res, { email, password, venueId, venueName, 
     return res.status(502).json({ error: `Could not reach DigitalPool registration service: ${e.message}` });
   }
 
+  // Subscription gate first, for the same reason as in /api/setup/register: a
+  // refusal arrives as ok:false and would otherwise read as a rejected login.
+  if (refusedForSubscription(res, assign)) return;
+
   if (assign.statusCode === 401 || assign.body?.ok === false)
     return res.status(401).json({ error: assign.body?.error || "DigitalPool rejected the registration" });
   if (assign.statusCode >= 400)
     return res.status(502).json({ error: assign.body?.error || `Registration service error (HTTP ${assign.statusCode})` });
-
-  // Subscription gate — a device may only be registered to a subscribed account.
-  if (refusedForSubscription(res, assign.body)) return;
 
   const cfg = loadRemoteConfig();
   cfg.deviceName   = deviceName;
@@ -1452,20 +1456,26 @@ app.post("/api/setup/register", requireAdmin, express.json(), async (req, res) =
     return res.status(502).json({ error: `Could not reach DigitalPool registration service: ${e.message}` });
   }
 
+  // A subscription refusal legitimately arrives as ok:false / 4xx, so the body
+  // is judged for subscription content FIRST.  Checking auth failure first sent
+  // "no subscription" back as "Invalid DigitalPool credentials" — the wrong
+  // message, and without the subscriptionRequired flag the UI needs to offer a
+  // way out.  A genuine auth error carries no subscription information and
+  // falls straight through.
+  if (refusedForSubscription(res, verify)) return;
+
   if (verify.statusCode === 401 || verify.body?.ok === false)
     return res.status(401).json({ error: verify.body?.error || "Invalid DigitalPool credentials" });
   if (verify.statusCode >= 400)
     return res.status(502).json({ error: verify.body?.error || `Registration service error (HTTP ${verify.statusCode})` });
 
-  // Credentials are good — record the account id for the recurring subscription
-  // check, then refuse the registration outright if the account has no plan.
+  // Credentials are good — record the account id for the recurring subscription check.
   const verifiedUserId = verify.body?.user_id || verify.body?.userId || verify.body?.uid || "";
   if (verifiedUserId) {
     const c = loadRemoteConfig();
     c.userId = verifiedUserId;
     saveRemoteConfig(c);
   }
-  if (refusedForSubscription(res, verify.body)) return;
 
   // Normalise the venue list to { id, name } regardless of the field casing the
   // function returns (venue_id/venue_name or id/name).
