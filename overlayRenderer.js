@@ -193,6 +193,18 @@ function imageUrlFor(element, binding, assets) {
 // makes the behaviour reproducible and testable.
 const CAROUSEL_FADE_MS = 600; // transition: opacity 0.6s ease-in-out
 
+// Whether to draw the intermediate frames of a carousel crossfade.
+//
+// Off by default, and the reason is downstream: gst-overlay-pipeline.py re-reads
+// the overlay PNG only when its mtime changes, on a 2 s poll. A 600 ms fade
+// therefore cannot be seen — the pipeline will pick up at most one frame of it,
+// at random. Drawing the other five costs a full PNG encode each (~110 ms on an
+// N97) and buys nothing, which matters most when two cameras are streaming.
+//
+// Turn it on once that poll is short enough to show a transition, or once the
+// handoff stops being a PNG.
+const CAROUSEL_FADE_ENABLED = process.env.OVERLAY_CAROUSEL_FADE === "1";
+
 function carouselImages(element) {
   return (element.images || []).filter(Boolean);
 }
@@ -227,7 +239,7 @@ function carouselState(element, now) {
   const index = ((slot % list.length) + list.length) % list.length;
   const prevIndex = ((index - 1) % list.length + list.length) % list.length;
   const sinceSwitch = now - slot * intervalMs;
-  const fading = element.effect === "fade" && sinceSwitch < CAROUSEL_FADE_MS;
+  const fading = CAROUSEL_FADE_ENABLED && element.effect === "fade" && sinceSwitch < CAROUSEL_FADE_MS;
   return { index, prevIndex, progress: fading ? easeInOut(sinceSwitch / CAROUSEL_FADE_MS) : 1 };
 }
 
@@ -244,7 +256,7 @@ function nextAnimationAt(canvasDef, now) {
     const intervalMs = carouselIntervalMs(el);
     const sinceSwitch = now % intervalMs;
     // Either the next slot boundary, or the next step of an in-flight fade.
-    const next = el.effect === "fade" && sinceSwitch < CAROUSEL_FADE_MS
+    const next = CAROUSEL_FADE_ENABLED && el.effect === "fade" && sinceSwitch < CAROUSEL_FADE_MS
       ? now + Math.min(CAROUSEL_FADE_MS / 6, intervalMs - sinceSwitch)
       : now + (intervalMs - sinceSwitch);
     if (soonest === null || next < soonest) soonest = next;
