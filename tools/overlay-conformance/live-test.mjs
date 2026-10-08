@@ -1,9 +1,15 @@
 // End-to-end check of the local producer against LIVE DigitalPool data: the real
 // saved overlay canvas, the real match binding, the real renderer, no browser.
 //
-//   node live-test.mjs [overlayId] [seconds]
+//   node live-test.mjs <overlayUrl> [seconds]
+//   node live-test.mjs [overlayId]  [seconds]
 //
-// With no overlayId it picks a real one and a real streaming table on its own.
+// Pass the camera's ACTUAL configured overlay URL to test what that device will
+// really draw. With an overlay id, or nothing at all, it picks a real overlay and
+// a real streaming table on its own.
+//
+// Safe to run on a device while it is streaming: it writes to a scratch PNG that
+// nothing composites and never touches the service.
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -13,28 +19,45 @@ const require = createRequire(import.meta.url);
 const dataSource = require('../../overlayDataSource.js');
 const SkiaOverlay = require('../../skiaOverlay.js');
 
-const wantId = process.argv[2] ? parseInt(process.argv[2], 10) : null;
+const arg = process.argv[2] || '';
 const seconds = Number(process.argv[3] || 10);
+const explicitUrl = /^https?:/i.test(arg) ? arg : null;
+const wantId = !explicitUrl && arg ? parseInt(arg, 10) : null;
 
+let url;
+if (explicitUrl) {
+  const parsed = dataSource.parseOverlayUrl(explicitUrl);
+  if (!parsed) {
+    console.error(`not a DigitalPool overlay URL — this device would use the browser for it:\n  ${explicitUrl}`);
+    process.exit(2);
+  }
+  if (!parsed.supported) {
+    console.error(`overlay mode "${parsed.mode}" is not implemented locally — this device would use the browser for it`);
+    process.exit(2);
+  }
+  url = explicitUrl;
+  console.log(`overlay     : #${parsed.overlayId} (${parsed.mode} ${parsed.slug}/${parsed.tableSlug})`);
+} else {
 // A real overlay, and a real tournament table to bind it to.
-const overlays = await dataSource._internals.graphql(
+  const overlays = await dataSource._internals.graphql(
   `query { user_overlays(order_by: {id: asc}, limit: 20) { id name } }`, {}
 );
-const overlay = wantId
-  ? overlays.user_overlays.find((o) => o.id === wantId)
-  : overlays.user_overlays[1] || overlays.user_overlays[0];
-if (!overlay) { console.error(`overlay ${wantId} not visible`); process.exit(1); }
+  const overlay = wantId
+    ? overlays.user_overlays.find((o) => o.id === wantId)
+    : overlays.user_overlays[1] || overlays.user_overlays[0];
+  if (!overlay) { console.error(`overlay ${wantId} not visible`); process.exit(1); }
 
-const probe = await dataSource._internals.graphql(
+  const probe = await dataSource._internals.graphql(
   `query { pool_tables(where: {is_streaming_table: {_eq: true}, tournament_id: {_is_null: false}},
            order_by: {updated_at: desc}, limit: 1) { slug tournament { slug name } } }`, {}
 );
-const table = probe.pool_tables && probe.pool_tables[0];
-if (!table || !table.tournament) { console.error('no live streaming table found'); process.exit(1); }
+  const table = probe.pool_tables && probe.pool_tables[0];
+  if (!table || !table.tournament) { console.error('no live streaming table found'); process.exit(1); }
 
-const url = `https://digitalpool.com/tournaments/${table.tournament.slug}/tables/${table.slug}/overlays/${overlay.id}`;
-console.log(`overlay     : #${overlay.id} "${overlay.name}"`);
-console.log(`live source : ${table.tournament.name} / ${table.slug}`);
+  url = `https://digitalpool.com/tournaments/${table.tournament.slug}/tables/${table.slug}/overlays/${overlay.id}`;
+  console.log(`overlay     : #${overlay.id} "${overlay.name}"`);
+  console.log(`live source : ${table.tournament.name} / ${table.slug}`);
+}
 console.log(`url         : ${url}\n`);
 
 const pngPath = path.join(os.tmpdir(), 'dp-live-overlay.png');
