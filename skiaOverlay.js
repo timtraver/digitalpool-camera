@@ -18,6 +18,7 @@
 const EventEmitter = require("events");
 const fs = require("fs");
 const path = require("path");
+const { Worker } = require("worker_threads");
 
 const renderer = require("./overlayRenderer");
 const dataSource = require("./overlayDataSource");
@@ -40,6 +41,12 @@ const CLOCK_TICK_MS = 30000;
 const FAILURES_BEFORE_UNHEALTHY = 5;
 
 const FONT_DIR = path.join(__dirname, "assets", "fonts");
+// Render on a worker thread by default. The draw is ~17 ms but the 1080p PNG
+// encode is ~115-175 ms on an N97 and does not yield, so doing it on the main
+// thread stalls everything the app does — including the 1 Hz bitrate poll, which
+// then reports a dip and a spike around every redraw. Set OVERLAY_RENDER_INLINE=1
+// to render on the main thread instead (useful when debugging a render).
+const RENDER_INLINE = process.env.OVERLAY_RENDER_INLINE === "1";
 const IMAGE_CACHE_DIR = process.env.OVERLAY_IMAGE_CACHE || "/var/tmp/dp-overlay-images";
 
 /** Whether this producer could render the given overlay URL at all. */
@@ -65,7 +72,11 @@ class SkiaOverlay extends EventEmitter {
     this._lastDrawAt = 0;
     this._hasClock = false;
     this._nextAnimationAt = 0;   // when an animated element next needs a frame
-    this._images = new Map();   // url -> decoded Image
+    this._images = new Map();   // url -> decoded Image (inline mode only)
+    this._imageBytes = new Map(); // url -> Buffer, for shipping to the worker
+    this._worker = null;        // render thread, created on first draw
+    this._workerHas = new Set(); // urls the worker has already decoded
+    this._renderSeq = 0;
     this._pending = [];         // score-delay queue: [{ at, binding }]
     this._delaySeconds = 0;
     this._renderCount = 0;
@@ -103,6 +114,9 @@ class SkiaOverlay extends EventEmitter {
     this._pending = [];
     this._failures = 0;
     this._nextAnimationAt = 0;
+    this._imageBytes.clear();
+    this._workerHas.clear();
+    if (this._worker) this._worker.postMessage({ type: "forgetImages" });
     this.unsupported = null;
     if (this._parsed && this._parsed.supported) {
       console.log(`🎨 Local overlay: ${this._parsed.mode} ${this._parsed.slug}/${this._parsed.tableSlug} overlay #${this._parsed.overlayId}`);
@@ -221,16 +235,76 @@ class SkiaOverlay extends EventEmitter {
   async _draw(binding, now = Date.now()) {
     await this._ensureImages(binding);
     const started = Date.now();
+    const info = RENDER_INLINE
+      ? await this._drawInline(binding, now)
+      : await this._drawOnWorker(binding, now);
+    this._lastDrawAt = Date.now();
+    this._renderCount++;
+    const ms = info && info.ms != null ? info.ms : this._lastDrawAt - started;
+    if (this._renderCount === 1 || this._renderCount % 50 === 0) {
+      console.log(`🎨 Local overlay frame ${this._renderCount} (${ms} ms, ${((info && info.bytes) / 1024 || 0).toFixed(0)} KB${RENDER_INLINE ? ", inline" : ""})`);
+    }
+    this.emit("updated", { ms, bytes: (info && info.bytes) || 0 });
+  }
+
+  async _drawInline(binding, now) {
     const surface = renderer.renderCanvas(this._canvas, binding, { images: this._images, now });
     const buf = await surface.encode("png");
     this._writeAtomic(buf);
-    this._lastDrawAt = Date.now();
-    this._renderCount++;
-    const ms = this._lastDrawAt - started;
-    if (this._renderCount === 1 || this._renderCount % 50 === 0) {
-      console.log(`🎨 Local overlay frame ${this._renderCount} (${ms} ms, ${(buf.length / 1024).toFixed(0)} KB)`);
+    return { bytes: buf.length };
+  }
+
+  /**
+   * Hand the frame to the render thread. Only images the worker has not already
+   * decoded are shipped, so a redraw normally sends just the canvas and binding.
+   */
+  _drawOnWorker(binding, now) {
+    const worker = this._ensureWorker();
+    const id = ++this._renderSeq;
+    const newImages = {};
+    for (const [url, bytes] of this._imageBytes) {
+      if (!bytes || this._workerHas.has(url)) continue;
+      newImages[url] = bytes;
+      this._workerHas.add(url);
     }
-    this.emit("updated", { ms, bytes: buf.length });
+    return new Promise((resolve, reject) => {
+      const onMessage = (msg) => {
+        if (msg.type === "imageFailed") {
+          console.log(`⚠️  Overlay image unusable (${String(msg.url).slice(0, 80)}): ${msg.message}`);
+          return;
+        }
+        if (msg.id !== id) return;
+        worker.off("message", onMessage);
+        worker.off("error", onError);
+        if (msg.type === "error") reject(new Error(msg.message));
+        else resolve(msg);
+      };
+      const onError = (err) => {
+        worker.off("message", onMessage);
+        worker.off("error", onError);
+        reject(err);
+      };
+      worker.on("message", onMessage);
+      worker.on("error", onError);
+      worker.postMessage({
+        type: "render", id, canvas: this._canvas, binding, now,
+        pngPath: this.pngPath, fontsDir: FONT_DIR, newImages,
+      });
+    });
+  }
+
+  _ensureWorker() {
+    if (this._worker) return this._worker;
+    const worker = new Worker(path.join(__dirname, "overlayRenderWorker.js"));
+    worker.unref(); // never hold the process open
+    worker.on("error", (err) => {
+      console.log(`⚠️  Overlay render thread error: ${err.message}`);
+      this._worker = null;
+      this._workerHas.clear();
+    });
+    worker.on("exit", () => { this._worker = null; this._workerHas.clear(); });
+    this._worker = worker;
+    return worker;
   }
 
   /**
@@ -253,14 +327,19 @@ class SkiaOverlay extends EventEmitter {
   async _ensureImages(binding) {
     const urls = renderer.imageUrls(this._canvas, binding, null);
     for (const url of urls) {
-      if (this._images.has(url)) continue;
+      if (this._imageBytes.has(url) || this._images.has(url)) continue;
       try {
-        this._images.set(url, await renderer.loadImage(await this._fetchImageBytes(url)));
+        const bytes = await this._fetchImageBytes(url);
+        this._imageBytes.set(url, bytes);
+        // Decoding is synchronous too, so it only happens here in inline mode;
+        // on the worker path the bytes are decoded on the render thread.
+        if (RENDER_INLINE) this._images.set(url, await renderer.loadImage(bytes));
       } catch (err) {
         // A missing logo must not stop the scoreboard; the element just draws
         // nothing, which is what the web renderer does for a broken <img> too.
         console.log(`⚠️  Overlay image unavailable (${url.slice(0, 80)}): ${err.message}`);
-        this._images.set(url, null);
+        this._imageBytes.set(url, null);
+        if (RENDER_INLINE) this._images.set(url, null);
       }
     }
   }
@@ -311,6 +390,12 @@ class SkiaOverlay extends EventEmitter {
     this._stopPeriodicRefresh();
     this.isRunning = false;
     this._images.clear();
+    this._imageBytes.clear();
+    this._workerHas.clear();
+    if (this._worker) {
+      await this._worker.terminate().catch(() => {});
+      this._worker = null;
+    }
     return true;
   }
 }
