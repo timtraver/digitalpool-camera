@@ -34,13 +34,20 @@ const recordingManager = new RecordingManager([
   { path: "live2", label: "cam2", streamId: 2 },
 ]);
 
-// Try to load HTML overlay renderer (wkhtmltoimage + ImageMagick)
+// Graphics overlay producer.
+//
+// This is overlayProducer, not puppeteerOverlay directly: it presents the same
+// interface and picks between the headless-Chromium renderer and the local Skia
+// renderer (overlayRenderer.js), falling back to the browser for any overlay the
+// local one cannot draw faithfully. OVERLAY_ENGINE controls it and defaults to
+// "chromium", so behaviour here is unchanged until that is set to "auto".
+// The variable keeps its old name because every call site below is unchanged.
 let PuppeteerOverlay = null;
 try {
-  PuppeteerOverlay = require("./puppeteerOverlay");
-  console.log("✅ HTML overlay module loaded (wkhtmltoimage + ImageMagick)");
+  PuppeteerOverlay = require("./overlayProducer");
+  console.log(`✅ Overlay producer loaded (engine: ${PuppeteerOverlay.ENGINE}${PuppeteerOverlay.SHADOW ? ", shadow on" : ""})`);
 } catch (err) {
-  console.log("ℹ️  HTML overlay not available:", err.message);
+  console.log("ℹ️  Overlay producer not available:", err.message);
 }
 
 const app = express();
@@ -3078,6 +3085,26 @@ app.post("/api/overlay-url", express.json(), async (req, res) => {
   _scForOverlay.saveConfig();
 
   res.json({ success: true, overlayUrl: url || "" });
+});
+
+// Which overlay engine each camera is actually using, and why.
+//
+// The point of this endpoint is the rollout: with OVERLAY_ENGINE=auto a device
+// may be drawing overlays locally, or may have fallen back to the browser for a
+// reason worth knowing (an unported overlay mode, an element the local renderer
+// cannot draw, a data source that stopped answering). `activeEngine` is the
+// truth; `demoted` lists URLs that failed and will not be retried until restart.
+app.get("/api/overlay/engine", requireAuth, (req, res) => {
+  const forCamera = (producer) => (producer && producer.stats ? producer.stats() : null);
+  res.json({
+    success: true,
+    configuredEngine: PuppeteerOverlay ? PuppeteerOverlay.ENGINE : null,
+    shadow: PuppeteerOverlay ? PuppeteerOverlay.SHADOW : false,
+    cameras: {
+      1: forCamera(puppeteerOverlay),
+      2: forCamera(puppeteerOverlay2),
+    },
+  });
 });
 
 // API endpoint to list the overlays available to this device's DigitalPool

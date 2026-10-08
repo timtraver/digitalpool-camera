@@ -28,7 +28,8 @@
     "socket.io": "^4.8.3"
   },
   "optionalDependencies": {
-    "canvas": "^2.11.2"
+    "canvas": "^2.11.2",
+    "@napi-rs/canvas": "^0.1.60"
   },
   "engines": {
     "node": ">=14.0.0"
