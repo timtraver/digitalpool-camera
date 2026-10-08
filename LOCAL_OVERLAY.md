@@ -8,20 +8,41 @@ which is the behaviour this device has always had.
 
 ## Why
 
-Today every overlay frame costs a full-page Chromium render plus a 1080p PNG
-encode, every 2 seconds, per camera — and a resident browser. Removing it:
+Measured on an N97 (`dp-stream-1`, 4 cores), before and after, with the same box
+doing the work:
 
-- gives back ~150–250 MB of RSS against the `MemoryMax=2500M` cap in
-  `digitalpool-camera.service` (that cap exists because of an OOM that took the
-  WiFi driver down with it)
-- removes a ~1-core spike every 2 s per camera, plus the screenshot stagger and
-  the global capture mutex that exist only to stop two browser captures colliding
-- removes the hourly Chromium restart, during which the overlay goes dark for 2–3 s
-- redraws when the score actually changes rather than sampling on a timer
+| | browser engine, 1 stream | local renderer, 2 streams |
+|---|---|---|
+| overlay + app CPU | 5.6% of one core (Chrome 4.0 + node 1.6), continuous | **2.8% of one core** |
+| cgroup memory | 802 MB | **605 MB** (cap is 2500) |
+| browser processes | 3–9, restarted hourly | **0** |
+| PNG writes | every 2 s whether or not anything changed | only when something changes |
+
+Twice the streams, half the CPU, 200 MB back. The browser also screenshotted on a
+timer regardless of whether the scoreboard had moved — 10 rewrites in 20 s with
+identical content — where the local renderer redraws on an actual change.
 
 It does **not** touch the per-frame compositing cost (the NV12↔BGRA round-trip),
-which is the larger steady-state load. Expect the spikes to go, not the overlay to
-become free.
+which is the larger steady-state load. The 38% of four cores this box uses with
+two 4K streams is encoding, not overlays.
+
+### Where the remaining overlay cost is
+
+A frame on that hardware breaks down as:
+
+```
+warm draw    :   8 ms
+png encode   : 114 ms   ← 93% of the frame
+raw RGBA     :  10 ms
+```
+
+PNG compression level makes no difference — the cost is the per-pixel scan. The
+one change left that materially moves this is handing the pipeline raw
+premultiplied BGRA instead of a PNG, which would also remove the cairo decode in
+`_build_composition`. A frame would go from ~122 ms to ~18 ms.
+
+In practice an overlay with a 10 s sponsor carousel redraws about 6 times a
+minute, so that single change is worth roughly 1.3% of a core per camera.
 
 ## How the pieces fit
 
@@ -98,6 +119,10 @@ real tournament data.
 - `player_avatar`, `static_image` and `tournament_logo` are implemented but
   currently unverifiable, because every image in the DigitalPool S3 bucket
   returns `AllAccessDisabled` (see below). The other 16 types are verified.
+- Carousel crossfades are **off** by default (`OVERLAY_CAROUSEL_FADE=1` enables
+  them). The pipeline only re-reads the PNG on a 2 s mtime poll, so a 600 ms fade
+  cannot be seen — it would cost 7 PNG encodes per carousel cycle instead of 1
+  for nothing. Worth revisiting once the handoff is raw pixels.
 - Fonts live in `assets/fonts/` (36 faces, 4.4 MB) and must ship in the device
   image. `fontFamily: inherit` resolves to UniformCondensed, which has only a 400
   weight, so weights 500–800 are synthesised — slightly differently from Chrome.
@@ -112,6 +137,7 @@ real tournament data.
 | 14 built-in example layouts | 0.9% of painted pixels |
 | all 41 overlays readable from the database | 0.7% |
 | synthetic fixture covering all 20 element types | 0.2% |
+| live production page, overlay #273 (40 elements, 16 types) | 0.1% |
 
 The residual is glyph edge weight from synthesised bold, not geometry. See its
 README.
