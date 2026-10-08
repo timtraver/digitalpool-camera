@@ -3229,18 +3229,33 @@ socket.on("cpuLoad", ({ percent }) => {
 // Positive = GStreamer clock running fast; negative = running slow.
 // Displayed as seconds-per-hour (ppm × 3600 / 1e6) for human-relatability.
 const streamDriftEl = document.getElementById("streamDrift");
-socket.on("streamDrift", ({ ppm }) => {
+// Like the bitrate above, both cameras report drift into this one field, so
+// with two streams it flickered between their values. Keep them apart and show
+// the WORST — a clock problem on either stream is the thing worth seeing — and
+// name the camera once there is more than one to confuse it with.
+const driftByCamera = new Map(); // cameraIndex -> ppm
+
+socket.on("streamDrift", ({ ppm, cameraIndex }) => {
   if (!streamDriftEl) return;
-  if (ppm === null) {
+  const cam = cameraIndex || 1;
+  if (ppm === null) driftByCamera.delete(cam);
+  else driftByCamera.set(cam, ppm);
+
+  if (driftByCamera.size === 0) {
     streamDriftEl.textContent = "—";
     streamDriftEl.style.color = "#12c7ff";
     return;
   }
-  const sPerHr = ppm * 0.0036;
+  let worstCam = null;
+  for (const [c, v] of driftByCamera) {
+    if (worstCam === null || Math.abs(v) > Math.abs(driftByCamera.get(worstCam))) worstCam = c;
+  }
+  const sPerHr = driftByCamera.get(worstCam) * 0.0036;
+  const tag = driftByCamera.size > 1 ? ` (c${worstCam})` : "";
   const abs    = Math.abs(sPerHr);
   // 1 decimal under 10 s/hr, integer beyond — keeps the field width steady.
   const shown = abs < 10 ? sPerHr.toFixed(1) : Math.round(sPerHr).toString();
-  streamDriftEl.textContent = (sPerHr >= 0 ? "+" : "") + shown + " s/hr";
+  streamDriftEl.textContent = (sPerHr >= 0 ? "+" : "") + shown + " s/hr" + tag;
   streamDriftEl.style.color = abs > 18 ? "#f87171"   // red   — significant drift (>18 s/hr ≈ >5000 ppm)
                             : abs >  4 ? "#fbbf24"   // amber — mild drift       (>4  s/hr ≈ >1100 ppm)
                             :            "#4ade80";  // green — negligible
@@ -3376,28 +3391,58 @@ socket.on("streamDrift", ({ ppm }) => {
     if (!animFrame) animFrame = requestAnimationFrame(draw);
   }
 
-  socket.on("streamBitrate", ({ mbps }) => {
-    if (mbps === null) {
-      // Stream stopped — reset display
-      data.length = 0;
-      peakMbps = 0;
-      wrap.style.display = "none";
-      valEl.textContent = "—";
-      if (maxEl) maxEl.textContent = "";
-      const ctx = canvas.getContext("2d");
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      return;
-    }
+  // Both cameras emit "streamBitrate" once a second, each tagged with its own
+  // cameraIndex. Pushing every event straight into one series interleaved them,
+  // so with two streams running the trace alternated camera 1, camera 2, camera
+  // 1 ... and appeared to bounce between their two rates — e.g. 8 Mbps and
+  // 1 Mbps — when in fact both were steady.
+  //
+  // The label is "Total Out", so keep the latest reading per camera and plot
+  // their SUM. Sampling is driven by a local 1 Hz timer rather than by event
+  // arrival, so the time axis stays even no matter how many cameras report.
+  const latest = new Map(); // cameraIndex -> Mbps
+  let sampler = null;
+
+  function resetGraph() {
+    data.length = 0;
+    peakMbps = 0;
+    wrap.style.display = "none";
+    valEl.textContent = "—";
+    if (maxEl) maxEl.textContent = "";
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+
+  function sample() {
+    if (latest.size === 0) return;
+    let total = 0;
+    for (const v of latest.values()) total += v;
 
     wrap.style.display = "block";
-    data.push(mbps);
+    data.push(total);
     if (data.length > HISTORY) data.shift();
-    if (mbps > peakMbps) peakMbps = mbps;
+    if (total > peakMbps) peakMbps = total;
 
-    valEl.textContent = mbps.toFixed(2);
+    valEl.textContent = total.toFixed(2);
     if (maxEl) maxEl.textContent = "↑" + peakMbps.toFixed(2);
-
     schedDraw();
+  }
+
+  socket.on("streamBitrate", ({ mbps, cameraIndex }) => {
+    const cam = cameraIndex || 1;
+    if (mbps === null) {
+      latest.delete(cam);
+      if (latest.size === 0) {
+        if (sampler) { clearInterval(sampler); sampler = null; }
+        resetGraph();
+      }
+      return;
+    }
+    latest.set(cam, mbps);
+    if (!sampler) {
+      sample();                       // draw the first point immediately
+      sampler = setInterval(sample, 1000);
+    }
   });
 
   // Redraw on resize so canvas pixel width stays correct
