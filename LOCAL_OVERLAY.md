@@ -90,9 +90,9 @@ real tournament data.
   `OVERLAY_SOURCE_FUNCTION` to a cloud function that returns it. **Until one of
   those exists, `auto` always falls back to the browser** — safely, but with no
   benefit.
-- Only **tournament-mode** overlay URLs render locally. Event and venue mode need
-  the aliased/inflated queries `VenueTableStreamOverlay` uses; until those are
-  ported those URLs use the browser.
+- **Tournament** and **venue** mode overlay URLs render locally. Event mode reads
+  its match through a nested event→tournament structure that is not ported yet,
+  so those URLs still use the browser.
 - **`image_carousel` is not implemented** — the one element type that needs a
   frame loop rather than redraw-on-change. Any overlay using it falls back.
 - `player_avatar`, `static_image` and `tournament_logo` are implemented but

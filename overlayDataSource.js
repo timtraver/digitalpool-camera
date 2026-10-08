@@ -92,10 +92,10 @@ async function graphql(query, variables) {
 const ROUTE = /\/(venues|events|tournaments)\/([^/]+)\/tables\/([^/]+)\/overlays\/(\d+)\/?$/;
 const MODE_FOR = { venues: "venue", events: "event", tournaments: "tournament" };
 
-// Modes whose queries are implemented here. Event and venue mode need the
-// aliased/inflated queries VenueTableStreamOverlay uses; until those are ported
-// they fall back to the browser rather than render something wrong.
-const SUPPORTED_MODES = new Set(["tournament"]);
+// Modes whose queries are implemented here. Event mode reads matches through a
+// nested event→tournament structure that is not ported yet, so it still falls
+// back to the browser rather than render something wrong.
+const SUPPORTED_MODES = new Set(["tournament", "venue"]);
 
 function parseOverlayUrl(url) {
   if (!url) return null;
@@ -158,6 +158,70 @@ const Q_TABLE_MATCH = `
       }
     }
   }`;
+
+// Venue mode. A venue table can be carrying either a tournament match or a
+// casual match (QR-started play with no event at all), so fetch both and prefer
+// the tournament one — the order extractVenueLiveData() resolves them in.
+//
+// The web app reads this through GET_VENUE_LIVE_TABLE_QUERY, whose fields are
+// all aliased to one or two letters to keep the payload small for a browser.
+// Nothing here needs that, so this asks for the same data by its real names.
+const Q_VENUE_TABLE = `
+  query DeviceVenueTable($venue_slug: String!, $table_slug: String!) {
+    pool_tables(where: { slug: { _eq: $table_slug }, venue: { slug: { _eq: $venue_slug } } }, limit: 1) {
+      id slug label
+      venue { id name city region }
+      user { id city region }
+      tournament {
+        id name slug logo avatar game_type winners_race_to losers_race_to
+        venue { id name city region }
+      }
+      tournament_match_table(where: { status: { _eq: IN_PROGRESS } }, order_by: { updated_at: desc }, limit: 1) {
+        id identifier status scheduled_time start_time end_time updated_at
+        challenger1_name challenger1_country challenger1_score challenger1_points
+        challenger1_race_to challenger1_skill_level challenger1_is_playing
+        challenger2_name challenger2_country challenger2_score challenger2_points
+        challenger2_race_to challenger2_skill_level challenger2_is_playing
+        challenger1 { id name team { id name } user { id avatar } }
+        challenger2 { id name team { id name } user { id avatar } }
+      }
+      matches(where: { status: { _neq: COMPLETED } }, order_by: { updated_at: desc }, limit: 1) {
+        id name status race_to game_type updated_at
+        start_date_time end_date_time
+        player_name player_score player_race_to player_fargo player_country player_is_winner player_is_playing
+        opponent_name opponent_score opponent_race_to opponent_fargo opponent_country opponent_is_winner opponent_is_playing
+      }
+    }
+  }`;
+
+/**
+ * Port of casualMatchToChallenger(). A casual match stores its two competitors
+ * as player_ and opponent_ fields rather than challenger1_ and challenger2_.
+ *
+ * It maps exactly the six fields the web app maps, and no more — points,
+ * start/end time and avatars are deliberately NOT mapped, because the web app
+ * does not map them either and a casual-match overlay therefore shows 0 points
+ * and a 0:00 clock. Adding them here would make the device disagree with the
+ * browser, which is a worse outcome than reproducing the gap.
+ */
+function casualMatchToChallenger(m) {
+  if (!m) return null;
+  return {
+    ...m,
+    challenger1_name: m.player_name,
+    challenger1_score: m.player_score,
+    challenger1_race_to: m.player_race_to,
+    challenger1_skill_level: m.player_fargo,
+    challenger1_country: m.player_country,
+    challenger1_is_winner: m.player_is_winner,
+    challenger2_name: m.opponent_name,
+    challenger2_score: m.opponent_score,
+    challenger2_race_to: m.opponent_race_to,
+    challenger2_skill_level: m.opponent_fargo,
+    challenger2_country: m.opponent_country,
+    challenger2_is_winner: m.opponent_is_winner,
+  };
+}
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
 async function fetchCanvas(overlayId) {
@@ -279,6 +343,7 @@ function buildBinding(tournament, table, match) {
  * the queries simply find no match on the table.
  */
 async function fetchBinding(parsed) {
+  if (parsed.mode === "venue") return fetchVenueBinding(parsed);
   if (parsed.mode !== "tournament") {
     throw new Error(`overlay mode '${parsed.mode}' not implemented locally`);
   }
@@ -290,6 +355,22 @@ async function fetchBinding(parsed) {
   const table = d.pool_tables && d.pool_tables[0];
   const match = table && table.tournament_match_table && table.tournament_match_table[0];
   return buildBinding(tournament, table, match || null);
+}
+
+async function fetchVenueBinding(parsed) {
+  const d = await graphql(Q_VENUE_TABLE, { venue_slug: parsed.slug, table_slug: parsed.tableSlug });
+  const table = d.pool_tables && d.pool_tables[0];
+  if (!table) throw new Error(`table '${parsed.tableSlug}' not found at venue '${parsed.slug}'`);
+
+  const tournamentMatch = table.tournament_match_table && table.tournament_match_table[0];
+  if (tournamentMatch) {
+    return buildBinding(table.tournament || null, table, tournamentMatch);
+  }
+  // No tournament match on the table: a casual match, or nothing at all. There is
+  // no tournament in either case, so the tournament fields stay blank and only
+  // the location resolves (from the venue, or the table owner for a home table).
+  const casual = casualMatchToChallenger(table.matches && table.matches[0]);
+  return buildBinding(null, table, casual);
 }
 
 /**
@@ -316,6 +397,7 @@ module.exports = {
   fetchBinding,
   bindingFingerprint,
   buildBinding,
+  casualMatchToChallenger,
   graphqlUrl,
   EMPTY_BINDING,
   SUPPORTED_MODES,
