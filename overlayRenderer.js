@@ -472,6 +472,43 @@ function ellipsePath(ctx, x, y, w, h) {
   ctx.closePath();
 }
 
+// Overlay artwork is nearly always drawn much smaller than it was uploaded — a
+// 1000px sponsor logo into a 250px slot, a full-size avatar into 60px. Skia's
+// drawImage samples rather than filters when it shrinks like that, so fine
+// detail breaks up into hard dots where a browser renders a smooth blend
+// (imageSmoothingQuality is accepted but has no effect here).
+//
+// Halving repeatedly until the image is within 2x of its target averages those
+// pixels away, which is what a browser's downscale filter does. The result is
+// cached per destination size: an overlay redraws on every score change but its
+// logos do not change, so this work happens once.
+const _scaledCache = new Map();
+const SCALED_CACHE_MAX = 64;
+
+function scaledForBox(img, key, dw, dh) {
+  const targetW = Math.max(1, Math.round(dw));
+  const targetH = Math.max(1, Math.round(dh));
+  if (!key || img.width <= targetW * 2 || img.height <= targetH * 2) return img;
+
+  const cacheKey = `${key}@${targetW}x${targetH}`;
+  const hit = _scaledCache.get(cacheKey);
+  if (hit) return hit;
+
+  const { createCanvas } = skia();
+  let w = img.width, h = img.height;
+  let src = img;
+  while (w > targetW * 2 && h > targetH * 2) {
+    w = Math.max(targetW, Math.round(w / 2));
+    h = Math.max(targetH, Math.round(h / 2));
+    const step = createCanvas(w, h);
+    step.getContext("2d").drawImage(src, 0, 0, w, h);
+    src = step;
+  }
+  if (_scaledCache.size >= SCALED_CACHE_MAX) _scaledCache.delete(_scaledCache.keys().next().value);
+  _scaledCache.set(cacheKey, src);
+  return src;
+}
+
 // object-fit: where the image lands inside its box.
 function objectFitRect(fit, boxW, boxH, imgW, imgH) {
   if (!imgW || !imgH) return { x: 0, y: 0, w: boxW, h: boxH };
@@ -697,7 +734,7 @@ function drawElement(ctx, element, binding, images, assets, now) {
       const prev = ctx.globalAlpha;
       ctx.globalAlpha = prev * alpha;
       const r = objectFitRect(fit, w, h, img.width, img.height);
-      ctx.drawImage(img, r.x, r.y, r.w, r.h);
+      ctx.drawImage(scaledForBox(img, url, r.w, r.h), r.x, r.y, r.w, r.h);
       ctx.globalAlpha = prev;
     };
     // Mid-fade the outgoing image is still painted underneath the incoming one,
@@ -724,7 +761,7 @@ function drawElement(ctx, element, binding, images, assets, now) {
       ctx.save();
       ellipsePath(ctx, sx + 1, sy + 1, size - 2, size - 2);
       ctx.clip();
-      ctx.drawImage(img, sx, sy, size, size);
+      ctx.drawImage(scaledForBox(img, url, size, size), sx, sy, size, size);
       ctx.restore();
       ellipsePath(ctx, sx + 0.5, sy + 0.5, size - 1, size - 1);
       ctx.lineWidth = 1;
@@ -751,7 +788,7 @@ function drawElement(ctx, element, binding, images, assets, now) {
         element.type === "tournament_logo" ? "contain" :
         element.objectFit || "contain";
       const r = objectFitRect(fit, w, h, img.width, img.height);
-      ctx.drawImage(img, r.x, r.y, r.w, r.h);
+      ctx.drawImage(scaledForBox(img, url, r.w, r.h), r.x, r.y, r.w, r.h);
     }
     ctx.restore();
     ctx.restore();
@@ -845,5 +882,5 @@ module.exports = {
   SUPPORTED,
   INHERIT_FAMILY,
   // exported for tests
-  _internals: { imageUrlFor, carouselState, carouselImages, easeInOut, wrapLines, parseRadii, compensateShadowAlpha, countryShortCode, flagSourceFor, gameTypeImagePath, parseShadows, parseBorder, gradientPoints, matchClockText, applyTextTransform, objectFitRect },
+  _internals: { imageUrlFor, scaledForBox, carouselState, carouselImages, easeInOut, wrapLines, parseRadii, compensateShadowAlpha, countryShortCode, flagSourceFor, gameTypeImagePath, parseShadows, parseBorder, gradientPoints, matchClockText, applyTextTransform, objectFitRect },
 };
