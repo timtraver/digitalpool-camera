@@ -6,7 +6,7 @@
 // data layer too — if overlayDataSource fetched the wrong match, or resolved a
 // venue differently from the web app, it shows up as pixels.
 //
-//   node compare-live.mjs <overlayUrl> [settleMs] [nowMs]
+//   node compare-live.mjs <overlayUrl> [settleMs] [animationNowMs]
 //
 // Carousels: the browser advances from whenever the page mounted, the local
 // renderer derives its index from a clock. To compare like with like, the page
@@ -103,7 +103,11 @@ for (const u of renderer.imageUrls(canvas, binding, null)) {
   }
 }
 const t0 = Date.now();
-const surface = renderer.renderCanvas(canvas, binding, { images, now: nowMs });
+const surface = renderer.renderCanvas(canvas, binding, {
+  images,
+  now: Date.now(),      // match_clock: the real elapsed match time, as the page shows it
+  animationNow: nowMs,  // carousels: hold on image 0, where the freshly loaded page is
+});
 const buf = await surface.encode('png');
 const drawMs = Date.now() - t0;
 fs.writeFileSync(locPath, buf);

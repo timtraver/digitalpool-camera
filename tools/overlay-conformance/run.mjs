@@ -28,7 +28,11 @@ const renderer = require('../../overlayRenderer.js');
 // strict: antialiasing differences between two text rasterisers show up at this
 // threshold, which is exactly what we want to see.
 const THRESHOLD = 0.1;
-// 1000 ms is inside slot 0 for any interval >= 1 s and past the 600 ms fade.
+// The render clock, pinned so a run is reproducible. It drives two things:
+//   • carousels — 1000 ms is inside slot 0 for any interval >= 1 s and past the
+//     600 ms fade, which is where the reference (captured just after mount) is;
+//   • match_clock — whose elapsed minutes would otherwise tick between runs and
+//     quietly change the score.
 const CAROUSEL_NOW_MS = 1000;
 
 // Decoding goes through renderer.loadImage so the Image comes from the SAME
@@ -68,6 +72,26 @@ function elementBounds(el) {
   return { x0: Math.floor(cx - w / 2), y0: Math.floor(cy - h / 2), x1: Math.ceil(cx + w / 2), y1: Math.ceil(cy + h / 2) };
 }
 
+// pixelmatch blends a pixel's alpha onto WHITE before comparing, so a faint
+// translucent fill over transparency — rgba(255,255,255,0.1), which is exactly
+// what ElementRenderer paints where an avatar or logo is missing — scores
+// identical to nothing at all. Compositing both images onto a mid grey first
+// makes those differences visible, and is also closer to the truth: the overlay
+// is keyed over video, not over white.
+const COMPOSITE_BG = [92, 92, 92];
+
+function flattenOntoGrey(png) {
+  const out = Buffer.alloc(png.data.length);
+  for (let i = 0; i < png.data.length; i += 4) {
+    const a = png.data[i + 3] / 255;
+    for (let c = 0; c < 3; c++) {
+      out[i + c] = Math.round(png.data[i + c] * a + COMPOSITE_BG[c] * (1 - a));
+    }
+    out[i + 3] = 255;
+  }
+  return out;
+}
+
 function deadImageElement(el, binding) {
   const url = renderer._internals.imageUrlFor(el, binding, null);
   return !!(url && failedImages.has(url));
@@ -81,7 +105,9 @@ function score(refPng, locPng, canvas, binding, diffPath) {
   // rasterisers antialias differently are not counted — which is the right call
   // here, since no two text engines agree on edge pixels and we are looking for
   // layout and colour differences, not subpixel noise.
-  const total = pixelmatch(refPng.data, locPng.data, diff.data, width, height, {
+  const refFlat = flattenOntoGrey(refPng);
+  const locFlat = flattenOntoGrey(locPng);
+  const total = pixelmatch(refFlat, locFlat, diff.data, width, height, {
     threshold: THRESHOLD,
     alpha: 0.3,
   });
@@ -95,8 +121,8 @@ function score(refPng, locPng, canvas, binding, diffPath) {
     if (!renderer.SUPPORTED.has(el.type) || deadImageElement(el, binding)) masked.push(elementBounds(el));
   }
   let inSupported = total;
-  const refM = Buffer.from(refPng.data);
-  const locM = Buffer.from(locPng.data);
+  const refM = Buffer.from(refFlat);
+  const locM = Buffer.from(locFlat);
   if (masked.length) {
     for (const b of masked) {
       for (let y = Math.max(0, b.y0); y < Math.min(height, b.y1); y++) {
@@ -162,6 +188,8 @@ const keys = fs
 // Crops both images to one element's box and scores just that, so the residual
 // can be attributed to element types. Boxes that overlap are counted for each
 // element they belong to, so these are per-type diagnostics, not a partition.
+let refFlatGlobal, locFlatGlobal;
+
 function scoreElement(refPng, locPng, el) {
   const b = elementBounds(el);
   const x0 = Math.max(0, b.x0), y0 = Math.max(0, b.y0);
@@ -174,8 +202,8 @@ function scoreElement(refPng, locPng, el) {
     for (let x = 0; x < w; x++) {
       const src = ((y0 + y) * refPng.width + (x0 + x)) * 4;
       const dst = (y * w + x) * 4;
-      refPng.data.copy(a, dst, src, src + 4);
-      locPng.data.copy(c, dst, src, src + 4);
+      refFlatGlobal.copy(a, dst, src, src + 4);
+      locFlatGlobal.copy(c, dst, src, src + 4);
       if (refPng.data[src + 3] > 8 || locPng.data[src + 3] > 8) ink++;
     }
   }
@@ -185,18 +213,24 @@ function scoreElement(refPng, locPng, el) {
 const byType = new Map();
 const rows = [];
 for (const key of keys) {
-  const { canvas, binding } = JSON.parse(fs.readFileSync(path.join(OUT, `${key}.canvas.json`), 'utf8'));
+  const { canvas, binding, capturedAt } = JSON.parse(fs.readFileSync(path.join(OUT, `${key}.canvas.json`), 'utf8'));
   const images = await loadImages(canvas, binding);
   // Carousels advance on a clock. The reference was captured just after the page
   // mounted, i.e. on image 0, so pin the local render to a time that also
   // resolves to image 0 and is past the fade — otherwise this scores whichever
   // sponsor logo happened to be up when the run started.
-  const surface = renderer.renderCanvas(canvas, binding, { images, now: CAROUSEL_NOW_MS });
+  const surface = renderer.renderCanvas(canvas, binding, {
+    images,
+    now: capturedAt || Date.now(),   // match_clock: the instant the shot was taken
+    animationNow: CAROUSEL_NOW_MS,   // carousels: hold on image 0, where the page was
+  });
   const localPath = path.join(OUT, `${key}.local.png`);
   fs.writeFileSync(localPath, surface.toBuffer('image/png'));
 
   const refPng = PNG.sync.read(fs.readFileSync(path.join(OUT, `${key}.ref.png`)));
   const locPng = PNG.sync.read(fs.readFileSync(localPath));
+  refFlatGlobal = flattenOntoGrey(refPng);
+  locFlatGlobal = flattenOntoGrey(locPng);
   const s = score(refPng, locPng, canvas, binding, path.join(OUT, `${key}.diff.png`));
   const unsupported = renderer.unsupportedTypes(canvas);
   rows.push({ key, ...s, unsupported });

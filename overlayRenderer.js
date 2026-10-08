@@ -61,7 +61,7 @@ function unsupportedTypes(canvas) {
 // ── Data binding ─────────────────────────────────────────────────────────────
 // Mirrors ElementRenderer's switch. Returns the string an element renders, or
 // null when the element is not textual.
-function textFor(element, binding) {
+function textFor(element, binding, now = Date.now()) {
   const player = element.player === 2 ? "challenger2" : "challenger1";
   const m = (binding && binding.match) || {};
   const t = (binding && binding.tournament) || {};
@@ -83,7 +83,7 @@ function textFor(element, binding) {
       return r ? `Race to ${r}` : "";
     }
     case "match_status":       return m.identifier || "";
-    case "match_clock":        return matchClockText(m.start_time, m.end_time);
+    case "match_clock":        return matchClockText(m.start_time, m.end_time, now);
     case "table_label":        return tbl.label || "";
     case "tournament_name":    return t.name || "";
     case "tournament_location":return t.location || "";
@@ -667,7 +667,7 @@ function drawShape(ctx, element, w, h, style) {
   }
 }
 
-function drawElement(ctx, element, binding, images, assets, now) {
+function drawElement(ctx, element, binding, images, assets, now = Date.now(), animationNow = now) {
   const style = element.style || {};
   const w = element.w, h = element.h;
 
@@ -739,7 +739,7 @@ function drawElement(ctx, element, binding, images, assets, now) {
       return;
     }
     const fit = element.objectFit || "cover";
-    const { index, prevIndex, progress } = carouselState(element, now);
+    const { index, prevIndex, progress } = carouselState(element, animationNow);
     const paint = (url, alpha) => {
       const img = images && images.get(url);
       if (!img || alpha <= 0) return;
@@ -785,7 +785,33 @@ function drawElement(ctx, element, binding, images, assets, now) {
     return;
   }
 
+  // Element types whose content is an image, and what ElementRenderer paints when
+  // that image is missing: a faint translucent panel, with a word in the middle
+  // for the two that have one. Without this an empty avatar or logo slot is
+  // simply absent here while the browser shows a grey box — a difference that is
+  // invisible to a diff taken over white, which is how it went unnoticed.
+  const IMAGE_PLACEHOLDERS = {
+    player_avatar: null,
+    tournament_logo: null,
+    tournament_game_type_image: "Game Type",
+    static_image: "Image",
+  };
+
   const url = imageUrlFor(element, binding, assets);
+  if (url === null && Object.prototype.hasOwnProperty.call(IMAGE_PLACEHOLDERS, element.type)) {
+    ctx.fillStyle = "rgba(255,255,255,0.1)";
+    roundRectPath(ctx, 0, 0, w, h, style.borderRadius);
+    ctx.fill();
+    const label = IMAGE_PLACEHOLDERS[element.type];
+    if (label) {
+      // These two override justifyContent to center, so the label is centred
+      // whatever the element's textAlign says.
+      drawText(ctx, label, { x: 0, y: 0, w, h }, { ...style, textAlign: "center", textTransform: "none" });
+    }
+    ctx.restore();
+    ctx.restore();
+    return;
+  }
   if (url !== null) {
     // Image elements render with `padding: 0` in ElementRenderer, so the picture
     // fills the border box.
@@ -807,7 +833,7 @@ function drawElement(ctx, element, binding, images, assets, now) {
     return;
   }
 
-  const text = textFor(element, binding);
+  const text = textFor(element, binding, now);
   if (text) {
     const pad = style.padding || 0;
     const bw = border ? border.width : 0;
@@ -855,7 +881,13 @@ function imageUrls(canvasDef, binding, assets) {
  * Draw an overlay canvas. `images` is a Map of url → decoded Image for anything
  * imageUrls() reported. Returns the Skia canvas.
  */
-function renderCanvas(canvasDef, binding, { images = new Map(), assets = null, now = Date.now() } = {}) {
+/**
+ * `now` is the wall clock the overlay is drawn for — it is what match_clock
+ * reads. `animationNow` drives carousels, and defaults to the same value; they
+ * are separable only so the conformance harness can hold a carousel on a known
+ * image while still asking for the real elapsed match time.
+ */
+function renderCanvas(canvasDef, binding, { images = new Map(), assets = null, now = Date.now(), animationNow = null } = {}) {
   const { createCanvas } = skia();
   const width = (canvasDef && canvasDef.width) || 1920;
   const height = (canvasDef && canvasDef.height) || 1080;
@@ -879,7 +911,7 @@ function renderCanvas(canvasDef, binding, { images = new Map(), assets = null, n
     .sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));
   for (const el of elements) {
     if (!SUPPORTED.has(el.type)) continue;
-    drawElement(ctx, el, binding, images, assets, now);
+    drawElement(ctx, el, binding, images, assets, now, animationNow == null ? now : animationNow);
   }
   return surface;
 }

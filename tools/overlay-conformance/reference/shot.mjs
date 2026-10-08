@@ -70,7 +70,13 @@ export async function captureCanvases(items, outDir) {
       await page.evaluate((c, b) => window.__render__(c, b), canvas, binding);
       await settle(page);
       await (await page.$('#root')).screenshot({ path: path.join(outDir, `${key}.ref.png`), omitBackground: true });
-      fs.writeFileSync(path.join(outDir, `${key}.canvas.json`), JSON.stringify({ canvas, binding }, null, 2));
+      // Record when the shot was taken: match_clock shows elapsed time, so the
+      // local render has to be asked for the same instant or it scores a
+      // difference that is only the clock having moved on.
+      fs.writeFileSync(
+        path.join(outDir, `${key}.canvas.json`),
+        JSON.stringify({ canvas, binding, capturedAt: Date.now() }, null, 2)
+      );
       console.log(`📸 ${key}`);
     }
     return items.map((i) => i.key);
@@ -107,7 +113,10 @@ export async function captureAll(outDir) {
       const binding = await page.evaluate(() => window.__BINDING__);
       const png = path.join(outDir, `${key}.ref.png`);
       await (await page.$('#root')).screenshot({ path: png, omitBackground: true });
-      fs.writeFileSync(path.join(outDir, `${key}.canvas.json`), JSON.stringify({ canvas, binding }, null, 2));
+      fs.writeFileSync(
+        path.join(outDir, `${key}.canvas.json`),
+        JSON.stringify({ canvas, binding, capturedAt: Date.now() }, null, 2)
+      );
       results.push({ key, png });
       console.log(`📸 ${key}`);
     }
