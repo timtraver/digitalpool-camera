@@ -28,6 +28,10 @@ const SkiaOverlay = require("./skiaOverlay");
 // without a working browser still gets the local renderer instead of nothing.
 let _PuppeteerOverlay;
 function puppeteerAvailable() {
+  // In local-only mode the browser is not merely unused, it is never loaded:
+  // requiring puppeteer-core pulls in its whole stack, and the point of this
+  // mode is a process with no browser in it anywhere.
+  if (ENGINE === "local") return null;
   if (_PuppeteerOverlay === undefined) {
     try {
       _PuppeteerOverlay = require("./puppeteerOverlay");
@@ -42,8 +46,10 @@ function puppeteerAvailable() {
 // chromium : only ever use the browser (the safe default while this is new)
 // auto     : use the local renderer wherever it can faithfully handle the
 //            overlay, and fall back to the browser otherwise
-// local    : use the local renderer and do NOT fall back — for testing only; a
-//            refusal leaves the overlay blank rather than hiding a problem
+// local    : the local renderer ONLY. puppeteer-core is never even require()d
+//            and no browser process is ever started, so a box in this mode runs
+//            with no Chromium at all. An overlay the local renderer cannot draw
+//            is left blank and logged loudly rather than quietly papered over.
 const ENGINE = (process.env.OVERLAY_ENGINE || "chromium").toLowerCase();
 
 // Run the local renderer alongside Chromium, writing to a separate file that
@@ -89,6 +95,9 @@ class OverlayProducer extends EventEmitter {
     // (updateState) working for callers that never set a URL at all.
     if (puppeteerAvailable()) {
       await this._use("chromium");
+    } else if (ENGINE === "local") {
+      console.log("🎛️  OVERLAY_ENGINE=local — browser engine will not be loaded at all");
+      await this._use("skia");
     } else if (ENGINE !== "chromium") {
       // No browser: the local engine is the only option, so hold off until a URL
       // arrives and setOverlayUrl can tell whether it is one we can draw.
@@ -113,6 +122,9 @@ class OverlayProducer extends EventEmitter {
         this._demote(`engine switch failed: ${err.message}`);
       });
       return;
+    }
+    if (ENGINE === "local" && this._url && !SkiaOverlay.canHandle(this._url)) {
+      console.log(`⚠️  OVERLAY_ENGINE=local and this overlay cannot be drawn locally — it will be BLANK: ${this._url}`);
     }
     this._active.setOverlayUrl(this._url, options);
     this._syncShadow();
@@ -166,7 +178,10 @@ class OverlayProducer extends EventEmitter {
   _engineFor(url) {
     const canBrowse = !!puppeteerAvailable();
     if (ENGINE === "chromium") return "chromium";
-    if (ENGINE === "local") return SkiaOverlay.canHandle(url) ? "skia" : "chromium";
+    // local: always the local engine, even for a URL it will refuse — there is
+    // no browser to hand it to, and silently drawing nothing without saying so
+    // would be worse than an empty overlay plus a log line.
+    if (ENGINE === "local") return "skia";
     if (!url) return "chromium";                       // local-HTML scoreboard mode
     if (this._demotedUrls.has(url) && canBrowse) return "chromium"; // already failed once
     if (!SkiaOverlay.canHandle(url)) return "chromium";

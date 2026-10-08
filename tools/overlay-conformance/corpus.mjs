@@ -27,17 +27,25 @@ function builderDefs() {
 // with real URLs so they are actually exercised.
 export const RICH_BINDING_EXTRAS = {
   tournament: {
-    logo: 'https://digitalpool.s3.amazonaws.com/tournament-logos/HT-Logo_blue_200.png',
+    logo: 'https://d2cqpja9v01i02.cloudfront.net/media/images/1791479050422-ariakon-logo_c8502f57.png',
     game_type: '9-Ball',
   },
   table: { label: 'Table 7' },
   match: {
-    challenger1_avatarImg: 'https://digitalpool.s3.us-west-1.amazonaws.com/users/12916/avatar_f72b5477.jpg',
-    challenger2_avatarImg: 'https://digitalpool.s3.us-west-1.amazonaws.com/users/12916/avatar_f72b5477.jpg',
+    challenger1_avatarImg: 'https://d2cqpja9v01i02.cloudfront.net/media/images/1791479080485-Circle_Logo_Text_Centered_White_6d1da86b.png',
+    challenger2_avatarImg: 'https://d2cqpja9v01i02.cloudfront.net/media/images/1791479080485-Circle_Logo_Text_Centered_White_6d1da86b.png',
     challenger1_race_to: 9,
     challenger2_race_to: 7,
   },
 };
+
+// A real sponsor carousel's artwork, so image_carousel is exercised with the
+// kind of images it actually carries.
+export const CAROUSEL_IMAGES = [
+  "https://d2cqpja9v01i02.cloudfront.net/media/images/1791482272431-Good_Times_Billiards_-_Sponsor_Carou_fc57630e.png",
+  "https://d2cqpja9v01i02.cloudfront.net/media/images/1791482276914-Good_Times_Billiards_-_Sponsor_Carou_2bad64a7.png",
+  "https://d2cqpja9v01i02.cloudfront.net/media/images/1791482282097-Good_Times_Billiards_-_Sponsor_Carou_77efb6ed.png"
+];
 
 export function richBinding(sample) {
   return {
@@ -129,8 +137,9 @@ export function kitchenSink() {
       el.stroke = { width: 2, color: '#ffd700', opacity: 0.6 };
     }
     if (type === 'image_carousel') {
-      el.images = [RICH_BINDING_EXTRAS.tournament.logo];
-      el.interval = 5;
+      el.images = CAROUSEL_IMAGES;
+      el.interval = 8;
+      el.effect = 'fade';
     }
     elements.push(el);
   });

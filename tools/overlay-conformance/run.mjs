@@ -28,6 +28,8 @@ const renderer = require('../../overlayRenderer.js');
 // strict: antialiasing differences between two text rasterisers show up at this
 // threshold, which is exactly what we want to see.
 const THRESHOLD = 0.1;
+// 1000 ms is inside slot 0 for any interval >= 1 s and past the 600 ms fade.
+const CAROUSEL_NOW_MS = 1000;
 
 // Decoding goes through renderer.loadImage so the Image comes from the SAME
 // native @napi-rs/canvas instance the renderer draws with — one produced by this
@@ -185,7 +187,11 @@ const rows = [];
 for (const key of keys) {
   const { canvas, binding } = JSON.parse(fs.readFileSync(path.join(OUT, `${key}.canvas.json`), 'utf8'));
   const images = await loadImages(canvas, binding);
-  const surface = renderer.renderCanvas(canvas, binding, { images });
+  // Carousels advance on a clock. The reference was captured just after the page
+  // mounted, i.e. on image 0, so pin the local render to a time that also
+  // resolves to image 0 and is past the fade — otherwise this scores whichever
+  // sponsor logo happened to be up when the run started.
+  const surface = renderer.renderCanvas(canvas, binding, { images, now: CAROUSEL_NOW_MS });
   const localPath = path.join(OUT, `${key}.local.png`);
   fs.writeFileSync(localPath, surface.toBuffer('image/png'));
 

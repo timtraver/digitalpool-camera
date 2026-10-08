@@ -168,28 +168,38 @@ const Q_TABLE_MATCH = `
 // Nothing here needs that, so this asks for the same data by its real names.
 const Q_VENUE_TABLE = `
   query DeviceVenueTable($venue_slug: String!, $table_slug: String!) {
-    pool_tables(where: { slug: { _eq: $table_slug }, venue: { slug: { _eq: $venue_slug } } }, limit: 1) {
-      id slug label
-      venue { id name city region }
-      user { id city region }
-      tournament {
-        id name slug logo avatar game_type winners_race_to losers_race_to
+    venues(where: { slug: { _eq: $venue_slug } }, limit: 1) {
+      id name city region
+      pool_tables(where: { slug: { _eq: $table_slug } }, limit: 1) {
+        id slug label
+        user { id city region }
         venue { id name city region }
       }
-      tournament_match_table(where: { status: { _eq: IN_PROGRESS } }, order_by: { updated_at: desc }, limit: 1) {
-        id identifier status scheduled_time start_time end_time updated_at
-        challenger1_name challenger1_country challenger1_score challenger1_points
-        challenger1_race_to challenger1_skill_level challenger1_is_playing
-        challenger2_name challenger2_country challenger2_score challenger2_points
-        challenger2_race_to challenger2_skill_level challenger2_is_playing
-        challenger1 { id name team { id name } user { id avatar } }
-        challenger2 { id name team { id name } user { id avatar } }
-      }
-      matches(where: { status: { _neq: COMPLETED } }, order_by: { updated_at: desc }, limit: 1) {
+      matches(where: { status: { _neq: COMPLETED }, pool_table: { slug: { _eq: $table_slug } } },
+              order_by: { updated_at: desc }, limit: 1) {
         id name status race_to game_type updated_at
         start_date_time end_date_time
         player_name player_score player_race_to player_fargo player_country player_is_winner player_is_playing
         opponent_name opponent_score opponent_race_to opponent_fargo opponent_country opponent_is_winner opponent_is_playing
+        pool_table { id slug label }
+      }
+      tournaments(where: { status: { _neq: COMPLETED }, pool_tables: { slug: { _eq: $table_slug } } }) {
+        id name slug event_id logo avatar game_type winners_race_to losers_race_to
+        venue { id name city region }
+        pool_tables(where: { slug: { _eq: $table_slug } }) {
+          id slug label
+          user { id city region }
+          tournament_match_table(where: { status: { _eq: IN_PROGRESS } },
+                                 order_by: { updated_at: desc }, limit: 1) {
+            id identifier status scheduled_time start_time end_time updated_at
+            challenger1_name challenger1_country challenger1_score challenger1_points
+            challenger1_race_to challenger1_skill_level challenger1_is_playing
+            challenger2_name challenger2_country challenger2_score challenger2_points
+            challenger2_race_to challenger2_skill_level challenger2_is_playing
+            challenger1 { id name team { id name } user { id avatar } }
+            challenger2 { id name team { id name } user { id avatar } }
+          }
+        }
       }
     }
   }`;
@@ -359,18 +369,42 @@ async function fetchBinding(parsed) {
 
 async function fetchVenueBinding(parsed) {
   const d = await graphql(Q_VENUE_TABLE, { venue_slug: parsed.slug, table_slug: parsed.tableSlug });
-  const table = d.pool_tables && d.pool_tables[0];
-  if (!table) throw new Error(`table '${parsed.tableSlug}' not found at venue '${parsed.slug}'`);
+  const venue = d.venues && d.venues[0];
+  if (!venue) throw new Error(`venue '${parsed.slug}' not found`);
 
-  const tournamentMatch = table.tournament_match_table && table.tournament_match_table[0];
-  if (tournamentMatch) {
-    return buildBinding(table.tournament || null, table, tournamentMatch);
+  // A tournament running at a venue gets its OWN pool_tables rows, with the same
+  // slug as the venue's table but a different id — so the live match is often not
+  // on the venue's own table row at all. This is why a venue overlay has to look
+  // in several places, and extractVenueLiveData() fixes the order they win in:
+  //   1. a tournament attached to an event
+  //   2. a casual match on the table (QR-started play, no event)
+  //   3. a standalone tournament (event_id null)
+  const withMatch = (t) => {
+    const pt = (t.pool_tables || []).find((x) => x.tournament_match_table && x.tournament_match_table[0]);
+    return pt ? { tournament: t, table: pt, match: pt.tournament_match_table[0] } : null;
+  };
+  const tournaments = venue.tournaments || [];
+  const eventTournament = tournaments.filter((t) => t.event_id != null).map(withMatch).find(Boolean);
+  const standalone = tournaments.filter((t) => t.event_id == null).map(withMatch).find(Boolean);
+  const casual = venue.matches && venue.matches[0];
+
+  const venueTable = (venue.pool_tables && venue.pool_tables[0]) || null;
+  // The venue itself is the fallback source for the location when the winning
+  // row carries no venue of its own.
+  const withVenue = (table) => (table && !table.venue ? { ...table, venue } : table || { ...venueTable, venue });
+
+  if (eventTournament) {
+    return buildBinding(eventTournament.tournament, withVenue(eventTournament.table), eventTournament.match);
   }
-  // No tournament match on the table: a casual match, or nothing at all. There is
-  // no tournament in either case, so the tournament fields stay blank and only
-  // the location resolves (from the venue, or the table owner for a home table).
-  const casual = casualMatchToChallenger(table.matches && table.matches[0]);
-  return buildBinding(null, table, casual);
+  if (casual) {
+    return buildBinding(null, withVenue(casual.pool_table || venueTable), casualMatchToChallenger(casual));
+  }
+  if (standalone) {
+    return buildBinding(standalone.tournament, withVenue(standalone.table), standalone.match);
+  }
+  // Nothing on the table: blank values, but still the venue's own label and
+  // location, exactly as the web renderer leaves it.
+  return buildBinding(null, withVenue(venueTable), null);
 }
 
 /**

@@ -46,7 +46,7 @@ const SUPPORTED = new Set([
   "tournament_name", "tournament_location", "tournament_game_type",
   "static_text", "static_image", "shape",
   "player_avatar", "tournament_logo", "tournament_game_type_image",
-  "player_flag",
+  "player_flag", "image_carousel",
 ]);
 
 function unsupportedTypes(canvas) {
@@ -183,6 +183,73 @@ function imageUrlFor(element, binding, assets) {
       return gameTypeImagePath(t.game_type, assets);
     default: return null;
   }
+}
+
+// ── Image carousel ───────────────────────────────────────────────────────────
+// Port of renderers/ImageCarousel.js. The web component advances on a setInterval
+// started when it mounts; nothing here mounts, so the index is derived from the
+// wall clock instead. That means the device's phase is its own — which is fine,
+// because on a device this renderer IS the only one, and a deterministic clock
+// makes the behaviour reproducible and testable.
+const CAROUSEL_FADE_MS = 600; // transition: opacity 0.6s ease-in-out
+
+function carouselImages(element) {
+  return (element.images || []).filter(Boolean);
+}
+
+function carouselIntervalMs(element) {
+  return Math.max(1, element.interval || 5) * 1000;
+}
+
+// CSS ease-in-out is cubic-bezier(0.42, 0, 0.58, 1); solved by bisection on x,
+// which is plenty precise for an opacity ramp and avoids pulling in a solver.
+function easeInOut(t) {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  const bez = (a, b, u) => 3 * a * (1 - u) * (1 - u) * u + 3 * b * (1 - u) * u * u + u * u * u;
+  let lo = 0, hi = 1, u = t;
+  for (let i = 0; i < 20; i++) {
+    u = (lo + hi) / 2;
+    if (bez(0.42, 0.58, u) < t) lo = u; else hi = u;
+  }
+  return bez(0, 1, u);
+}
+
+/**
+ * Which image(s) a carousel shows at `now`, and how far through a crossfade it
+ * is. Returns { index, prevIndex, progress } where progress 1 means settled.
+ */
+function carouselState(element, now) {
+  const list = carouselImages(element);
+  if (list.length <= 1) return { index: 0, prevIndex: 0, progress: 1 };
+  const intervalMs = carouselIntervalMs(element);
+  const slot = Math.floor(now / intervalMs);
+  const index = ((slot % list.length) + list.length) % list.length;
+  const prevIndex = ((index - 1) % list.length + list.length) % list.length;
+  const sinceSwitch = now - slot * intervalMs;
+  const fading = element.effect === "fade" && sinceSwitch < CAROUSEL_FADE_MS;
+  return { index, prevIndex, progress: fading ? easeInOut(sinceSwitch / CAROUSEL_FADE_MS) : 1 };
+}
+
+/**
+ * When this canvas next needs redrawing for animation reasons alone, as an
+ * absolute timestamp, or null if nothing on it animates. The producer uses this
+ * to wake exactly when a carousel changes instead of polling the clock.
+ */
+function nextAnimationAt(canvasDef, now) {
+  let soonest = null;
+  for (const el of (canvasDef && canvasDef.elements) || []) {
+    if (el.visible === false || el.type !== "image_carousel") continue;
+    if (carouselImages(el).length <= 1) continue;
+    const intervalMs = carouselIntervalMs(el);
+    const sinceSwitch = now % intervalMs;
+    // Either the next slot boundary, or the next step of an in-flight fade.
+    const next = el.effect === "fade" && sinceSwitch < CAROUSEL_FADE_MS
+      ? now + Math.min(CAROUSEL_FADE_MS / 6, intervalMs - sinceSwitch)
+      : now + (intervalMs - sinceSwitch);
+    if (soonest === null || next < soonest) soonest = next;
+  }
+  return soonest;
 }
 
 // ── CSS value parsing ────────────────────────────────────────────────────────
@@ -551,7 +618,7 @@ function drawShape(ctx, element, w, h, style) {
   }
 }
 
-function drawElement(ctx, element, binding, images, assets) {
+function drawElement(ctx, element, binding, images, assets, now) {
   const style = element.style || {};
   const w = element.w, h = element.h;
 
@@ -605,6 +672,43 @@ function drawElement(ctx, element, binding, images, assets) {
     ctx.stroke();
   }
 
+  if (element.type === "image_carousel") {
+    // ImageCarousel fills the element box (its container is width/height 100%
+    // with overflow hidden) and keeps the element's border-radius.
+    const list = carouselImages(element);
+    if (!list.length) {
+      // Same empty state the component renders, so a misconfigured element looks
+      // the same on the device as it does in the builder.
+      ctx.fillStyle = "rgba(0,0,0,0.4)";
+      roundRectPath(ctx, 0, 0, w, h, style.borderRadius);
+      ctx.fill();
+      drawText(ctx, "Image Carousel (add images)", { x: 0, y: 0, w, h }, {
+        ...style, color: "#ffffff", fontSize: 14, textAlign: "center", textTransform: "none", textShadow: "none",
+      });
+      ctx.restore();
+      ctx.restore();
+      return;
+    }
+    const fit = element.objectFit || "cover";
+    const { index, prevIndex, progress } = carouselState(element, now);
+    const paint = (url, alpha) => {
+      const img = images && images.get(url);
+      if (!img || alpha <= 0) return;
+      const prev = ctx.globalAlpha;
+      ctx.globalAlpha = prev * alpha;
+      const r = objectFitRect(fit, w, h, img.width, img.height);
+      ctx.drawImage(img, r.x, r.y, r.w, r.h);
+      ctx.globalAlpha = prev;
+    };
+    // Mid-fade the outgoing image is still painted underneath the incoming one,
+    // which is what the stacked absolutely-positioned <img>s do.
+    if (progress < 1 && list.length > 1) paint(list[prevIndex], 1 - progress);
+    paint(list[index], progress);
+    ctx.restore();
+    ctx.restore();
+    return;
+  }
+
   if (element.type === "player_flag") {
     // CircleFlag renders a span of min(w,h), border-radius 50%, 1px dark border,
     // holding an img of the SAME size — which therefore overflows the border-box
@@ -638,7 +742,14 @@ function drawElement(ctx, element, binding, images, assets) {
     // fills the border box.
     const img = images && images.get(url);
     if (img) {
-      const fit = element.objectFit || "contain";
+      // ElementRenderer hardcodes the fit for two of these rather than reading
+      // element.objectFit: an avatar is always cropped to fill its box, and a
+      // tournament logo is always fitted whole. Only static_image and the game
+      // type image honour the element's own setting.
+      const fit =
+        element.type === "player_avatar" ? "cover" :
+        element.type === "tournament_logo" ? "contain" :
+        element.objectFit || "contain";
       const r = objectFitRect(fit, w, h, img.width, img.height);
       ctx.drawImage(img, r.x, r.y, r.w, r.h);
     }
@@ -681,6 +792,10 @@ function imageUrls(canvasDef, binding, assets) {
   const urls = new Set();
   for (const el of (canvasDef && canvasDef.elements) || []) {
     if (el.visible === false) continue;
+    if (el.type === "image_carousel") {
+      for (const u of carouselImages(el)) urls.add(u);
+      continue;
+    }
     const u = imageUrlFor(el, binding, assets);
     if (u) urls.add(u);
   }
@@ -691,7 +806,7 @@ function imageUrls(canvasDef, binding, assets) {
  * Draw an overlay canvas. `images` is a Map of url → decoded Image for anything
  * imageUrls() reported. Returns the Skia canvas.
  */
-function renderCanvas(canvasDef, binding, { images = new Map(), assets = null } = {}) {
+function renderCanvas(canvasDef, binding, { images = new Map(), assets = null, now = Date.now() } = {}) {
   const { createCanvas } = skia();
   const width = (canvasDef && canvasDef.width) || 1920;
   const height = (canvasDef && canvasDef.height) || 1080;
@@ -715,7 +830,7 @@ function renderCanvas(canvasDef, binding, { images = new Map(), assets = null } 
     .sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));
   for (const el of elements) {
     if (!SUPPORTED.has(el.type)) continue;
-    drawElement(ctx, el, binding, images, assets);
+    drawElement(ctx, el, binding, images, assets, now);
   }
   return surface;
 }
@@ -726,8 +841,9 @@ module.exports = {
   loadImage,
   imageUrls,
   unsupportedTypes,
+  nextAnimationAt,
   SUPPORTED,
   INHERIT_FAMILY,
   // exported for tests
-  _internals: { imageUrlFor, wrapLines, parseRadii, compensateShadowAlpha, countryShortCode, flagSourceFor, gameTypeImagePath, parseShadows, parseBorder, gradientPoints, matchClockText, applyTextTransform, objectFitRect },
+  _internals: { imageUrlFor, carouselState, carouselImages, easeInOut, wrapLines, parseRadii, compensateShadowAlpha, countryShortCode, flagSourceFor, gameTypeImagePath, parseShadows, parseBorder, gradientPoints, matchClockText, applyTextTransform, objectFitRect },
 };

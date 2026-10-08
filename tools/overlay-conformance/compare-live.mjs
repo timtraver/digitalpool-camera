@@ -6,7 +6,13 @@
 // data layer too — if overlayDataSource fetched the wrong match, or resolved a
 // venue differently from the web app, it shows up as pixels.
 //
-//   node compare-live.mjs <overlayUrl> [settleMs]
+//   node compare-live.mjs <overlayUrl> [settleMs] [nowMs]
+//
+// Carousels: the browser advances from whenever the page mounted, the local
+// renderer derives its index from a clock. To compare like with like, the page
+// is captured early (while it is still on image 0) and the local render is given
+// a `now` that also resolves to image 0, settled. Pass a different nowMs to
+// compare a later slot.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,7 +34,10 @@ const CHROME_CANDIDATES = [
 ];
 
 const url = process.argv[2];
-const settleMs = Number(process.argv[3] || 6000);
+const settleMs = Number(process.argv[3] || 3500);
+// 1000 ms lands in slot 0 for any interval >= 1 s, and past the 600 ms fade, so
+// every carousel is settled on its first image.
+const nowMs = Number(process.argv[4] || 1000);
 if (!url) { console.error('usage: node compare-live.mjs <overlayUrl> [settleMs]'); process.exit(1); }
 
 const parsed = dataSource.parseOverlayUrl(url);
@@ -52,10 +61,18 @@ const browser = await puppeteer.launch({
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 });
+  // Two loads. The first is only to warm Chrome's image cache: an overlay with
+  // several carousels pulls down a lot of artwork, and waiting for that on the
+  // capture load would let its carousels advance past image 0, which is the one
+  // slot we can compare against a clock-driven renderer. The second load starts
+  // every carousel afresh with the images already cached.
   await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-  // The page runs its own queries and subscriptions after load; give it time to
-  // settle on real data before capturing, the same way the device's screenshot
-  // loop waits out jsDelay.
+  await new Promise((r) => setTimeout(r, 4000));
+  await page.goto('about:blank');
+  await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+  // The page runs its own queries and subscriptions after load; give it a moment
+  // to settle on real data, the same way the device's screenshot loop waits out
+  // jsDelay. Keep this under the shortest carousel interval.
   await new Promise((r) => setTimeout(r, settleMs));
   await page.evaluate(async () => {
     await document.fonts.ready;
@@ -86,7 +103,7 @@ for (const u of renderer.imageUrls(canvas, binding, null)) {
   }
 }
 const t0 = Date.now();
-const surface = renderer.renderCanvas(canvas, binding, { images });
+const surface = renderer.renderCanvas(canvas, binding, { images, now: nowMs });
 const buf = await surface.encode('png');
 const drawMs = Date.now() - t0;
 fs.writeFileSync(locPath, buf);

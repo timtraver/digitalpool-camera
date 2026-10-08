@@ -64,6 +64,7 @@ class SkiaOverlay extends EventEmitter {
     this._failures = 0;
     this._lastDrawAt = 0;
     this._hasClock = false;
+    this._nextAnimationAt = 0;   // when an animated element next needs a frame
     this._images = new Map();   // url -> decoded Image
     this._pending = [];         // score-delay queue: [{ at, binding }]
     this._delaySeconds = 0;
@@ -101,6 +102,7 @@ class SkiaOverlay extends EventEmitter {
     this._fingerprint = null;
     this._pending = [];
     this._failures = 0;
+    this._nextAnimationAt = 0;
     this.unsupported = null;
     if (this._parsed && this._parsed.supported) {
       console.log(`🎨 Local overlay: ${this._parsed.mode} ${this._parsed.slug}/${this._parsed.tableSlug} overlay #${this._parsed.overlayId}`);
@@ -116,8 +118,9 @@ class SkiaOverlay extends EventEmitter {
     this._stopped = false;
     const tick = async () => {
       if (this._stopped) return;
+      let nextDelay = POLL_MS;
       try {
-        await this._cycle();
+        nextDelay = await this._cycle();
       } catch (err) {
         this._failures++;
         this._lastError = err.message;
@@ -127,7 +130,7 @@ class SkiaOverlay extends EventEmitter {
           console.log(`⚠️  Local overlay update failed (${this._failures}x): ${err.message}`);
         }
       }
-      if (!this._stopped) this._timer = setTimeout(tick, POLL_MS);
+      if (!this._stopped) this._timer = setTimeout(tick, Math.max(50, Math.min(POLL_MS, nextDelay || POLL_MS)));
     };
     tick();
   }
@@ -137,7 +140,11 @@ class SkiaOverlay extends EventEmitter {
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
   }
 
-  /** One poll: refresh the canvas if stale, read live state, redraw if needed. */
+  /**
+   * One poll: refresh the canvas if stale, read live state, redraw if needed.
+   * Returns how long to wait before the next tick — normally the poll interval,
+   * but shorter when an animated element (a carousel) is mid-transition.
+   */
   async _cycle() {
     const now = Date.now();
 
@@ -159,21 +166,31 @@ class SkiaOverlay extends EventEmitter {
       this._hasClock = (canvas.elements || []).some((el) => el.type === "match_clock" && el.visible !== false);
       if (changed) this._fingerprint = null; // force a redraw against the new canvas
     }
+    // An overlay whose only moving part is a carousel still has to redraw, even
+    // though no match data changed.
+    const animationAt = renderer.nextAnimationAt(this._canvas, now);
+    const animationDue = animationAt !== null && now >= this._nextAnimationAt;
 
     const binding = await dataSource.fetchBinding(this._parsed);
     this._failures = 0;
     this._lastError = null;
 
     const applied = this._applyScoreDelay(binding, now);
-    if (!applied) return;
+    if (!applied) return POLL_MS;
 
     const fingerprint = dataSource.bindingFingerprint(applied);
     const clockDue = this._hasClock && now - this._lastDrawAt >= CLOCK_TICK_MS;
-    if (fingerprint === this._fingerprint && !clockDue) return;
+    if (fingerprint === this._fingerprint && !clockDue && !animationDue) {
+      return animationAt === null ? POLL_MS : animationAt - now;
+    }
 
     this._fingerprint = fingerprint;
     this._binding = applied;
-    await this._draw(applied);
+    await this._draw(applied, now);
+
+    const after = renderer.nextAnimationAt(this._canvas, Date.now());
+    this._nextAnimationAt = after === null ? Infinity : after;
+    return after === null ? POLL_MS : after - Date.now();
   }
 
   /**
@@ -201,10 +218,10 @@ class SkiaOverlay extends EventEmitter {
   }
 
   /** Render and publish one frame. */
-  async _draw(binding) {
+  async _draw(binding, now = Date.now()) {
     await this._ensureImages(binding);
     const started = Date.now();
-    const surface = renderer.renderCanvas(this._canvas, binding, { images: this._images });
+    const surface = renderer.renderCanvas(this._canvas, binding, { images: this._images, now });
     const buf = await surface.encode("png");
     this._writeAtomic(buf);
     this._lastDrawAt = Date.now();
