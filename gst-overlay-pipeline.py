@@ -1429,49 +1429,160 @@ def main():
         _comp_mtime  = [0]
         _comp_logged = [None]
 
+        # Rows of fully transparent overlay between two bands of content are
+        # still blended if the whole span is sent as one rectangle. Splitting
+        # the span into runs costs one extra blend call per run and saves every
+        # pixel in the gaps, which is the better trade until the runs get small:
+        # a scoreboard with a top bar and a lower third covers ~25% of the frame
+        # as two rectangles and ~95% as one.
+        #
+        # Runs closer together than this are merged, because a blend call has a
+        # fixed cost and splitting hair-thin gaps is not worth it.
+        COMP_MIN_GAP_ROWS = int(os.environ.get("OVERLAY_COMP_MIN_GAP", "24"))
+        # Beyond this, fall back to a single band: many rectangles means the
+        # overlay is scattered and the per-call overhead starts to dominate.
+        COMP_MAX_RECTS = int(os.environ.get("OVERLAY_COMP_MAX_RECTS", "6"))
+
+        # ── Raw overlay handoff ──────────────────────────────────────────────
+        # The renderer can hand us premultiplied BGRA directly instead of a PNG.
+        # Encoding a 1920x1080 PNG costs ~142 ms on an N97 and decoding it here
+        # costs more; the same pixels as raw bytes cost ~38 ms to produce and
+        # nothing to "decode". Same format cairo was producing, so everything
+        # downstream is unchanged.
+        #
+        #   magic "DPOV" | version u8 | format u8 (1 = premultiplied BGRA)
+        #   | reserved u16 | width u32le | height u32le | pixels
+        RAW_PATH   = png_path + ".bgra" if png_path else ""
+        RAW_MAGIC  = b"DPOV"
+        RAW_HEADER = 16
+        # Touched while we are consuming the raw file, so the renderer knows it
+        # can skip writing the PNG. It goes stale on its own if this process
+        # dies, and the renderer then resumes writing PNGs for the idle preview.
+        RAW_CLAIM  = png_path + ".rawclaim" if png_path else ""
+        _claim_touched = [0.0]
+        # Set once the raw file has been read successfully. An overlay that is
+        # not changing produces no rebuilds, so without this the claim would go
+        # stale between redraws and the renderer would start encoding PNGs again
+        # for a reader that does not want them.
+        _raw_in_use = [False]
+
+        def _read_raw():
+            """(data, w, h, stride) from the raw sidecar, or None if unusable."""
+            if not RAW_PATH or not os.path.exists(RAW_PATH):
+                return None
+            try:
+                with open(RAW_PATH, "rb") as fh:
+                    head = fh.read(RAW_HEADER)
+                    if len(head) < RAW_HEADER or head[:4] != RAW_MAGIC:
+                        return None
+                    if head[4] != 1 or head[5] != 1:   # version, format
+                        return None
+                    w = int.from_bytes(head[8:12], "little")
+                    h = int.from_bytes(head[12:16], "little")
+                    if not (0 < w <= 8192 and 0 < h <= 8192):
+                        return None
+                    data = fh.read(w * h * 4)
+                    if len(data) != w * h * 4:
+                        return None            # torn write — try again next poll
+                return data, w, h, w * 4
+            except OSError:
+                return None
+
+        def _touch_claim():
+            now = time.time()
+            if now - _claim_touched[0] < 2.0 or not RAW_CLAIM:
+                return
+            _claim_touched[0] = now
+            try:
+                with open(RAW_CLAIM, "a"):
+                    os.utime(RAW_CLAIM, None)
+            except OSError:
+                pass
+
+        def _source_mtime():
+            """Newest mtime across whichever overlay file is being written."""
+            best = 0
+            for pth in (RAW_PATH, png_path):
+                try:
+                    if pth and os.path.exists(pth):
+                        best = max(best, os.path.getmtime(pth))
+                except OSError:
+                    pass
+            return best
+
+        def _content_runs(alpha, w, h):
+            """Row ranges [(top, height), ...] that contain any opaque pixel."""
+            rows = []
+            for y in range(h):
+                if alpha[y * w:(y + 1) * w].strip(b"\x00"):
+                    rows.append(y)
+            if not rows:
+                return []
+            runs = [[rows[0], rows[0]]]
+            for y in rows[1:]:
+                if y - runs[-1][1] - 1 <= COMP_MIN_GAP_ROWS:
+                    runs[-1][1] = y
+                else:
+                    runs.append([y, y])
+            if len(runs) > COMP_MAX_RECTS:
+                runs = [[runs[0][0], runs[-1][1]]]
+            return [(a, b - a + 1) for a, b in runs]
+
         def _build_composition():
             """Decode the PNG and build an overlay composition. Called on mtime change."""
             try:
-                if not os.path.exists(png_path) or os.path.getsize(png_path) < 100:
-                    _comp[0] = None
-                    return
-                surf   = _cairo.ImageSurface.create_from_png(png_path)
-                w, h   = surf.get_width(), surf.get_height()
-                stride = surf.get_stride()
-                data   = bytes(surf.get_data())
+                raw = _read_raw()
+                if raw is not None:
+                    data, w, h, stride = raw
+                    _raw_in_use[0] = True
+                    _touch_claim()
+                else:
+                    if not os.path.exists(png_path) or os.path.getsize(png_path) < 100:
+                        _comp[0] = None
+                        return
+                    surf   = _cairo.ImageSurface.create_from_png(png_path)
+                    w, h   = surf.get_width(), surf.get_height()
+                    stride = surf.get_stride()
+                    data   = bytes(surf.get_data())
 
-                # Crop to the non-transparent horizontal band so the blend touches
-                # only the scoreboard, not all 2M pixels.  Cairo ARGB32 is
-                # premultiplied BGRA byte-order on little-endian, so alpha is byte 3.
+                # Both sources are premultiplied BGRA byte-order on little-endian,
+                # so alpha is byte 3 of each pixel either way.
                 alpha = data[3::4]
-                head  = alpha.lstrip(b"\x00")
-                if not head:
+                runs = _content_runs(alpha, w, stride // 4 if stride % 4 == 0 else w)
+                if not runs:
                     _comp[0] = None          # fully transparent — nothing to draw
                     return
-                first = len(alpha) - len(head)
-                last  = len(alpha.rstrip(b"\x00")) - 1
-                top   = first // w
-                bh    = (last // w) - top + 1
 
-                rows = data[top * stride : (top + bh) * stride]
-                if stride != w * 4:
-                    # GstVideoMeta below assumes the default tightly-packed stride.
-                    rows = b"".join(rows[y * stride : y * stride + w * 4] for y in range(bh))
+                comp = None
+                covered = 0
+                for top, bh in runs:
+                    rows = data[top * stride : (top + bh) * stride]
+                    if stride != w * 4:
+                        # GstVideoMeta below assumes the default tightly-packed stride.
+                        rows = b"".join(rows[y * stride : y * stride + w * 4] for y in range(bh))
+                    buf = Gst.Buffer.new_wrapped(rows)
+                    GstVideo.buffer_add_video_meta(
+                        buf, GstVideo.VideoFrameFlags.NONE,
+                        GstVideo.VideoFormat.BGRA, w, bh)
+                    rect = GstVideo.VideoOverlayRectangle.new_raw(
+                        buf, 0, top, w, bh,
+                        GstVideo.VideoOverlayFormatFlags.PREMULTIPLIED_ALPHA)
+                    if comp is None:
+                        comp = GstVideo.VideoOverlayComposition.new(rect)
+                    else:
+                        comp.add_rectangle(rect)
+                    covered += bh
 
-                buf = Gst.Buffer.new_wrapped(rows)
-                GstVideo.buffer_add_video_meta(
-                    buf, GstVideo.VideoFrameFlags.NONE,
-                    GstVideo.VideoFormat.BGRA, w, bh)
-                rect = GstVideo.VideoOverlayRectangle.new_raw(
-                    buf, 0, top, w, bh,
-                    GstVideo.VideoOverlayFormatFlags.PREMULTIPLIED_ALPHA)
-                _comp[0]       = GstVideo.VideoOverlayComposition.new(rect)
-                _comp_mtime[0] = os.path.getmtime(png_path)
+                _comp[0]       = comp
+                _comp_mtime[0] = _source_mtime()
 
-                if (w, bh, top) != _comp_logged[0]:
-                    _comp_logged[0] = (w, bh, top)
-                    pct = 100.0 * bh / max(1, h)
-                    print(f"🧮 Overlay composition {w}×{bh}@(0,{top}) — {pct:.0f}% of frame", file=sys.stderr)
+                shape = tuple(runs)
+                if shape != _comp_logged[0]:
+                    _comp_logged[0] = shape
+                    pct = 100.0 * covered / max(1, h)
+                    where = ", ".join(f"{w}x{bh}@{top}" for top, bh in runs)
+                    print(f"🧮 Overlay composition {len(runs)} rect(s) [{where}] — {pct:.0f}% of frame",
+                          file=sys.stderr)
             except Exception as exc:
                 # Degrade to "no overlay" rather than killing the stream.
                 print(f"⚠️  Overlay composition build failed: {exc}", file=sys.stderr)
@@ -1488,14 +1599,21 @@ def main():
 
         def check_png_update_comp():
             try:
-                mtime = os.path.getmtime(png_path) if os.path.exists(png_path) else 0
+                if _raw_in_use[0]:
+                    _touch_claim()        # rate-limited internally to every 2 s
+                mtime = _source_mtime()
                 if mtime != _comp_mtime[0]:
                     _build_composition()
             except OSError:
                 pass
             return True  # keep timer running
 
-        GLib.timeout_add(2000, check_png_update_comp)
+        # How often to notice a new overlay. This is a stat() of two paths, so it
+        # is close to free, and it is the floor on how quickly a score change
+        # reaches the stream: at the old 2000 ms an update could sit for two
+        # seconds after the renderer had already produced it.
+        GLib.timeout_add(int(os.environ.get("OVERLAY_POLL_INTERVAL_MS", "250")),
+                         check_png_update_comp)
 
     elif has_png_overlay and _CAIRO_OK:
         # ── Path A: cairooverlay + Cairo draw callback ────────────────────────
