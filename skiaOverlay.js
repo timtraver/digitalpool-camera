@@ -23,12 +23,21 @@ const { Worker } = require("worker_threads");
 const renderer = require("./overlayRenderer");
 const dataSource = require("./overlayDataSource");
 
-// How often to re-read live match state. This is a poll, not a subscription:
-// the web overlay uses a subscription for tournament mode and a poll for venue
-// mode, and a poll is both simpler and — at this interval — already far fresher
-// than the 2 s screenshot sampling it replaces. A tiny JSON query costs orders
-// of magnitude less than a 1080p PNG encode, so the interval can be short.
-const POLL_MS = parseInt(process.env.OVERLAY_POLL_MS, 10) || 1000;
+// How often to re-read live match state. This is a poll, not a subscription.
+//
+// 2000 ms is deliberately the same interval CustomOverlayRenderer polls at for
+// venue mode, so moving the query from the browser to the device does not change
+// how often DigitalPool is asked. Halving it would double the request rate
+// across every camera in the fleet for a latency gain the viewer cannot see:
+// the overlay still only redraws when something actually changed, and the
+// pipeline now notices a new overlay within 250 ms rather than 2 s, so a score
+// change reaches the stream in about a quarter of the time the browser path
+// took even at this interval.
+//
+// Worth knowing for tournament-mode overlays: there the web app uses a real
+// GraphQL subscription, so a poll is strictly more requests than the browser
+// made. A subscription here would be the better answer if that load matters.
+const POLL_MS = parseInt(process.env.OVERLAY_POLL_MS, 10) || 2000;
 // How often to re-read the saved canvas, so an overlay edited in the builder
 // reaches a running device without a restart.
 const CANVAS_REFRESH_MS = parseInt(process.env.OVERLAY_CANVAS_REFRESH_MS, 10) || 60000;
