@@ -94,6 +94,7 @@ APP_STATE_FILES=(
     "ethernet-config.json"
     "banned-ips.json"
     "viewer-connections.json"
+    "subscription.json"
 )
 for f in "${APP_STATE_FILES[@]}"; do
     rm -f "${APP_DIR}/${f}" && echo "  removed ${f}" || true

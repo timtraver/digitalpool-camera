@@ -107,6 +107,7 @@ APP_STATE_FILES=(
     "ethernet-config.json"
     "banned-ips.json"
     "viewer-connections.json"
+    "subscription.json"
 )
 for f in "${APP_STATE_FILES[@]}"; do
     fp="${APP_DIR}/${f}"
