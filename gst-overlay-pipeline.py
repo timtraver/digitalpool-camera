@@ -1429,6 +1429,38 @@ def main():
         _comp_mtime  = [0]
         _comp_logged = [None]
 
+        # Rows of fully transparent overlay between two bands of content are
+        # still blended if the whole span is sent as one rectangle. Splitting
+        # the span into runs costs one extra blend call per run and saves every
+        # pixel in the gaps, which is the better trade until the runs get small:
+        # a scoreboard with a top bar and a lower third covers ~25% of the frame
+        # as two rectangles and ~95% as one.
+        #
+        # Runs closer together than this are merged, because a blend call has a
+        # fixed cost and splitting hair-thin gaps is not worth it.
+        COMP_MIN_GAP_ROWS = int(os.environ.get("OVERLAY_COMP_MIN_GAP", "24"))
+        # Beyond this, fall back to a single band: many rectangles means the
+        # overlay is scattered and the per-call overhead starts to dominate.
+        COMP_MAX_RECTS = int(os.environ.get("OVERLAY_COMP_MAX_RECTS", "6"))
+
+        def _content_runs(alpha, w, h):
+            """Row ranges [(top, height), ...] that contain any opaque pixel."""
+            rows = []
+            for y in range(h):
+                if alpha[y * w:(y + 1) * w].strip(b"\x00"):
+                    rows.append(y)
+            if not rows:
+                return []
+            runs = [[rows[0], rows[0]]]
+            for y in rows[1:]:
+                if y - runs[-1][1] - 1 <= COMP_MIN_GAP_ROWS:
+                    runs[-1][1] = y
+                else:
+                    runs.append([y, y])
+            if len(runs) > COMP_MAX_RECTS:
+                runs = [[runs[0][0], runs[-1][1]]]
+            return [(a, b - a + 1) for a, b in runs]
+
         def _build_composition():
             """Decode the PNG and build an overlay composition. Called on mtime change."""
             try:
@@ -1440,38 +1472,44 @@ def main():
                 stride = surf.get_stride()
                 data   = bytes(surf.get_data())
 
-                # Crop to the non-transparent horizontal band so the blend touches
-                # only the scoreboard, not all 2M pixels.  Cairo ARGB32 is
-                # premultiplied BGRA byte-order on little-endian, so alpha is byte 3.
+                # Cairo ARGB32 is premultiplied BGRA byte-order on little-endian,
+                # so alpha is byte 3 of each pixel.
                 alpha = data[3::4]
-                head  = alpha.lstrip(b"\x00")
-                if not head:
+                runs = _content_runs(alpha, w, stride // 4 if stride % 4 == 0 else w)
+                if not runs:
                     _comp[0] = None          # fully transparent — nothing to draw
                     return
-                first = len(alpha) - len(head)
-                last  = len(alpha.rstrip(b"\x00")) - 1
-                top   = first // w
-                bh    = (last // w) - top + 1
 
-                rows = data[top * stride : (top + bh) * stride]
-                if stride != w * 4:
-                    # GstVideoMeta below assumes the default tightly-packed stride.
-                    rows = b"".join(rows[y * stride : y * stride + w * 4] for y in range(bh))
+                comp = None
+                covered = 0
+                for top, bh in runs:
+                    rows = data[top * stride : (top + bh) * stride]
+                    if stride != w * 4:
+                        # GstVideoMeta below assumes the default tightly-packed stride.
+                        rows = b"".join(rows[y * stride : y * stride + w * 4] for y in range(bh))
+                    buf = Gst.Buffer.new_wrapped(rows)
+                    GstVideo.buffer_add_video_meta(
+                        buf, GstVideo.VideoFrameFlags.NONE,
+                        GstVideo.VideoFormat.BGRA, w, bh)
+                    rect = GstVideo.VideoOverlayRectangle.new_raw(
+                        buf, 0, top, w, bh,
+                        GstVideo.VideoOverlayFormatFlags.PREMULTIPLIED_ALPHA)
+                    if comp is None:
+                        comp = GstVideo.VideoOverlayComposition.new(rect)
+                    else:
+                        comp.add_rectangle(rect)
+                    covered += bh
 
-                buf = Gst.Buffer.new_wrapped(rows)
-                GstVideo.buffer_add_video_meta(
-                    buf, GstVideo.VideoFrameFlags.NONE,
-                    GstVideo.VideoFormat.BGRA, w, bh)
-                rect = GstVideo.VideoOverlayRectangle.new_raw(
-                    buf, 0, top, w, bh,
-                    GstVideo.VideoOverlayFormatFlags.PREMULTIPLIED_ALPHA)
-                _comp[0]       = GstVideo.VideoOverlayComposition.new(rect)
+                _comp[0]       = comp
                 _comp_mtime[0] = os.path.getmtime(png_path)
 
-                if (w, bh, top) != _comp_logged[0]:
-                    _comp_logged[0] = (w, bh, top)
-                    pct = 100.0 * bh / max(1, h)
-                    print(f"🧮 Overlay composition {w}×{bh}@(0,{top}) — {pct:.0f}% of frame", file=sys.stderr)
+                shape = tuple(runs)
+                if shape != _comp_logged[0]:
+                    _comp_logged[0] = shape
+                    pct = 100.0 * covered / max(1, h)
+                    where = ", ".join(f"{w}x{bh}@{top}" for top, bh in runs)
+                    print(f"🧮 Overlay composition {len(runs)} rect(s) [{where}] — {pct:.0f}% of frame",
+                          file=sys.stderr)
             except Exception as exc:
                 # Degrade to "no overlay" rather than killing the stream.
                 print(f"⚠️  Overlay composition build failed: {exc}", file=sys.stderr)
