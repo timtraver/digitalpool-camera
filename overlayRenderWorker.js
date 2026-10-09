@@ -21,6 +21,73 @@ const path = require("path");
 
 const renderer = require("./overlayRenderer");
 
+// ── Raw handoff ──────────────────────────────────────────────────────────────
+// Encoding a 1920x1080 PNG costs ~142 ms on an N97, and the pipeline then spends
+// more decoding it. Handing over the pixels as premultiplied BGRA — byte for
+// byte what cairo used to produce from the PNG — costs ~38 ms end to end:
+// 12 ms to read the surface, 21 ms to convert, 5 ms to write 8 MB into /dev/shm.
+//
+//   magic "DPOV" | version u8 | format u8 (1 = premultiplied BGRA)
+//   | reserved u16 | width u32le | height u32le | pixels
+const RAW_MAGIC = Buffer.from("DPOV", "ascii");
+const RAW_HEADER = 16;
+
+function rawHeader(width, height) {
+  const head = Buffer.alloc(RAW_HEADER);
+  RAW_MAGIC.copy(head, 0);
+  head[4] = 1;                      // version
+  head[5] = 1;                      // format: premultiplied BGRA
+  head.writeUInt32LE(width, 8);
+  head.writeUInt32LE(height, 12);
+  return head;
+}
+
+/**
+ * Canvas pixels are straight (non-premultiplied) RGBA; the overlay API wants
+ * premultiplied BGRA. Done in place into a fresh buffer rather than with a
+ * typed-array trick because the byte swap and the multiply have to happen
+ * together anyway.
+ */
+function toPremultipliedBGRA(src) {
+  const out = Buffer.allocUnsafe(src.length);
+  for (let i = 0; i < src.length; i += 4) {
+    const a = src[i + 3];
+    if (a === 255) {
+      out[i] = src[i + 2]; out[i + 1] = src[i + 1]; out[i + 2] = src[i]; out[i + 3] = 255;
+    } else if (a === 0) {
+      out[i] = 0; out[i + 1] = 0; out[i + 2] = 0; out[i + 3] = 0;
+    } else {
+      out[i]     = ((src[i + 2] * a + 127) / 255) | 0;
+      out[i + 1] = ((src[i + 1] * a + 127) / 255) | 0;
+      out[i + 2] = ((src[i]     * a + 127) / 255) | 0;
+      out[i + 3] = a;
+    }
+  }
+  return out;
+}
+
+/** Write through a temp file and rename so a reader never sees a torn file. */
+function writeAtomic(dest, parts) {
+  const tmp = `${dest}.tmp`;
+  fs.writeFileSync(tmp, parts.length === 1 ? parts[0] : Buffer.concat(parts));
+  fs.renameSync(tmp, dest);
+}
+
+/**
+ * Whether a pipeline is currently consuming the raw file. It touches a claim
+ * file while it does, so a PNG only has to be produced when nothing is reading
+ * raw — which in practice means while idle, where the idle preview needs a real
+ * PNG for gdkpixbufoverlay and the CPU is free anyway.
+ */
+function rawIsClaimed(pngPath) {
+  try {
+    const age = Date.now() - fs.statSync(`${pngPath}.rawclaim`).mtimeMs;
+    return age < 10000;
+  } catch {
+    return false;
+  }
+}
+
 const images = new Map(); // url -> decoded Image (or null when it failed)
 let fontsDir = null;
 
@@ -48,16 +115,23 @@ async function handleRender(msg) {
     now: msg.now,
     animationNow: msg.animationNow,
   });
-  const buf = await surface.encode("png");
 
-  // Write through a temporary file and rename: the pipeline watches this path's
-  // mtime and re-reads the moment it changes, so a plain write would eventually
-  // be caught half-finished.
-  const tmp = `${msg.pngPath}.tmp`;
-  fs.writeFileSync(tmp, buf);
-  fs.renameSync(tmp, msg.pngPath);
+  const width = surface.width;
+  const height = surface.height;
+  const ctx = surface.getContext("2d");
+  const pixels = toPremultipliedBGRA(Buffer.from(ctx.getImageData(0, 0, width, height).data.buffer));
+  writeAtomic(`${msg.pngPath}.bgra`, [rawHeader(width, height), pixels]);
+  let bytes = RAW_HEADER + pixels.length;
 
-  parentPort.postMessage({ type: "rendered", id: msg.id, ms: Date.now() - started, bytes: buf.length });
+  // The PNG is still what the idle preview reads, so keep producing one whenever
+  // no pipeline has claimed the raw file.
+  if (!rawIsClaimed(msg.pngPath)) {
+    const png = await surface.encode("png");
+    writeAtomic(msg.pngPath, [png]);
+    bytes = png.length;
+  }
+
+  parentPort.postMessage({ type: "rendered", id: msg.id, ms: Date.now() - started, bytes });
 }
 
 parentPort.on("message", (msg) => {
