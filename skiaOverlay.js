@@ -194,6 +194,19 @@ class SkiaOverlay extends EventEmitter {
     const animationAt = renderer.nextAnimationAt(this._canvas, now);
     const animationDue = animationAt !== null && now >= this._nextAnimationAt;
 
+    // Redraw if our output has gone missing. The browser producer rewrote its
+    // PNG every couple of seconds whether or not anything had changed, so
+    // anything that removed the file self-healed almost immediately. This one
+    // draws only on change, which is the whole point — but it means a deleted
+    // file would never come back, and the pipeline would sit with no overlay
+    // indefinitely. Several things still delete that path (a stream restart,
+    // the browser producer's own cleanup on a box that has run both), so check
+    // rather than assume. It is a stat() per poll.
+    if (this._outputMissing()) {
+      this._fingerprint = null;
+      console.log("🎨 Overlay output disappeared — redrawing");
+    }
+
     const binding = await dataSource.fetchBinding(this._parsed);
     this._failures = 0;
     this._lastError = null;
@@ -214,6 +227,26 @@ class SkiaOverlay extends EventEmitter {
     const after = renderer.nextAnimationAt(this._canvas, Date.now());
     this._nextAnimationAt = after === null ? Infinity : after;
     return after === null ? POLL_MS : after - Date.now();
+  }
+
+  /**
+   * Whether the files this producer is responsible for have gone missing. The
+   * raw buffer is always written; the PNG only when no pipeline has claimed the
+   * raw file, so it is only required in that case.
+   */
+  _outputMissing() {
+    if (!this._canvas) return false;
+    try {
+      if (!fs.existsSync(`${this.pngPath}.bgra`)) return true;
+      let claimed = false;
+      try {
+        claimed = Date.now() - fs.statSync(`${this.pngPath}.rawclaim`).mtimeMs < 10000;
+      } catch { claimed = false; }
+      if (!claimed && !fs.existsSync(this.pngPath)) return true;
+    } catch {
+      return false;   // a stat error is not evidence of anything
+    }
+    return false;
   }
 
   /**
