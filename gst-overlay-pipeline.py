@@ -316,7 +316,20 @@ def main():
     # Determine whether a PNG overlay element is needed.
     # An empty png_path means the pipeline is being routed through Python purely
     # for CLOCK_REALTIME (audio sync) — skip gdkpixbufoverlay entirely.
-    has_png_overlay = bool(png_path)
+    # A path here means "an overlay may be composited", not "there is one now".
+    # streamController passes it whenever the overlay could be switched on while
+    # the stream runs, so the element has to exist up front — a pipeline cannot
+    # grow one later, which is what used to force a restart.
+    overlay_path_given = bool(png_path)
+    def _overlay_file_present():
+        for p in (png_path + ".bgra", png_path):
+            try:
+                if os.path.exists(p) and os.path.getsize(p) > 100:
+                    return True
+            except OSError:
+                pass
+        return False
+    has_png_overlay = overlay_path_given
 
     # Determine if ANY overlay is active. When none are, skip the expensive
     # software NV12→BGRA→NV12 round-trip entirely — the hardware encoder
@@ -369,8 +382,15 @@ def main():
     # and no flip: videoflip is documented as unreliable on NV12 here, and the cairo
     # path only got away with it by flipping on BGRA.  Set OVERLAY_MODE=cairo to revert.
     overlay_mode    = os.environ.get('OVERLAY_MODE', 'composition').lower()
-    use_composition = (has_png_overlay and _CAIRO_OK and _GSTVIDEO_OK
+    use_composition = (overlay_path_given and _CAIRO_OK and _GSTVIDEO_OK
                        and overlay_mode == 'composition' and not flip_str)
+
+    # overlaycomposition costs nothing while there is nothing to draw — the draw
+    # callback just hands back None — so it is always worth having in place. The
+    # fallbacks are not free (cairooverlay crosses into Python every frame), so
+    # those are only built when an overlay actually exists right now.
+    if not use_composition:
+        has_png_overlay = overlay_path_given and _overlay_file_present()
 
     png_overlay_element = (
         f'! overlaycomposition name=pngoverlay '

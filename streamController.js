@@ -1846,10 +1846,27 @@ class StreamController extends EventEmitter {
         effectiveDestination = "rtmp://localhost:1935/stream";
       }
     }
-    // Only pass the real PNG path when graphics overlay is active.
-    // An empty string tells gst-overlay-pipeline.py to skip gdkpixbufoverlay.
-    // Each camera writes to its own file so overlays don't overwrite each other.
-    const pngPath = needsGraphicsOverlay ? this.pngOverlayPath : "";
+    // Which path to hand the pipeline, and therefore whether it builds an
+    // overlay element at all.
+    //
+    // Passing it only when an overlay is already on meant turning one on later
+    // did nothing: the running pipeline had no element to draw into, so the
+    // overlay could not appear until the stream was restarted by hand. Passing
+    // it always would be wrong too — above 1080p the pipeline downscales before
+    // compositing so the 1920x1080 overlay lines up with the frame, and forcing
+    // that on a 4K stream with no overlay would quietly halve its output.
+    //
+    // So: always when the frame is already within the overlay's own resolution
+    // (the element is then free and the overlay can be switched on live), and
+    // otherwise only when an overlay is actually active. gst-overlay-pipeline.py
+    // decides from there whether an element is worth building — see its
+    // overlay_path_given handling.
+    const fitsOverlayResolution =
+      (this.streamConfig.width || 0) <= 1920 && (this.streamConfig.height || 0) <= 1080;
+    const pngPath = (needsGraphicsOverlay || fitsOverlayResolution) ? this.pngOverlayPath : "";
+    // Recorded so server.js can tell whether a running pipeline could show an
+    // overlay at all, and rebuild only when it genuinely has to.
+    this.pipelineHasOverlayElement = !!pngPath;
 
     // Per-element formatting (fall back to legacy shared values)
     const titleFs = this.streamConfig.titleFontSize || this.streamConfig.overlayFontSize || 32;

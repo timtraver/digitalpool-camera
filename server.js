@@ -5108,6 +5108,9 @@ const _overlaySettleCleanup = { 1: null, 2: null };
 // "overlay" element. When true, the gst-idle-preview.py runner hot-reloads the
 // overlay PNG in place, so switching overlays needs NO pipeline rebuild.
 const _idlePreviewHasOverlay = { 1: false, 2: false };
+// Guards the pipeline rebuild that an overlay switched on mid-stream can trigger,
+// so a double-click cannot stop and start the stream twice over.
+const _overlayRebuildInFlight = { 1: false, 2: false };
 // 8554 is reserved for MediaMTX RTSP; 8553 & 8552 used for camera 1 & 2 idle preview
 const IDLE_PREVIEW_PORT   = 8553;
 const IDLE_PREVIEW_PORT_2 = 8552;
@@ -6139,6 +6142,38 @@ io.on("connection", (socket) => {
             if (settleTimer) clearTimeout(settleTimer);
             _overlaySettleCleanup[camIdx] = null;
           };
+        } else if (sc.isStreaming && !sc.pipelineHasOverlayElement) {
+          // The stream is up but was built without an overlay element, so there
+          // is nothing for the renderer to draw into and the overlay can never
+          // appear on its own. A GStreamer pipeline cannot grow an element while
+          // it runs, so the only way through is to rebuild it.
+          //
+          // This only happens above 1080p: at or below it streamController always
+          // includes the element (it is free there) and switching an overlay on
+          // is seamless. Higher than that the pipeline has to downscale before
+          // compositing for the overlay to line up with the frame, which is not
+          // something to impose on a 4K stream that may never use one.
+          //
+          // Doing it here rather than leaving it to the operator is the point:
+          // ticking the box used to appear to do nothing at all.
+          if (_overlayRebuildInFlight[camIdx]) {
+            console.log(`⏳ [Cam${camIdx}] Overlay rebuild already in progress — skipping`);
+          } else {
+            _overlayRebuildInFlight[camIdx] = true;
+            console.log(`🔁 [Cam${camIdx}] Overlay enabled on a stream built without one — rebuilding the pipeline`);
+            (async () => {
+              try {
+                io.emit("streamStatus", { ...sc.getStatus(), status: "restarting", cameraIndex: camIdx });
+                await sc.stopStream();
+                const r = await sc.startStream({}, { skipEntitlementCheck: true });
+                console.log(`🔁 [Cam${camIdx}] Pipeline rebuilt with overlay: ${r && r.success ? "ok" : (r && r.error) || "failed"}`);
+              } catch (e) {
+                console.error(`⚠️  [Cam${camIdx}] Overlay rebuild failed:`, e.message);
+              } finally {
+                _overlayRebuildInFlight[camIdx] = false;
+              }
+            })();
+          }
         }
       }
     } else if (overlayConfig.remoteOverlayEnabled === false && camPuppeteer && !effOverlay.branded) {
