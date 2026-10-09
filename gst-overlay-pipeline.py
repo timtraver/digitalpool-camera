@@ -1550,6 +1550,11 @@ def main():
 
         def _build_composition():
             """Decode the PNG and build an overlay composition. Called on mtime change."""
+            # Read the mtime BEFORE the contents, and cache that one. If a write
+            # lands in between, the file's real mtime ends up newer than what we
+            # cached and the next poll rebuilds — whereas caching the mtime after
+            # the read could stamp a frame we never saw as already loaded.
+            m0 = _source_mtime()
             try:
                 raw = _read_raw()
                 if raw is not None:
@@ -1558,7 +1563,10 @@ def main():
                     _touch_claim()
                 else:
                     if not os.path.exists(png_path) or os.path.getsize(png_path) < 100:
-                        _comp[0] = None
+                        # No overlay file at all: the renderer was stopped, which
+                        # is how switching the overlay off takes it off the stream.
+                        _comp[0]       = None
+                        _comp_mtime[0] = m0
                         return
                     surf   = _cairo.ImageSurface.create_from_png(png_path)
                     w, h   = surf.get_width(), surf.get_height()
@@ -1570,7 +1578,8 @@ def main():
                 alpha = data[3::4]
                 runs = _content_runs(alpha, w, stride // 4 if stride % 4 == 0 else w)
                 if not runs:
-                    _comp[0] = None          # fully transparent — nothing to draw
+                    _comp[0]       = None    # fully transparent — nothing to draw
+                    _comp_mtime[0] = m0      # ...and don't decode it again until it changes
                     return
 
                 comp = None
@@ -1594,7 +1603,7 @@ def main():
                     covered += bh
 
                 _comp[0]       = comp
-                _comp_mtime[0] = _source_mtime()
+                _comp_mtime[0] = m0
 
                 shape = tuple(runs)
                 if shape != _comp_logged[0]:

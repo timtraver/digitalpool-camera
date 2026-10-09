@@ -6176,8 +6176,17 @@ io.on("connection", (socket) => {
           }
         }
       }
-    } else if (overlayConfig.remoteOverlayEnabled === false && camPuppeteer && !effOverlay.branded) {
-      console.log(`🛑 [Cam${camIdx}] Remote overlay disabled — shutting down Puppeteer...`);
+    } else if (camPuppeteer && !effOverlay.branded) {
+      // There is nothing to render. That is either because the box was
+      // unchecked, or because it is still checked with the overlay set to None —
+      // and both have to take what is already on screen away. Stopping the
+      // producer deletes the overlay files, and the pipeline notices they are
+      // gone on its next poll and clears the composition.
+      const why =
+        overlayConfig.remoteOverlayEnabled === false
+          ? "Remote overlay disabled"
+          : "No overlay selected";
+      console.log(`🛑 [Cam${camIdx}] ${why} — stopping the overlay renderer...`);
       await camPuppeteer.stop();
       if (camIdx === 2) puppeteerOverlay2 = null;
       else puppeteerOverlay = null;
