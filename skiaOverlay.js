@@ -428,16 +428,40 @@ class SkiaOverlay extends EventEmitter {
     };
   }
 
+  /**
+   * Stop producing and remove what we produced.
+   *
+   * Deleting the files is the contract, not an afterthought: server.js turns an
+   * overlay off by calling stop() on the producer, and the pipeline only stops
+   * compositing once the file it is reading actually goes away. Leaving them
+   * behind means unchecking "Remote Overlay" visibly does nothing — the last
+   * frame stays burned into the stream indefinitely. puppeteerOverlay.stop()
+   * unlinked its PNG for exactly this reason.
+   *
+   * Order matters: the loop stops, then the render thread is joined, and only
+   * then do the files go — otherwise a render already in flight would write the
+   * overlay back out after we deleted it.
+   */
   async stop() {
     this._stopPeriodicRefresh();
     this.isRunning = false;
-    this._images.clear();
-    this._imageBytes.clear();
-    this._workerHas.clear();
+
     if (this._worker) {
       await this._worker.terminate().catch(() => {});
       this._worker = null;
     }
+
+    for (const f of [this.pngPath, `${this.pngPath}.bgra`,
+                     `${this.pngPath}.tmp`, `${this.pngPath}.bgra.tmp`]) {
+      try {
+        fs.unlinkSync(f);
+        console.log(`🗑️  Deleted overlay file: ${f}`);
+      } catch (e) { /* already gone */ }
+    }
+
+    this._images.clear();
+    this._imageBytes.clear();
+    this._workerHas.clear();
     return true;
   }
 }
