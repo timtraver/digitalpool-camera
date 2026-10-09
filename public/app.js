@@ -4045,9 +4045,19 @@ overlayEnabled.addEventListener("change", () => {
 remoteOverlayEnabled.addEventListener("change", () => {
   currentOverlayConfig.remoteOverlayEnabled = remoteOverlayEnabled.checked;
   console.log("Remote overlay changed:", remoteOverlayEnabled.checked);
-  // Pull a fresh overlay list each time the feature is switched on, so an
-  // overlay just created on the website shows up without waiting out the cache.
-  if (remoteOverlayEnabled.checked) loadOverlayList(true);
+  if (remoteOverlayEnabled.checked) {
+    // Pull a fresh overlay list each time the feature is switched on, so an
+    // overlay just created on the website shows up without waiting out the cache.
+    loadOverlayList(true);
+  } else {
+    // Switching the feature off drops the choice with it: nothing is being
+    // drawn any more, so the selector must not go on naming an overlay as if
+    // it were. reconcile puts it back to "— None —" and hides the custom-URL
+    // row, and the empty URL goes to the server with this same change.
+    overlayUrl.value = "";
+    currentOverlayConfig.overlayUrl = "";
+    reconcileOverlaySelect();
+  }
   updateOverlayVisibility();
   drawOverlay();
   // Show "Updating preview" banner immediately — don't wait for server round-trip
@@ -4055,9 +4065,11 @@ remoteOverlayEnabled.addEventListener("change", () => {
     const ps = document.getElementById("overlayPreviewStatus");
     if (ps) ps.style.display = "block";
   } else {
-    // Toggling the remote overlay on/off changes whether gdkpixbufoverlay is in
-    // the pipeline at all — that only takes effect on restart.
-    showOverlayNeedsRestart();
+    // This used to warn that a restart was needed, because the pipeline either
+    // had a compositing element or it didn't. It now always has one at or below
+    // 1080p, and above that the server rebuilds the pipeline by itself — so the
+    // change does apply live and there is nothing to ask the operator to do.
+    showOverlayUpdating();
   }
   applyOverlaySettings();
 });
