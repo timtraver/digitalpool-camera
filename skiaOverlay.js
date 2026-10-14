@@ -106,6 +106,7 @@ class SkiaOverlay extends EventEmitter {
     this._watch = null;         // subscription handle, when one is held
     this._watchActive = null;   // last pushed verdict; null = it has not spoken
     this._onWatchState = null;  // socket up/down listener, while watching
+    this._loopGen = 0;          // only the newest tick chain may continue
     this._images = new Map();   // url -> decoded Image (inline mode only)
     this._imageBytes = new Map(); // url -> Buffer, for shipping to the worker
     this._worker = null;        // render thread, created on first draw
@@ -166,16 +167,28 @@ class SkiaOverlay extends EventEmitter {
 
   /** Mirrors puppeteerOverlay.startPeriodicRefresh. */
   startPeriodicRefresh() {
-    this._stopPeriodicRefresh();
+    // Keep any socket we already hold. server.js re-applies the effective
+    // overlay on all sorts of events and calls this each time; tearing the
+    // subscription down and rebuilding it every time would churn a connection
+    // that is still perfectly good for the same overlay. setOverlayUrl() closes
+    // it when the URL actually changes, and _stopPeriodicRefresh() with no
+    // argument — which is what the "overlay off" path calls — still closes it.
+    this._stopPeriodicRefresh(true);
     if (!this._parsed || !this._parsed.supported) return;
     this._stopped = false;
     this._nextFetchAt = 0;   // the first tick always reads
     this._startWatch();
-    this._tick();
+    // Each start owns a generation. A tick that is already awaiting a fetch
+    // cannot be stopped by the _stopped flag — it resumes after the restart has
+    // cleared it — so without this a second startPeriodicRefresh() leaves TWO
+    // loops running, each polling, which is exactly the load this is all meant
+    // to remove.
+    this._loopGen++;
+    this._tick(this._loopGen);
   }
 
-  async _tick() {
-    if (this._stopped) return;
+  async _tick(gen) {
+    if (this._stopped || gen !== this._loopGen) return;
     let nextDelay = this._live ? POLL_MS : IDLE_POLL_MS;
     try {
       nextDelay = await this._cycle();
@@ -196,9 +209,9 @@ class SkiaOverlay extends EventEmitter {
     // must never be the thing that forces a query. Even with the subscription
     // holding the data side quiet for ten minutes at a time, the loop keeps
     // turning at this rate so _outputMissing() still self-heals promptly.
-    if (!this._stopped) {
+    if (!this._stopped && gen === this._loopGen) {
       const wait = Number.isFinite(nextDelay) ? nextDelay : IDLE_POLL_MS;
-      this._timer = setTimeout(() => this._tick(), Math.max(50, Math.min(IDLE_POLL_MS, wait)));
+      this._timer = setTimeout(() => this._tick(gen), Math.max(50, Math.min(IDLE_POLL_MS, wait)));
     }
   }
 
@@ -208,13 +221,13 @@ class SkiaOverlay extends EventEmitter {
     if (this._stopped || !this._timer) return;   // a tick already in flight will pick it up
     clearTimeout(this._timer);
     this._timer = null;
-    this._tick();
+    this._tick(this._loopGen);
   }
 
-  _stopPeriodicRefresh() {
+  _stopPeriodicRefresh(keepWatch = false) {
     this._stopped = true;
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
-    this._stopWatch();
+    if (!keepWatch) this._stopWatch();
   }
 
   // ── Subscription ───────────────────────────────────────────────────────────
