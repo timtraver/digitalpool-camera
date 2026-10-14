@@ -23,7 +23,8 @@ const { Worker } = require("worker_threads");
 const renderer = require("./overlayRenderer");
 const dataSource = require("./overlayDataSource");
 
-// How often to re-read live match state. This is a poll, not a subscription.
+// How often to re-read live match state. This is a poll, not a subscription,
+// and it runs at two speeds.
 //
 // 2000 ms is deliberately the same interval CustomOverlayRenderer polls at for
 // venue mode, so moving the query from the browser to the device does not change
@@ -34,10 +35,27 @@ const dataSource = require("./overlayDataSource");
 // change reaches the stream in about a quarter of the time the browser path
 // took even at this interval.
 //
-// Worth knowing for tournament-mode overlays: there the web app uses a real
-// GraphQL subscription, so a poll is strictly more requests than the browser
-// made. A subscription here would be the better answer if that load matters.
+// But that cadence is only worth paying for while a match is on the table. A
+// device parked on a venue overlay between events used to send the full query
+// 43,000 times a day to re-render the same empty scoreboard, and a venue box is
+// idle far more often than it is live. So the fast poll is now entered on
+// evidence: an empty table is watched with dataSource.probeLive(), which asks
+// only whether anything is there, and the full query starts the moment it is.
 const POLL_MS = parseInt(process.env.OVERLAY_POLL_MS, 10) || 2000;
+// How often to ask "has a match started?" while the table is empty.
+const IDLE_POLL_MS = parseInt(process.env.OVERLAY_IDLE_POLL_MS, 10) || 20000;
+// How long to keep polling at match tempo after the last match left the table.
+// One match ending and the next being assigned is a normal gap of seconds;
+// dropping straight to the idle cadence would make the next one take up to
+// IDLE_POLL_MS to appear, which is exactly when an operator is watching.
+const IDLE_AFTER_MS = parseInt(process.env.OVERLAY_IDLE_AFTER_MS, 10) || 60000;
+// With the subscription connected the idle probe stops entirely — the socket
+// has already said whether anything is on the table, and says so again the
+// instant it changes. This re-check exists only so that a push which never
+// arrived (a half-open socket the OS has not given up on, a Hasura restart that
+// dropped the subscription without closing the connection) cannot strand an
+// overlay forever. It is the safety net, not the mechanism.
+const WATCH_RECHECK_MS = parseInt(process.env.OVERLAY_WATCH_RECHECK_MS, 10) || 600000;
 // How often to re-read the saved canvas, so an overlay edited in the builder
 // reaches a running device without a restart.
 const CANVAS_REFRESH_MS = parseInt(process.env.OVERLAY_CANVAS_REFRESH_MS, 10) || 60000;
@@ -81,6 +99,13 @@ class SkiaOverlay extends EventEmitter {
     this._lastDrawAt = 0;
     this._hasClock = false;
     this._nextAnimationAt = 0;   // when an animated element next needs a frame
+    this._fresh = null;         // newest binding read from DigitalPool
+    this._live = false;         // is a match on the table (→ which cadence)
+    this._lastMatchAt = 0;      // last time a match was actually seen
+    this._nextFetchAt = 0;      // when the data layer may be asked again
+    this._watch = null;         // subscription handle, when one is held
+    this._watchActive = null;   // last pushed verdict; null = it has not spoken
+    this._onWatchState = null;  // socket up/down listener, while watching
     this._images = new Map();   // url -> decoded Image (inline mode only)
     this._imageBytes = new Map(); // url -> Buffer, for shipping to the worker
     this._worker = null;        // render thread, created on first draw
@@ -123,6 +148,11 @@ class SkiaOverlay extends EventEmitter {
     this._pending = [];
     this._failures = 0;
     this._nextAnimationAt = 0;
+    this._fresh = null;
+    this._live = false;
+    this._lastMatchAt = 0;
+    this._nextFetchAt = 0;
+    this._stopWatch();
     this._imageBytes.clear();
     this._workerHas.clear();
     if (this._worker) this._worker.postMessage({ type: "forgetImages" });
@@ -139,34 +169,125 @@ class SkiaOverlay extends EventEmitter {
     this._stopPeriodicRefresh();
     if (!this._parsed || !this._parsed.supported) return;
     this._stopped = false;
-    const tick = async () => {
-      if (this._stopped) return;
-      let nextDelay = POLL_MS;
-      try {
-        nextDelay = await this._cycle();
-      } catch (err) {
-        this._failures++;
-        this._lastError = err.message;
-        // Log the first failure and then every tenth, so a long outage does not
-        // fill the journal.
-        if (this._failures === 1 || this._failures % 10 === 0) {
-          console.log(`⚠️  Local overlay update failed (${this._failures}x): ${err.message}`);
-        }
+    this._nextFetchAt = 0;   // the first tick always reads
+    this._startWatch();
+    this._tick();
+  }
+
+  async _tick() {
+    if (this._stopped) return;
+    let nextDelay = this._live ? POLL_MS : IDLE_POLL_MS;
+    try {
+      nextDelay = await this._cycle();
+    } catch (err) {
+      this._failures++;
+      this._lastError = err.message;
+      // Do not keep hammering a data source that is failing: an idle table
+      // retries on the idle cadence, which is also what a device with an
+      // unreachable uplink should be doing.
+      this._nextFetchAt = Date.now() + (this._live ? POLL_MS : IDLE_POLL_MS);
+      // Log the first failure and then every tenth, so a long outage does not
+      // fill the journal.
+      if (this._failures === 1 || this._failures % 10 === 0) {
+        console.log(`⚠️  Local overlay update failed (${this._failures}x): ${err.message}`);
       }
-      if (!this._stopped) this._timer = setTimeout(tick, Math.max(50, Math.min(POLL_MS, nextDelay || POLL_MS)));
-    };
-    tick();
+    }
+    // The ceiling is the idle cadence, not the fast one: a tick is free, but it
+    // must never be the thing that forces a query. Even with the subscription
+    // holding the data side quiet for ten minutes at a time, the loop keeps
+    // turning at this rate so _outputMissing() still self-heals promptly.
+    if (!this._stopped) {
+      const wait = Number.isFinite(nextDelay) ? nextDelay : IDLE_POLL_MS;
+      this._timer = setTimeout(() => this._tick(), Math.max(50, Math.min(IDLE_POLL_MS, wait)));
+    }
+  }
+
+  /** Re-enter the loop now rather than waiting out the current sleep. */
+  _kick() {
+    this._nextFetchAt = 0;
+    if (this._stopped || !this._timer) return;   // a tick already in flight will pick it up
+    clearTimeout(this._timer);
+    this._timer = null;
+    this._tick();
   }
 
   _stopPeriodicRefresh() {
     this._stopped = true;
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+    this._stopWatch();
+  }
+
+  // ── Subscription ───────────────────────────────────────────────────────────
+  /**
+   * Hold the idle question open instead of asking it on a timer. This is an
+   * optimisation and nothing more: everything still works, at the idle poll
+   * cadence, if the socket never connects or quietly dies.
+   */
+  _startWatch() {
+    if (this._watch || !this._parsed || !this._parsed.supported) return;
+    const parsed = this._parsed;   // guard against the overlay changing under us
+    this._watchActive = null;
+
+    // Losing the socket has to pull the next read back in. While the watch is
+    // healthy the idle read is scheduled WATCH_RECHECK_MS out, and without this
+    // a drop would leave the overlay waiting ten minutes before it noticed it
+    // was on its own again — the exact stranding the re-check exists to stop.
+    if (!this._onWatchState) {
+      this._onWatchState = (connected) => {
+        if (connected || this._live) return;
+        this._watchActive = null;   // it knows nothing until it speaks again
+        this._kick();
+      };
+      dataSource.watchEvents.on("state", this._onWatchState);
+    }
+    dataSource
+      .watchLive(parsed, (active) => {
+        if (this._parsed !== parsed) return;
+        const spokenBefore = this._watchActive !== null;
+        this._watchActive = active;
+        // A match appearing is the entire point of holding the socket open —
+        // do not make it wait for the re-check.
+        if (active && !this._live) {
+          if (spokenBefore) console.log("🎬 Watch: match assigned to the table");
+          this._kick();
+        }
+      })
+      .then((handle) => {
+        if (this._parsed !== parsed || this._stopped) { handle.close(); return; }
+        this._watch = handle;
+      })
+      .catch((err) => {
+        console.log(`ℹ️  Overlay watch unavailable, polling instead: ${err.message}`);
+      });
+  }
+
+  _stopWatch() {
+    if (this._watch) { this._watch.close(); this._watch = null; }
+    if (this._onWatchState) {
+      dataSource.watchEvents.removeListener("state", this._onWatchState);
+      this._onWatchState = null;
+    }
+    this._watchActive = null;
   }
 
   /**
-   * One poll: refresh the canvas if stale, read live state, redraw if needed.
-   * Returns how long to wait before the next tick — normally the poll interval,
-   * but shorter when an animated element (a carousel) is mid-transition.
+   * Whether the subscription may be believed instead of polled. Connected is
+   * not enough — a socket that has not yet delivered its first payload knows
+   * nothing, and treating silence as "no match" would strand the overlay.
+   */
+  _watchHealthy() {
+    return !!(this._watch && this._watchActive !== null && dataSource.watchStats().connected);
+  }
+
+  /**
+   * One tick: refresh the canvas if stale, read live state IF A READ IS DUE,
+   * redraw if needed. Returns how long to wait before the next tick.
+   *
+   * A tick is not a query. Carousel frames and the match clock redraw from the
+   * binding already in hand, so animation runs at whatever rate it needs
+   * without that rate reaching DigitalPool — which it used to, because every
+   * tick fetched. With OVERLAY_CAROUSEL_FADE=1 that meant ten queries a second
+   * for the length of every fade.
    */
   async _cycle() {
     const now = Date.now();
@@ -189,11 +310,6 @@ class SkiaOverlay extends EventEmitter {
       this._hasClock = (canvas.elements || []).some((el) => el.type === "match_clock" && el.visible !== false);
       if (changed) this._fingerprint = null; // force a redraw against the new canvas
     }
-    // An overlay whose only moving part is a carousel still has to redraw, even
-    // though no match data changed.
-    const animationAt = renderer.nextAnimationAt(this._canvas, now);
-    const animationDue = animationAt !== null && now >= this._nextAnimationAt;
-
     // Redraw if our output has gone missing. The browser producer rewrote its
     // PNG every couple of seconds whether or not anything had changed, so
     // anything that removed the file self-healed almost immediately. This one
@@ -207,26 +323,109 @@ class SkiaOverlay extends EventEmitter {
       console.log("🎨 Overlay output disappeared — redrawing");
     }
 
-    const binding = await dataSource.fetchBinding(this._parsed);
+    if (now >= this._nextFetchAt) await this._readLiveState(now);
+
+    // The delay queue is driven every tick, not every fetch: it releases on
+    // wall-clock time, and re-offering a binding whose fingerprint has not
+    // changed is a no-op.
+    const applied = this._applyScoreDelay(this._fresh, now);
+    if (!applied) return this._nextDelay(now);
+
+    // An overlay whose only moving part is a carousel still has to redraw, even
+    // though no match data changed.
+    const animationAt = renderer.nextAnimationAt(this._canvas, now);
+    const animationDue = animationAt !== null && now >= this._nextAnimationAt;
+    // Only a live match has a clock worth advancing; an empty table's clock
+    // reads the same every time, so redrawing it burns a 1080p encode for
+    // nothing.
+    const clockDue = this._hasClock && this._live && now - this._lastDrawAt >= CLOCK_TICK_MS;
+
+    const fingerprint = dataSource.bindingFingerprint(applied);
+    if (fingerprint !== this._fingerprint || clockDue || animationDue) {
+      this._fingerprint = fingerprint;
+      this._binding = applied;
+      await this._draw(applied, now);
+      const after = renderer.nextAnimationAt(this._canvas, Date.now());
+      this._nextAnimationAt = after === null ? Infinity : after;
+    }
+    return this._nextDelay(Date.now());
+  }
+
+  /**
+   * Ask DigitalPool what is on the table, at whichever cost the situation
+   * justifies — the full binding while a match is live, the probe while the
+   * table is empty.
+   *
+   * The first read of an overlay is always a full one even with no match on the
+   * table: the blank scoreboard still carries the venue's own name and location
+   * (fetchVenueBinding's last return), and the probe cannot supply those.
+   */
+  async _readLiveState(now) {
+    if (this._fresh && !this._live) {
+      if (!(await this._somethingOnTable(now))) return;
+      console.log(`🎬 Match on the table — reading live data every ${POLL_MS}ms`);
+      this._live = true;
+      this._lastMatchAt = now;
+    }
+
+    this._fresh = await dataSource.fetchBinding(this._parsed);
     this._failures = 0;
     this._lastError = null;
 
-    const applied = this._applyScoreDelay(binding, now);
-    if (!applied) return POLL_MS;
-
-    const fingerprint = dataSource.bindingFingerprint(applied);
-    const clockDue = this._hasClock && now - this._lastDrawAt >= CLOCK_TICK_MS;
-    if (fingerprint === this._fingerprint && !clockDue && !animationDue) {
-      return animationAt === null ? POLL_MS : animationAt - now;
+    if (dataSource.hasLiveMatch(this._fresh)) {
+      this._live = true;
+      this._lastMatchAt = now;
+    } else if (this._live && now - this._lastMatchAt > IDLE_AFTER_MS) {
+      this._live = false;
+      console.log(`💤 Table empty — backing off to a ${IDLE_POLL_MS}ms probe`);
     }
+    this._nextFetchAt = now + (this._live ? POLL_MS : IDLE_POLL_MS);
+  }
 
-    this._fingerprint = fingerprint;
-    this._binding = applied;
-    await this._draw(applied, now);
+  /**
+   * The idle question — is anything on this table — answered by whichever
+   * transport is actually working. Sets the next read time and returns false
+   * when there is still nothing to draw.
+   *
+   * The subscription wins when it is healthy, and costs no request at all. The
+   * poll is not a legacy path kept around for symmetry: these boxes live on
+   * venue WiFi behind NAT, the socket will drop, and when it does this is what
+   * keeps the overlay working.
+   */
+  async _somethingOnTable(now) {
+    if (this._watchHealthy()) {
+      if (!this._watchActive) {
+        this._nextFetchAt = now + WATCH_RECHECK_MS;
+        return false;
+      }
+      return true;
+    }
+    const probe = await dataSource.probeLive(this._parsed);
+    this._failures = 0;
+    this._lastError = null;
+    if (!probe.active) {
+      this._nextFetchAt = now + IDLE_POLL_MS;
+      return false;
+    }
+    return true;
+  }
 
-    const after = renderer.nextAnimationAt(this._canvas, Date.now());
-    this._nextAnimationAt = after === null ? Infinity : after;
-    return after === null ? POLL_MS : after - Date.now();
+  /**
+   * When to wake next: the earliest of the next data read and any frame the
+   * canvas owes on its own (a carousel step, a clock minute). Animation and the
+   * clock can pull the tick in without pulling a query in with it.
+   */
+  _nextDelay(now) {
+    let next = this._nextFetchAt;
+    if (this._nextAnimationAt && Number.isFinite(this._nextAnimationAt)) {
+      next = Math.min(next, this._nextAnimationAt);
+    }
+    // _lastDrawAt is 0 until the first frame, which is not a timestamp to
+    // schedule against.
+    if (this._hasClock && this._live && this._lastDrawAt) {
+      next = Math.min(next, this._lastDrawAt + CLOCK_TICK_MS);
+    }
+    return next - now;
   }
 
   /**
@@ -420,6 +619,15 @@ class SkiaOverlay extends EventEmitter {
       overlayId: this._parsed && this._parsed.overlayId,
       renders: this._renderCount,
       lastDrawAt: this._lastDrawAt || null,
+      // Which cadence this overlay is on, and why — the field check for the
+      // idle backoff is "a box with no match says live:false".
+      live: this._live,
+      pollMs: this._live ? POLL_MS : (this._watchHealthy() ? 0 : IDLE_POLL_MS),
+      lastMatchAt: this._lastMatchAt || null,
+      // pollMs 0 with watching true means the idle poll is off entirely and the
+      // subscription is carrying it.
+      watching: this._watchHealthy(),
+      watch: dataSource.watchStats(),
       failures: this._failures,
       lastError: this._lastError,
       unsupported: this.unsupported,

@@ -23,6 +23,8 @@ const { URL } = require("url");
 const https = require("https");
 const http = require("http");
 
+const overlayWatch = require("./overlayWatch");
+
 const DEFAULT_GRAPHQL = "https://api-prod.digitalpool.com/v1/graphql";
 
 function graphqlUrl() {
@@ -183,7 +185,8 @@ const Q_VENUE_TABLE = `
         opponent_name opponent_score opponent_race_to opponent_fargo opponent_country opponent_is_winner opponent_is_playing
         pool_table { id slug label }
       }
-      tournaments(where: { status: { _neq: COMPLETED }, pool_tables: { slug: { _eq: $table_slug } } }) {
+      tournaments(where: { status: { _neq: COMPLETED }, pool_tables: { slug: { _eq: $table_slug } } },
+                  order_by: { id: desc }, limit: 10) {
         id name slug event_id logo avatar game_type winners_race_to losers_race_to
         venue { id name city region }
         pool_tables(where: { slug: { _eq: $table_slug } }) {
@@ -201,6 +204,48 @@ const Q_VENUE_TABLE = `
           }
         }
       }
+    }
+  }`;
+
+// ── Probes ───────────────────────────────────────────────────────────────────
+// Almost nothing the full queries return changes at match tempo. The scores and
+// the is_playing flags do; the venue, the table, the tournament record and both
+// challengers' names, teams and avatars do not — and an empty table has none of
+// them at all.
+//
+// These ask one question only: is there anything on this table right now. They
+// select ids and timestamps, with no challenger objects and no nested user or
+// team rows, so a device between matches can keep asking cheaply instead of
+// pulling the whole scoreboard down to render the same blank overlay.
+//
+// They must agree with their full counterparts about what "something is on the
+// table" means, or the renderer would sit idle through a live match: the venue
+// probe looks in the same three places fetchVenueBinding() resolves, and the
+// tournament probe uses the same IN_PROGRESS filter as Q_TABLE_MATCH.
+const Q_VENUE_PROBE = `
+  query DeviceVenueProbe($venue_slug: String!, $table_slug: String!) {
+    venues(where: { slug: { _eq: $venue_slug } }, limit: 1) {
+      id
+      matches(where: { status: { _neq: COMPLETED }, pool_table: { slug: { _eq: $table_slug } } },
+              order_by: { updated_at: desc }, limit: 1) { id updated_at }
+      tournaments(where: { status: { _neq: COMPLETED }, pool_tables: { slug: { _eq: $table_slug } } },
+                  order_by: { id: desc }, limit: 10) {
+        id
+        pool_tables(where: { slug: { _eq: $table_slug } }) {
+          id
+          tournament_match_table(where: { status: { _eq: IN_PROGRESS } },
+                                 order_by: { updated_at: desc }, limit: 1) { id updated_at }
+        }
+      }
+    }
+  }`;
+
+const Q_TOURNAMENT_PROBE = `
+  query DeviceTournamentProbe($tournament_id: Int!, $table_slug: String!) {
+    pool_tables(where: { tournament_id: { _eq: $tournament_id }, slug: { _eq: $table_slug } }, limit: 1) {
+      id
+      tournament_match_table(where: { status: { _eq: IN_PROGRESS } },
+                             order_by: { updated_at: desc }, limit: 1) { id updated_at }
     }
   }`;
 
@@ -347,6 +392,114 @@ function buildBinding(tournament, table, match) {
   };
 }
 
+// The tournament record — name, logo, game type, race lengths — is not
+// match-tempo data, but tournament mode re-read it on every poll, so that mode
+// cost two queries per tick where one would do. Cache it for the same interval
+// the overlay canvas is refreshed at: an organiser editing a race length
+// mid-event shows up within that, and nothing else in the record moves.
+const TOURNAMENT_TTL_MS = parseInt(process.env.OVERLAY_TOURNAMENT_TTL_MS, 10) || 60000;
+const _tournamentCache = new Map(); // slug -> { at, tournament }
+
+async function tournamentBySlug(slug) {
+  const hit = _tournamentCache.get(slug);
+  if (hit && Date.now() - hit.at < TOURNAMENT_TTL_MS) return hit.tournament;
+  const t = await graphql(Q_TOURNAMENT, { slug });
+  const tournament = t.tournaments && t.tournaments[0];
+  if (!tournament) throw new Error(`tournament '${slug}' not found`);
+  _tournamentCache.set(slug, { at: Date.now(), tournament });
+  return tournament;
+}
+
+// The same probe documents, as subscriptions. Derived from the query text
+// rather than written out again so the two can never drift: a watch that asked
+// a subtly different question than the poll it falls back to would show up as
+// an overlay that works until the socket drops, which is the worst way to find
+// out.
+function asSubscription(query) {
+  return query.replace(/\bquery\b/, "subscription");
+}
+
+/**
+ * Read a probe response — poll or push, the shape is the same — and say whether
+ * anything is on the table. Shared so the two transports cannot disagree.
+ */
+function probeVerdict(parsed, data) {
+  if (parsed.mode === "venue") {
+    const venue = data && data.venues && data.venues[0];
+    if (!venue) throw new Error(`venue '${parsed.slug}' not found`);
+    const casual = !!(venue.matches && venue.matches[0]);
+    const onTournamentTable = (venue.tournaments || []).some((t) =>
+      (t.pool_tables || []).some((pt) => pt.tournament_match_table && pt.tournament_match_table.length)
+    );
+    return { active: casual || onTournamentTable };
+  }
+  const table = data && data.pool_tables && data.pool_tables[0];
+  return { active: !!(table && table.tournament_match_table && table.tournament_match_table.length) };
+}
+
+/**
+ * Is there a match on this table at all? The cheap question, for a renderer
+ * that has nothing to draw and is only waiting for play to start.
+ *
+ * Throws on transport/permission failure exactly as fetchBinding does, so the
+ * caller's failure counting and fallback behave the same either way.
+ */
+async function probeLive(parsed) {
+  if (parsed.mode === "venue") {
+    const d = await graphql(Q_VENUE_PROBE, { venue_slug: parsed.slug, table_slug: parsed.tableSlug });
+    return probeVerdict(parsed, d);
+  }
+  if (parsed.mode !== "tournament") {
+    throw new Error(`overlay mode '${parsed.mode}' not implemented locally`);
+  }
+  const tournament = await tournamentBySlug(parsed.slug);
+  const d = await graphql(Q_TOURNAMENT_PROBE, { tournament_id: tournament.id, table_slug: parsed.tableSlug });
+  return probeVerdict(parsed, d);
+}
+
+/**
+ * The same question, held open instead of asked repeatedly. onActive(bool) is
+ * called with every push Hasura sends, starting with the current state.
+ *
+ * This does not replace probeLive() — the caller keeps polling whenever the
+ * socket is not connected. Returns a handle with close().
+ */
+async function watchLive(parsed, onActive) {
+  if (!overlayWatch.available) return { close() {} };
+  let query;
+  let variables;
+  if (parsed.mode === "venue") {
+    query = asSubscription(Q_VENUE_PROBE);
+    variables = { venue_slug: parsed.slug, table_slug: parsed.tableSlug };
+  } else if (parsed.mode === "tournament") {
+    query = asSubscription(Q_TOURNAMENT_PROBE);
+    // Resolving the tournament is a one-off query; the id is then fixed for the
+    // life of the subscription.
+    const tournament = await tournamentBySlug(parsed.slug);
+    variables = { tournament_id: tournament.id, table_slug: parsed.tableSlug };
+  } else {
+    throw new Error(`overlay mode '${parsed.mode}' not implemented locally`);
+  }
+  return overlayWatch.watch(graphqlUrl(), query, variables, (payload) => {
+    if (!payload || !payload.data) return;
+    let verdict;
+    try { verdict = probeVerdict(parsed, payload.data); }
+    catch (err) { return; }   // a push we cannot read is not evidence of anything
+    onActive(verdict.active);
+  });
+}
+
+/**
+ * Whether a binding actually carries a match, as opposed to being the
+ * blank-but-valid one an empty table produces. buildBinding() hands back
+ * EMPTY_BINDING.match in that case, where every field is "" or null.
+ */
+function hasLiveMatch(binding) {
+  const m = binding && binding.match;
+  if (!m) return false;
+  return !!(m.status || m.identifier || m.challenger1_name || m.challenger2_name);
+}
+
 /**
  * Current binding for a parsed overlay URL. Throws on transport/permission
  * failures so the caller can fall back; returns a blank-but-valid binding when
@@ -357,9 +510,7 @@ async function fetchBinding(parsed) {
   if (parsed.mode !== "tournament") {
     throw new Error(`overlay mode '${parsed.mode}' not implemented locally`);
   }
-  const t = await graphql(Q_TOURNAMENT, { slug: parsed.slug });
-  const tournament = t.tournaments && t.tournaments[0];
-  if (!tournament) throw new Error(`tournament '${parsed.slug}' not found`);
+  const tournament = await tournamentBySlug(parsed.slug);
 
   const d = await graphql(Q_TABLE_MATCH, { tournament_id: tournament.id, table_slug: parsed.tableSlug });
   const table = d.pool_tables && d.pool_tables[0];
@@ -429,6 +580,11 @@ module.exports = {
   parseOverlayUrl,
   fetchCanvas,
   fetchBinding,
+  probeLive,
+  watchLive,
+  watchStats: () => overlayWatch.stats(),
+  watchEvents: overlayWatch,
+  hasLiveMatch,
   bindingFingerprint,
   buildBinding,
   casualMatchToChallenger,

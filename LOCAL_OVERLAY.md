@@ -17,10 +17,67 @@ doing the work:
 | cgroup memory | 802 MB | **605 MB** (cap is 2500) |
 | browser processes | 3–9, restarted hourly | **0** |
 | PNG writes | every 2 s whether or not anything changed | only when something changes |
+| DigitalPool queries, table idle | every 2 s, the full query | **none — a subscription** |
 
 Twice the streams, half the CPU, 200 MB back. The browser also screenshotted on a
 timer regardless of whether the scoreboard had moved — 10 rewrites in 20 s with
 identical content — where the local renderer redraws on an actual change.
+
+## What it asks DigitalPool for
+
+The renderer polls; it does not subscribe. What keeps that affordable is that it
+runs at two speeds, and only the fast one costs anything much:
+
+- **A match is on the table** — the full binding query every `OVERLAY_POLL_MS`
+  (2 s), the same interval the web overlay uses for venue mode.
+- **The table is empty** — nothing is sent. The same question is held open as a
+  GraphQL subscription (`overlayWatch.js`), and Hasura pushes only when the
+  answer changes. Measured against api-prod: a subscription on an idle table
+  delivered **one payload in 25 s** — the initial result — and nothing after it.
+
+A venue box is idle far more of the day than it is live, and at the old fixed
+cadence each camera sent the heavy query about 43,000 times a day to re-render
+the same blank scoreboard. Holding the cheap question open instead takes that to
+zero, and makes detection immediate rather than a function of a poll interval.
+
+After a match leaves the table the fast cadence is held for
+`OVERLAY_IDLE_AFTER_MS` (60 s), so the normal few-second gap between one match
+and the next does not pay the handover.
+
+### The subscription is never load-bearing
+
+These boxes sit on venue WiFi and LTE behind NAT; the socket will drop. Every
+watcher keeps its poll behind it:
+
+- Socket connected and it has delivered a payload → believed, no requests sent.
+  "Connected" alone is not enough: a socket that has not spoken yet knows
+  nothing, and reading silence as "no match" would strand the overlay.
+- Socket down, or not yet speaking → `probeLive()` every `OVERLAY_IDLE_POLL_MS`,
+  exactly as if subscriptions did not exist. A close is noticed immediately and
+  pulls the next read right in, rather than leaving it scheduled at the
+  safety-net interval.
+- `OVERLAY_WATCH_RECHECK_MS` (10 min) only covers a push that never arrived at
+  all — a half-open socket, or a Hasura restart that dropped the subscription
+  without closing the connection.
+
+One socket per device, shared by both cameras, with jittered reconnect backoff
+so a fleet coming back from an outage does not reconnect in lockstep.
+
+Only the PROBE is subscribed. The full binding query stays a poll on purpose:
+Hasura implements live queries by re-running the query server-side on its
+multiplexed refetch interval, so subscribing the expensive query would mean
+*more* database work during a match, not less. The cheap question is the one
+worth holding open.
+
+A tick is also no longer the same thing as a query. Carousel frames and the match
+clock redraw from the binding already in hand, so animation runs at whatever rate
+it needs without that rate reaching DigitalPool — which it used to, because every
+tick fetched. With `OVERLAY_CAROUSEL_FADE=1` that meant ten queries a second for
+the length of every fade.
+
+`GET /api/overlay/engine` reports `live`, `watching` and `pollMs` per camera,
+which is how to tell from outside which cadence a box is actually on —
+`pollMs: 0` with `watching: true` means the idle poll is off entirely.
 
 It does **not** touch the per-frame compositing cost (the NV12↔BGRA round-trip),
 which is the larger steady-state load. The 38% of four cores this box uses with
