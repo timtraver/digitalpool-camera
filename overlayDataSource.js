@@ -301,6 +301,11 @@ async function fetchCanvas(overlayId) {
 // URL with no match assigned, elements render blank rather than showing sample
 // players, exactly as the web renderer does off the preview route.
 const EMPTY_BINDING = {
+  // The venue the overlay is being SHOWN at, which is not the same question as
+  // the venue a match belongs to: it comes from the overlay's URL and has to be
+  // there even when the table is empty. ad_center elements set to "Automatic"
+  // read it. Mirrors withBindingVenue() in sampleBinding.js.
+  venue: { id: null },
   tournament: { id: null, name: "", slug: "", location: "", logo: null, game_type: "", winners_race_to: null, losers_race_to: null },
   table: { id: null, slug: "", label: "" },
   match: {
@@ -390,6 +395,17 @@ function buildBinding(tournament, table, match) {
         }
       : EMPTY_BINDING.match,
   };
+}
+
+/**
+ * Attach the venue the overlay is being shown at. Port of withBindingVenue()
+ * in sampleBinding.js, and kept separate from buildBinding() for the same
+ * reason the web app keeps it separate: it comes from the URL rather than from
+ * the live match, and must survive an empty table.
+ */
+function withBindingVenue(binding, venueId) {
+  const id = parseInt(venueId, 10);
+  return { ...binding, venue: { id: Number.isFinite(id) && id > 0 ? id : null } };
 }
 
 // The tournament record — name, logo, game type, race lengths — is not
@@ -515,7 +531,13 @@ async function fetchBinding(parsed) {
   const d = await graphql(Q_TABLE_MATCH, { tournament_id: tournament.id, table_slug: parsed.tableSlug });
   const table = d.pool_tables && d.pool_tables[0];
   const match = table && table.tournament_match_table && table.tournament_match_table[0];
-  return buildBinding(tournament, table, match || null);
+  // resolveOverlayVenueId() takes the tournament's venue in this mode. The
+  // table's venue is a step the web app does not have: a tournament row with no
+  // venue still sits on a table that belongs to one, and that is the venue
+  // whose ads an overlay at that table should be showing.
+  const venueId = (tournament.venue && tournament.venue.id)
+    || (table && table.venue && table.venue.id) || null;
+  return withBindingVenue(buildBinding(tournament, table, match || null), venueId);
 }
 
 async function fetchVenueBinding(parsed) {
@@ -544,18 +566,22 @@ async function fetchVenueBinding(parsed) {
   // row carries no venue of its own.
   const withVenue = (table) => (table && !table.venue ? { ...table, venue } : table || { ...venueTable, venue });
 
+  // In venue mode the overlay's venue is the one named in the URL, whether or
+  // not anything is on the table.
+  const atVenue = (binding) => withBindingVenue(binding, venue.id);
+
   if (eventTournament) {
-    return buildBinding(eventTournament.tournament, withVenue(eventTournament.table), eventTournament.match);
+    return atVenue(buildBinding(eventTournament.tournament, withVenue(eventTournament.table), eventTournament.match));
   }
   if (casual) {
-    return buildBinding(null, withVenue(casual.pool_table || venueTable), casualMatchToChallenger(casual));
+    return atVenue(buildBinding(null, withVenue(casual.pool_table || venueTable), casualMatchToChallenger(casual)));
   }
   if (standalone) {
-    return buildBinding(standalone.tournament, withVenue(standalone.table), standalone.match);
+    return atVenue(buildBinding(standalone.tournament, withVenue(standalone.table), standalone.match));
   }
   // Nothing on the table: blank values, but still the venue's own label and
   // location, exactly as the web renderer leaves it.
-  return buildBinding(null, withVenue(venueTable), null);
+  return atVenue(buildBinding(null, withVenue(venueTable), null));
 }
 
 /**
@@ -579,6 +605,8 @@ function bindingFingerprint(binding) {
 module.exports = {
   parseOverlayUrl,
   fetchCanvas,
+  graphql,
+  withBindingVenue,
   fetchBinding,
   probeLive,
   watchLive,

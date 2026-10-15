@@ -268,7 +268,7 @@ class OverlayProducer extends EventEmitter {
     }
     if (this._shadow) { this._shadow.setOverlayUrl(this._url, this._options); return; }
     const shadowPath = `${this._pngPath}.shadow.png`;
-    const shadow = new SkiaOverlay();
+    const shadow = new SkiaOverlay({ shadow: true });
     this._shadow = shadow;
     shadow
       .initialize(this._serverPort, shadowPath)

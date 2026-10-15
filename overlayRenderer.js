@@ -46,7 +46,7 @@ const SUPPORTED = new Set([
   "tournament_name", "tournament_location", "tournament_game_type",
   "static_text", "static_image", "shape",
   "player_avatar", "tournament_logo", "tournament_game_type_image",
-  "player_flag", "image_carousel",
+  "player_flag", "image_carousel", "ad_center",
 ]);
 
 function unsupportedTypes(canvas) {
@@ -248,10 +248,21 @@ function carouselState(element, now) {
  * absolute timestamp, or null if nothing on it animates. The producer uses this
  * to wake exactly when a carousel changes instead of polling the clock.
  */
-function nextAnimationAt(canvasDef, now) {
+function nextAnimationAt(canvasDef, now, binding = null) {
   let soonest = null;
   for (const el of (canvasDef && canvasDef.elements) || []) {
-    if (el.visible === false || el.type !== "image_carousel") continue;
+    if (el.visible === false) continue;
+    if (el.type === "ad_center") {
+      const ads = adsFor(el, binding);
+      if (ads.length <= 1) continue;
+      const state = adCarouselState(ads, el, now);
+      const next = CAROUSEL_FADE_ENABLED && el.effect === "fade" && state.sinceSwitch < CAROUSEL_FADE_MS
+        ? now + Math.min(CAROUSEL_FADE_MS / 6, state.holdMs - state.sinceSwitch)
+        : now + (state.holdMs - state.sinceSwitch);
+      if (soonest === null || next < soonest) soonest = next;
+      continue;
+    }
+    if (el.type !== "image_carousel") continue;
     if (carouselImages(el).length <= 1) continue;
     const intervalMs = carouselIntervalMs(el);
     const sinceSwitch = now % intervalMs;
@@ -262,6 +273,88 @@ function nextAnimationAt(canvasDef, now) {
     if (soonest === null || next < soonest) soonest = next;
   }
   return soonest;
+}
+
+// ── Ad Center ────────────────────────────────────────────────────────────────
+// Port of renderers/AdCenterCarousel.js. The ads themselves are NOT in the
+// saved canvas — they are queried per venue and arrive on the binding as
+// `binding.ads` ({ venueId: [ad, ...] }), which overlayAds.js fills in. Drawing
+// stays a pure function of (canvas, binding, now) that way, and the renderer
+// never makes a request.
+
+/**
+ * Which venue's ads an element shows. This is ElementRenderer's ternary
+ * verbatim: a fixed venue, or whichever venue the overlay is being shown at.
+ *
+ * The device's extra rule — fall back to the venue the appliance is registered
+ * to when the URL names none — is applied by the producer when it fills in
+ * `binding.venue.id`, so that both sides resolve one value and this stays the
+ * web's rule rather than a second, subtly different one.
+ */
+function adVenueIdFor(element, binding) {
+  if (element.venueSource === "auto") {
+    const v = (binding && binding.venue) || {};
+    return v.id || null;
+  }
+  return element.venueId || null;
+}
+
+function adsFor(element, binding) {
+  const venueId = adVenueIdFor(element, binding);
+  if (!venueId) return [];
+  const byVenue = (binding && binding.ads) || {};
+  const list = byVenue[venueId] || byVenue[String(venueId)];
+  return Array.isArray(list) ? list.filter((ad) => ad && ad.file_url) : [];
+}
+
+// Port of src/utils/adDuration.js. An ad's own `duration` is honoured as set in
+// the Ad Center; the element's `interval` is only the fallback for ads that
+// have none, and is deliberately NOT a clamp — clamping cut long ads short on
+// the venue's own screens, which is the bug that helper exists to document.
+function resolveAdDuration(ad, defaultInterval = 10) {
+  const configured = Number(ad && ad.duration);
+  if (Number.isFinite(configured) && configured > 0) return configured;
+  return Math.max(1, Math.min(120, defaultInterval || 10));
+}
+
+/**
+ * Which ad an element is showing at `now`, and how far through a crossfade it
+ * is — the ad-list equivalent of carouselState().
+ *
+ * An image carousel can find its slot with one modulo because every image is on
+ * screen for the same interval. Ads are not: each carries its own duration, so
+ * the rotation is a cumulative schedule and the position is found by walking
+ * it. Like the carousel, the phase comes from the wall clock rather than from
+ * when the element mounted — there is nothing here that mounts, and a clock
+ * makes the result reproducible.
+ */
+function adCarouselState(ads, element, now) {
+  if (!ads.length) return null;
+  const fallback = element.interval || 10;
+  const holds = ads.map((ad) => Math.max(1, resolveAdDuration(ad, fallback)) * 1000);
+  const cycle = holds.reduce((a, b) => a + b, 0);
+  let pos = ((now % cycle) + cycle) % cycle;
+  let index = 0;
+  while (index < holds.length - 1 && pos >= holds[index]) { pos -= holds[index]; index++; }
+  const prevIndex = (index - 1 + ads.length) % ads.length;
+  const fading = CAROUSEL_FADE_ENABLED && element.effect === "fade" && ads.length > 1 && pos < CAROUSEL_FADE_MS;
+  return {
+    index,
+    prevIndex,
+    progress: fading ? easeInOut(pos / CAROUSEL_FADE_MS) : 1,
+    sinceSwitch: pos,
+    holdMs: holds[index],
+  };
+}
+
+/**
+ * The ad an element has on screen right now, for the caller that has to log an
+ * impression for it. Returns null when the element has no venue or no ads.
+ */
+function currentAd(element, binding, now = Date.now()) {
+  const ads = adsFor(element, binding);
+  const state = adCarouselState(ads, element, now);
+  return state ? ads[state.index] : null;
 }
 
 // ── CSS value parsing ────────────────────────────────────────────────────────
@@ -758,6 +851,34 @@ function drawElement(ctx, element, binding, images, assets, now = Date.now(), an
     return;
   }
 
+  if (element.type === "ad_center") {
+    // Same geometry as an image carousel: the media fills the element box and
+    // keeps its border-radius. The empty states differ, though — the web
+    // component draws a labelled placeholder in the BUILDER and renders
+    // nothing in a live render, "so the stream stays clean". A device is only
+    // ever the live case, so a venue with no ads running leaves a hole in the
+    // overlay rather than a grey box on the broadcast.
+    const ads = adsFor(element, binding);
+    const state = adCarouselState(ads, element, animationNow);
+    if (state) {
+      const fit = element.objectFit || "contain";
+      const paint = (ad, alpha) => {
+        const img = ad && images && images.get(ad.file_url);
+        if (!img || alpha <= 0) return;
+        const prev = ctx.globalAlpha;
+        ctx.globalAlpha = prev * alpha;
+        const r = objectFitRect(fit, w, h, img.width, img.height);
+        ctx.drawImage(scaledForBox(img, ad.file_url, r.w, r.h), r.x, r.y, r.w, r.h);
+        ctx.globalAlpha = prev;
+      };
+      if (state.progress < 1 && ads.length > 1) paint(ads[state.prevIndex], 1 - state.progress);
+      paint(ads[state.index], state.progress);
+    }
+    ctx.restore();
+    ctx.restore();
+    return;
+  }
+
   if (element.type === "player_flag") {
     // CircleFlag renders a span of min(w,h), border-radius 50%, 1px dark border,
     // holding an img of the SAME size — which therefore overflows the border-box
@@ -855,8 +976,48 @@ function drawElement(ctx, element, binding, images, assets, now = Date.now(), an
  * `new Image(); img.src = buf` reports a width and height but draws nothing —
  * loadImage is the only form that works.
  */
-function loadImage(source) {
-  return skia().loadImage(source);
+async function loadImage(source) {
+  try {
+    return await skia().loadImage(source);
+  } catch (err) {
+    const stripped = Buffer.isBuffer(source) ? withoutExtraPngChunks(source) : null;
+    if (!stripped) throw err;
+    return skia().loadImage(stripped);
+  }
+}
+
+// PNG chunks the decoder may not skip, dropped on a retry.
+//
+// @napi-rs/canvas rejects a PNG carrying a C2PA provenance chunk (`caBX`, which
+// Photoshop and most AI image tools now write) with "Invalid SVG image" — it
+// fails to parse the PNG, falls through to its SVG loader, and reports that
+// instead. Venue ad creative comes out of exactly those tools, so this is not
+// an edge case: one of the nine ads running at the first venue we tested
+// against is such a file.
+//
+// Only ancillary chunks go. Everything that defines the pixels (IHDR, PLTE,
+// IDAT, IEND, tRNS) and everything that defines their colour (gAMA, cHRM,
+// iCCP, sRGB) is kept, so a rescued image looks the same as the original — it
+// just no longer carries metadata.
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const PNG_KEEP = new Set(["IHDR", "PLTE", "IDAT", "IEND", "tRNS", "gAMA", "cHRM", "iCCP", "sRGB"]);
+
+function withoutExtraPngChunks(buf) {
+  if (buf.length < 8 || !buf.subarray(0, 8).equals(PNG_MAGIC)) return null;
+  const parts = [PNG_MAGIC];
+  let i = 8;
+  let dropped = false;
+  while (i + 8 <= buf.length) {
+    const length = buf.readUInt32BE(i);
+    const type = buf.toString("latin1", i + 4, i + 8);
+    const end = i + 12 + length;
+    if (end > buf.length) return null;   // truncated: not something to fix here
+    if (PNG_KEEP.has(type)) parts.push(buf.subarray(i, end));
+    else dropped = true;
+    i = end;
+    if (type === "IEND") break;
+  }
+  return dropped ? Buffer.concat(parts) : null;
 }
 
 /**
@@ -869,6 +1030,14 @@ function imageUrls(canvasDef, binding, assets) {
     if (el.visible === false) continue;
     if (el.type === "image_carousel") {
       for (const u of carouselImages(el)) urls.add(u);
+      continue;
+    }
+    if (el.type === "ad_center") {
+      // Every ad in the rotation, not just the one on screen: the next one has
+      // to be decoded before its slot comes round, or the element would go
+      // blank for a frame on each change — and with the fade on, the outgoing
+      // ad is painted underneath the incoming one anyway.
+      for (const ad of adsFor(el, binding)) urls.add(ad.file_url);
       continue;
     }
     const u = imageUrlFor(el, binding, assets);
@@ -923,8 +1092,9 @@ module.exports = {
   imageUrls,
   unsupportedTypes,
   nextAnimationAt,
+  currentAd,
   SUPPORTED,
   INHERIT_FAMILY,
   // exported for tests
-  _internals: { imageUrlFor, scaledForBox, carouselState, carouselImages, easeInOut, wrapLines, parseRadii, compensateShadowAlpha, countryShortCode, flagSourceFor, gameTypeImagePath, parseShadows, parseBorder, gradientPoints, matchClockText, applyTextTransform, objectFitRect },
+  _internals: { withoutExtraPngChunks, imageUrlFor, scaledForBox, carouselState, carouselImages, adsFor, adVenueIdFor, adCarouselState, resolveAdDuration, easeInOut, wrapLines, parseRadii, compensateShadowAlpha, countryShortCode, flagSourceFor, gameTypeImagePath, parseShadows, parseBorder, gradientPoints, matchClockText, applyTextTransform, objectFitRect },
 };

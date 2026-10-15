@@ -108,6 +108,7 @@ overlayProducer.js   picks the engine, and falls back
   ├── puppeteerOverlay.js   headless Chromium  (unchanged)
   └── skiaOverlay.js        local renderer
         ├── overlayDataSource.js   overlay canvas + live match binding
+        ├── overlayAds.js          Ad Center ads for ad_center elements
         └── overlayRenderer.js     draws the canvas to a Skia surface
 ```
 
@@ -116,6 +117,52 @@ downstream can tell which one produced it — `gst-overlay-pipeline.py` still
 hot-swaps on mtime, and `effectiveOverlay()` still decides whose overlay shows.
 `server.js` requires `overlayProducer` in place of `puppeteerOverlay`; every call
 site is unchanged.
+
+## Ad Center elements
+
+`ad_center` is the only element whose content is not in the saved canvas. It
+names a venue — or says "whichever venue this overlay is being shown at" — and
+the images come from that venue's Ad Center, the same ads its TVs are showing.
+`overlayAds.js` is the port of the web component that fetches them
+(`renderers/AdCenterCarousel.js`), and the ads ride along on the binding as
+`binding.ads`, so drawing stays a pure function of (canvas, binding, now) and
+the renderer still never makes a request.
+
+What it asks for, and how often:
+
+| | |
+|---|---|
+| query | `GET_ACTIVE_ADS_FOR_SCREEN` as screen `default` — venue-scoped ads with no target screen, i.e. the ones that run on every screen — plus national ads when `venue_custom_install` and `accepts_national_ads` are both set |
+| cadence | every `OVERLAY_AD_REFRESH_MS` (5 min), per venue, shared by both cameras' elements through one cache |
+| failure | the last good list keeps drawing for `OVERLAY_AD_STALE_MS` (24 h). A venue sold that slot; a dropped uplink must not blank it |
+| rotation | each ad holds for its own `duration` (the element's `interval` is only the fallback), so the cycle is a cumulative schedule walked off the wall clock, not one interval |
+
+**Which venue.** A fixed venue if the element names one; otherwise the venue in
+the overlay's URL; otherwise the venue this device is registered to in
+`remote.json`. That last step is the device's own — the browser has no way of
+knowing where it is, and without it an element set to "Automatic" would be empty
+on an appliance sitting in the venue whose ads it was put there to show. It is
+last, so an overlay that does name a venue always wins, and
+`OVERLAY_AD_DEVICE_VENUE=0` removes it. The resolved value is written onto
+`binding.venue.id` so the renderer keeps the web component's rule rather than a
+second one.
+
+**Video ads are skipped.** The handoff to GStreamer is a PNG re-read on an mtime
+poll; there is no way to play a video through it, and a still frame of an ad the
+advertiser paid to have *play* would be worse than leaving it out. The browser
+engine still plays them, so a venue whose ads are mostly video is a reason to
+keep that box on `OVERLAY_ENGINE=chromium`.
+
+**Impressions** are reported the way the web overlay reports them — one
+`ad_events` row per ad shown, throttled to one per ad per minute per camera,
+with the rotations inside that window carried as `rotation_count`. The web app embeds its
+ClickHouse credentials in a public bundle; this does not, so nothing is sent
+until `ADS_CLICKHOUSE_URL` and its password are set in `.env`, and
+`GET /api/overlay/engine` reports `ads.impressions.enabled` so that is visible
+from outside. **A box on the local engine with those unset renders ads and
+counts none of them.** A cloud function that writes the row server-side would be
+the better home for this and would keep the credentials off the device
+entirely — the device half would be the same two fields pointed at it.
 
 ## Rollback
 
@@ -161,25 +208,30 @@ real tournament data.
 
 ## Current limitations
 
-- **`user_overlays` is not readable by Hasura's anonymous role**, so the device
-  cannot fetch the overlay canvas yet. Live match data (`tournaments`,
-  `pool_tables`) already is. Either grant that role SELECT on
-  `user_overlays(id, user_id, name, is_public, is_example, canvas)`, or set
-  `OVERLAY_SOURCE_FUNCTION` to a cloud function that returns it. **Until one of
-  those exists, `auto` always falls back to the browser** — safely, but with no
-  benefit.
 - **Tournament** and **venue** mode overlay URLs render locally. Event mode reads
   its match through a nested event→tournament structure that is not ported yet,
   so those URLs still use the browser.
-- **`image_carousel` is not implemented** — the one element type that needs a
-  frame loop rather than redraw-on-change. Any overlay using it falls back.
-- `player_avatar`, `static_image` and `tournament_logo` are implemented but
-  currently unverifiable, because every image in the DigitalPool S3 bucket
-  returns `AllAccessDisabled` (see below). The other 16 types are verified.
+- **`ad_center` is not covered by the conformance harness.** Its reference
+  component runs three Apollo queries and logs an impression per ad, so scoring
+  it means mounting the harness page inside an `ApolloProvider` and stubbing
+  them — otherwise a conformance run would post impressions into production
+  analytics. Everything else about it is verified against live ad data instead:
+  the producer's `ads` block in `GET /api/overlay/engine` reports which venues
+  it resolved, how many ads each returned, and what failed.
+- All 21 element types are implemented. `player_avatar`, `static_image` and
+  `tournament_logo` went unverified for a while because the old S3 bucket
+  returned `AllAccessDisabled`; media has since moved to CloudFront and they
+  draw.
 - Carousel crossfades are **off** by default (`OVERLAY_CAROUSEL_FADE=1` enables
   them). The pipeline only re-reads the PNG on a 2 s mtime poll, so a 600 ms fade
   cannot be seen — it would cost 7 PNG encodes per carousel cycle instead of 1
   for nothing. Worth revisiting once the handoff is raw pixels.
+- Some PNGs have to be repaired before they decode: `@napi-rs/canvas` rejects a
+  file carrying a C2PA provenance chunk (`caBX`, written by Photoshop and most
+  AI image tools) with the misleading "Invalid SVG image", so `loadImage()`
+  retries once with ancillary chunks stripped. Venue ad creative comes out of
+  exactly those tools — one of the nine ads running at the first venue tested
+  against is such a file, and before this it simply did not draw.
 - Fonts live in `assets/fonts/` (36 faces, 4.4 MB) and must ship in the device
   image. `fontFamily: inherit` resolves to UniformCondensed, which has only a 400
   weight, so weights 500–800 are synthesised — slightly differently from Chrome.
@@ -193,18 +245,22 @@ real tournament data.
 |---|---|
 | 14 built-in example layouts | 0.9% of painted pixels |
 | all 41 overlays readable from the database | 0.7% |
-| synthetic fixture covering all 20 element types | 0.2% |
+| synthetic fixture covering all 20 element types (pre-`ad_center`) | 0.2% |
 | live production page, overlay #273 (40 elements, 16 types) | 0.1% |
 
 The residual is glyph edge weight from synthesised bold, not geometry. See its
 README.
 
-## Unrelated but blocking: the S3 bucket is disabled
+## Where overlay media lives
 
-Every object under `digitalpool.s3.amazonaws.com` and
-`digitalpool.s3.us-west-1.amazonaws.com` currently returns HTTP 403
-`AllAccessDisabled`, including the bucket root — avatars, tournament logos and
-every custom overlay image. This is an AWS-level block on the bucket, not a
-permissions setting, and it affects the existing browser-based overlays exactly
-as much as this one. Overlays that are mostly a custom background image are
-rendering blank in production right now.
+Direct S3 URLs do not work and are not meant to: the `digital-pool` bucket is
+private and everything is served through the CloudFront distribution in front of
+it (`d2cqpja9v01i02.cloudfront.net`), with the pre-October-2026 bucket still
+answering on `d1k23ln7af6dzb.cloudfront.net`. The database holds both, and plain
+S3 URLs for media uploaded before the move.
+
+`overlayAds.js` rewrites ad URLs to their CDN host exactly as the web app's
+`transformToCdnUrl()` does, so an ad stored with an S3 URL still draws. Nothing
+rewrites avatars or tournament logos — those arrive already pointing at
+CloudFront — so a *stored* S3 URL on one of those would 403 here for the same
+reason it does in the browser.

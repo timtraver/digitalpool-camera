@@ -22,6 +22,7 @@ const { Worker } = require("worker_threads");
 
 const renderer = require("./overlayRenderer");
 const dataSource = require("./overlayDataSource");
+const ads = require("./overlayAds");
 
 // How often to re-read live match state. This is a poll, not a subscription,
 // and it runs at two speeds.
@@ -83,8 +84,16 @@ function canHandle(url) {
 }
 
 class SkiaOverlay extends EventEmitter {
-  constructor() {
+  /**
+   * `options.shadow` marks an instance that renders alongside the real
+   * producer for measurement (OVERLAY_SHADOW=1) and whose frames composite
+   * nothing. It only affects ad impressions: the browser is the one actually
+   * on screen then, and it is already counting them — a shadow counting them
+   * too would bill the venue's advertisers twice.
+   */
+  constructor(options = {}) {
     super();
+    this._shadow = options.shadow === true;
     this.isRunning = false;
     this.pngPath = "/dev/shm/graphics-overlay.png";
     this._url = null;
@@ -98,6 +107,11 @@ class SkiaOverlay extends EventEmitter {
     this._failures = 0;
     this._lastDrawAt = 0;
     this._hasClock = false;
+    this._hasAds = false;        // does the canvas carry an ad_center element
+    this._ads = null;            // venueId -> [ad], as last read from Ad Center
+    this._adsFingerprint = "";   // changes when the ad LISTS change, not the rotation
+    this._adErrors = null;
+    this._nextAdFetchAt = 0;
     this._nextAnimationAt = 0;   // when an animated element next needs a frame
     this._fresh = null;         // newest binding read from DigitalPool
     this._live = false;         // is a match on the table (→ which cadence)
@@ -149,6 +163,11 @@ class SkiaOverlay extends EventEmitter {
     this._pending = [];
     this._failures = 0;
     this._nextAnimationAt = 0;
+    this._hasAds = false;
+    this._ads = null;
+    this._adsFingerprint = "";
+    this._adErrors = null;
+    this._nextAdFetchAt = 0;
     this._fresh = null;
     this._live = false;
     this._lastMatchAt = 0;
@@ -321,6 +340,10 @@ class SkiaOverlay extends EventEmitter {
       this._canvasFetchedAt = now;
       this._delaySeconds = this._resolveDelaySeconds(canvas);
       this._hasClock = (canvas.elements || []).some((el) => el.type === "match_clock" && el.visible !== false);
+      this._hasAds = ads.hasAdElements(canvas);
+      // An edited canvas can point an ad_center element at a different venue,
+      // so re-read the ads rather than waiting out the refresh interval.
+      if (changed) this._nextAdFetchAt = 0;
       if (changed) this._fingerprint = null; // force a redraw against the new canvas
     }
     // Redraw if our output has gone missing. The browser producer rewrote its
@@ -341,25 +364,35 @@ class SkiaOverlay extends EventEmitter {
     // The delay queue is driven every tick, not every fetch: it releases on
     // wall-clock time, and re-offering a binding whose fingerprint has not
     // changed is a no-op.
-    const applied = this._applyScoreDelay(this._fresh, now);
+    let applied = this._applyScoreDelay(this._fresh, now);
     if (!applied) return this._nextDelay(now);
+
+    // ad_center elements hold no images of their own — the venue's current Ad
+    // Center ads are read on a cadence of their own and ride along on the
+    // binding, which is what makes them visible to the renderer and to the
+    // worker thread without either of them making a request.
+    if (this._hasAds) applied = await this._withAds(applied, now);
 
     // An overlay whose only moving part is a carousel still has to redraw, even
     // though no match data changed.
-    const animationAt = renderer.nextAnimationAt(this._canvas, now);
+    const animationAt = renderer.nextAnimationAt(this._canvas, now, applied);
     const animationDue = animationAt !== null && now >= this._nextAnimationAt;
     // Only a live match has a clock worth advancing; an empty table's clock
     // reads the same every time, so redrawing it burns a 1080p encode for
     // nothing.
     const clockDue = this._hasClock && this._live && now - this._lastDrawAt >= CLOCK_TICK_MS;
 
-    const fingerprint = dataSource.bindingFingerprint(applied);
+    const fingerprint = dataSource.bindingFingerprint(applied) + this._adsFingerprint;
     if (fingerprint !== this._fingerprint || clockDue || animationDue) {
       this._fingerprint = fingerprint;
       this._binding = applied;
       await this._draw(applied, now);
-      const after = renderer.nextAnimationAt(this._canvas, Date.now());
+      const after = renderer.nextAnimationAt(this._canvas, Date.now(), applied);
       this._nextAnimationAt = after === null ? Infinity : after;
+      // An ad is counted once it has actually been drawn, for the same reason
+      // the web component logs from a render effect: a slot the stream never
+      // showed is not an impression.
+      if (this._hasAds) this._noteImpressions(applied, Date.now());
     }
     return this._nextDelay(Date.now());
   }
@@ -424,6 +457,66 @@ class SkiaOverlay extends EventEmitter {
   }
 
   /**
+   * Put the venue's current ads on the binding for the renderer to draw.
+   *
+   * Never throws. The ads are a separate data source from the scoreboard, on a
+   * five-minute cadence rather than a two-second one, and a failure to read
+   * them must not count as a binding failure or stop the match data — the last
+   * good list is kept and the overlay carries on.
+   */
+  async _withAds(binding, now) {
+    let next = binding;
+    // "Automatic" means the venue the overlay is shown at. When the URL names
+    // none — a tournament with no venue attached — the venue this appliance is
+    // registered to stands in, since unlike a browser it knows where it is.
+    // Resolved HERE, onto binding.venue, so the renderer keeps the web
+    // component's rule rather than carrying a second one.
+    if (!(next.venue && next.venue.id)) {
+      const fallback = ads.fallbackVenueId();
+      if (fallback) next = dataSource.withBindingVenue(next, fallback);
+    }
+
+    const venueIds = ads.adVenueIds(this._canvas, next);
+    if (!venueIds.length) {
+      this._ads = null;
+      this._adsFingerprint = "";
+      return next;
+    }
+
+    if (!this._ads || now >= this._nextAdFetchAt) {
+      const { ads: byVenue, errors } = await ads.fetchAds(venueIds, now);
+      const signature = ads.adsSignature(byVenue);
+      if (signature !== this._adsFingerprint) {
+        const counts = venueIds.map((id) => `venue ${id}: ${(byVenue[id] || []).length}`).join(", ");
+        console.log(`📣 Ad Center ads for this overlay — ${counts}`);
+      }
+      this._ads = byVenue;
+      this._adErrors = Object.keys(errors).length ? errors : null;
+      this._adsFingerprint = signature;
+      this._nextAdFetchAt = now + ads.REFRESH_MS;
+    }
+    return { ...next, ads: this._ads };
+  }
+
+  /** Report the ads currently on screen, one per ad_center element. */
+  _noteImpressions(binding, now) {
+    if (this._shadow) return;
+    for (const el of (this._canvas && this._canvas.elements) || []) {
+      if (el.visible === false || el.type !== "ad_center") continue;
+      const ad = renderer.currentAd(el, binding, now);
+      if (!ad) continue;
+      ads.logImpression(ad, {
+        venueId: ads.resolveAdVenueId(el, binding),
+        // One throttle window per camera — the PNG path is what distinguishes
+        // them (graphics-overlay.png vs -2.png) — and per element, so two ad
+        // panels on one overlay are not mistaken for one.
+        instance: `${this.pngPath}#${el.id}`,
+        now,
+      });
+    }
+  }
+
+  /**
    * When to wake next: the earliest of the next data read and any frame the
    * canvas owes on its own (a carousel step, a clock minute). Animation and the
    * clock can pull the tick in without pulling a query in with it.
@@ -433,6 +526,11 @@ class SkiaOverlay extends EventEmitter {
     if (this._nextAnimationAt && Number.isFinite(this._nextAnimationAt)) {
       next = Math.min(next, this._nextAnimationAt);
     }
+    // An overlay with a single ad has nothing to animate, so without this the
+    // ad list would only be re-read whenever something else happened to wake
+    // the loop — which on an idle table with the watch connected is ten
+    // minutes.
+    if (this._hasAds && this._nextAdFetchAt) next = Math.min(next, this._nextAdFetchAt);
     // _lastDrawAt is 0 until the first frame, which is not a timestamp to
     // schedule against.
     if (this._hasClock && this._live && this._lastDrawAt) {
@@ -641,6 +739,12 @@ class SkiaOverlay extends EventEmitter {
       // subscription is carrying it.
       watching: this._watchHealthy(),
       watch: dataSource.watchStats(),
+      ads: this._hasAds ? {
+        venues: this._ads ? Object.keys(this._ads).map(Number) : [],
+        counts: this._ads ? Object.fromEntries(Object.entries(this._ads).map(([k, v]) => [k, v.length])) : {},
+        errors: this._adErrors,
+        impressions: ads.impressionStats(),
+      } : null,
       failures: this._failures,
       lastError: this._lastError,
       unsupported: this.unsupported,
@@ -666,6 +770,9 @@ class SkiaOverlay extends EventEmitter {
   async stop() {
     this._stopPeriodicRefresh();
     this.isRunning = false;
+    // Impressions are buffered for ten seconds at a time; an overlay being
+    // switched off should not throw away the last few.
+    if (this._hasAds) ads.flushImpressions().catch(() => {});
 
     if (this._worker) {
       await this._worker.terminate().catch(() => {});
