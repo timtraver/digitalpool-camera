@@ -219,6 +219,14 @@ class OverlayWatch extends EventEmitter {
     this._connected = false;
     if (this._ws) {
       this._ws.removeAllListeners();
+      // Terminating a socket that is still shaking hands makes ws report
+      // "WebSocket was closed before the connection was established" — and it
+      // reports it on a LATER tick, by which time removeAllListeners() has
+      // taken our handler away. An EventEmitter with no 'error' listener
+      // throws, so closing a watch early (the renderer refusing an overlay and
+      // stopping itself, say) surfaced as an uncaught exception that no
+      // try/catch around terminate() could ever have caught.
+      this._ws.on("error", () => {});
       try { this._ws.terminate(); } catch (e) { /* already gone */ }
       this._ws = null;
     }
