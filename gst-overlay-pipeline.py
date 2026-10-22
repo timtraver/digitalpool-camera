@@ -73,6 +73,374 @@ if _delta_s > 60:
 else:
     print("✅ CLOCK_REALTIME confirmed — GStreamer and wall clock are within 60 s", file=sys.stderr)
 
+
+
+# ── Background-music filter ────────────────────────────────────────────────
+# Pool halls play music, and a stream carrying it clearly gets flagged by
+# Facebook's and YouTube's content matching. audio/dp_percussive.c keeps the
+# room's sudden sounds and removes what is sustained; it is installed as a
+# LADSPA plugin by migrations/0020-audio-music-filter.sh.
+#
+# This file only handles audio that arrives EMBEDDED in a source (NDI, RTSP,
+# RTMP). On the USB camera path audio belongs to ffmpeg, which applies the same
+# plugin itself — see audioFilter.js.
+#
+# Settings arrive in the environment rather than as more positional arguments,
+# because the argument order here is a contract with streamController.js that
+# has to be edited in two places at once.
+#
+# Two differences from the ffmpeg side, both deliberate:
+#   • ffmpeg instantiates a LADSPA plugin per channel; GStreamer's element is
+#     whatever the plugin is, and this plugin is mono. Embedded audio is
+#     therefore folded to mono through the filter and spread back afterwards.
+#     A pool hall is not a stereo recording, and losing the image is a smaller
+#     price than carrying the music.
+#   • the filter's look-ahead is taken off its own src pad with set_offset(),
+#     which is the GStreamer equivalent of the shift streamController folds
+#     into the A/V alignment.
+_MUSIC_FILTER_LATENCY_NS = 6144 * Gst.SECOND // 48000   # DP_PERCUSSIVE_LATENCY at 48 kHz
+_music_filter_factory_cache = []
+
+
+def _music_filter_wanted():
+    if os.environ.get("DP_AUDIO_FILTER", "1") != "1":
+        return 0.0
+    try:
+        strength = float(os.environ.get("DP_AUDIO_FILTER_STRENGTH", "1"))
+    except ValueError:
+        strength = 1.0
+    return max(0.0, min(1.0, strength))
+
+
+def _music_filter_factory():
+    """The element name GStreamer gave the plugin, or None if it is not installed.
+
+    GStreamer builds that name from the file and the plugin's label, and the
+    exact mangling has changed between versions, so the known spellings are
+    tried first and then the registry is searched rather than trusting one.
+    """
+    if _music_filter_factory_cache:
+        return _music_filter_factory_cache[0]
+    candidates = [
+        "ladspa-dp-percussive-so-dp-percussive",
+        "ladspa-dp_percussive-so-dp_percussive",
+    ]
+    found = None
+    for name in candidates:
+        if Gst.ElementFactory.find(name):
+            found = name
+            break
+    if found is None:
+        try:
+            for feature in Gst.Registry.get().get_feature_list(Gst.ElementFactory):
+                name = feature.get_name()
+                if name.startswith("ladspa") and "percussive" in name:
+                    found = name
+                    break
+        except Exception:
+            found = None
+    _music_filter_factory_cache.append(found)
+    return found
+
+
+def _music_filter_chain(element_name="musicfilter"):
+    """The filter as a piece of pipeline string, or "" when it is off/missing."""
+    strength = _music_filter_wanted()
+    if strength <= 0:
+        return ""
+    factory = _music_filter_factory()
+    if not factory:
+        print("⚠️  Background-music filter requested but no LADSPA plugin found — "
+              "embedded audio will be unfiltered (run migrations/0020-audio-music-filter.sh)",
+              file=sys.stderr)
+        return ""
+    print(f"🎚️  Background-music filter on embedded audio ({factory}, strength {strength:.2f})",
+          file=sys.stderr)
+    return (
+        f"! audioconvert ! audioresample "
+        f"! audio/x-raw,format=F32LE,rate=48000,channels=1 "
+        f"! {factory} name={element_name} strength={strength:.3f} "
+        f"! audioconvert "
+    )
+
+
+def _music_filter_make_elements():
+    """The filter as loose elements, in link order, for the pad-added chains.
+
+    Returns [] when the filter is off or the plugin is missing, which the
+    callers splice in as nothing at all. The look-ahead is taken off the
+    filter's own src pad here, so a chain built at runtime needs no more
+    thought about it than one built from a pipeline string.
+    """
+    strength = _music_filter_wanted()
+    if strength <= 0:
+        return []
+    factory = _music_filter_factory()
+    if not factory:
+        print("⚠️  Background-music filter requested but no LADSPA plugin found — "
+              "embedded audio will be unfiltered", file=sys.stderr)
+        return []
+    convert_in = Gst.ElementFactory.make("audioconvert", None)
+    resample = Gst.ElementFactory.make("audioresample", None)
+    caps = Gst.ElementFactory.make("capsfilter", None)
+    filt = Gst.ElementFactory.make(factory, None)
+    convert_out = Gst.ElementFactory.make("audioconvert", None)
+    if not all([convert_in, resample, caps, filt, convert_out]):
+        print("⚠️  Could not build the music filter chain — embedded audio unfiltered", file=sys.stderr)
+        return []
+    caps.set_property("caps", Gst.Caps.from_string("audio/x-raw,format=F32LE,rate=48000,channels=1"))
+    try:
+        filt.set_property("strength", strength)
+    except Exception:
+        # An older plugin build without the control port still filters, just
+        # always at full strength.
+        print("⚠️  Music filter has no strength control — running at full", file=sys.stderr)
+    src_pad = filt.get_static_pad("src")
+    if src_pad is not None:
+        src_pad.set_offset(-_MUSIC_FILTER_LATENCY_NS)
+    print(f"🎚️  Background-music filter on embedded audio ({factory}, strength {strength:.2f})",
+          file=sys.stderr)
+    return [convert_in, resample, caps, filt, convert_out]
+
+
+def _music_filter_compensate(pipeline, element_name="musicfilter"):
+    """Take the filter's look-ahead off its own pad, so sound keeps its time."""
+    el = pipeline.get_by_name(element_name)
+    if el is None:
+        return
+    pad = el.get_static_pad("src")
+    if pad is not None:
+        pad.set_offset(-_MUSIC_FILTER_LATENCY_NS)
+        print(f"🎚️  Music filter latency compensated ({_MUSIC_FILTER_LATENCY_NS / Gst.MSECOND:.0f} ms)",
+              file=sys.stderr)
+
+
+# ── A/V sync: video frames carry the time they were captured ────────────────
+# The offset a venue used to dial in by hand ("A/V Offset (ms)") was never about
+# the microphone or the camera. It was the video pipeline's own latency: ffmpeg
+# stamped the MPEG-TS pipe with av_gettime() AT THE MOMENT THE READ RETURNED —
+# after capture, encode, mux and pipe transit — while the ALSA input carried the
+# hardware's capture time. Audio and video were measured from two different
+# instants, so somebody had to type in the difference.
+#
+# These two classes remove the need for that number entirely:
+#
+#   _CaptureClockAnchor keeps the video timestamps on the wall clock's RATE, and
+#   _announce_first_mux_frame prints the wall-clock INSTANT that the muxer's
+#   first frame was captured, which is what lets streamController line the ALSA
+#   input up with the video timeline without anyone measuring anything.
+#
+# AVSYNC_LEGACY=1 in the environment turns both off and restores the old
+# stamp-at-read behaviour, as a way back if a box misbehaves.
+_AVSYNC_LEGACY = os.environ.get("AVSYNC_LEGACY") == "1"
+
+
+class _CaptureClockAnchor:
+    """Hold video timestamps to CLOCK_REALTIME's rate, whatever the driver stamps.
+
+    v4l2src derives its timestamps from the kernel capture time, which is
+    CLOCK_MONOTONIC — the raw hardware oscillator. On the RK3588 that runs
+    ~764 us/s slower than NTP-adjusted CLOCK_REALTIME, so over an evening the
+    video timeline slides seconds away from the audio timeline no matter how
+    well the two were aligned at the start. Forcing the pipeline clock is not
+    enough: the PTS the driver supplies still advance at the oscillator's rate.
+
+    Rather than rewrite every buffer from Python — 30 callbacks a second that
+    have to make each buffer writable — this watches how far behind the clock
+    each frame's timestamp arrives and corrects the whole branch once a second
+    with gst_pad_set_offset(). The baseline is the smallest delay seen in the
+    first few seconds, which is the genuine capture-to-pipeline latency; from
+    then on, anything that delay GROWS by is drift, and the offset absorbs it.
+
+    Taking the MINIMUM rather than the average is deliberate: scheduling jitter
+    can only ever make a frame look late, never early, so the floor of the
+    distribution is the honest measurement.
+    """
+
+    # Delay samples are bucketed into windows and only two are kept, so the
+    # "recent minimum" costs two comparisons per frame instead of a deque scan.
+    WINDOW_NS = 2 * Gst.SECOND
+    # How long to watch before fixing the baseline. Long enough to see the floor
+    # of the arrival distribution, short enough that drift has not yet moved it.
+    BASELINE_NS = 5 * Gst.SECOND
+    # The most the correction may move in one second. Real drift is sub-ms/s; a
+    # bigger jump means an NTP step or a stalled capture, and following it
+    # instantly would put a visible seam in the timeline.
+    MAX_STEP_NS = 10 * Gst.MSECOND
+    # Correcting a RATE error with a position offset means the offset grows for
+    # as long as the stream runs — that is the arithmetic, not a leak: 764 us/s
+    # is 22 s over an evening and 66 s over a day, and these boxes stream for
+    # days at a time. So the ceiling is only here to stop a runaway, and is set
+    # where no genuine drift can reach it (an hour of correction is about 54
+    # days of streaming). The real guard against a jump is MAX_STEP_NS.
+    MAX_OFFSET_NS = 3600 * Gst.SECOND
+    # How far below the baseline the floor has to fall before the baseline is
+    # treated as wrong rather than as noise.
+    REBASELINE_NS = 5 * Gst.MSECOND
+    # A delay reading beyond this is not a late frame or accumulated drift, it
+    # is a timestamp from another clock domain — those are wrong by decades,
+    # not by minutes. Ignored rather than learned from.
+    MAX_DELAY_NS = 3600 * Gst.SECOND
+
+    def __init__(self, pipeline, pad):
+        self._pipeline = pipeline
+        # Measure on the source's own pad; correct on the pad DOWNSTREAM of it.
+        #
+        # They have to be different pads. Whether a probe on a pad sees an
+        # offset set on that same pad is a GStreamer implementation detail, and
+        # getting it wrong is not a small error: if the measurement includes
+        # the correction, the loop converges on half the drift and silently
+        # leaves the other half (simulated, and it does exactly that). Reading
+        # upstream of where the correction is applied removes the question.
+        self._pad = pad.get_peer()
+        self._measure_only = self._pad is None
+        if self._measure_only:
+            # Nothing is linked downstream yet, which should not happen after
+            # parse_launch. Measure and report, but do not correct half-blind.
+            self._pad = pad
+            print("⚠️  A/V sync — no pad downstream of the camera to correct on; "
+                  "drift will be reported but not corrected", file=sys.stderr)
+        self._window_end = 0
+        self._cur_min = None
+        self._prev_min = None
+        self._baseline_ns = None
+        self._baseline_deadline = None
+        self._offset_ns = 0
+        self.frames = 0
+        self.last_delay_ns = 0
+        self.saturated = False
+        pad.add_probe(Gst.PadProbeType.BUFFER, self._on_buffer)
+
+    def _on_buffer(self, pad, info):
+        # Read-only: the probe measures, the 1 Hz tick corrects. Nothing here
+        # touches the buffer, so there is no writability dance and no copy.
+        #
+        # Whether the stamp read here already has the pad offset applied
+        # depends on where GStreamer applies it relative to probes, and the
+        # loop below converges either way: without it this is feed-forward,
+        # with it a closed loop, and both settle on the same correction. The
+        # one test that must not depend on it is the re-baseline, which is why
+        # that one has a deadband.
+        buf = info.get_buffer()
+        if buf is None or buf.pts == Gst.CLOCK_TIME_NONE:
+            return Gst.PadProbeReturn.OK
+        clock = self._pipeline.get_clock()
+        base = self._pipeline.get_base_time()
+        if clock is None or base <= 0:
+            return Gst.PadProbeReturn.OK
+        now_rt = clock.get_time() - base
+        delay = now_rt - buf.pts
+        # A frame cannot have been captured in the future, and one that claims
+        # to be minutes old is a stamp from another clock domain rather than a
+        # late frame. Either way there is nothing to learn from it.
+        if delay < 0 or delay > self.MAX_DELAY_NS:
+            return Gst.PadProbeReturn.OK
+        self.frames += 1
+        self.last_delay_ns = delay
+        if now_rt >= self._window_end:
+            self._prev_min = self._cur_min
+            self._cur_min = delay
+            self._window_end = now_rt + self.WINDOW_NS
+            if self._baseline_deadline is None:
+                self._baseline_deadline = now_rt + self.BASELINE_NS
+        elif self._cur_min is None or delay < self._cur_min:
+            self._cur_min = delay
+        return Gst.PadProbeReturn.OK
+
+    def _recent_min(self):
+        mins = [m for m in (self._cur_min, self._prev_min) if m is not None]
+        return min(mins) if mins else None
+
+    def tick(self):
+        """Once a second: move the branch's offset to cancel the drift so far."""
+        recent = self._recent_min()
+        if recent is None:
+            return
+        clock = self._pipeline.get_clock()
+        base = self._pipeline.get_base_time()
+        now_rt = (clock.get_time() - base) if (clock and base > 0) else 0
+        if self._baseline_ns is None:
+            if self._baseline_deadline is None or now_rt < self._baseline_deadline:
+                return
+            self._baseline_ns = recent
+            print(f"🕒 A/V sync — capture latency baseline {self._baseline_ns / 1e6:.1f} ms", file=sys.stderr)
+            return
+        target = recent - self._baseline_ns
+        if target < 0:
+            # The floor moved down. A little is ordinary jitter, or the
+            # correction doing its job; a lot means the first seconds were
+            # unlucky and the baseline itself is wrong. Only the second is
+            # worth re-anchoring for — re-baselining on every small negative
+            # would walk the timeline a millisecond at a time for no reason.
+            if -target > self.REBASELINE_NS:
+                self._baseline_ns = recent
+            target = 0
+        if target > self.MAX_OFFSET_NS:
+            if not self.saturated:
+                self.saturated = True
+                print(f"⚠️  A/V sync — capture delay grew to {target / 1e6:.0f} ms; "
+                      f"holding the offset at {self._offset_ns / 1e6:.0f} ms", file=sys.stderr)
+            return
+        self.saturated = False
+        step = max(-self.MAX_STEP_NS, min(self.MAX_STEP_NS, target - self._offset_ns))
+        if step == 0:
+            return
+        self._offset_ns += step
+        if not self._measure_only:
+            self._pad.set_offset(self._offset_ns)
+
+    def status(self):
+        if self._baseline_ns is None:
+            return "avsync=settling"
+        mode = "measured" if self._measure_only else "corrected"
+        return (f"avsync={mode} +{self._offset_ns / 1e6:.1f}ms "
+                f"(latency {self._baseline_ns / 1e6:.0f}ms, now {self.last_delay_ns / 1e6:.0f}ms)")
+
+
+def _announce_first_mux_frame(pipeline):
+    """Print the wall-clock capture time of the first frame handed to the muxer.
+
+    streamController pairs this with the PTS it reads out of the first video PES
+    packet, and the two together say exactly how the MPEG-TS timeline maps onto
+    the wall clock — which is all it needs to drop the ALSA input onto the same
+    timeline. Measured AT THE MUXER on purpose: if anything upstream dropped a
+    frame, this is still the frame that produced that first packet.
+    """
+    mux = pipeline.get_by_name("mux")
+    if mux is None:
+        return
+    pads = []
+    it = mux.iterate_sink_pads()
+    while True:
+        res, pad = it.next()
+        if res != Gst.IteratorResult.OK:
+            break
+        pads.append(pad)
+    if len(pads) != 1:
+        # Audio in the same muxer means the hybrid split is not in use, so
+        # nothing downstream is waiting to be told where the timeline starts.
+        return
+
+    def _on_first(pad, info):
+        buf = info.get_buffer()
+        if buf is None or buf.pts == Gst.CLOCK_TIME_NONE:
+            return Gst.PadProbeReturn.OK
+        running = buf.pts
+        ev = pad.get_sticky_event(Gst.EventType.SEGMENT, 0)
+        if ev is not None:
+            seg = ev.parse_segment()
+            converted = seg.to_running_time(Gst.Format.TIME, buf.pts)
+            if converted != Gst.CLOCK_TIME_NONE:
+                running = converted
+        epoch_ns = pipeline.get_base_time() + running
+        # Parsed by streamController._startFfmpegMux(); keep the name and the
+        # shape of this line in step with the regex there.
+        print(f"AVSYNC_FIRST_FRAME_EPOCH_NS={epoch_ns}", file=sys.stderr, flush=True)
+        return Gst.PadProbeReturn.REMOVE
+
+    pads[0].add_probe(Gst.PadProbeType.BUFFER, _on_first)
+
+
 def main():
     if len(sys.argv) < 8:
         print(f"Usage: {sys.argv[0]} CAMERA_DEVICE WIDTH HEIGHT FRAMERATE BITRATE PROTOCOL DESTINATION [PNG_PATH] [OVERLAY_TEXT] [SHOW_TIMESTAMP] [FONT_SIZE] [COLOR] [BACKGROUND] [TIMESTAMP_FORMAT] [TITLE_POS] [TIMESTAMP_POS]", file=sys.stderr)
@@ -650,7 +1018,7 @@ def main():
         # constraint, GStreamer negotiates YUYV at runtime and converts to NV12.
         print(f"📹 Input source: USB v4l2src (YUYV) → {camera_device}", file=sys.stderr)
         source_str = (
-            f'v4l2src device={camera_device} do-timestamp=true '
+            f'v4l2src name=vsrc device={camera_device} do-timestamp=true '
             f'! video/x-raw,width={width},height={height},framerate={framerate}/1 '
             f'! videoconvert ! video/x-raw,format=NV12 '
             f'! videorate ! video/x-raw,framerate={framerate}/1 '
@@ -663,7 +1031,7 @@ def main():
         parse_str = 'jpegparse ! ' if jpeg_decoder == 'mppjpegdec' else ''
         print(f"📹 Input source: USB v4l2src (MJPEG) → {camera_device} [{jpeg_decoder}]", file=sys.stderr)
         source_str = (
-            f'v4l2src device={camera_device} do-timestamp=true '
+            f'v4l2src name=vsrc device={camera_device} do-timestamp=true '
             # Cap capture framerate at the source so the camera driver delivers
             # only {framerate} JPEG frames/sec over USB.  Without this, v4l2src
             # requests the camera's highest rate (e.g. 60fps), the JPEG decoder
@@ -836,7 +1204,8 @@ def main():
             # with silence — mpegtsmux always sees continuous audio → no video stall.
             # Both streams share the single pipeline clock → automatic A/V sync.
             f'audiomixer name=amix latency=200000000 '
-            f'! voaacenc bitrate=128000 '
+            + _music_filter_chain("alsa_musicfilter")
+            + f'! voaacenc bitrate=128000 '
             f'! aacparse '
             + f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream '
             + f'! {audio_mux_target} '
@@ -862,7 +1231,8 @@ def main():
             f'! audiomixer name=ndi_amix '
             f'! audioconvert ! audioresample '
             f'! audio/x-raw,rate=48000,channels=2 '
-            f'! avenc_aac bitrate=128000 '
+            + _music_filter_chain("ndi_musicfilter")
+            + f'! avenc_aac bitrate=128000 '
             f'! aacparse '
             f'! queue max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 leaky=downstream '
             f'! {audio_mux_target} '
@@ -976,16 +1346,23 @@ def main():
 
                 aacenc.set_property("bitrate", 128000)
 
+                # The whole chain in link order, with the background-music
+                # filter spliced in ahead of the encoder when it is on.
+                chain = ([audioqueue, audioconv, audiores]
+                         + _music_filter_make_elements()
+                         + [aacenc, aacparse_el])
+
                 # Step 1: add all elements (stay in NULL state).
-                for elem in [audioqueue, audioconv, audiores, aacenc, aacparse_el]:
+                for elem in chain:
                     pipeline.add(elem)
 
                 # Step 2: link fully so caps are known before state sync.
-                pad.link(audioqueue.get_static_pad("sink"))
-                audioqueue.link(audioconv)
-                audioconv.link(audiores)
-                audiores.link(aacenc)
-                aacenc.link(aacparse_el)
+                pad.link(chain[0].get_static_pad("sink"))
+                for upstream, downstream in zip(chain, chain[1:]):
+                    if not upstream.link(downstream):
+                        print(f"❌ Could not link {upstream.get_name()} → {downstream.get_name()}",
+                              file=sys.stderr)
+                        return
 
                 # Request the audio sink pad from the mux.
                 # flvmux (RTMP) uses "audio"; mpegtsmux (SRT) uses "audio_%u".
@@ -999,7 +1376,7 @@ def main():
                     print(f"⚠️  Could not get {mux_factory} audio request pad", file=sys.stderr)
 
                 # Step 3: sync state after full linking.
-                for elem in [audioqueue, audioconv, audiores, aacenc, aacparse_el]:
+                for elem in chain:
                     elem.sync_state_with_parent()
 
             dec_element.connect("pad-added", on_rtsp_pad_added, mux_element)
@@ -1092,16 +1469,23 @@ def main():
 
                 aacenc.set_property("bitrate", 128000)
 
+                # The whole chain in link order, with the background-music
+                # filter spliced in ahead of the encoder when it is on.
+                chain = ([audioqueue, audioconv, audiores]
+                         + _music_filter_make_elements()
+                         + [aacenc, aacparse_el])
+
                 # Step 1: add all elements (stay in NULL state).
-                for elem in [audioqueue, audioconv, audiores, aacenc, aacparse_el]:
+                for elem in chain:
                     pipeline.add(elem)
 
                 # Step 2: link fully so caps are known before state sync.
-                pad.link(audioqueue.get_static_pad("sink"))
-                audioqueue.link(audioconv)
-                audioconv.link(audiores)
-                audiores.link(aacenc)
-                aacenc.link(aacparse_el)
+                pad.link(chain[0].get_static_pad("sink"))
+                for upstream, downstream in zip(chain, chain[1:]):
+                    if not upstream.link(downstream):
+                        print(f"❌ Could not link {upstream.get_name()} → {downstream.get_name()}",
+                              file=sys.stderr)
+                        return
 
                 # Request the audio sink pad from the mux.
                 # flvmux (RTMP output) uses "audio"; mpegtsmux (SRT) uses "audio_%u".
@@ -1115,7 +1499,7 @@ def main():
                     print(f"⚠️  Could not get {mux_factory} audio request pad", file=sys.stderr)
 
                 # Step 3: sync state after full linking.
-                for elem in [audioqueue, audioconv, audiores, aacenc, aacparse_el]:
+                for elem in chain:
                     elem.sync_state_with_parent()
 
             dec_element.connect("pad-added", on_rtmp_pad_added, mux_element)
@@ -1848,6 +2232,34 @@ def main():
 
     bus.connect("message", on_message)
 
+    # ── A/V sync ────────────────────────────────────────────────────────────
+    # Installed before PLAYING on purpose: the announcement has to see the
+    # FIRST frame the muxer gets, and with a fast encoder that frame can be
+    # through before a probe added afterwards exists. Both read the clock and
+    # the base time lazily, so neither needs the pipeline running yet.
+    #
+    # Two independent pieces, both only meaningful for the hybrid split (video
+    # here, ALSA audio in ffmpeg):
+    #   • the anchor keeps this branch's timestamps on the wall clock's rate
+    #   • the announcement tells streamController where the timeline starts
+    # A source that is not a local camera (RTSP, RTMP, NDI) carries timestamps
+    # from the far end, so there is no capture latency of ours to measure —
+    # the announcement still applies, and is what lines the ALSA input up.
+    avsync_anchor = None
+    if not _AVSYNC_LEGACY:
+        _vsrc = pipeline.get_by_name("vsrc")
+        if _vsrc is not None:
+            _vpad = _vsrc.get_static_pad("src")
+            if _vpad is not None:
+                avsync_anchor = _CaptureClockAnchor(pipeline, _vpad)
+                GLib.timeout_add_seconds(1, lambda: (avsync_anchor.tick(), True)[1])
+                print("🕒 A/V sync — video stamped with capture time (AVSYNC_LEGACY=1 to disable)",
+                      file=sys.stderr)
+        _announce_first_mux_frame(pipeline)
+    else:
+        print("🕒 A/V sync — AVSYNC_LEGACY=1: timestamps left to ffmpeg's stamp-at-read",
+              file=sys.stderr)
+
     # Start pipeline
     ret = pipeline.set_state(Gst.State.PLAYING)
     if ret == Gst.StateChangeReturn.FAILURE:
@@ -1865,6 +2277,11 @@ def main():
 
     overlay_msg = " (overlay auto-reloads on PNG change)" if overlay_element else ""
     print(f"✅ Pipeline started{overlay_msg} [CLOCK_REALTIME — no long-term A/V drift]", file=sys.stderr)
+
+    # Take the music filter's look-ahead off the two chains built from the
+    # pipeline string (the dynamic ones do it as they are built).
+    for _mf in ("alsa_musicfilter", "ndi_musicfilter"):
+        _music_filter_compensate(pipeline, _mf)
 
     # ── Verify the pipeline is using our CLOCK_REALTIME clock after PLAYING ──
     # GStreamer re-evaluates clock selection when transitioning to PLAYING.
@@ -1995,9 +2412,11 @@ def main():
             pos_ppm  = pos_drift / wall_elapsed * 1e6
             pos_str  = f"  pos={gst_s:.3f}s Δ{pos_drift:+.3f}s ({pos_ppm:+.1f} ppm)"
 
+        avsync_str = f"  {avsync_anchor.status()}" if avsync_anchor else ""
+
         print(
             f"🕒 Drift check — Wall: {wall_elapsed:.3f}s  "
-            f"{rt_str}{pos_str}  {clock_vs_wall}",
+            f"{rt_str}{pos_str}{avsync_str}  {clock_vs_wall}",
             file=sys.stderr,
         )
         return True  # keep timer running

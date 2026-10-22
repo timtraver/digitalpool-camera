@@ -4177,18 +4177,20 @@ app.post("/api/stream/stop", async (req, res) => {
 // Settings baked into the media pipeline when it is built, and therefore only
 // in effect after a restart.
 //
-// A/V Offset was the case that exposed this: audioOffset becomes ffmpeg's
-// `-itsoffset` on the ALSA input at spawn time, so changing it while streaming
-// wrote the new value to stream-config.json and left the running ffmpeg with
-// the offset it started with. The control appeared to do nothing no matter how
-// far it was moved. (`-itsoffset` itself is fine — verified against the
-// production flag set, including `aresample=async`, it shifts audio as asked.)
+// The old A/V Offset control was the case that exposed this: it became
+// ffmpeg's `-itsoffset` at spawn time, so changing it mid-stream wrote the new
+// value to stream-config.json and left the running ffmpeg with the offset it
+// started with — the control appeared to do nothing however far it was moved.
+// That setting is gone (video now carries its capture time and the two streams
+// align themselves), but everything below has the same property: it is read
+// when the pipeline is built and nowhere else.
 //
-// The audio device and source belong here for the same reason: both decide how
-// the ffmpeg audio input is constructed in _buildPNGOverlayPipeline().
+// The audio device, source and filter belong here because each decides how the
+// ffmpeg audio input is constructed in _buildPNGOverlayPipeline().
 const PIPELINE_REBUILD_KEYS = [
   "flipHorizontal", "flipVertical",
-  "audioOffset", "audioEnabled", "audioSource", "audioDevice",
+  "audioEnabled", "audioSource", "audioDevice",
+  "audioFilter", "audioFilterStrength",
 ];
 
 app.post("/api/stream/config", async (req, res) => {

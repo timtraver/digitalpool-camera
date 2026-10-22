@@ -4,6 +4,8 @@ const execAsync = promisify(exec);
 const EventEmitter = require("events");
 const fs = require("fs");
 const path = require("path");
+const tsTimestamps = require("./tsTimestamps");
+const audioFilter = require("./audioFilter");
 
 // ── MPEG-TS PTS extractor ────────────────────────────────────────────────────
 // Scans a raw MPEG-TS buffer and returns the first PTS value found in any PES
@@ -84,6 +86,14 @@ class StreamController extends EventEmitter {
     // 'yuyv'  → video/x-raw,format=YUYV ! videoconvert (software convert, YUYV-only cameras)
     this.captureFormat = 'mjpeg';
     this.gstProcess = null;
+    // Wall-clock capture time of the muxer's first frame, announced by the
+    // GStreamer pipeline. Half of the A/V alignment; the other half is read
+    // from the video pipe itself. Reset on every start.
+    this._avsyncEpochNs = null;
+    // PTS the muxer gave that same frame, in seconds on the MPEG-TS timeline.
+    this._avsyncVideoStartSec = 0;
+    // How far the audio filter holds sound back, when one is in the chain.
+    this._audioFilterLatencySec = 0;
     this.ffmpegProcess = null; // Separate ffmpeg process for SRT+audio hybrid
     this.isStreaming = false;
     // Intent flag: true only while an explicit stopStream() is in flight.  The
@@ -142,7 +152,11 @@ class StreamController extends EventEmitter {
       audioEnabled: true,      // Include audio in stream
       audioSource: "video",    // "video" = use embedded source audio; "external" = ALSA device
       audioDevice: "", // ALSA device used when audioSource === "external"; "" = auto-detect at start
-      audioOffset: 0,          // A/V sync offset in ms: negative = advance audio (fix audio lag), positive = delay audio
+      // Background-music suppression (see audioFilter.js). A/V sync is NOT a
+      // setting: video now carries its capture time, so the two streams line up
+      // on their own — see _avsyncAlignment().
+      audioFilter: true,       // Remove sustained sound (music) and keep the room's transients
+      audioFilterStrength: 1.0, // 0 = bypass (dry), 1 = the full separation
       // Skia graphics overlay
       skiaGraphicsEnabled: false, // Enable Skia graphics overlay
       skiaGraphicsPort: 8556, // Port where Skia graphics server is running
@@ -785,9 +799,23 @@ class StreamController extends EventEmitter {
         // In SRT+audio mode the Python script writes a full audio+video MPEG-TS
         // to stdout (fdsink fd=1). Always pipe stdout so ffmpeg can read it;
         // all Python diagnostics go to stderr (captured by the stderr handler below).
-        const compositorOpts = useFfmpegAudio
-          ? { stdio: ["ignore", "pipe", "pipe"] }
-          : { stdio: ["ignore", "pipe", "pipe"] }; // always pipe — diagnostics on stderr
+        // The music filter is passed in the environment rather than as more
+        // positional arguments: the argument order is a contract between this
+        // file and gst-overlay-pipeline.py that has to be edited in two places
+        // at once, and this setting has no business joining it. The pipeline
+        // only acts on these when IT handles the audio (an NDI or RTSP source
+        // with embedded sound); on the USB path ffmpeg applies the filter and
+        // the pipeline carries video alone.
+        const compositorOpts = {
+          stdio: ["ignore", "pipe", "pipe"], // always pipe — diagnostics on stderr
+          env: {
+            ...process.env,
+            DP_AUDIO_FILTER: this.streamConfig.audioFilter !== false ? "1" : "0",
+            DP_AUDIO_FILTER_STRENGTH: String(
+              this.streamConfig.audioFilterStrength == null ? 1 : this.streamConfig.audioFilterStrength
+            ),
+          },
+        };
 
         // Check if scriptPath is a Python script, Node script, or bash script
         if (gstArgs.scriptPath === 'python3' || gstArgs.scriptPath === 'node') {
@@ -840,6 +868,15 @@ class StreamController extends EventEmitter {
         const driftMatch = message.match(/\((-?[\d.]+)\s*ppm\)/);
         if (driftMatch) {
           this.emit("drift", parseFloat(driftMatch[1]));
+        }
+
+        // A/V sync: the wall-clock instant the muxer's first frame was captured.
+        // Printed once, by _announce_first_mux_frame() in gst-overlay-pipeline.py,
+        // before any frame can have reached this process — so it is always here
+        // by the time the first PES packet is parsed out of the video pipe.
+        const epochMatch = message.match(/AVSYNC_FIRST_FRAME_EPOCH_NS=(\d+)/);
+        if (epochMatch) {
+          this._avsyncEpochNs = Number(epochMatch[1]);
         }
 
         // Only emit as error if it's an actual error (contains ERROR, WARNING, or CRITICAL)
@@ -921,24 +958,28 @@ class StreamController extends EventEmitter {
         let audioDevice = _preProbeAudioDevice;
         let audioDeviceBusy = _preProbeAudioDeviceBusy;
 
-        // ── Part 1: Audio input args (built now) ────────────────────────────
-        // -use_wallclock_as_timestamps 1 replaces ALSA's USB-clock-derived PTS
-        // with av_gettime() (system wall clock), so audio never drifts relative
-        // to real time regardless of how long the session runs.
-        //
-        // -itsoffset: A/V sync correction for cameras whose MJPEG/encode pipeline
-        // adds more video latency than the ALSA capture path.
-        //   Negative offset → advance audio timestamps (audio was lagging video).
-        //   Positive offset → delay audio timestamps  (audio was leading video).
-        // Both streams use wall-clock timestamps so this offset is applied ONCE
-        // at start and does not accumulate over time.
+        // ── Part 1: Audio input args ────────────────────────────────────────
+        // Built as a function because the alignment they carry is only known
+        // once the video pipe has produced its first packet.
         //
         // When the audio device is busy (held by the other camera), use lavfi
         // anullsrc to generate a silent audio track so the stream still starts.
-        const audioOffsetSec = (this.streamConfig.audioOffset || 0) / 1000;
-        const ffmpegAudioArgs = audioDeviceBusy
+        // ── A/V alignment, measured rather than configured ──────────────
+        // `alignSec` is what has to be ADDED to the ALSA input's own timestamps
+        // (which are the sound card's capture times, in epoch seconds) to put
+        // them on the video pipe's MPEG-TS timeline. It is not a tuning value
+        // and there is no UI for it: both halves are read from the running
+        // pipeline — see _avsyncAlignment() — and a venue never sees a number.
+        //
+        // null means the alignment could not be established, in which case the
+        // old stamp-at-read behaviour is used and the two streams are as
+        // aligned as they ever were.
+        const buildAudioArgs = (alignSec) => audioDeviceBusy
           ? [
             "-loglevel", "warning",
+            // Silence still has to start where the video timeline starts, or
+            // the muxer pads the gap and every timestamp afterwards is shifted.
+            ...(alignSec !== null ? ["-copyts", "-itsoffset", this._avsyncVideoStartSec.toFixed(6)] : []),
             "-f", "lavfi",
             "-i", "anullsrc=sample_rate=48000:channel_layout=stereo",
           ]
@@ -958,7 +999,9 @@ class StreamController extends EventEmitter {
             // ALSA's POSIX timestamps are absolute (same epoch as the system wall
             // clock) so they naturally align with the wall-clock video stream.
             // aresample=async=10000 below handles any residual USB clock rate drift.
-            ...(audioOffsetSec !== 0 ? ["-itsoffset", String(audioOffsetSec)] : []),
+            // -copyts keeps ALSA's absolute capture timestamps instead of
+            // rebasing them to zero, so the shift below means something.
+            ...(alignSec !== null ? ["-copyts", "-itsoffset", alignSec.toFixed(6)] : []),
             "-f", "alsa",
             // Capture at the rate the card actually advertises, discovered by the
             // pre-spawn probe.  Do NOT hardcode one here: ALSA rejects an
@@ -978,6 +1021,46 @@ class StreamController extends EventEmitter {
             "-thread_queue_size", "32768",
             "-i", audioDevice,
           ];
+
+        // ── The audio filter chain ──────────────────────────────────────────
+        // Resample first: the filter's frame sizes are tuned for 48 kHz (and
+        // AAC wants it anyway), so a 32 kHz card is brought up to rate before
+        // anything looks at it.
+        //
+        // Then, when the venue has it on, the background-music filter — see
+        // audioFilter.js. It holds sound back by its look-ahead, which is
+        // added to the A/V alignment rather than left for anyone to notice:
+        // _avsyncAlignment() subtracts it from the shift applied to the input.
+        // Asked once per process; both cameras share the answer.
+        await audioFilter.verify();
+        // Nothing to separate in generated silence. This matters because the
+        // second camera falls back to anullsrc whenever the first is holding
+        // the only USB sound card, and filtering that costs a real 7% of a
+        // core to produce silence at the other end.
+        const musicFilter = audioDeviceBusy ? null : audioFilter.ffmpegFilter(
+          this.streamConfig.audioFilter !== false,
+          this.streamConfig.audioFilterStrength == null ? 1 : this.streamConfig.audioFilterStrength
+        );
+        // Fold to mono before the filter when it is on. ffmpeg instantiates a
+        // LADSPA plugin PER CHANNEL, so stereo means running the whole
+        // separation twice — measured at 12% of a core on an N97, against 6%
+        // for one channel. A pool hall mic is not a stereo recording and the
+        // image is worth less than the CPU on a box that already runs at its
+        // thermal limit. It also matches the GStreamer path, which has no
+        // choice: its LADSPA element is whatever the plugin is, and this
+        // plugin is mono.
+        const audioChain = [
+          "aresample=48000:async=10000",
+          musicFilter ? "aformat=channel_layouts=mono" : null,
+          musicFilter,
+        ].filter(Boolean).join(",");
+        this._audioFilterLatencySec = musicFilter ? audioFilter.LATENCY_SEC : 0;
+        console.log(`🎚️  [Cam${this.streamId}] ${audioDeviceBusy
+          ? "background-music filter skipped — this camera is on generated silence"
+          : audioFilter.describe(
+              this.streamConfig.audioFilter !== false,
+              this.streamConfig.audioFilterStrength == null ? 1 : this.streamConfig.audioFilterStrength
+            )}`);
 
         // ── Part 2: Output args (built now) ─────────────────────────────────
         // RTSP publish transport is chosen by codec — see the matching comment in
@@ -1040,18 +1123,20 @@ class StreamController extends EventEmitter {
             : []),
           "-c:a", "aac",
           "-b:a", "128k",
-          // Audio filter for long-running USB capture stability:
+          // The chain built above: resampling, then the music filter if the
+          // venue has it on. The resampling is also what keeps long sessions
+          // stable:
           //
           // aresample=48000:async=10000
           //    Resample 32 kHz → 48 kHz for AAC.  The USB audio oscillator runs at
           //    a slightly different rate than the system clock (typically ±0.01–0.1%).
           //    Over 13+ hours this accumulates ~65 ms of drift (-1.3 ppm measured).
-          //    -use_wallclock_as_timestamps replaces PTS values but does NOT slow
-          //    the USB oscillator — the ALSA buffer still fills up over time.
+          //    Nothing upstream slows the USB oscillator down — the ALSA buffer
+          //    still fills up over time whatever the timestamps say.
           //    async=10000 allows the resampler to correct up to 10 000 samples/sec
           //    (vs the old 1000), so large accumulated drift is absorbed gradually
           //    and inaudibly rather than in abrupt glitches.
-          "-af", "aresample=48000:async=10000",
+          "-af", audioChain,
           // max_interleave_delta: both streams share the same wall-clock epoch, so
           // the interleave delta stays near zero. 1 s cap is a safety margin.
           // muxdelay=0 removes mux buffering.
@@ -1080,10 +1165,13 @@ class StreamController extends EventEmitter {
 
         // ── Deferred ffmpeg spawn ────────────────────────────────────────────
         // GStreamer's MPP hardware encoder takes 1-2 s to produce its first
-        // frame. Deferring the spawn until the first video chunk arrives ensures
-        // ALSA capture (and its wall-clock timestamps) begins at the same instant
-        // as video, so both streams start stamping with av_gettime() at ~the same
-        // wall-clock moment and the muxer normalises them both to start at ~0.
+        // frame, so the spawn waits for the pipe to produce something. It now
+        // waits for one thing more: enough of the stream to read the PTS the
+        // muxer gave that first frame. Together with the capture instant the
+        // pipeline announced on stderr, that is the whole A/V alignment, and
+        // waiting the few extra milliseconds for it is what removes the manual
+        // offset. _collectAlignment() gives up quickly if either half does not
+        // arrive, and the stream starts the way it always did.
         //
         // NOTE: do NOT call gstStdout.pause() before attaching the listener.
         // pause() sets _readableState.flowing = false; a subsequent "data"
@@ -1092,31 +1180,44 @@ class StreamController extends EventEmitter {
         // never spawns → SRT port never opens.
         const gstStdout = this.gstProcess.stdout;
 
-        gstStdout.once("data", (firstChunk) => {
-          // ── Wall-clock timestamps on the video pipe ──────────────────────
-          // -use_wallclock_as_timestamps 1 replaces the MPEG-TS packet timestamps
-          // (which are CLOCK_MONOTONIC-derived from v4l2src kernel capture times)
-          // with av_gettime() (CLOCK_REALTIME).  This matches the rate used by
-          // the ALSA audio input and eliminates the MONOTONIC/REALTIME rate
-          // mismatch that causes audio to gradually overtake video over hours.
+        this._collectAlignment(gstStdout, (firstChunk, alignSec) => {
+          // ── Timestamps on the video pipe ─────────────────────────────────
+          // Aligned (the normal case): -copyts keeps the timestamps GStreamer
+          // wrote, which are the camera's CAPTURE times — the pipeline anchors
+          // them to CLOCK_REALTIME per frame, so they neither lag by the encode
+          // time nor drift at the kernel oscillator's rate. The ALSA input is
+          // shifted onto that same timeline, and the result needs no offset
+          // from anybody. No +genpts either: these PTS are real and distinct,
+          // where stamp-at-read gave a whole burst of frames the same
+          // millisecond and needed them regenerated.
           //
-          // +genpts: when a single pipe read() returns a burst of N frames they
-          // all receive the same av_gettime() millisecond.  +genpts regenerates
-          // sequential PTS for those frames based on the stream's frame duration,
-          // so the demuxer never sees duplicate PTS.  For RTMP the setts BSF (in
-          // the output args) enforces DTS monotonicity via max(DTS, PREV_OUTDTS+100),
-          // absorbing burst duplicates without assuming any fixed frame rate.
-          console.log(`🕒 A/V sync (${protocol.toUpperCase()}) — wall-clock timestamps on both audio and video (av_gettime / CLOCK_REALTIME)`);
+          // Legacy: -use_wallclock_as_timestamps 1 replaces the MPEG-TS
+          // timestamps with av_gettime() at the moment the read returns, which
+          // is what made the video timeline late by the pipeline's own latency
+          // and left a venue to type the difference into "A/V Offset (ms)".
+          const aligned = alignSec !== null;
+          if (aligned) {
+            console.log(
+              `🕒 [Cam${this.streamId}] A/V sync (${protocol.toUpperCase()}) — ` +
+              `audio placed on the video's capture timeline (shift ${alignSec.toFixed(3)}s, no configured offset)`
+            );
+          } else {
+            console.log(
+              `🕒 [Cam${this.streamId}] A/V sync (${protocol.toUpperCase()}) — ` +
+              `alignment unavailable, falling back to wall-clock stamping`
+            );
+          }
 
           const ffmpegVideoArgs = [
-            "-use_wallclock_as_timestamps", "1",
-            // +genpts: regenerate sequential PTS for burst-read frames.
+            ...(aligned ? ["-copyts"] : ["-use_wallclock_as_timestamps", "1"]),
             // +nobuffer: don't accumulate an internal demux buffer (latency guard).
             // +discardcorrupt (SRT only): drop garbled MPEG-TS packets.
+            // +genpts (legacy only): regenerate PTS for burst-read frames that
+            // all landed on the same av_gettime() millisecond.
             // low_delay: minimise internal buffering at every stage.
             ...(protocol === "rtmp" || protocol === "rtsp"
-              ? ["-fflags", "+genpts+nobuffer", "-flags", "low_delay"]
-              : ["-fflags", "+genpts+nobuffer+discardcorrupt", "-flags", "low_delay"]),
+              ? ["-fflags", `${aligned ? "" : "+genpts"}+nobuffer`, "-flags", "low_delay"]
+              : ["-fflags", `${aligned ? "" : "+genpts"}+nobuffer+discardcorrupt`, "-flags", "low_delay"]),
             ...(protocol === "rtmp" || protocol === "rtsp"
               ? ["-probesize", "1048576", "-analyzeduration", "500000"]
               : ["-probesize", "32", "-analyzeduration", "0"]),
@@ -1125,7 +1226,7 @@ class StreamController extends EventEmitter {
             "-i", "pipe:0",
           ];
 
-          const ffmpegArgs = [...ffmpegAudioArgs, ...ffmpegVideoArgs, ...ffmpegOutputArgs];
+          const ffmpegArgs = [...buildAudioArgs(alignSec), ...ffmpegVideoArgs, ...ffmpegOutputArgs];
 
           console.log("Starting ffmpeg with args:", ffmpegArgs.join(" "));
           // Spawn ffmpeg via `nice -n -5` to give the A/V mux process slightly
@@ -1181,6 +1282,9 @@ class StreamController extends EventEmitter {
 
                 const silentAudioArgs = [
                   "-loglevel", "warning",
+                  // Start the silence where the video timeline starts, for the
+                  // same reason the first attempt did.
+                  ...(alignSec !== null ? ["-copyts", "-itsoffset", this._avsyncVideoStartSec.toFixed(6)] : []),
                   "-f", "lavfi",
                   "-i", "anullsrc=sample_rate=48000:channel_layout=stereo",
                 ];
@@ -1980,6 +2084,85 @@ class StreamController extends EventEmitter {
   /**
    * Build GStreamer pipeline based on configuration
    */
+  /**
+   * Wait until the A/V alignment can be worked out, then start the mux.
+   *
+   * Two numbers make the alignment, and neither is a setting:
+   *   • the wall-clock instant the muxer's first frame was CAPTURED, announced
+   *     by the GStreamer pipeline on stderr;
+   *   • the PTS that muxer wrote for it, read out of the video pipe here.
+   * Their difference converts any wall-clock instant into a position on the
+   * MPEG-TS timeline — which is exactly what the ALSA input needs, since its
+   * timestamps are the sound card's capture times in the same wall clock.
+   *
+   * `onReady(bufferedStart, alignSec)` is called once. Nothing read from the
+   * pipe is consumed: every byte is handed over to be written to ffmpeg first.
+   * alignSec is null when the alignment could not be established, which is the
+   * caller's signal to fall back to stamp-at-read.
+   */
+  _collectAlignment(stream, onReady) {
+    // Both ends read the same variable: the pipeline skips the announcement,
+    // this skips the wait, and the stream behaves exactly as it did before.
+    const legacy = process.env.AVSYNC_LEGACY === "1";
+    // The announcement is printed when the first frame reaches the muxer, so
+    // it is already on its way when these bytes arrive; this only covers the
+    // two pipes being read in a different order.
+    const WAIT_MS = 1000;
+    // A video PES header turns up within a packet or two. This much without
+    // one means the stream is not what we think it is.
+    const MAX_BYTES = 2 * 1024 * 1024;
+
+    const chunks = [];
+    let total = 0;
+    let settled = false;
+    let timer = null;
+
+    const finish = (alignSec) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      stream.removeListener("data", onData);
+      onReady(Buffer.concat(chunks), alignSec);
+    };
+
+    const onData = (chunk) => {
+      chunks.push(chunk);
+      total += chunk.length;
+      if (legacy) return finish(null);
+      if (timer === null) timer = setTimeout(() => finish(null), WAIT_MS);
+      if (this._avsyncEpochNs == null) {
+        if (total > MAX_BYTES) finish(null);
+        return;
+      }
+      const pts = tsTimestamps.firstVideoPtsSeconds(Buffer.concat(chunks));
+      if (pts === null) {
+        if (total > MAX_BYTES) finish(null);
+        return;
+      }
+      this._avsyncVideoStartSec = pts;
+      finish(this._avsyncAlignment(pts));
+    };
+
+    stream.on("data", onData);
+  }
+
+  /**
+   * What to add to the ALSA input's own timestamps to put them on the video
+   * timeline, or null if that cannot be worked out.
+   */
+  _avsyncAlignment(videoStartSec) {
+    if (this._avsyncEpochNs == null) return null;
+    const captureEpochSec = this._avsyncEpochNs / 1e9;
+    // Audio timestamp T (wall clock) belongs at videoStart + (T - captureEpoch)
+    // on the muxer's timeline, so everything is shifted by the difference.
+    let shift = videoStartSec - captureEpochSec;
+    // A filter that looks ahead emits each sample later than the timestamp it
+    // carries, so the input is advanced by exactly that much. This is why the
+    // filter's latency never reaches a human either.
+    shift -= this._audioFilterLatencySec || 0;
+    return Number.isFinite(shift) ? shift : null;
+  }
+
   /**
    * Clamp streamConfig.framerate to a rate the camera advertises for the
    * configured resolution in the active capture format (MJPEG/YUYV).

@@ -1637,8 +1637,12 @@ const audioSourceTypeSelect  = document.getElementById("audioSourceType");
 const audioDeviceRow         = document.getElementById("audioDeviceRow");
 const audioDeviceSelect      = document.getElementById("audioDeviceSelect");
 const refreshAudioDevicesBtn = document.getElementById("refreshAudioDevices");
-const audioOffsetRow         = document.getElementById("audioOffsetRow");
-const audioOffsetInput       = document.getElementById("audioOffset");
+const audioDeviceInfoBtn     = document.getElementById("audioDeviceInfo");
+const audioFilterRow         = document.getElementById("audioFilterRow");
+const audioFilterCheckbox    = document.getElementById("audioFilter");
+const audioFilterStrengthRow = document.getElementById("audioFilterStrengthRow");
+const audioFilterStrength    = document.getElementById("audioFilterStrength");
+const audioFilterStrengthVal = document.getElementById("audioFilterStrengthValue");
 
 // True once the user has clicked 🔄 at least once (audio device list was fetched).
 // Used by switchCamera() to auto-refresh the device list on tab switch so the
@@ -1854,6 +1858,12 @@ let reloadCameraInput = null;
   if (refreshAudioDevicesBtn) refreshAudioDevicesBtn.addEventListener("click", () => loadAudioDevices());
   if (audioEnabledCheckbox) audioEnabledCheckbox.addEventListener("change", updateAudioDeviceRowVisibility);
   if (audioSourceTypeSelect) audioSourceTypeSelect.addEventListener("change", updateAudioDeviceRowVisibility);
+  if (audioFilterCheckbox) audioFilterCheckbox.addEventListener("change", updateAudioDeviceRowVisibility);
+  if (audioFilterStrength) audioFilterStrength.addEventListener("input", updateAudioFilterStrengthLabel);
+  if (audioDeviceSelect) audioDeviceSelect.addEventListener("change", syncAudioDeviceInfo);
+  // Whether the name fits depends on the width the row ends up with, which
+  // changes with the window and when the row is first shown.
+  window.addEventListener("resize", syncAudioDeviceInfo);
 
   // ── NDI source discovery ───────────────────────────────────────────────────
   // Clicking 🔍 calls /api/ndi/sources, waits up to 5 s for the SDK to find
@@ -2322,7 +2332,8 @@ startStreamBtn.addEventListener("click", async () => {
       audioEnabled: audioEnabledCheckbox.checked,
       audioSource: audioSourceTypeSelect ? audioSourceTypeSelect.value : "video",
       audioDevice: currentAudioDevice(),
-      audioOffset: audioOffsetInput ? parseInt(audioOffsetInput.value, 10) || 0 : 0,
+      audioFilter: audioFilterCheckbox ? audioFilterCheckbox.checked : true,
+      audioFilterStrength: currentAudioFilterStrength(),
       width: resW,
       height: resH,
       framerate: parseInt(streamFramerate.value),
@@ -2345,7 +2356,8 @@ startStreamBtn.addEventListener("click", async () => {
       audioEnabled: audioEnabledCheckbox.checked,
       audioSource: audioSourceTypeSelect ? audioSourceTypeSelect.value : "video",
       audioDevice: currentAudioDevice(),
-      audioOffset: audioOffsetInput ? parseInt(audioOffsetInput.value, 10) || 0 : 0,
+      audioFilter: audioFilterCheckbox ? audioFilterCheckbox.checked : true,
+      audioFilterStrength: currentAudioFilterStrength(),
       width: resW,
       height: resH,
       framerate: parseInt(streamFramerate.value),
@@ -4392,13 +4404,140 @@ function updateAudioDeviceRowVisibility() {
   //   • USB source (audio always from ALSA), or
   //   • RTSP/NDI source AND user has selected "External device"
   const showDevicePicker = audioEnabled && (inputType === "usb" || audioSource === "external");
+  // A hidden control has no width, so anything measured against it is
+  // meaningless — re-measure once the row is on screen.
+  if (showDevicePicker) requestAnimationFrame(() => syncAudioDeviceInfo());
   if (audioDeviceRow) {
     audioDeviceRow.style.display = showDevicePicker ? "" : "none";
   }
 
-  // A/V offset row is visible whenever audio is enabled (applies to all sources).
-  if (audioOffsetRow) {
-    audioOffsetRow.style.display = audioEnabled ? "" : "none";
+  // The music filter applies to whatever audio the stream carries, so it shows
+  // whenever audio is on; the strength slider only matters while it is enabled.
+  if (audioFilterRow) {
+    audioFilterRow.style.display = audioEnabled ? "" : "none";
+  }
+  if (audioFilterStrengthRow) {
+    const filterOn = audioEnabled && audioFilterCheckbox && audioFilterCheckbox.checked;
+    audioFilterStrengthRow.style.display = filterOn ? "" : "none";
+  }
+}
+
+/**
+ * Show the full value of a control whose text has been clipped.
+ *
+ * Long ALSA device names ("OBSBOT Tiny 2 Lite — USB Audio (plughw:0,0)") used
+ * to widen the settings panel past the screen, so the operator had to swipe
+ * sideways to read a row. The text is clipped now; this is how to get it back.
+ *
+ * The trigger is a separate ⓘ button rather than the control itself, because
+ * this panel is driven from a tablet: tapping a <select> opens the native
+ * picker, and a `title` tooltip — which is set here too, for a mouse — never
+ * appears on touch at all.
+ *
+ * The button only exists when it is needed: `sync()` measures the text against
+ * the room the control has and shows or hides it.
+ */
+function attachValuePopover(control, button, getText) {
+  if (!control || !button) return () => {};
+
+  const sync = () => {
+    const text = (getText() || "").trim();
+    control.title = text;
+    button.classList.toggle("is-needed", !!text && !textFitsIn(control, text));
+  };
+
+  button.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    showValuePopover(button, (getText() || "").trim());
+  });
+
+  return sync;
+}
+
+// Measuring a <select>'s overflow is not something the DOM will answer —
+// scrollWidth tracks its box, not the selected option's text — so the text is
+// measured in the control's own font and compared with the room it has.
+let _textRuler = null;
+function textFitsIn(control, text) {
+  if (!_textRuler) _textRuler = document.createElement("canvas").getContext("2d");
+  const cs = window.getComputedStyle(control);
+  const width = control.clientWidth;
+  if (!width) return true;                 // hidden: nothing is clipped yet
+  _textRuler.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+  const padding = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+  // A <select> also keeps room for its own dropdown arrow.
+  const arrow = control.tagName === "SELECT" ? 22 : 0;
+  return _textRuler.measureText(text).width <= width - padding - arrow;
+}
+
+let _valuePopover = null;
+function showValuePopover(anchor, text) {
+  if (!text) return;
+  if (!_valuePopover) {
+    _valuePopover = document.createElement("div");
+    _valuePopover.className = "value-popover";
+    document.body.appendChild(_valuePopover);
+    // Anything that moves the page moves the anchor out from under it.
+    const close = () => hideValuePopover();
+    document.addEventListener("click", close);
+    document.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+  }
+  _valuePopover.textContent = text;
+  _valuePopover.style.visibility = "hidden";
+  _valuePopover.style.display = "block";
+
+  // Hang it under the button, pulled back from the right edge if it would
+  // otherwise run off a tablet screen.
+  const a = anchor.getBoundingClientRect();
+  const p = _valuePopover.getBoundingClientRect();
+  const margin = 8;
+  let left = a.right - p.width;
+  left = Math.max(margin, Math.min(left, window.innerWidth - p.width - margin));
+  let top = a.bottom + 6;
+  if (top + p.height > window.innerHeight - margin) top = Math.max(margin, a.top - p.height - 6);
+  _valuePopover.style.left = `${Math.round(left)}px`;
+  _valuePopover.style.top = `${Math.round(top)}px`;
+  _valuePopover.style.visibility = "visible";
+}
+
+function hideValuePopover() {
+  if (_valuePopover) _valuePopover.style.display = "none";
+}
+
+// The device row's ⓘ: the full name of whatever is selected.
+//
+// A hoisted function rather than a const holding the closure, because this is
+// called from listener wiring and from updateAudioDeviceRowVisibility(), both
+// of which can run before this point in the file — a const would still be in
+// its temporal dead zone and throw.
+let _audioDeviceInfoSync = null;
+function syncAudioDeviceInfo() {
+  if (!_audioDeviceInfoSync) {
+    _audioDeviceInfoSync = attachValuePopover(
+      audioDeviceSelect,
+      audioDeviceInfoBtn,
+      () => {
+        const opt = audioDeviceSelect && audioDeviceSelect.selectedOptions[0];
+        return opt ? opt.textContent : "";
+      }
+    );
+  }
+  _audioDeviceInfoSync();
+}
+
+/** Filter strength as the 0-1 fraction the server stores. */
+function currentAudioFilterStrength() {
+  if (!audioFilterStrength) return 1;
+  const pct = parseInt(audioFilterStrength.value, 10);
+  return Number.isFinite(pct) ? Math.max(0, Math.min(100, pct)) / 100 : 1;
+}
+
+function updateAudioFilterStrengthLabel() {
+  if (audioFilterStrengthVal && audioFilterStrength) {
+    audioFilterStrengthVal.textContent = `${audioFilterStrength.value}%`;
   }
 }
 
@@ -4456,9 +4595,11 @@ async function loadAudioDevices() {
     // Mark that devices have been loaded at least once so switchCamera() can
     // auto-refresh the list (and selection) on subsequent tab switches.
     _audioDevicesLoaded = true;
+    syncAudioDeviceInfo();
   } catch (e) {
     audioDeviceSelect.innerHTML = "<option value=''>Error — click 🔄 to retry</option>";
   }
+  syncAudioDeviceInfo();
 }
 
 // Load stream configuration on page load
@@ -4556,9 +4697,14 @@ async function loadStreamConfig() {
         }
       }
 
-      // Restore A/V sync offset (default 0).
-      if (audioOffsetInput) {
-        audioOffsetInput.value = data.config.audioOffset ?? 0;
+      // Restore the music filter (on unless it was turned off).
+      if (audioFilterCheckbox) {
+        audioFilterCheckbox.checked = data.config.audioFilter !== false;
+      }
+      if (audioFilterStrength) {
+        const saved = data.config.audioFilterStrength;
+        audioFilterStrength.value = Math.round((saved == null ? 1 : saved) * 100);
+        updateAudioFilterStrengthLabel();
       }
 
       updateAudioDeviceRowVisibility();
@@ -4642,7 +4788,8 @@ async function saveFlipConfig() {
         audioEnabled: audioEnabledCheckbox ? audioEnabledCheckbox.checked : true,
         audioSource:  audioSourceTypeSelect ? audioSourceTypeSelect.value : "video",
         audioDevice:  currentAudioDevice(),
-        audioOffset:  audioOffsetInput ? parseInt(audioOffsetInput.value, 10) || 0 : 0,
+        audioFilter:  audioFilterCheckbox ? audioFilterCheckbox.checked : true,
+        audioFilterStrength: currentAudioFilterStrength(),
         width:        resW,
         height:       resH,
         framerate:    parseInt(streamFramerate.value),

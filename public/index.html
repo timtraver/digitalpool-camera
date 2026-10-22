@@ -712,17 +712,25 @@
             <!-- ALSA device selector — only shown when "External device" is chosen -->
             <div class="control-item" id="audioDeviceRow" style="display:none">
               <label for="audioDeviceSelect">Audio Device:</label>
-              <select id="audioDeviceSelect" style="flex:1"><option value="">Click 🔄 to load devices</option></select>
-              <button id="refreshAudioDevices" class="btn-icon-small" title="Refresh audio device list">🔄</button>
+              <select id="audioDeviceSelect"><option value="">Click 🔄 to load devices</option></select>
+              <span style="display:flex;gap:4px;align-items:center">
+                <button type="button" id="audioDeviceInfo" class="value-info" title="Show the full device name" aria-label="Show the full device name">i</button>
+                <button id="refreshAudioDevices" class="btn-icon-small" title="Refresh audio device list">🔄</button>
+              </span>
             </div>
 
-            <!-- A/V Sync offset — hidden when audio is disabled -->
-            <div class="control-item" id="audioOffsetRow" style="display:none">
-              <label for="audioOffset" title="Negative = advance audio (fix audio lag). Positive = delay audio (fix audio lead).">A/V Offset (ms):</label>
-              <input type="number" id="audioOffset" value="0" min="-2000" max="2000" step="10"
-                     style="width:70px; flex:none"
-                     title="Negative = advance audio (fix audio lag). Positive = delay audio (fix audio lead)." />
-              <span style="font-size:10px; color:rgba(255,255,255,0.45); margin-left:4px">− leads, + lags</span>
+            <!-- Background music suppression — hidden when audio is disabled.
+                 A/V sync used to live here as an "A/V Offset (ms)" box. It is
+                 gone on purpose: video now carries the time it was captured, so
+                 the audio lines up on its own and there is nothing to dial in. -->
+            <div class="control-item toggle-row" id="audioFilterRow" style="display:none">
+              <label for="audioFilter" title="Keeps the room's sudden sounds — balls, cue tips, pockets — and takes out what is sustained, which is what music is made of. The stream is mono while this is on.">Remove background music</label>
+              <input type="checkbox" id="audioFilter" checked />
+            </div>
+            <div class="control-item" id="audioFilterStrengthRow" style="display:none">
+              <label for="audioFilterStrength" title="How much of the filtered sound to use. Lower keeps more of the room as it is.">Strength:</label>
+              <input type="range" id="audioFilterStrength" min="0" max="100" step="5" value="100" style="flex:1" />
+              <span id="audioFilterStrengthValue" style="font-size:11px; min-width:34px; text-align:right">100%</span>
             </div>
 
             <!-- Shown when DigitalPool reports no active subscription (or the

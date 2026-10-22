@@ -2028,7 +2028,15 @@ Key stream settings (configured via the UI, saved to `stream-config.json`):
 | Bitrate | `5 Mbps` | H.264/H.265 target bitrate |
 | Audio device | `plughw:2,0` | ALSA device for microphone — use `plughw:` (not `hw:`) so the plug layer handles sample-rate conversion automatically. Run `arecord -l` to find the card number; set it to `plughw:<card>,0`. |
 | Audio enabled | `true` | Mux audio into stream |
-| A/V Offset | `0` ms | Fine-tune audio/video sync. **Negative** values advance the audio (fix audio lag); **positive** values delay it. Adjust in 50 ms steps — RTSP/USB camera pipelines typically add 80–150 ms of video latency, so values of `-80` to `-150` are common starting points. The value is saved and restored on page load. |
+| Remove background music | `on` | Keeps the room's sudden sounds — balls, cue tips, pockets, voices — and takes out what is sustained, which is what music is made of and what Facebook's and YouTube's content matching recognises. The stream is mono while it is on (the filter costs twice as much in stereo). See `AUDIO.md`. |
+| Strength | `100%` | How much of the filtered sound to use. Lower keeps more of the room as it is; `0%` leaves the filter out of the chain entirely. |
+
+> **There is no A/V sync setting any more.** It used to be an "A/V Offset (ms)"
+> box that every venue dialled in by hand, usually somewhere around −80 to −150.
+> That number was the video pipeline's own latency, which the device now
+> measures for itself — video frames carry the time they were captured, and the
+> audio is placed on that same timeline. `AUDIO.md` explains how, and how to
+> check it on a box. A value saved by an older build is ignored.
 
 **Input source settings** (persisted to `camera-source.json`):
 

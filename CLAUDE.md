@@ -132,7 +132,9 @@ serves SRT on **8891**, camera 2 on **8892**.
 
 `README.md` is a ~95KB step-by-step device provisioning guide (OS install → drivers → service).
 `STREAMING_ARCHITECTURE.md`, `SRT_SETUP_GUIDE.md`, `OBS_SETUP_GUIDE.md`, `DEPLOY_GRAPHICS.md`
-cover streaming/receiver setup. `SUBSCRIPTION_CHECK.md` is the device↔cloud-function
+cover streaming/receiver setup. `AUDIO.md` covers the two things done to the sound:
+how A/V sync is measured rather than configured (there is no offset setting), and the
+LADSPA background-music filter in `audio/`. `SUBSCRIPTION_CHECK.md` is the device↔cloud-function
 contract for subscription enforcement. `SYSTEM_IMAGE.md` covers golden-image capture and the
 self-installing USB built from it (`dp-create-image.sh` → `dp-build-recovery-iso.sh` →
 `dp-factory-install.sh` → `dp-restore.sh` → `dp-firstboot.sh`); `FACTORY_INSTALL.md` is the
