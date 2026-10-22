@@ -906,29 +906,20 @@ function drawElement(ctx, element, binding, images, assets, now = Date.now(), an
     return;
   }
 
-  // Element types whose content is an image, and what ElementRenderer paints when
-  // that image is missing: a faint translucent panel, with a word in the middle
-  // for the two that have one. Without this an empty avatar or logo slot is
-  // simply absent here while the browser shows a grey box — a difference that is
-  // invisible to a diff taken over white, which is how it went unnoticed.
-  const IMAGE_PLACEHOLDERS = {
-    player_avatar: null,
-    tournament_logo: null,
-    tournament_game_type_image: "Game Type",
-    static_image: "Image",
-  };
+  // An image element with nothing to show draws NOTHING.
+  //
+  // ElementRenderer paints a faint panel in this case, with the words "Game
+  // Type" or "Image" in two of them. That is right in the builder, where an
+  // element you cannot see is an element you cannot select — and wrong on a
+  // broadcast: the Ariakon streams run all day with no match on the table, so
+  // the lettering sat on screen the whole time. The web component now gates
+  // those placeholders on `preview`, and a device is never the preview case.
+  const IMAGE_ELEMENTS = new Set([
+    "player_avatar", "tournament_logo", "tournament_game_type_image", "static_image",
+  ]);
 
   const url = imageUrlFor(element, binding, assets);
-  if (url === null && Object.prototype.hasOwnProperty.call(IMAGE_PLACEHOLDERS, element.type)) {
-    ctx.fillStyle = "rgba(255,255,255,0.1)";
-    roundRectPath(ctx, 0, 0, w, h, style.borderRadius);
-    ctx.fill();
-    const label = IMAGE_PLACEHOLDERS[element.type];
-    if (label) {
-      // These two override justifyContent to center, so the label is centred
-      // whatever the element's textAlign says.
-      drawText(ctx, label, { x: 0, y: 0, w, h }, { ...style, textAlign: "center", textTransform: "none" });
-    }
+  if (url === null && IMAGE_ELEMENTS.has(element.type)) {
     ctx.restore();
     ctx.restore();
     return;
