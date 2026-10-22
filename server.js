@@ -360,6 +360,7 @@ streamController.on("preparing", () => {
 streamController.on("started", () => {
   _streamReachedStarted[1] = true;
   isRestartInProgress[1] = false;
+  syncOverlayStreamLive(1);
   const status = streamController.getStatus();
   io.emit("streamStatus", { ...status, status: "started", cameraIndex: 1 });
   // Starting the pipeline reopens the V4L2 device, and these cameras run a
@@ -370,6 +371,7 @@ streamController.on("started", () => {
 });
 
 streamController.on("stopped", (code) => {
+  syncOverlayStreamLive(1);
   // If the pipeline died before reaching "started" (e.g. ALSA device missing,
   // GStreamer plugin error), nothing else will ever clear isRestartInProgress.
   // Clear it here and restore the idle preview so the UI doesn't stay blank.
@@ -436,6 +438,7 @@ streamController2.on("preparing", () => {
 streamController2.on("started", () => {
   _streamReachedStarted[2] = true;
   isRestartInProgress[2] = false;
+  syncOverlayStreamLive(2);
   const status = streamController2.getStatus();
   io.emit("streamStatus", { ...status, status: "started", cameraIndex: 2 });
   // Starting the pipeline reopens the V4L2 device, and these cameras run a
@@ -446,6 +449,7 @@ streamController2.on("started", () => {
 });
 
 streamController2.on("stopped", (code) => {
+  syncOverlayStreamLive(2);
   // If the pipeline died before reaching "started" (e.g. ALSA device missing,
   // GStreamer plugin error), nothing else will ever clear isRestartInProgress.
   // Clear it here and restore the idle preview so the UI doesn't stay blank.
@@ -3066,6 +3070,23 @@ app.post("/api/scoreboard", express.json(), (req, res) => {
   });
 });
 
+/**
+ * Tell a camera's overlay producer whether that camera is streaming.
+ *
+ * Only the local renderer uses it, and only to decide whether an Ad Center ad
+ * it draws counts as an impression. The producer runs for as long as an
+ * overlay URL is configured — which on a venue box is most of the day — so
+ * without this, every idle hour would bill the venue's advertisers for ads
+ * that went into a PNG no pipeline was reading.
+ */
+function syncOverlayStreamLive(camIdx) {
+  const producer = camIdx === 2 ? puppeteerOverlay2 : puppeteerOverlay;
+  const sc = camIdx === 2 ? streamController2 : streamController;
+  if (producer && typeof producer.setStreamLive === "function") {
+    producer.setStreamLive(!!(sc && sc.isStreaming));
+  }
+}
+
 // API endpoint to set/change the overlay URL (for remote JS-based overlays)
 app.post("/api/overlay-url", express.json(), async (req, res) => {
   const { url, refreshInterval, jsDelay } = req.body;
@@ -3075,6 +3096,7 @@ app.post("/api/overlay-url", express.json(), async (req, res) => {
     puppeteerOverlay.setOverlayUrl(url, { refreshInterval, jsDelay });
     if (url && url.trim()) {
       puppeteerOverlay.startPeriodicRefresh();
+      syncOverlayStreamLive(1);
     }
     // No local scoreboard rendering — remote overlay handles its own content
   }
@@ -6680,6 +6702,7 @@ server.listen(PORT, async () => {
           ...(bootOverlay.refreshMs ? { refreshInterval: bootOverlay.refreshMs } : {}),
         });
         puppeteerOverlay.startPeriodicRefresh();
+        syncOverlayStreamLive(1);
         console.log("✅ Remote overlay started — will restart preview when first screenshot is ready...");
         // Wait for the first screenshot, then restart preview with overlay
         await new Promise((resolve) => {
@@ -6823,6 +6846,7 @@ streamController.on("preparing", async () => {
             ...(startOverlay.refreshMs ? { refreshInterval: startOverlay.refreshMs } : {}),
           });
           puppeteerOverlay.startPeriodicRefresh();
+          syncOverlayStreamLive(1);
         }
         console.log("✅ [Cam1] Overlay PNG ready for GStreamer");
       } catch (err) {
@@ -6870,6 +6894,7 @@ streamController2.on("preparing", async () => {
             ...(startOverlay2.refreshMs ? { refreshInterval: startOverlay2.refreshMs } : {}),
           });
           puppeteerOverlay2.startPeriodicRefresh();
+          syncOverlayStreamLive(2);
         }
         console.log("✅ [Cam2] Overlay PNG ready for GStreamer");
       } catch (err) {

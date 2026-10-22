@@ -127,6 +127,15 @@ const Q_NATIONAL_ADS = `
 const REMOTE_CONFIG_FILE = path.join(__dirname, "remote.json");
 let _deviceVenue = { at: 0, mtime: 0, id: null };
 
+function deviceName() {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(REMOTE_CONFIG_FILE, "utf8"));
+    return (cfg.deviceName || "").trim();
+  } catch (e) {
+    return "";
+  }
+}
+
 function deviceVenueId() {
   try {
     const mtime = fs.statSync(REMOTE_CONFIG_FILE).mtimeMs;
@@ -376,7 +385,18 @@ function logImpression(ad, { venueId, screenId = SCREEN_ID, instance = "", now =
   const rotations = seen ? seen.rotations : 0;
   _throttle.set(key, { at: now, rotations: 0 });
 
-  const meta = { ad_title: ad.title, ad_type: ad.type, source: "overlay", renderer: "device", ...metadata };
+  // screen_id stays "default" because that is what the web overlay writes and
+  // the two should be comparable; which box and camera it came from goes in
+  // the metadata, where it answers "who showed this" without changing the
+  // shape of the row.
+  const meta = {
+    ad_title: ad.title,
+    ad_type: ad.type,
+    source: "overlay",
+    renderer: "device",
+    ...(deviceName() ? { device: deviceName() } : {}),
+    ...metadata,
+  };
   if (rotations > 0) meta.rotation_count = rotations;
   _buffer.push({
     advertisement_id: ad.id,
@@ -458,6 +478,7 @@ module.exports = {
   fetchAds,
   adsSignature,
   deviceVenueId,
+  deviceName,
   logImpression,
   flushImpressions,
   impressionStats,

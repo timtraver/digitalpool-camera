@@ -94,6 +94,9 @@ class SkiaOverlay extends EventEmitter {
   constructor(options = {}) {
     super();
     this._shadow = options.shadow === true;
+    // Whether this camera is actually streaming. Impressions are only counted
+    // while it is — see _noteImpressions().
+    this._streamLive = false;
     this.isRunning = false;
     this.pngPath = "/dev/shm/graphics-overlay.png";
     this._url = null;
@@ -498,9 +501,34 @@ class SkiaOverlay extends EventEmitter {
     return { ...next, ads: this._ads };
   }
 
+  /**
+   * Whether the overlay this produces is going into a live stream.
+   *
+   * server.js sets this from the stream controller's own state. It exists for
+   * the impression count: the overlay producer runs whenever an overlay URL is
+   * configured, which on a venue box is most of the day, and an ad drawn into
+   * a PNG that no pipeline is reading has been shown to nobody.
+   */
+  setStreamLive(live) {
+    this._streamLive = !!live;
+  }
+
+  /**
+   * Which camera this producer belongs to. The PNG path is what says so —
+   * server.js gives camera 2 the "-2" file — and it is the only identity this
+   * class is handed.
+   */
+  _cameraIndex() {
+    return /-2\.png$/.test(this.pngPath || "") ? 2 : 1;
+  }
+
   /** Report the ads currently on screen, one per ad_center element. */
   _noteImpressions(binding, now) {
     if (this._shadow) return;
+    // An ad is only counted when somebody could actually have seen it. This is
+    // billing data: counting the hours a box sits idle with an overlay
+    // configured would inflate every venue's numbers.
+    if (!this._streamLive) return;
     for (const el of (this._canvas && this._canvas.elements) || []) {
       if (el.visible === false || el.type !== "ad_center") continue;
       const ad = renderer.currentAd(el, binding, now);
@@ -512,6 +540,7 @@ class SkiaOverlay extends EventEmitter {
         // panels on one overlay are not mistaken for one.
         instance: `${this.pngPath}#${el.id}`,
         now,
+        metadata: { camera: this._cameraIndex() },
       });
     }
   }
@@ -740,6 +769,7 @@ class SkiaOverlay extends EventEmitter {
       watching: this._watchHealthy(),
       watch: dataSource.watchStats(),
       ads: this._hasAds ? {
+        counting: this._streamLive,
         venues: this._ads ? Object.keys(this._ads).map(Number) : [],
         counts: this._ads ? Object.fromEntries(Object.entries(this._ads).map(([k, v]) => [k, v.length])) : {},
         errors: this._adErrors,

@@ -127,6 +127,9 @@ class OverlayProducer extends EventEmitter {
       console.log(`⚠️  OVERLAY_ENGINE=local and this overlay cannot be drawn locally — it will be BLANK: ${this._url}`);
     }
     this._active.setOverlayUrl(this._url, options);
+    if (typeof this._active.setStreamLive === "function") {
+      this._active.setStreamLive(!!this._streamLive);
+    }
     this._syncShadow();
   }
 
@@ -135,6 +138,22 @@ class OverlayProducer extends EventEmitter {
     if (this._active) this._active.startPeriodicRefresh();
     if (this._shadow) this._shadow.startPeriodicRefresh();
     this._startHealthChecks();
+  }
+
+  /**
+   * Tell the engine whether this camera is streaming.
+   *
+   * Only the local renderer acts on it, and only for Ad Center impressions —
+   * it counts an ad as shown only while the overlay is going somewhere. The
+   * browser engine logs its own impressions from the page and has no such
+   * notion, so for it this is a no-op. Remembered here so an engine created or
+   * swapped later starts out with the right answer.
+   */
+  setStreamLive(live) {
+    this._streamLive = !!live;
+    for (const engine of [this._active, this._shadow]) {
+      if (engine && typeof engine.setStreamLive === "function") engine.setStreamLive(this._streamLive);
+    }
   }
 
   _stopPeriodicRefresh() {

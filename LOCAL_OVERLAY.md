@@ -155,13 +155,31 @@ keep that box on `OVERLAY_ENGINE=chromium`.
 
 **Impressions** are reported the way the web overlay reports them — one
 `ad_events` row per ad shown, throttled to one per ad per minute per camera,
-with the rotations inside that window carried as `rotation_count`. The web app embeds its
-ClickHouse credentials in a public bundle; this does not, so nothing is sent
-until `ADS_CLICKHOUSE_URL` and its password are set in `.env`, and
-`GET /api/overlay/engine` reports `ads.impressions.enabled` so that is visible
-from outside. **A box on the local engine with those unset renders ads and
-counts none of them.** A cloud function that writes the row server-side would be
-the better home for this and would keep the credentials off the device
+with the rotations inside that window carried as `rotation_count`. The row has
+the shape the web app inserts, so the two are comparable: `screen_id` stays
+`default`, and which box and camera it came from goes in the metadata
+(`{"source":"overlay","renderer":"device","device":"dp-stream-b1b5","camera":1}`).
+
+Three things are deliberately not counted:
+
+- **Anything drawn while the camera is not streaming.** The overlay producer
+  runs for as long as an overlay URL is configured, which on a venue box is
+  most of the day, and an ad drawn into a PNG no pipeline is reading has been
+  shown to nobody. `server.js` tells the producer when its stream starts and
+  stops (`setStreamLive`), and `GET /api/overlay/engine` reports the current
+  answer as `ads.counting`. Without it, every idle hour would bill the venue's
+  advertisers.
+- **Shadow renders** (`OVERLAY_SHADOW=1`) — the browser is the one on screen
+  then, and it is already counting.
+- **Two cameras at one venue are not deduplicated**: two streams are two
+  audiences, and the web counts per page for the same reason.
+
+The web app embeds its ClickHouse credentials in a public bundle; this does
+not, so nothing is sent until `ADS_CLICKHOUSE_URL` and its password are set in
+`.env`, and `GET /api/overlay/engine` reports `ads.impressions.enabled` so that
+is visible from outside. **A box on the local engine with those unset renders
+ads and counts none of them.** A cloud function writing the row server-side
+would be the better home for this and would keep the credentials off devices
 entirely — the device half would be the same two fields pointed at it.
 
 ## Rollback
