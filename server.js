@@ -3602,6 +3602,112 @@ function startCameraPresenceMonitor() {
     _cameraPresence[idx].present = dev ? fsSync.existsSync(dev) : null;
   }
   console.log("📷 Camera presence monitor started");
+  startKernelHealthMonitor();
+}
+
+// ── Will this box come back if it reboots? ──────────────────────────────────
+// A kernel with no initramfs boots to a panic: no dm/LVM, so the root volume
+// cannot be opened. Four boxes at Ariakon died that way on 2026-10-21, eight
+// days after the upgrade that armed them, and the only symptom in the meantime
+// was a line in a log nobody reads.
+//
+// dp-kernel-guard (migrations/0025) repairs what it can at boot and daily.
+// This is the other half: if a box is in a state that would brick it, somebody
+// hears about it while the box is still up and reachable.
+const KERNEL_HEALTH_POLL_MS = 60 * 60 * 1000;   // hourly; nothing here changes fast
+const KERNEL_GUARD_STATE = "/var/lib/digitalpool-camera/kernel-guard.json";
+const _kernelHealth = { bad: null };
+
+/** Kernels in /boot that have no initramfs, by release. */
+function _kernelsWithoutInitrd() {
+  let entries;
+  try {
+    entries = fsSync.readdirSync("/boot");
+  } catch (e) {
+    return [];                            // not a Linux box, or /boot unreadable
+  }
+  const missing = [];
+  for (const name of entries) {
+    if (!name.startsWith("vmlinuz-")) continue;
+    const release = name.slice("vmlinuz-".length);
+    // A vmlinuz with no module tree is a leftover, not something GRUB will run.
+    if (!fsSync.existsSync(`/lib/modules/${release}`)) continue;
+    if (!fsSync.existsSync(`/boot/initrd.img-${release}`)) missing.push(release);
+  }
+  return missing;
+}
+
+async function _pollKernelHealth() {
+  const missing = _kernelsWithoutInitrd();
+
+  // Packages left half-configured are how the missing initramfs happens in the
+  // first place, so they are worth reporting even while everything still boots.
+  let pending = 0;
+  try {
+    const { stdout } = await execAsync("dpkg --audit 2>/dev/null || true", { timeout: 10000 });
+    pending = stdout.split("\n").filter((l) => /^ [a-z]/.test(l)).length;
+  } catch (e) { /* dpkg missing or slow — the initrd check is the important one */ }
+
+  let guard = null;
+  try {
+    guard = JSON.parse(fsSync.readFileSync(KERNEL_GUARD_STATE, "utf8"));
+  } catch (e) { /* guard has not run yet, or is not installed on this box */ }
+
+  const bad = missing.length > 0 || (guard && guard.unbootable && guard.unbootable.length > 0);
+  const was = _kernelHealth.bad;
+  _kernelHealth.bad = bad;
+
+  if (bad) {
+    const detail =
+      `These kernels are installed but have no initramfs:\n` +
+      `  ${missing.join(", ") || (guard.unbootable || []).join(", ")}\n\n` +
+      `GRUB boots the newest kernel it finds. Without an initramfs there is no ` +
+      `dm/LVM, so the root volume cannot be opened and the box panics with\n` +
+      `  "Cannot open root device /dev/mapper/ubuntu--vg-ubuntu--lv".\n\n` +
+      `IT IS STILL RUNNING on the kernel it booted, and will keep running until ` +
+      `something reboots it — a watchdog, a power cut, an update.\n\n` +
+      `Fix it before that happens:\n` +
+      `  sudo /usr/local/sbin/dp-kernel-guard\n` +
+      `and if that cannot build one, run the migrations (0022/0023 cover the ` +
+      `aic8800 DKMS build that caused this the first time).` +
+      (pending ? `\n\n${pending} package(s) are also half-configured (dpkg --audit).` : "");
+    // force: this is the one alert that must not be swallowed by the throttle —
+    // the window between arming and bricking has been as long as eight days.
+    alerts.sendAlert({
+      eventClass: "service",
+      subject: "This box will NOT boot if it restarts",
+      detail,
+      key: "kernel-no-initrd",
+    });
+    if (was !== true) {
+      console.error(`🚨 Kernel(s) with no initramfs: ${missing.join(", ")} — ` +
+                    `this box will panic on its next reboot`);
+    }
+    return;
+  }
+
+  if (was === true) {
+    console.log("✅ Every installed kernel has an initramfs again");
+    alerts.sendAlert({
+      eventClass: "service",
+      subject: "Boot problem resolved — every kernel has an initramfs",
+      detail: "The box can reboot safely again.",
+      key: "kernel-initrd-ok",
+    });
+  }
+  if (was === null) {
+    const n = (guard && guard.checked && guard.checked.length) || "all";
+    console.log(`🐧 Kernel boot check: ${n} kernel(s) bootable` +
+                (pending ? `, ${pending} package(s) half-configured` : ""));
+  }
+}
+
+function startKernelHealthMonitor() {
+  const t = setInterval(() => { _pollKernelHealth().catch(() => {}); }, KERNEL_HEALTH_POLL_MS);
+  if (typeof t.unref === "function") t.unref();
+  // Not at startup: let the boot settle, and let dp-kernel-guard have its turn
+  // first so a box that repaired itself does not send an alert about it.
+  setTimeout(() => { _pollKernelHealth().catch(() => {}); }, 90000).unref?.();
 }
 
 // List the USB cameras that can actually be streamed from.
