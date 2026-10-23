@@ -83,8 +83,9 @@ also killed by the service's `ExecStopPost`).
 it is registered to holds a subscription, and *what* it may do depends on the package:
 a base plan can push to the venue's own YouTube/Facebook/RTMP and carries the DigitalPool
 branded overlay; the **Advanced Streaming** package adds the RTSP/SRT Server output modes
-our datacenter pulls, plus the venue's own overlays. Registration is refused without any
-subscription, and the entitlement is re-verified every 14 days (identity-based — the
+our datacenter pulls, plus the venue's own overlays. Registration needs *some* active
+subscription but not a camera one — somebody already paying DigitalPool should not have to
+buy a second plan to set a camera up — and the entitlement is re-verified every 14 days (identity-based — the
 password is never kept). Enforcement is one-sided on purpose: only an explicit "not
 subscribed" blocks immediately; an unreachable service changes nothing until the last good
 answer is 21 days stale; a feature flag the service does not mention is granted, not
