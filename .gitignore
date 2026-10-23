@@ -142,6 +142,7 @@ vite.config.ts.timestamp-*
 recording-config.json
 subscription.json
 branding.json
+table-names.json
 
 # Overlay conformance harness (dev tooling — generated artifacts)
 tools/overlay-conformance/node_modules/

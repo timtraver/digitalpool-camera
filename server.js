@@ -234,14 +234,64 @@ const alerts = new AlertMailer();
 // device can be registered (or moved to another venue) while the service runs,
 // and both helpers are hoisted function declarations so this is safe to install
 // before they appear in the file.
+// Which table each camera covers, for the alert subject lines.
+const tableNames = require("./tableNames");
+tableNames.configure(() => {
+  const cfg = loadRemoteConfig();
+  return { venueId: cfg.venueId || "", deviceName: getDeviceName() };
+});
+tableNames.start();
+
 alerts.setIdentity(() => {
   const cfg = loadRemoteConfig();
   return {
     venueName: cfg.venueName || "",
     deviceName: getDeviceName(),
     ownerEmail: cfg.ownerEmail || "",
+    tables: { 1: tableNameFor(1), 2: tableNameFor(2) },   // see tableNameFor()
   };
 });
+
+/**
+ * Which table a camera is pointed at, for the alert subject line.
+ *
+ * Taken from that camera's overlay URL, which carries the table slug
+ * (/venues/<venue>/tables/table-7/overlays/134) and is the only place this box
+ * knows it: registration records the venue, not the table. Parsed with
+ * parseOverlayUrl() rather than a regex of its own, so there stays one
+ * definition of what those URLs look like.
+ *
+ * Returns "" when no overlay is configured, and the subject then falls back to
+ * the hostname exactly as it did before.
+ */
+function tableNameFor(camIdx) {
+  // What DigitalPool says, which is per camera and survives a camera with no
+  // overlay configured — the usual state of the second camera on a venue box.
+  const known = tableNames.get(camIdx);
+  if (known) return known;
+
+  // Otherwise the camera's own overlay URL, which carries the table slug.
+  try {
+    const sc = camIdx === 2 ? streamController2 : streamController;
+    const url = sc && sc.streamConfig && sc.streamConfig.overlayUrl;
+    if (!url) return "";
+    const parsed = require("./overlayDataSource").parseOverlayUrl(url);
+    if (!parsed || !parsed.tableSlug) return "";
+    // "table-7" → "Table 7"; a venue that names its tables something else
+    // ("diamond-1") reads correctly too.
+    const label = parsed.tableSlug
+      .split("-")
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+    // Remember it, so an alert raised while DigitalPool is unreachable still
+    // names the table.
+    tableNames.seed(camIdx, label);
+    return label;
+  } catch (e) {
+    return "";
+  }
+}
 
 /** Short description of the deployed commit, for the service-started alert. */
 function _runningVersion() {
@@ -409,6 +459,7 @@ streamController.on("stalled", ({ seconds, detail }) => {
     detail: `The pipeline was still running but publishing nothing for ${seconds}s (${detail}).\n` +
             `It is being torn down and restarted automatically.`,
     key: "stream-stalled-1",
+    camera: 1,
   });
   streamController.killForRecovery(`stalled for ${seconds}s`);
 });
@@ -487,6 +538,7 @@ streamController2.on("stalled", ({ seconds, detail }) => {
     detail: `The pipeline was still running but publishing nothing for ${seconds}s (${detail}).\n` +
             `It is being torn down and restarted automatically.`,
     key: "stream-stalled-2",
+    camera: 2,
   });
   streamController2.killForRecovery(`stalled for ${seconds}s`);
 });
@@ -3567,6 +3619,7 @@ function _pollCameraPresence() {
           subject: `Camera ${idx} is back`,
           detail: `The device node ${dev} exists again.`,
           key: `camera-back-${idx}`,
+          camera: idx,
         });
       }
       state.present = true;
@@ -3584,6 +3637,7 @@ function _pollCameraPresence() {
                 `power, or has dropped off the USB bus without re-enumerating.\n` +
                 `Any stream on this camera will be down until it returns.`,
         key: `camera-gone-${idx}`,
+        camera: idx,
       });
       state.present = false;
     }
@@ -6670,6 +6724,7 @@ server.listen(PORT, async () => {
       subject: "Camera 1 failed to initialize at startup",
       detail: `The camera did not come up cleanly: ${error.message}`,
       key: "camera-init-1",
+      camera: 1,
     });
     cameraInitialized = true; // Allow commands even if init failed
   } finally {
@@ -6779,6 +6834,7 @@ server.listen(PORT, async () => {
           subject: "Camera 2 failed to initialize at startup",
           detail: `The camera did not come up cleanly: ${e.message}`,
           key: "camera-init-2",
+          camera: 2,
         });
         cameraInitialized2 = true; // allow commands even if PTZ init failed
       } finally {
@@ -7152,6 +7208,7 @@ async function _attemptStreamAutoResume(camIdx) {
           subject: `Camera ${camIdx} stream is back`,
           detail: `Auto-resume restarted the stream on attempt ${attempt + 1}.`,
           key: `stream-resumed-${camIdx}`,
+          camera: camIdx,
         });
         return;
       }
@@ -7171,6 +7228,7 @@ async function _attemptStreamAutoResume(camIdx) {
       detail: `Auto-resume tried ${_RESUME_BACKOFF_MS.length} times over ~2 minutes and gave up. ` +
               `The stream will stay down until someone starts it.`,
       key: `stream-gaveup-${camIdx}`,
+      camera: camIdx,
       force: true,
     });
   } catch (err) {
@@ -7222,6 +7280,7 @@ async function _handleStreamStopped(camIdx) {
       detail: "Nobody asked it to stop — the pipeline died on its own. Auto-resume is " +
               "trying to bring it back; a follow-up will say whether it worked.",
       key: `stream-unexpected-${camIdx}`,
+      camera: camIdx,
     });
     _attemptStreamAutoResume(camIdx);
     return;

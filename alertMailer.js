@@ -130,8 +130,14 @@ class AlertMailer {
   }
 
   /**
-   * Supply a function returning { venueName, deviceName, ownerEmail } — the
-   * venue this appliance sits in, for the subject line and the body.
+   * Supply a function returning { venueName, deviceName, ownerEmail, tables } —
+   * the venue this appliance sits in, for the subject line and the body.
+   *
+   * `tables` is optional: { 1: "Table 7", 2: "Table 8" }, the table each camera
+   * is pointed at. When a camera-specific alert knows its camera, the subject
+   * carries the TABLE rather than the hostname, because "dp-stream-2e27" means
+   * nothing to somebody reading mail on a phone and sends them to look up which
+   * table that box covers. The hostname is still in the body.
    *
    * A function, not a value, because registration can happen (or change) long
    * after boot: an alert sent at 09:00 should carry whatever the device knew at
@@ -143,8 +149,13 @@ class AlertMailer {
     this._identity = fn;
   }
 
-  /** Current identity, falling back to the hostname alone. */
-  _who() {
+  /**
+   * Current identity, falling back to the hostname alone.
+   *
+   * `camera` (1 or 2) names which camera an alert is about, so the subject can
+   * say which TABLE is affected.
+   */
+  _who(camera) {
     let info = {};
     try {
       if (this._identity) info = this._identity() || {};
@@ -153,13 +164,22 @@ class AlertMailer {
     }
     const device = (info.deviceName || "").trim() || this.deviceName;
     const venue = (info.venueName || "").trim();
+    const tables = info.tables || {};
+    const table = camera ? (tables[camera] || "").trim() : "";
+    // Every table this box covers, for alerts that are not about one camera.
+    const allTables = [...new Set(Object.values(tables).map((t) => (t || "").trim()).filter(Boolean))];
+
+    // What an operator needs to see first in a full inbox is where to go: the
+    // venue and the table. The hostname only answers that after a lookup, so it
+    // moves to the body and is the fallback for a camera with no table known.
+    const place = table || device;
     return {
       device,
       venue,
+      table,
+      allTables,
       owner: (info.ownerEmail || "").trim(),
-      // "Venue — device" is what an operator with several venues needs to see
-      // first in a full inbox; unregistered devices still get their hostname.
-      label: venue ? `${venue} — ${device}` : device,
+      label: venue ? `${venue} — ${place}` : place,
     };
   }
 
@@ -200,8 +220,11 @@ class AlertMailer {
    *                                   flapping camera coalesces instead of
    *                                   sending mail every 45 seconds
    * @param {boolean} [alert.force]    bypass the cooldown (not the hourly cap)
+   * @param {number} [alert.camera]    1 or 2, when the alert is about one
+   *                                   camera: puts that camera's table in the
+   *                                   subject instead of the hostname
    */
-  sendAlert({ eventClass, subject, detail = "", key, force = false }) {
+  sendAlert({ eventClass, subject, detail = "", key, force = false, camera = null }) {
     try {
       if (!this.enabled) return;
       if (this.events && !this.events.has(eventClass)) return;
@@ -231,15 +254,15 @@ class AlertMailer {
       this._lastSentAt.set(dedupeKey, now);
       this._sentTimes.push(now);
 
-      const who = this._who();
-      const body = this._composeBody({ eventClass, detail, suppressedCount, since: last, who });
+      const who = this._who(camera);
+      const body = this._composeBody({ eventClass, detail, suppressedCount, since: last, who, camera });
       this._deliver(`[${who.label}] ${subject}`, body, 0);
     } catch (e) {
       console.warn("📧 Alert failed to queue:", e.message);
     }
   }
 
-  _composeBody({ eventClass, detail, suppressedCount, since, who }) {
+  _composeBody({ eventClass, detail, suppressedCount, since, who, camera }) {
     const lines = [];
     if (detail) lines.push(detail, "");
     if (suppressedCount > 0) {
@@ -247,6 +270,9 @@ class AlertMailer {
                  `${new Date(since).toLocaleString()})`, "");
     }
     if (who.venue) lines.push(`Venue:   ${who.venue}`);
+    // The table first — it is what somebody acts on — then the box it is on.
+    if (camera && who.table) lines.push(`Table:   ${who.table} (camera ${camera})`);
+    else if (who.allTables.length) lines.push(`Tables:  ${who.allTables.join(", ")}`);
     lines.push(`Device:  ${who.device}`);
     if (who.owner) lines.push(`Owner:   ${who.owner}`);
     lines.push(`Event:   ${eventClass}`);
