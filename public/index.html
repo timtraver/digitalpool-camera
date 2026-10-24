@@ -1115,7 +1115,11 @@
                              autocomplete="email" style="font-size:12px" />
                       <label style="margin-top:10px">DigitalPool Password</label>
                       <div style="position:relative">
-                        <input type="password" id="regOwnerPassword" placeholder="••••••••"
+                        <!-- A dotted placeholder reads as a filled password field: people
+                             open this modal and see what looks like a saved credential in a
+                             box that is actually empty. Worded, like every other password
+                             input in this app. -->
+                        <input type="password" id="regOwnerPassword" placeholder="Account password"
                                autocomplete="current-password" style="font-size:12px;width:100%;padding-right:36px;box-sizing:border-box" />
                         <button type="button" id="regPasswordToggle" title="Show password" aria-label="Show password"
                                 style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:rgba(255,255,255,0.6);cursor:pointer;font-size:15px;line-height:1;padding:2px 4px">👁</button>
