@@ -97,6 +97,10 @@ class SkiaOverlay extends EventEmitter {
     // Whether this camera is actually streaming. Impressions are only counted
     // while it is — see _noteImpressions().
     this._streamLive = false;
+    // The other half of "could anybody have seen this ad": whether a match is
+    // being played. Kept as state so stats() can say which gate is shut.
+    this._matchLive = false;
+    this._lastMatchStatus = "";
     this.isRunning = false;
     this.pngPath = "/dev/shm/graphics-overlay.png";
     this._url = null;
@@ -522,13 +526,37 @@ class SkiaOverlay extends EventEmitter {
     return /-2\.png$/.test(this.pngPath || "") ? 2 : 1;
   }
 
+  /**
+   * Is a match actually being played on this table?
+   *
+   * The third thing an impression has to mean, after "the stream is up" and
+   * "somebody is receiving it": that there is something to receive. An Ariakon
+   * camera's consumer pulls 24 hours a day (checked 2026-10-26: connected since
+   * 00:47, 44 GB), so without this an empty table between events counts the
+   * same as a packed final.
+   *
+   * IN_PROGRESS is the only status that means play, and it is what the device's
+   * own tournament queries already filter on; a match sitting NOT_STARTED on
+   * the table is a match nobody is watching yet. An overlay with no match bound
+   * at all never counts, which is the same answer by a different route.
+   */
+  _matchIsLive(binding) {
+    return !!(binding && binding.match && binding.match.status === "IN_PROGRESS");
+  }
+
   /** Report the ads currently on screen, one per ad_center element. */
   _noteImpressions(binding, now) {
     if (this._shadow) return;
+    // Recorded before the gates, so a venue asking "why is my camera showing no
+    // impressions?" gets an answer out of /api/overlay/engine rather than a
+    // silence that looks the same whichever gate is shut.
+    this._lastMatchStatus = (binding && binding.match && binding.match.status) || "";
+    this._matchLive = this._matchIsLive(binding);
     // An ad is only counted when somebody could actually have seen it. This is
     // billing data: counting the hours a box sits idle with an overlay
     // configured would inflate every venue's numbers.
     if (!this._streamLive) return;
+    if (!this._matchLive) return;
     for (const el of (this._canvas && this._canvas.elements) || []) {
       if (el.visible === false || el.type !== "ad_center") continue;
       const ad = renderer.currentAd(el, binding, now);
@@ -769,7 +797,12 @@ class SkiaOverlay extends EventEmitter {
       watching: this._watchHealthy(),
       watch: dataSource.watchStats(),
       ads: this._hasAds ? {
-        counting: this._streamLive,
+        // All three gates, and which one is shut. `streamLive` is itself the
+        // stream being up AND something receiving it (see streamAudience.js).
+        counting: this._streamLive && this._matchLive,
+        streamLive: this._streamLive,
+        matchLive: this._matchLive,
+        matchStatus: this._lastMatchStatus || "",
         venues: this._ads ? Object.keys(this._ads).map(Number) : [],
         counts: this._ads ? Object.fromEntries(Object.entries(this._ads).map(([k, v]) => [k, v.length])) : {},
         errors: this._adErrors,

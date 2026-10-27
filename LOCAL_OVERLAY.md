@@ -181,10 +181,22 @@ Three things are deliberately not counted:
   never sees — both are assumed to have an audience while the stream is up,
   because guessing "nobody" from an absence of evidence would silently zero a
   venue that really is being watched.
+- **Anything drawn while no match is being played.** The consumer at Ariakon
+  pulls 24 hours a day (checked 2026-10-26: connected since 00:47, 44 GB), so
+  "somebody is receiving it" does not by itself mean there is anything to
+  receive. `IN_PROGRESS` is the only match status that counts — it is what the
+  device's own tournament queries already filter on, and a match sitting
+  `NOT_STARTED` on the table is one nobody is watching yet. An overlay with no
+  match bound never counts.
 - **Shadow renders** (`OVERLAY_SHADOW=1`) — the browser is the one on screen
   then, and it is already counting.
 - **Two cameras at one venue are not deduplicated**: two streams are two
   audiences, and the web counts per page for the same reason.
+
+`GET /api/overlay/engine` reports all three gates per camera — `ads.counting`
+is the answer, `ads.streamLive`, `ads.matchLive` and `ads.matchStatus` say
+which one is shut, and the top-level `audience` says why `streamLive` is what
+it is.
 
 Rows are POSTed to the `analyticsApi` cloud function's `/ad-events` route,
 which checks every field and inserts as ClickHouse's insert-only `dp_ingest`
