@@ -30,6 +30,15 @@ const { callDigitalPoolFunction } = require("./digitalpoolApi");
 const SCREEN_ID = "default";
 const SCREEN_ID_ARRAY = [SCREEN_ID];
 
+// What the impression is reported *as*, which is a different question from which
+// ads are eligible: these rows have to be tellable apart from a venue's TVs, or
+// a camera's numbers disappear into the venue's totals. screen_id is the column
+// the Ad Center already breaks ads down by (byScreen, unique_screens), so a
+// camera arrives as its own line in reports that exist, with no query to change.
+// Nothing filters on it, so a new value cannot hide a row.
+const REPORT_SCREEN_PREFIX = "camera";
+const MAX_SCREEN_ID = 100;   // analyticsIngest truncates past this
+
 // How often to re-ask for a venue's ads. The web component uses five minutes
 // and bumps the query's `current_time` on the same cadence, so an ad whose
 // start/end date crosses "now" comes and goes without a reload. A device runs
@@ -135,6 +144,18 @@ function deviceName() {
   } catch (e) {
     return "";
   }
+}
+
+/**
+ * The screen_id these impressions are reported under: "camera" for a box that
+ * has no name yet, "camera:<device>" for one that does. The prefix is what
+ * makes the whole class selectable (`screen_id LIKE 'camera:%'`) without
+ * knowing the fleet; the name is what makes one box's row readable in a
+ * report next to the venue's TVs.
+ */
+function reportScreenId(name = deviceName()) {
+  const id = name ? `${REPORT_SCREEN_PREFIX}:${name}` : REPORT_SCREEN_PREFIX;
+  return id.slice(0, MAX_SCREEN_ID);
 }
 
 function deviceVenueId() {
@@ -373,13 +394,15 @@ function chTimestamp(ms) {
  * Note that an ad is on screen. Called by the producer after a frame is drawn,
  * once per visible ad_center element.
  */
-function logImpression(ad, { venueId, screenId = SCREEN_ID, instance = "", now = Date.now(), metadata = {} } = {}) {
+function logImpression(ad, { venueId, screenId = null, instance = "", now = Date.now(), metadata = {} } = {}) {
   if (!ad || !ad.id || !venueId || !impressionsEnabled()) return false;
+  const name = deviceName();
+  const screen = screenId || reportScreenId(name);
   // `instance` only separates the throttle, never the row: two cameras at one
   // venue are two streams showing the ad to two audiences, and the web counts
   // them separately because each browser has its own throttle. Without it the
   // second camera's impressions would be swallowed by the first's window.
-  const key = `${ad.id}-${screenId}-${instance}`;
+  const key = `${ad.id}-${screen}-${instance}`;
   const seen = _throttle.get(key);
   if (seen && now - seen.at < THROTTLE_MS) {
     seen.rotations++;
@@ -388,16 +411,16 @@ function logImpression(ad, { venueId, screenId = SCREEN_ID, instance = "", now =
   const rotations = seen ? seen.rotations : 0;
   _throttle.set(key, { at: now, rotations: 0 });
 
-  // screen_id stays "default" because that is what the web overlay writes and
-  // the two should be comparable; which box and camera it came from goes in
-  // the metadata, where it answers "who showed this" without changing the
-  // shape of the row.
+  // The metadata says the same thing in finer grain than screen_id can: which
+  // box, which of its two cameras, and that a renderer rather than a browser
+  // drew it. `source` matches what the web overlay writes, so "every overlay
+  // impression" stays one query across both engines.
   const meta = {
     ad_title: ad.title,
     ad_type: ad.type,
     source: "overlay",
     renderer: "device",
-    ...(deviceName() ? { device: deviceName() } : {}),
+    ...(name ? { device: name } : {}),
     ...metadata,
   };
   if (rotations > 0) meta.rotation_count = rotations;
@@ -405,7 +428,7 @@ function logImpression(ad, { venueId, screenId = SCREEN_ID, instance = "", now =
     advertisement_id: ad.id,
     event_type: "impression",
     venue_id: venueId,
-    screen_id: screenId,
+    screen_id: screen,
     // The web overlay reports 'unknown' because a browser cannot tell what it
     // is running on. This one can.
     device_type: "monitor",
@@ -481,6 +504,7 @@ function impressionStats() {
 
 module.exports = {
   SCREEN_ID,
+  reportScreenId,
   REFRESH_MS,
   resolveAdVenueId,
   fallbackVenueId,

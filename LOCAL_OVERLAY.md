@@ -190,6 +190,44 @@ It is deliberately **not** `recordAdImpressions`. That one is a Firebase
 `dropped`, `buffered` and the last error — so whether a box is counting is
 visible from outside. Set `OVERLAY_AD_IMPRESSIONS=0` to stop a box reporting.
 
+### Telling a camera's impressions apart
+
+A camera's rows are reported under their own `screen_id` — `camera:<device>`,
+or `camera` on a box with no name yet — rather than the `default` that the
+venue's own screens write. That is the column the Ad Center already groups ads
+by (`byScreen`, `unique_screens`), so a camera shows up as its own line in
+reports that already exist, and nothing in the reader queries filters on it, so
+a new value cannot hide a row. `screen_id` for *reporting* is deliberately a
+different thing from the `default` screen the ad *query* asks as: a camera must
+keep matching only ads aimed at no particular screen.
+
+```sql
+-- every camera overlay impression at a venue
+SELECT screen_id, count() FROM ad_events
+WHERE venue_id = ? AND event_type = 'impression' AND screen_id LIKE 'camera%'
+GROUP BY screen_id;
+
+-- finer grain: which box, which of its two cameras
+SELECT JSONExtractString(metadata, 'device')  AS device,
+       JSONExtractInt(metadata, 'camera')     AS camera,
+       count()
+FROM ad_events WHERE event_type = 'impression' AND screen_id LIKE 'camera%'
+GROUP BY device, camera;
+```
+
+**This covers the local engine only.** `OVERLAY_ENGINE` defaults to `chromium`,
+and a browser-rendered overlay logs its own impressions from inside the page
+(AdCenterCarousel → useAdAnalytics), as `screen_id: 'default'`,
+`device_type: 'unknown'`, `metadata.source: 'overlay'`. So on a Chromium box the
+only marker is `source = 'overlay'`, which equally matches somebody running the
+same overlay URL in OBS. Closing that would mean the device passing a screen id
+in the overlay URL and the carousel honouring it — a change in both repos.
+
+Two more things that are true of the browser engine and not of this one: it has
+no `setStreamLive`, so it counts impressions through every idle hour the overlay
+page is loaded; and it writes `device_type: 'unknown'` where a device that knows
+what it is writes `monitor`.
+
 ## Rollback
 
 Three layers, fastest first:
