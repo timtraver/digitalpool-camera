@@ -174,13 +174,21 @@ Three things are deliberately not counted:
 - **Two cameras at one venue are not deduplicated**: two streams are two
   audiences, and the web counts per page for the same reason.
 
-The web app embeds its ClickHouse credentials in a public bundle; this does
-not, so nothing is sent until `ADS_CLICKHOUSE_URL` and its password are set in
-`.env`, and `GET /api/overlay/engine` reports `ads.impressions.enabled` so that
-is visible from outside. **A box on the local engine with those unset renders
-ads and counts none of them.** A cloud function writing the row server-side
-would be the better home for this and would keep the credentials off devices
-entirely — the device half would be the same two fields pointed at it.
+Rows are POSTed to the `analyticsApi` cloud function's `/ad-events` route,
+which checks every field and inserts as ClickHouse's insert-only `dp_ingest`
+user — the password is a Google secret, server-side, and no database credential
+lives on a device. That route is built for venue screens nobody signs in on, so
+it accepts an anonymous POST, which is all the appliance can make: registration
+keeps an identity, never a password.
+
+It is deliberately **not** `recordAdImpressions`. That one is a Firebase
+*callable* for the mobile app's match camera: it rejects a call without
+`request.auth.uid` and labels its rows `match_camera`. Both write the same
+`ad_events` table, so the Ad Center's reports count these either way.
+
+`GET /api/overlay/engine` reports `ads.impressions` — `enabled`, `sent`,
+`dropped`, `buffered` and the last error — so whether a box is counting is
+visible from outside. Set `OVERLAY_AD_IMPRESSIONS=0` to stop a box reporting.
 
 ## Rollback
 

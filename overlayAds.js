@@ -20,6 +20,7 @@ const fs = require("fs");
 const path = require("path");
 
 const dataSource = require("./overlayDataSource");
+const { callDigitalPoolFunction } = require("./digitalpoolApi");
 
 // An overlay is not an Ad Center screen, so it queries as the venue's default
 // screen — which matches only ads with no target screens, i.e. the ones meant
@@ -322,22 +323,21 @@ function adsSignature(adsByVenue) {
 }
 
 // ── Impressions ──────────────────────────────────────────────────────────────
-// The web overlay logs one impression per ad shown, inserted straight into
-// ClickHouse (src/services/clickhouseAnalyticsService.js). A device drawing the
-// same ads has to log them too, or every box moved to the local renderer would
+// The web overlay logs one impression per ad shown. A device drawing the same
+// ads has to log them too, or every box moved to the local renderer would
 // quietly stop counting toward what the venue is being paid for.
 //
-// The web app can embed the credentials because its bundle is public anyway.
-// This does not: the endpoint is configured in .env and, with nothing
-// configured, impressions are simply not sent (and say so in stats). See
-// LOCAL_OVERLAY.md — a cloud function that writes them server-side would be
-// the better home for this, and would let the credentials off the device
-// entirely.
-const CH_URL = (process.env.ADS_CLICKHOUSE_URL || "").replace(/\/$/, "");
-const CH_USER = process.env.ADS_CLICKHOUSE_USER || "default";
-const CH_PASSWORD = process.env.ADS_CLICKHOUSE_PASSWORD || "";
-const CH_DATABASE = process.env.ADS_CLICKHOUSE_DATABASE || "default";
-const CH_TABLE = process.env.ADS_CLICKHOUSE_TABLE || "ad_events";
+// Both now go through the cloud: POST to analyticsApi's /ad-events, which
+// checks each row field by field and inserts it as ClickHouse's insert-only
+// dp_ingest user (the password is a Google secret, server-side). That route
+// exists for exactly this — venue screens nobody signs in on — so it takes an
+// anonymous POST, which is what the appliance can do: registration keeps an
+// identity, never a password, so there is no Firebase token here.
+//
+// It is not recordAdImpressions: that one is a *callable* for the mobile app's
+// match camera and rejects anything without request.auth.uid. Both write the
+// same ad_events table, so the Ad Center's reports count these either way.
+const AD_EVENTS_FUNCTION = "analyticsApi/ad-events";
 
 // Mirrors useAdAnalytics: at most one impression event per ad per screen per
 // minute, with the rotations that happened inside the window carried on the
@@ -354,12 +354,15 @@ let _sent = 0;
 let _dropped = 0;
 let _lastError = null;
 
+// Nothing to configure — the endpoint is the one the device already talks to.
+// The switch is here only so a box can be told to stop reporting (a bench unit
+// rehearsing an overlay should not bill a venue's ad for the impressions).
 function impressionsEnabled() {
-  return !!CH_URL;
+  return process.env.OVERLAY_AD_IMPRESSIONS !== "0";
 }
 
 function chTimestamp(ms) {
-  // ClickHouse DateTime wants 'YYYY-MM-DD HH:MM:SS' in the column's timezone;
+  // The ad_events timestamp is 'YYYY-MM-DD HH:MM:SS' in the column's timezone;
   // the web app formats local time with dayjs, so do the same.
   const d = new Date(ms);
   const p = (n) => String(n).padStart(2, "0");
@@ -425,7 +428,7 @@ function ensureFlushTimer() {
 }
 
 /**
- * Post the buffered rows as one insert. Failures are dropped rather than
+ * Post the buffered rows as one batch. Failures are dropped rather than
  * retried forever: these are analytics, and a venue box that has been offline
  * for a day must not come back and replay a day of impressions with the wrong
  * timestamps still queued in memory.
@@ -433,20 +436,27 @@ function ensureFlushTimer() {
 async function flushImpressions() {
   if (!_buffer.length || !impressionsEnabled()) return;
   const rows = _buffer.splice(0, _buffer.length);
-  const query = encodeURIComponent(`INSERT INTO ${CH_DATABASE}.${CH_TABLE} FORMAT JSONEachRow`);
   try {
-    const res = await fetch(`${CH_URL}/?query=${query}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Basic ${Buffer.from(`${CH_USER}:${CH_PASSWORD}`).toString("base64")}`,
-      },
-      body: rows.map((r) => JSON.stringify(r)).join("\n"),
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
-    _sent += rows.length;
-    _lastError = null;
+    const { statusCode, body } = await callDigitalPoolFunction(
+      AD_EVENTS_FUNCTION,
+      { events: rows },
+      { timeout: 15000 },
+    );
+    if (statusCode !== 200) {
+      throw new Error(`HTTP ${statusCode} ${(body && (body.error || body.raw)) || ""}`.trim());
+    }
+    // The route drops a row it cannot make an ad_events row out of and still
+    // answers 200. Silently losing impressions is the failure that would never
+    // be noticed, so count them as dropped like any other.
+    const accepted = Number.isInteger(body && body.accepted) ? body.accepted : rows.length;
+    _sent += accepted;
+    if (accepted < rows.length) {
+      _dropped += rows.length - accepted;
+      _lastError = `${rows.length - accepted} of ${rows.length} events rejected`;
+      console.log(`⚠️  Ad impressions rejected: ${_lastError}`);
+    } else {
+      _lastError = null;
+    }
   } catch (err) {
     _dropped += rows.length;
     _lastError = err.message;
@@ -461,6 +471,7 @@ async function flushImpressions() {
 function impressionStats() {
   return {
     enabled: impressionsEnabled(),
+    endpoint: AD_EVENTS_FUNCTION,
     sent: _sent,
     dropped: _dropped,
     buffered: _buffer.length,
