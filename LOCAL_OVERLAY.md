@@ -169,6 +169,18 @@ Three things are deliberately not counted:
   stops (`setStreamLive`), and `GET /api/overlay/engine` reports the current
   answer as `ads.counting`. Without it, every idle hour would bill the venue's
   advertisers.
+- **Anything streamed to nobody.** Streaming is necessary but not sufficient:
+  the box publishes whether or not anything is pulling. Checked on 2026-10-26,
+  all three Ariakon boxes had a reader on `live` and none on `live2` — their
+  second camera had been encoding to an empty room all day. `streamAudience.js`
+  polls MediaMTX for readers in `read` state on that camera's path, ignoring
+  loopback (the local recorder reads over 127.0.0.1) and the AP hotspot (the
+  operator's tablet), and `GET /api/overlay/engine` reports the evidence under
+  `audience`. **Only `rtsp` can be measured this way**: a push output connects
+  outward, and `srt` is served by the pipeline's own srtsink, which MediaMTX
+  never sees — both are assumed to have an audience while the stream is up,
+  because guessing "nobody" from an absence of evidence would silently zero a
+  venue that really is being watched.
 - **Shadow renders** (`OVERLAY_SHADOW=1`) — the browser is the one on screen
   then, and it is already counting.
 - **Two cameras at one venue are not deduplicated**: two streams are two

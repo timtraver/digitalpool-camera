@@ -21,6 +21,7 @@ const StreamController = require("./streamController");
 const WifiManager = require("./wifiManager");
 const authManager = require("./authManager");
 const { RecordingManager, safeRecordingName } = require("./recordingManager");
+const { StreamAudience } = require("./streamAudience");
 const { AlertMailer } = require("./alertMailer");
 const { callDigitalPoolFunction } = require("./digitalpoolApi");
 const subscriptionManager = require("./subscriptionManager");
@@ -33,6 +34,26 @@ const recordingManager = new RecordingManager([
   { path: "live",  label: "cam1", streamId: 1 },
   { path: "live2", label: "cam2", streamId: 2 },
 ]);
+
+// Whether anything is actually receiving each camera's stream. Only the local
+// overlay renderer uses it, and only to decide whether an Ad Center ad it drew
+// counts as an impression. Both helpers it leans on are hoisted declarations,
+// so installing the callbacks here, above their definitions, is safe.
+const streamAudience = new StreamAudience({
+  get: (apiPath) => mediamtxGet(apiPath),
+  cameras: () => [
+    { index: 1, controller: streamController },
+    { index: 2, controller: streamController2 },
+  ]
+    .filter((c) => c.controller)
+    .map((c) => ({
+      index: c.index,
+      path: c.controller.mediamtxPathName,
+      protocol: (c.controller.streamConfig && c.controller.streamConfig.protocol) || "",
+      streaming: !!c.controller.isStreaming,
+    })),
+  onChange: (index) => syncOverlayStreamLive(index),
+});
 
 // Graphics overlay producer.
 //
@@ -3135,7 +3156,11 @@ function syncOverlayStreamLive(camIdx) {
   const producer = camIdx === 2 ? puppeteerOverlay2 : puppeteerOverlay;
   const sc = camIdx === 2 ? streamController2 : streamController;
   if (producer && typeof producer.setStreamLive === "function") {
-    producer.setStreamLive(!!(sc && sc.isStreaming));
+    // Streaming is necessary but not sufficient: a box publishes whether or not
+    // anything is pulling, and on 2026-10-26 every Ariakon box was encoding
+    // camera 2 to zero readers. An ad shown into a stream nobody is receiving
+    // has been shown to nobody — see streamAudience.js.
+    producer.setStreamLive(!!(sc && sc.isStreaming) && streamAudience.has(camIdx));
   }
 }
 
@@ -3178,6 +3203,9 @@ app.get("/api/overlay/engine", requireAuth, (req, res) => {
       1: forCamera(puppeteerOverlay),
       2: forCamera(puppeteerOverlay2),
     },
+    // Why a camera is or is not counting impressions: `ads.counting` in the
+    // camera stats is the answer, this is the evidence behind it.
+    audience: streamAudience.stats(),
   });
 });
 
@@ -6527,6 +6555,7 @@ server.listen(PORT, async () => {
   recordingManager.start().catch((err) =>
     console.error("⚠️  Failed to start recording manager:", err.message)
   );
+  streamAudience.start();
   // Recurring subscription verification (first attempt ~90 s after boot).
   subscriptionManager.start();
   console.log(`Camera device: ${CAMERA_DEVICE}`);
