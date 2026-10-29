@@ -2508,6 +2508,32 @@ footer {
   background: rgba(74, 222, 128, 0.1);
   border-color: rgba(74, 222, 128, 0.4);
 }
+/* The address to come back to. Monospace and selectable: on a phone this is
+   something to read off and type into another device, or long-press to copy. */
+.wiz-urls {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  color: #7dd3fc;
+  user-select: all;
+  word-break: break-all;
+}
+.wiz-url + .wiz-url { margin-top: 6px; }
+.wiz-url-tag {
+  font-family: inherit;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  margin-left: 8px;
+  user-select: none;
+  /* The container breaks anywhere so a long address fits; this label must not
+     be broken with it ("network cabl / e"). */
+  display: inline-block;
+  white-space: nowrap;
+}
 
 /* The wizard is read on a phone, standing at the camera — not on a desktop at
    normal reading distance. Everything goes up a size there. */
@@ -2516,6 +2542,7 @@ footer {
   .wiz-slogan { font-size: 15px; }
   .wiz-body   { font-size: 16px; line-height: 1.7; }
   .wiz-status { font-size: 16px; }
-  .wiz-step   { font-size: 11px; padding: 8px 4px; }
+  .wiz-step   { font-size: 11px; padding: 8px 2px; letter-spacing: 0; }
+  .wiz-urls   { font-size: 16px; }
   .wiz-actions .btn-wifi-action { font-size: 16px; padding: 13px 12px; }
 }

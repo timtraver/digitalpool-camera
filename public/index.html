@@ -1519,6 +1519,7 @@
               <span class="wiz-step" id="wizTab1">1 · Welcome</span>
               <span class="wiz-step" id="wizTab2">2 · Network</span>
               <span class="wiz-step" id="wizTab3">3 · Register</span>
+              <span class="wiz-step" id="wizTab4">4 · Done</span>
             </div>
 
             <!-- Step 1 -->
@@ -1566,6 +1567,28 @@
               </div>
               <div class="wiz-actions">
                 <button class="btn-wifi-action" id="wizRegisterBtn">Register this camera →</button>
+              </div>
+            </div>
+
+            <!-- Step 4 -->
+            <div class="wiz-pane" id="wizPane4">
+              <div class="wiz-lead">You're all set.</div>
+              <div class="wiz-status online"><span>🟢</span><span id="wizDoneText">This camera is registered and ready.</span></div>
+              <div class="wiz-body">
+                You don't need the camera's own WiFi from here on. Put your phone or laptop
+                back on your normal network and open this same page in any browser:
+              </div>
+              <div class="wiz-urls" id="wizUrls">—</div>
+              <div class="wiz-body" id="wizUrlHint">
+                Worth bookmarking — it is how you point the camera and check on it later.
+              </div>
+              <div class="wiz-body">
+                <strong>To go live:</strong> open <strong>🎥 Stream Server</strong>, choose where
+                the stream should go, and press Start.
+              </div>
+              <div class="wiz-actions">
+                <button class="btn-wifi-action" id="wizStreamBtn">🎥 Go to Stream Server</button>
+                <button class="btn-wifi-action" id="wizDoneBtn">Finish</button>
               </div>
             </div>
           </div>

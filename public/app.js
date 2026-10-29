@@ -6380,7 +6380,7 @@ loadDeviceIp();
 
     function setWizardStep(n) {
       wizardStep = n;
-      for (const i of [1, 2, 3]) {
+      for (const i of [1, 2, 3, 4]) {
         const tab  = document.getElementById(`wizTab${i}`);
         const pane = document.getElementById(`wizPane${i}`);
         if (pane) pane.classList.toggle("active", i === n);
@@ -6398,6 +6398,54 @@ loadDeviceIp();
           const el = document.getElementById("wizOnlineText");
           if (el) el.textContent = how;
         });
+      }
+      if (n === 4) showAccessUrls();
+    }
+
+    /**
+     * Where to find this page again once the operator leaves the camera's WiFi.
+     *
+     * Shown as text rather than links on purpose: while they are still on the
+     * hotspot there is no route to these addresses, and a link that fails when
+     * tapped teaches them the address is wrong when it is the network that is.
+     *
+     * The hotspot's own 192.168.50.1 is left out — that is the address they are
+     * on now, and the whole point of this step is the one that works afterwards.
+     * So is the NetBird address, which answers only from inside the VPN.
+     */
+    async function showAccessUrls() {
+      const box  = document.getElementById("wizUrls");
+      const hint = document.getElementById("wizUrlHint");
+      if (!box) return;
+      let addresses = [];
+      try {
+        const r = await fetch("/api/network");
+        const d = await r.json();
+        addresses = (d.addresses || [])
+          .filter((a) => !String(a.address).startsWith("192.168.50."))
+          .filter((a) => !/^wt/.test(a.interface));
+      } catch { /* leave the list empty and say so below */ }
+
+      if (!addresses.length) {
+        box.textContent = "http://<the camera's address on your network>:3000";
+        if (hint) {
+          hint.textContent = "The camera has no address on your network yet. Once it is on "
+            + "your WiFi or plugged into your router, its address appears here and under "
+            + "Network & WiFi Setup.";
+        }
+        return;
+      }
+      box.innerHTML = "";
+      for (const a of addresses) {
+        const row = document.createElement("div");
+        row.className = "wiz-url";
+        row.textContent = `http://${a.address}:3000`;
+        const how = /^(en|eth)/.test(a.interface) ? "network cable" : /^wl/.test(a.interface) ? "WiFi" : a.interface;
+        const tag = document.createElement("span");
+        tag.className = "wiz-url-tag";
+        tag.textContent = how;
+        row.appendChild(tag);
+        box.appendChild(row);
       }
     }
 
@@ -6464,13 +6512,18 @@ loadDeviceIp();
     document.getElementById("wizWifiBtn")?.addEventListener("click", () => {
       // The WiFi picker lives in the settings panel; sending them there beats a
       // second copy of it that could drift from the first.
-      closeWizard();
       goToNetworkSetup(true);
+    });
+    document.getElementById("wizStreamBtn")?.addEventListener("click", () => {
+      // Same reasoning as the WiFi button: the real control is one card down the
+      // page, and a new operator has no idea it is there.
+      goToPanel("streamServerToggle", "streamServerBody", "streamServerChevron");
     });
     document.getElementById("wizRegisterBtn")?.addEventListener("click", () => {
       closeWizard();
       openRegModal();
     });
+    document.getElementById("wizDoneBtn")?.addEventListener("click", () => closeWizard());
 
     /**
      * Send the operator to "Network & WiFi Setup": close the modal so the panel
@@ -6482,12 +6535,18 @@ loadDeviceIp();
      * that the box is broken.
      */
     function goToNetworkSetup(explain = false) {
-      closeRegModal();
-      const toggle  = document.getElementById("wifiPanelToggle");
-      const body    = document.getElementById("wifiPanelBody");
-      const chevron = document.getElementById("wifiChevron");
-      const notice  = document.getElementById("netFirstNotice");
+      const notice = document.getElementById("netFirstNotice");
       if (notice) notice.style.display = explain ? "" : "none";
+      goToPanel("wifiPanelToggle", "wifiPanelBody", "wifiChevron");
+    }
+
+    /** Close whatever is covering the page, open that settings card, scroll to it. */
+    function goToPanel(toggleId, bodyId, chevronId) {
+      closeRegModal();
+      closeWizard();
+      const toggle  = document.getElementById(toggleId);
+      const body    = document.getElementById(bodyId);
+      const chevron = document.getElementById(chevronId);
       if (!toggle || !body) return;
       if (body.style.display === "none") {
         body.style.display = "block";
@@ -6692,6 +6751,13 @@ loadDeviceIp();
         showRegMsg(`✅ Registered — NetBird IP: ${d.ip}`);
         showRegistered(d);
         refreshNetbirdStatus?.();
+        // Last thing the wizard does: the operator is about to leave the
+        // camera's hotspot, and nothing has told them how to get back to this
+        // page from their own computer.
+        const venue = d.venueName || d.venue || "";
+        const done = document.getElementById("wizDoneText");
+        if (done) done.textContent = venue ? `Registered to ${venue}.` : "This camera is registered and ready.";
+        openWizard(4);
         return;
       }
       if (d.needVenue) {
