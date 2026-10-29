@@ -2093,7 +2093,14 @@ let deviceLocalIP = null;
 
 // Helper: update the connection info box based on protocol and IP
 function updateConnectionInfo(protocol, ip) {
-  const resolvedIP = ip || deviceLocalIP || "device-ip";
+  const resolved   = ip || deviceLocalIP || null;
+  const resolvedIP = resolved || "device-ip";
+  // No address yet is a state, not an error: say so rather than printing the
+  // alternative URLs for an address that does not exist.
+  const waiting    = !resolved;
+  const waitingNote = `<span style="color:rgba(251,191,36,0.85);font-size:10px">`
+    + `Waiting for a network — plug in a cable or join WiFi above, and this fills itself in.`
+    + `</span>`;
   // Per-camera path and port — Camera 2 uses /live2, :8892; Camera 1 uses /live, :8891
   const rtspSuffix = activeCamIndex === 2 ? "live2" : "live";
   const srtPort    = activeCamIndex === 2 ? 8892 : 8891;
@@ -2103,7 +2110,7 @@ function updateConnectionInfo(protocol, ip) {
     if (youtubeKeyRow)  youtubeKeyRow.style.display  = "none";
     if (youtubeKeyHint) youtubeKeyHint.style.display = "none";
     connectionUrlEl.textContent = `rtsp://${resolvedIP}:8554/${rtspSuffix}`;
-    connectionInfoExtra.innerHTML =
+    connectionInfoExtra.innerHTML = waiting ? waitingNote :
       `<span style="color:rgba(255,255,255,0.45);font-size:10px">` +
       `Also: HLS → <code style="font-size:10px">http://${resolvedIP}:8888/${rtspSuffix}</code>` +
       `&nbsp;&nbsp;SRT → <code style="font-size:10px">srt://${resolvedIP}:8890?streamid=read:${rtspSuffix}</code>` +
@@ -2114,7 +2121,7 @@ function updateConnectionInfo(protocol, ip) {
     if (youtubeKeyRow)  youtubeKeyRow.style.display  = "none";
     if (youtubeKeyHint) youtubeKeyHint.style.display = "none";
     connectionUrlEl.textContent = `srt://${resolvedIP}:${srtPort}`;
-    connectionInfoExtra.innerHTML =
+    connectionInfoExtra.innerHTML = waiting ? waitingNote :
       `<span style="color:rgba(255,255,255,0.45);font-size:10px">` +
       `Listener mode — clients connect directly to this device` +
       `</span>`;
@@ -5063,25 +5070,52 @@ loadStreamConfig().then(() => {
 // the correct address for OBS and other clients, even when the admin UI
 // is being viewed from the WiFi hotspot (192.168.50.1).
 const AP_IP = "192.168.50.1";
+
+/**
+ * The address other machines use to reach this camera, or null when it has
+ * none yet.
+ *
+ * The hotspot's own address is never it. This used to fall back to the first
+ * address on the box, which on a camera with no network is 192.168.50.1 — so
+ * "Connect Local Clients To" offered the admin's own hotspot, an address no
+ * client on the venue network can reach. A placeholder says "not yet"; a wrong
+ * address says "here", and gets pasted into OBS.
+ */
+function pickDeviceAddress(addresses) {
+  const usable = (addresses || []).filter((a) => a.address !== AP_IP && !String(a.address).startsWith("192.168.50."));
+  if (!usable.length) return null;
+  const eth = usable.filter((a) => /^e(th|n)/.test(a.interface));
+  return ((eth.find((a) => a.primary) || eth[0]) || usable[0]).address;
+}
+
 async function loadDeviceIp() {
   try {
     const response = await fetch("/api/network");
     const data = await response.json();
-    if (data.success && data.addresses.length > 0) {
-      // Priority: 1) Primary ethernet (default-route iface), 2) any ethernet,
-      // 3) any non-AP address, 4) first address
-      const ethAddrs  = data.addresses.filter(a => /^e(th|n)/.test(a.interface));
-      const primaryEth = ethAddrs.find(a => a.primary) || ethAddrs[0];
-      const nonAp     = data.addresses.find(a => a.address !== AP_IP);
-      deviceLocalIP   = (primaryEth || nonAp || data.addresses[0]).address;
-    }
+    const next = data.success ? pickDeviceAddress(data.addresses) : null;
+    const changed = next !== deviceLocalIP;
+    deviceLocalIP = next;
     // Refresh connection info box with resolved IP
     updateConnectionInfo(streamProtocol.value, deviceLocalIP);
+    if (changed) {
+      console.log(`🌐 Device address is now ${deviceLocalIP || "(none)"} — refreshed the client URLs`);
+      // Anything else showing an address — the wizard's finishing step prints
+      // the same one — hears about it here rather than polling on its own.
+      document.dispatchEvent(new CustomEvent("dp:address-changed", { detail: { address: deviceLocalIP } }));
+    }
+    return changed;
   } catch (error) {
     console.error("❌ Error loading device IP:", error);
+    return false;
   }
 }
 loadDeviceIp();
+
+// A camera's address changes under a page that is already open: it gets plugged
+// in, moves to another WiFi, or its lease changes. Nothing reloads the page when
+// that happens — the operator is usually looking at it over the hotspot, which
+// is exactly the case where the address was wrong to begin with.
+setInterval(loadDeviceIp, 15000);
 
 // ═══════════════════════════════════════════════════════════════
 //  WiFi / Hotspot Panel
@@ -5288,6 +5322,9 @@ loadDeviceIp();
         showWifiMsg(`✅ Connected to ${ssid}`);
         if (wifiConnectDetails) wifiConnectDetails.open = false;
         await loadWifiClientStatus();
+        // The address almost certainly just changed; do not make them wait for
+        // the poll, or worse, reload the page to find out.
+        await loadDeviceIp();
       } else {
         showWifiMsg(`❌ ${d.error || "Connection failed"}`, true);
       }
@@ -5309,6 +5346,7 @@ loadDeviceIp();
       if (d.success) {
         showWifiMsg("✅ Disconnected");
         await loadWifiClientStatus();
+        await loadDeviceIp();
       } else {
         showWifiMsg(`❌ ${d.error}`, true);
       }
@@ -6595,6 +6633,10 @@ loadDeviceIp();
       openRegModal();
     });
     document.getElementById("wizDoneBtn")?.addEventListener("click", () => closeWizard());
+    // The address this step prints is the one that just changed under it.
+    document.addEventListener("dp:address-changed", () => {
+      if (wizardStep === 4) showAccessUrls();
+    });
 
     /**
      * Send the operator to "Network & WiFi Setup": close the modal so the panel
