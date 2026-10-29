@@ -192,7 +192,21 @@ sync
 # ── Stream the root filesystem to stdout ───────────────────────────────────────
 # --one-file-system keeps us on the root fs only; the separate mounts above are
 # already archived under $META_DIR (which lives on the root fs, so it rides along
-# inside this tar).  Exclusions: pseudo/volatile trees, caches, logs, swap.
+# inside this tar).  Exclusions: pseudo/volatile trees, caches, logs, swap, and
+# every WiFi profile.
+#
+# The WiFi exclusion is not tidiness — it is the master's secrets. NetworkManager
+# on Ubuntu stores each connection as /etc/netplan/90-NM-<uuid>.yaml (this box's
+# /etc/NetworkManager/system-connections is empty), and a wireless one carries its
+# PSK in clear. Capturing those shipped the image-builder's own WiFi password to
+# every unit built from it, and every unit then tried to join that network on
+# sight. The hotspot profile goes for the same reason in reverse: a clone that
+# inherits it keeps broadcasting the MASTER's SSID, because wifiManager only
+# derives the per-unit name when it CREATES the profile. With none present, the
+# app builds a fresh hotspot named after the new unit on first start.
+#
+# 50-cloud-init.yaml is deliberately NOT excluded: that is the base ethernet
+# config, has no secrets, and the unit needs it to come up on a cable.
 log "Streaming root filesystem (this is the long part)…"
 exec tar --numeric-owner --xattrs --acls -p -S --one-file-system \
     --warning=no-file-changed --ignore-failed-read \
@@ -207,5 +221,8 @@ exec tar --numeric-owner --xattrs --acls -p -S --one-file-system \
     --exclude='./root/.cache/*' \
     --exclude='./home/dp/system-images' \
     --exclude='./var/lib/digitalpool-camera/recordings/*' \
+    --exclude='./etc/netplan/90-NM-*.yaml' \
+    --exclude='./etc/NetworkManager/system-connections/*' \
+    --exclude='./var/lib/NetworkManager/*' \
     -I 'zstd -T0 -3' \
     -C / -cf - .

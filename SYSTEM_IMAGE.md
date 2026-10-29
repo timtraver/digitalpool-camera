@@ -275,6 +275,14 @@ register it under Remote Access.
 
 ## What the clone resets vs. keeps
 
+**Never captured** (see the exclude list in `dp-create-image.sh`): WiFi profiles.
+NetworkManager stores each connection as `/etc/netplan/90-NM-<uuid>.yaml`, and a
+wireless one holds its PSK in clear — so capturing them put the image-builder's
+own WiFi password on every unit shipped, and each unit tried to join that network
+on sight. `50-cloud-init.yaml` is kept: that is the base ethernet config, and on
+these boxes the wired NIC is `unmanaged` by NetworkManager, so excluding NM
+profiles costs the clone nothing on a cable.
+
 **Reset per unit** (see `dp-firstboot.sh`): machine-id, SSH host keys, hostname,
 NetBird peer, WiFi profiles (hotspot + saved networks), `SESSION_SECRET`, and all
 app state (`users.json`, `camera-config*`, `stream-config*`, `remote.json`,

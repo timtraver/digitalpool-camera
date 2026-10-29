@@ -778,6 +778,17 @@
             <span class="settings-card-chevron" id="wifiChevron">▼</span>
           </div>
           <div class="settings-card-body" id="wifiPanelBody">
+              <!-- Shown when an unregistered device was sent here instead of to the
+                   registration modal: it has no way to reach DigitalPool yet. -->
+              <div id="netFirstNotice" style="display:none;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.4);border-radius:6px;padding:12px;margin-bottom:12px">
+                <div style="color:rgba(147,197,253,0.95);font-size:13px;font-weight:600;margin-bottom:4px">📶 Connect this camera to a network first</div>
+                <div style="color:rgba(255,255,255,0.6);font-size:11px;line-height:1.5">
+                  You are connected to the camera's own hotspot, which has no route to the internet.
+                  Plug in an Ethernet cable or join a WiFi network below — registration opens by
+                  itself once the camera can reach DigitalPool.
+                </div>
+              </div>
+
               <!-- Two-column grid: Hotspot info | Client WiFi -->
               <div class="wifi-grid">
 

@@ -6370,6 +6370,33 @@ loadDeviceIp();
     function openRegModal()  { if (regModal) regModal.style.display = "flex"; }
     function closeRegModal() { if (regModal) regModal.style.display = "none"; }
 
+    /**
+     * Send the operator to "Network & WiFi Setup": close the modal so the panel
+     * is reachable, expand it if collapsed, and scroll to it.
+     *
+     * `explain` adds the banner saying why they are here, for the case where
+     * they were sent rather than came — a device with no network cannot be
+     * registered, and asking for a DigitalPool password first only teaches them
+     * that the box is broken.
+     */
+    function goToNetworkSetup(explain = false) {
+      closeRegModal();
+      const toggle  = document.getElementById("wifiPanelToggle");
+      const body    = document.getElementById("wifiPanelBody");
+      const chevron = document.getElementById("wifiChevron");
+      const notice  = document.getElementById("netFirstNotice");
+      if (notice) notice.style.display = explain ? "" : "none";
+      if (!toggle || !body) return;
+      if (body.style.display === "none") {
+        body.style.display = "block";
+        if (chevron) chevron.textContent = "▼";
+      }
+      // Wait a tick so layout reflows before scrolling.
+      requestAnimationFrame(() => {
+        toggle.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+
     function showRegMsg(text, isError = false) {
       if (!regMsg) return;
       regMsg.textContent = text;
@@ -6446,8 +6473,13 @@ loadDeviceIp();
                 clearInterval(noInternetPoll); noInternetPoll = null;
                 showRegistered(d);
               } else if (d.hasInternet) {
+                // A network arrived. NOW is the moment to ask them to register:
+                // the step is finally possible, and they are still at the box.
                 clearInterval(noInternetPoll); noInternetPoll = null;
+                const notice = document.getElementById("netFirstNotice");
+                if (notice) notice.style.display = "none";
                 showUnregistered(true);
+                openRegModal();
               }
             } catch { /* ignore — keep polling */ }
           }, 15000);
@@ -6466,11 +6498,18 @@ loadDeviceIp();
         showRegistered(d);
       } else {
         showUnregistered(d.hasInternet);
-        openRegModal();   // registration is required — bring it front-and-center
+        // A box fresh out of the box has no network: the operator is on its
+        // hotspot, which routes nowhere. Registration cannot succeed yet, so
+        // send them to set up a network instead of opening a form that can only
+        // fail. showUnregistered(false) has already started the 15 s poll that
+        // opens this modal the moment a network appears.
+        if (d.hasInternet) openRegModal();
+        else goToNetworkSetup(true);
       }
     } catch {
+      // Could not even ask this box: treat it as the no-network case.
       showUnregistered(false);
-      openRegModal();
+      goToNetworkSetup(true);
     }
 
     // Sidebar "Register Device" button — (re)opens the modal with fresh state.
@@ -6503,24 +6542,8 @@ loadDeviceIp();
       passwordToggle.setAttribute("aria-label", label);
     });
 
-    // "Go to Network Settings" — close the modal (so the panel is reachable),
-    // then expand the "Network & WiFi Setup" panel and scroll to it.
-    document.getElementById("regGoToNetworkBtn")?.addEventListener("click", () => {
-      closeRegModal();
-      const toggle  = document.getElementById("wifiPanelToggle");
-      const body    = document.getElementById("wifiPanelBody");
-      const chevron = document.getElementById("wifiChevron");
-      if (!toggle || !body) return;
-      // Expand it if collapsed.
-      if (body.style.display === "none") {
-        body.style.display = "block";
-        if (chevron) chevron.textContent = "▼";
-      }
-      // Wait a tick so layout reflows before scrolling.
-      requestAnimationFrame(() => {
-        toggle.scrollIntoView({ behavior: "smooth", block: "start" });
-      });
-    });
+    // "Go to Network Settings" — the operator asked to go, so no banner needed.
+    document.getElementById("regGoToNetworkBtn")?.addEventListener("click", () => goToNetworkSetup());
 
     // "Check Again" — re-probe internet and update the UI
     document.getElementById("regCheckAgainBtn")?.addEventListener("click", async () => {
