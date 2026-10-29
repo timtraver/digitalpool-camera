@@ -249,8 +249,23 @@ the customer's first power-on.
 
 `dp-firstboot.service` runs once (guarded by `/var/lib/dp-image/firstboot-pending`):
 new `machine-id`, fresh SSH host keys, hostname `dp-stream-<last 4 of the primary NIC MAC>`, wiped NetBird
-identity, cleared app state, regenerated `SESSION_SECRET`, Ethernet → DHCP. It
-then disables itself and reboots into the finished unit. Log: `/var/log/dp-firstboot.log`.
+identity, **deleted WiFi profiles**, cleared app state, regenerated `SESSION_SECRET`,
+Ethernet → DHCP. It then disables itself and reboots into the finished unit.
+Log: `/var/log/dp-firstboot.log`.
+
+Two of those are there because a unit built on 2026-10-29 came up as a second
+`dp-stream-b1b5`, broadcasting the master's SSID, and could not be reached at all
+(no dongle, so its own hotspot was the only way in):
+
+- The hostname is written to `/etc/hostname` **and** set with `hostnamectl`. The
+  script is deliberately not `set -e`, so when `hostnamectl` failed this early in
+  boot it failed silently, and nothing retried — the flag was already cleared.
+  The run now checks `/etc/hostname` before clearing the flag, and leaves the
+  service armed (without rebooting) if the rename did not take.
+- WiFi profiles are deleted so the app rebuilds the hotspot under *this* unit's
+  SSID. `wifiManager` only derives the per-unit name when it **creates** the
+  profile, and a clone arrives with the master's already made. It also means the
+  master's saved networks — and their passwords — do not ship on every unit.
 
 Then: connect to the unit's hotspot — the SSID is per-unit, **DigitalPool-XXXX**,
 where XXXX matches the hostname suffix (`dp-stream-b1b5` → `DigitalPool-B1B5`) —
@@ -261,9 +276,13 @@ register it under Remote Access.
 ## What the clone resets vs. keeps
 
 **Reset per unit** (see `dp-firstboot.sh`): machine-id, SSH host keys, hostname,
-NetBird peer, `SESSION_SECRET`, and all app state (`users.json`,
-`camera-config*`, `stream-config*`, `remote.json`, `banned-ips.json`, …), Ethernet
-back to DHCP.
+NetBird peer, WiFi profiles (hotspot + saved networks), `SESSION_SECRET`, and all
+app state (`users.json`, `camera-config*`, `stream-config*`, `remote.json`,
+`banned-ips.json`, `table-names.json`, …), Ethernet back to DHCP.
+
+`branding.json` and `recording-config.json` are deliberately **kept**: the first
+is set by dpadmin for the whole fleet, the second is a device default the image
+is meant to carry.
 
 **Kept from the golden image:** the OS, all installed packages, the app code,
 `.env` (including NetBird management URL / setup key — these are org-level; if you

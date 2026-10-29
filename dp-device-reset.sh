@@ -48,6 +48,7 @@ echo ""
 echo "  This will PERMANENTLY wipe:"
 echo "    • System hostname, machine-id, SSH host keys"
 echo "    • NetBird peer identity (/var/lib/netbird/)"
+echo "    • WiFi profiles — the hotspot is rebuilt under this unit's own SSID"
 echo "    • All app state (registration, users, camera/stream config)"
 echo ""
 
@@ -71,7 +72,11 @@ info "Services stopped"
 
 # ── 2. Hostname ───────────────────────────────────────────────────────────────
 echo "🏷  Setting hostname to ${NEW_HOSTNAME}…"
-hostnamectl set-hostname "${NEW_HOSTNAME}"
+# /etc/hostname first: it is what the next boot reads, and hostnamectl can fail
+# quietly when systemd-hostnamed is not reachable (see dp-firstboot.sh, which
+# had exactly that happen and shipped a unit named after its master).
+echo "${NEW_HOSTNAME}" > /etc/hostname
+hostnamectl set-hostname "${NEW_HOSTNAME}" 2>/dev/null || true
 # Also update /etc/hosts so local resolution doesn't break
 sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t${NEW_HOSTNAME}/" /etc/hosts
 grep -q "127.0.1.1" /etc/hosts || echo -e "127.0.1.1\t${NEW_HOSTNAME}" >> /etc/hosts
@@ -108,6 +113,7 @@ APP_STATE_FILES=(
     "banned-ips.json"
     "viewer-connections.json"
     "subscription.json"
+    "table-names.json"      # which table each camera covers at the OLD venue
 )
 for f in "${APP_STATE_FILES[@]}"; do
     fp="${APP_DIR}/${f}"
@@ -140,6 +146,26 @@ if [[ -f "$NETPLAN_FILE" ]]; then
     info "Ethernet config reset to DHCP"
 fi
 
+# ── 7b. WiFi profiles ─────────────────────────────────────────────────────────
+# The hotspot SSID is per-unit, but wifiManager only derives it when it creates
+# the profile — so a box that already has one keeps the name it was given, which
+# on a cloned unit is the master's. Deleting the profiles makes the app rebuild
+# the hotspot under this unit's own SSID, and drops saved client networks (and
+# their passwords) that belong to whoever set this box up before.
+if command -v nmcli >/dev/null 2>&1; then
+    echo "📡  Clearing WiFi profiles…"
+    # TYPE first so everything after the first colon is the name: nmcli escapes a
+    # colon inside a name as "\:", which splitting on NAME,TYPE would get wrong.
+    nmcli -t -f TYPE,NAME connection show 2>/dev/null \
+        | sed -n 's/^802-11-wireless://p' \
+        | sed 's/\\:/:/g' \
+        | while IFS= read -r profile; do
+            [[ -n "$profile" ]] || continue
+            nmcli connection delete "$profile" >/dev/null 2>&1 || true
+        done
+    info "WiFi profiles cleared — the hotspot is rebuilt on next start"
+fi
+
 # ── 8. GStreamer cache ────────────────────────────────────────────────────────
 GST_CACHE="/home/${APP_USER}/.cache/gstreamer-1.0"
 if [[ -d "$GST_CACHE" ]]; then
@@ -162,7 +188,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo -e "${GREEN}  ✅  Reset complete — ${NEW_HOSTNAME} is ready to deploy${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "  Connect to hotspot: DigitalPool-Camera"
+echo "  Connect to hotspot: DigitalPool-<last 4 of this unit's wired MAC>"
 echo "  Then open:          http://192.168.50.1:3000"
 echo "  Register via:       Remote Access tab → Register Device"
 echo ""

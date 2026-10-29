@@ -9,6 +9,8 @@
 #   • Neutral unique hostname  dp-stream-<4 hex>  (operator renames via the UI)
 #   • Fresh SSH host keys
 #   • Wiped NetBird peer identity  (re-registers on next activation)
+#   • Deleted WiFi profiles  (so the hotspot is rebuilt with THIS unit's SSID,
+#     and the master's saved networks and their passwords do not ship with it)
 #   • Cleared app state (registration, users, camera/stream config, …)
 #   • Regenerated SESSION_SECRET  (so cloned units don't share a cookie secret)
 #   • Ethernet back to DHCP, GStreamer cache cleared
@@ -65,7 +67,15 @@ fi
 
 NEW_HOSTNAME="dp-stream-${SUFFIX}"
 echo "Setting hostname to ${NEW_HOSTNAME}…"
-hostnamectl set-hostname "${NEW_HOSTNAME}"
+# /etc/hostname is what survives the reboot at the end of this script, so it is
+# written directly and first. hostnamectl alone used to do this job, but it talks
+# to systemd-hostnamed over D-Bus, and this unit runs early enough in boot that
+# the call can fail — silently, because this script is deliberately not `set -e`.
+# A unit built on 2026-10-29 came up as its master, dp-stream-b1b5, and nothing
+# ever retried: the flag had already been cleared and the service disabled.
+echo "${NEW_HOSTNAME}" > /etc/hostname
+hostnamectl set-hostname "${NEW_HOSTNAME}" 2>/dev/null \
+    || echo "  (hostnamectl unavailable this early — /etc/hostname carries it over the reboot)"
 sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t${NEW_HOSTNAME}/" /etc/hosts
 grep -q "127.0.1.1" /etc/hosts || echo -e "127.0.1.1\t${NEW_HOSTNAME}" >> /etc/hosts
 
@@ -95,6 +105,7 @@ APP_STATE_FILES=(
     "banned-ips.json"
     "viewer-connections.json"
     "subscription.json"
+    "table-names.json"      # which table each camera covers AT THE MASTER'S venue
 )
 for f in "${APP_STATE_FILES[@]}"; do
     rm -f "${APP_DIR}/${f}" && echo "  removed ${f}" || true
@@ -144,6 +155,32 @@ if [[ -f "$NETPLAN_FILE" ]]; then
     echo "Ethernet reset to DHCP"
 fi
 
+# ── 7b. WiFi profiles — the clone must not keep the master's ────────────────────
+# The hotspot SSID is per-unit ("DigitalPool-<last 4 of the wired MAC>"), but
+# wifiManager only derives it when it CREATES the profile, and a clone arrives
+# with the master's profile already made. Two units then broadcast one SSID on
+# one address (192.168.50.1), and a phone cannot tell them apart — which on
+# 2026-10-29 left a new box unreachable, since without a USB dongle its own
+# hotspot is the only way in. Deleting the profile makes the app build a fresh
+# one, named after this unit, the next time it starts.
+#
+# Saved client networks go too. They are the master's, which means every unit
+# built from an image would otherwise carry the PSK of whatever WiFi the master
+# was last joined to, and would try to join it on sight.
+if command -v nmcli >/dev/null 2>&1; then
+    echo "Clearing WiFi profiles cloned from the master…"
+    # TYPE first so everything after the first colon is the name: nmcli escapes a
+    # colon inside a name as "\:", which splitting on NAME,TYPE would get wrong.
+    nmcli -t -f TYPE,NAME connection show 2>/dev/null \
+        | sed -n 's/^802-11-wireless://p' \
+        | sed 's/\\:/:/g' \
+        | while IFS= read -r profile; do
+            [[ -n "$profile" ]] || continue
+            echo "  deleting \"${profile}\""
+            nmcli connection delete "$profile" >/dev/null 2>&1 || true
+        done
+fi
+
 # ── 8. GStreamer cache ──────────────────────────────────────────────────────────
 GST_CACHE="/home/${APP_USER}/.cache/gstreamer-1.0"
 [[ -d "$GST_CACHE" ]] && rm -f "${GST_CACHE}"/*.bin
@@ -151,7 +188,19 @@ GST_CACHE="/home/${APP_USER}/.cache/gstreamer-1.0"
 # ── 9. Make sure the app + hotspot come up on this fresh unit ────────────────────
 systemctl enable digitalpool-camera 2>/dev/null || true
 
-# ── 10. Disable self so this never runs again ───────────────────────────────────
+# ── 10. Check the rename took, then disable self ────────────────────────────────
+# The hostname is the one step whose failure leaves no trace afterwards: a unit
+# that comes up as its master looks perfectly healthy until two of them are on a
+# network together. If it did not take, the flag stays and the service stays
+# enabled so the next boot tries again — and this run does NOT reboot, because
+# rebooting on a failing run is a boot loop. Every step above is safe to repeat.
+CURRENT_HOSTNAME="$(cat /etc/hostname 2>/dev/null || echo "")"
+if [[ "$CURRENT_HOSTNAME" != "$NEW_HOSTNAME" ]]; then
+    echo "ERROR: /etc/hostname reads '${CURRENT_HOSTNAME}', expected '${NEW_HOSTNAME}'."
+    echo "Leaving the firstboot flag set so the next boot retries. Not rebooting."
+    exit 1
+fi
+
 echo "First-boot sanitise complete — disabling dp-firstboot.service"
 rm -f "$FLAG"
 rm -rf /var/lib/dp-image           # drop captured image metadata; no longer needed
