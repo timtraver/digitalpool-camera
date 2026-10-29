@@ -5712,13 +5712,55 @@ let _idlePreviewFailStreak2    = 0;  // Camera 2 quick-exit count
 // Cooldown schedule (ms) indexed by fail streak — capped at 60 s.
 const _IDLE_BACKOFF_MS = [0, 3000, 5000, 10000, 20000, 30000, 60000];
 
+/**
+ * Kill idle-preview processes for this camera that the app has no handle on.
+ *
+ * A preview is identified by its rtmpsink destination, which is exactly
+ * "/preview" or "/preview2" — compared as a whole argument so the first does not
+ * match the second. That works whatever the source type or overlay state, unlike
+ * the camera device (absent for NDI) or the overlay PNG path (empty when there
+ * is no overlay).
+ *
+ * This is cleanup after a bug that has already happened, so it does not trust a
+ * SIGTERM to land: a GStreamer pipeline wedged on a USB camera can ignore one,
+ * and the whole problem is a process that will not let go of the device.
+ */
+async function sweepStrayIdlePreviews(camIdx, keepPid = null) {
+  const marker = `location=rtmp://localhost:1935${getSC(camIdx).previewPath}`;
+  const strays = [];
+  try {
+    for (const entry of fsSync.readdirSync("/proc")) {
+      if (!/^\d+$/.test(entry)) continue;
+      const pid = Number(entry);
+      if (pid === process.pid || pid === keepPid) continue;
+      let argv;
+      try { argv = fsSync.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0"); } catch { continue; }
+      if (!argv.some((a) => a.endsWith("gst-idle-preview.py"))) continue;
+      if (!argv.includes(marker)) continue;
+      strays.push(pid);
+    }
+  } catch { return 0; }   // not Linux, or /proc unreadable
+  if (!strays.length) return 0;
+
+  console.log(`🧹 [Cam${camIdx}] ${strays.length} stray idle preview(s) still on ${marker.split("1935")[1]}: ${strays.join(", ")}`);
+  for (const pid of strays) { try { process.kill(pid, "SIGTERM"); } catch { /* already gone */ } }
+  await new Promise((r) => setTimeout(r, 600));
+  for (const pid of strays) {
+    try {
+      process.kill(pid, 0);          // throws when the process is gone
+      process.kill(pid, "SIGKILL");
+      console.log(`🧹 [Cam${camIdx}] stray ${pid} ignored SIGTERM — killed`);
+    } catch { /* exited on the TERM, as it should */ }
+  }
+  return strays.length;
+}
+
 async function startPersistentIdlePreview(camIdx = 1) {
   const sc = getSC(camIdx);
   const activeSource = getActiveSource(camIdx);
   const isStarting   = camIdx === 2 ? _idlePreviewStarting2 : _idlePreviewStarting;
   const startQueue   = camIdx === 2 ? _idlePreviewStartQueue2 : _idlePreviewStartQueue;
   const failStreak   = camIdx === 2 ? _idlePreviewFailStreak2 : _idlePreviewFailStreak;
-  const curProc      = camIdx === 2 ? currentIdlePreviewProcess2 : currentIdlePreviewProcess;
 
   // "No Camera" — this slot is intentionally empty; nothing to preview and the
   // physical device must stay released so the other slot can claim it.  Guarding
@@ -5741,24 +5783,39 @@ async function startPersistentIdlePreview(camIdx = 1) {
     return;
   }
 
-  // ── Backoff cooldown ─────────────────────────────────────────────────────
-  const backoffMs = _IDLE_BACKOFF_MS[Math.min(failStreak, _IDLE_BACKOFF_MS.length - 1)];
-  if (backoffMs > 0) {
-    console.log(`⏳ [Cam${camIdx}] Idle preview backoff (streak=${failStreak}) — waiting ${backoffMs}ms...`);
-    await new Promise((r) => setTimeout(r, backoffMs));
-  }
-  if (sc.isStreaming || isRestartInProgress[camIdx]) {
-    console.log(`⚠️  [Cam${camIdx}] Not starting idle preview — stream active or restart in progress`);
-    return;
-  }
-
-  // Declare the resolver variables BEFORE the Promise executors reference them
-  // to avoid the JavaScript Temporal Dead Zone (TDZ) error.
+  // Claim the mutex BEFORE anything that yields.
+  //
+  // It used to be claimed after the backoff sleep below, which left a window as
+  // wide as the backoff where a second call saw `isStarting` false and walked in
+  // behind the first. Both then spawned, and whichever lost the race to
+  // currentIdlePreviewProcess was orphaned — still holding the camera, still
+  // rendering, and now unkillable because nothing had a handle on it. The new
+  // spawns could not open the busy device, died inside 8s, grew the failure
+  // streak, lengthened the backoff and widened the window that caused it.
+  //
+  // Seen on dp-stream-1 on 2026-10-29: a preview from 14:14:11 still painting
+  // the old title ten minutes and seven "restarts" later, with fresh processes
+  // appearing and dying every ~15s. The overlay title looked stuck because the
+  // process drawing it was never the one being restarted.
   let _resolveQueue, _resolveQueue2;
   if (camIdx === 2) { _idlePreviewStarting2 = true; _idlePreviewStartQueue2 = new Promise((r) => { _resolveQueue2 = r; }); }
   else              { _idlePreviewStarting  = true; _idlePreviewStartQueue  = new Promise((r) => { _resolveQueue  = r; }); }
 
   try {
+    // ── Backoff cooldown ───────────────────────────────────────────────────
+    const backoffMs = _IDLE_BACKOFF_MS[Math.min(failStreak, _IDLE_BACKOFF_MS.length - 1)];
+    if (backoffMs > 0) {
+      console.log(`⏳ [Cam${camIdx}] Idle preview backoff (streak=${failStreak}) — waiting ${backoffMs}ms...`);
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+    if (sc.isStreaming || isRestartInProgress[camIdx]) {
+      console.log(`⚠️  [Cam${camIdx}] Not starting idle preview — stream active or restart in progress`);
+      return;
+    }
+
+    // Read the handle NOW rather than at function entry: the awaits above mean
+    // the process that was current then may not be the one running now.
+    const curProc = camIdx === 2 ? currentIdlePreviewProcess2 : currentIdlePreviewProcess;
     // Kill existing idle preview process for this camera
     if (curProc && !curProc.killed) {
       console.log(`🔄 [Cam${camIdx}] Killing previous idle preview`);
@@ -5771,6 +5828,10 @@ async function startPersistentIdlePreview(camIdx = 1) {
       else              currentIdlePreviewProcess  = null;
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
+
+    // Anything else still on this camera's preview path is an orphan from an
+    // earlier race, and it holds the camera against the process about to start.
+    await sweepStrayIdlePreviews(camIdx);
 
     const gstArgs = buildIdlePreviewGstArgs(camIdx);
     const previewPath = sc.previewPath;
