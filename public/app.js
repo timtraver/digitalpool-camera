@@ -5263,14 +5263,21 @@ setInterval(loadDeviceIp, 15000);
     }
   }
 
-  // Scan button — populate the dropdown
-  document.getElementById("wifiScanBtn")?.addEventListener("click", async () => {
+  // ── WiFi scan ───────────────────────────────────────────────────────────────
+  // Nobody reads a magnifying glass as "you must press this first". Opening the
+  // list is the natural way to ask what is nearby, so opening it scans — the
+  // button is now the way to scan AGAIN, not the way to scan at all.
+  let _wifiScanning = false;
+  let _wifiScanAt   = 0;
+  const WIFI_SCAN_FRESH_MS = 60000;   // a list older than this is worth redoing
+
+  async function scanWifiNetworks() {
     const btn    = document.getElementById("wifiScanBtn");
     const select = document.getElementById("wifiNetworkSelect");
-    if (!select) return;
-    btn.disabled = true;
-    btn.textContent = "⏳";
-    select.innerHTML = '<option value="">Scanning…</option>';
+    if (!select || _wifiScanning) return;
+    _wifiScanning = true;
+    if (btn) { btn.disabled = true; btn.textContent = "⏳"; }
+    select.innerHTML = '<option value="">🔍 Searching for networks…</option>';
     try {
       const r = await fetch("/api/wifi/networks");
       const d = await r.json();
@@ -5285,15 +5292,44 @@ setInterval(loadDeviceIp, 15000);
           opt.dataset.security = n.security || "";
           select.appendChild(opt);
         });
+        _wifiScanAt = Date.now();
       } else {
-        select.innerHTML = '<option value="">No networks found</option>';
+        select.innerHTML = '<option value="">No networks found — press 🔍 to look again</option>';
+        _wifiScanAt = 0;   // nothing found is not a list worth keeping
       }
     } catch (e) {
-      select.innerHTML = '<option value="">Scan failed</option>';
+      select.innerHTML = '<option value="">Scan failed — press 🔍 to try again</option>';
+      _wifiScanAt = 0;
     } finally {
-      btn.disabled = false;
-      btn.textContent = "🔍";
+      _wifiScanning = false;
+      if (btn) { btn.disabled = false; btn.textContent = "🔍"; }
     }
+  }
+
+  document.getElementById("wifiScanBtn")?.addEventListener("click", () => scanWifiNetworks());
+
+  // Opening the list with nothing in it (or something stale) scans first.
+  //
+  // The picker is held shut while that happens: a native select renders its
+  // options when it opens and does not re-render them underneath an open
+  // picker, so letting it open on an empty list would show an empty list and
+  // keep showing it after the results arrived.
+  const wifiSelectEl = document.getElementById("wifiNetworkSelect");
+  async function scanBeforeOpening(e) {
+    if (_wifiScanning) { e.preventDefault(); return; }
+    if (_wifiScanAt && Date.now() - _wifiScanAt < WIFI_SCAN_FRESH_MS) return;
+    e.preventDefault();
+    await scanWifiNetworks();
+    wifiSelectEl.focus();
+    // Re-open it for them where the browser allows it. This needs a live user
+    // gesture, which the scan has usually outlived, so a second tap is the
+    // normal path and this is a bonus rather than the mechanism.
+    try { wifiSelectEl.showPicker?.(); } catch { /* they tap again */ }
+  }
+  wifiSelectEl?.addEventListener("mousedown", scanBeforeOpening);
+  wifiSelectEl?.addEventListener("keydown", (e) => {
+    // Enter, Space and the arrows are how a keyboard opens a select.
+    if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(e.key)) scanBeforeOpening(e);
   });
 
   // Show/hide password field based on selected network's security
