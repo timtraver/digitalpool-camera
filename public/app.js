@@ -6376,7 +6376,9 @@ loadDeviceIp();
     // not one), and then a registration. This walks through them in that order,
     // because doing them in the other order simply fails.
     const welcomeModal = document.getElementById("welcomeModal");
-    let wizardStep = 0;   // 0 = not showing
+    let wizardStep = 0;          // 0 = not showing
+    let wizardReconnect = false; // opened because a registered camera went offline
+    let outageDismissed = false; // they closed it during this outage
 
     function setWizardStep(n) {
       wizardStep = n;
@@ -6399,7 +6401,17 @@ loadDeviceIp();
           if (el) el.textContent = how;
         });
       }
-      if (n === 4) showAccessUrls();
+      if (n === 4) {
+        showAccessUrls();
+        // After a reconnect the useful headline is which network it came back
+        // on, not the venue it was registered to months ago.
+        if (wizardReconnect) {
+          describeUplink().then((how) => {
+            const el = document.getElementById("wizDoneText");
+            if (el) el.textContent = how;
+          });
+        }
+      }
     }
 
     /**
@@ -6449,15 +6461,33 @@ loadDeviceIp();
       }
     }
 
-    function openWizard(step = 1) {
+    /**
+     * @param {number} step
+     * @param {{reconnect?: boolean}} [opts] reconnect: the camera is already
+     *        registered and has lost its connection, so this is not a welcome —
+     *        the steps either side of "network" do not apply and the title says
+     *        what actually happened.
+     */
+    function openWizard(step = 1, { reconnect = false } = {}) {
       if (!welcomeModal) return false;
       closeRegModal();
+      wizardReconnect = reconnect;
+      const title = welcomeModal.querySelector(".reg-modal-title");
+      if (title) title.textContent = reconnect ? "📡 Camera is offline" : "👋 Welcome to DuoCast";
+      const tabs = welcomeModal.querySelector(".wiz-steps");
+      if (tabs) tabs.style.display = reconnect ? "none" : "";
+      const lead = document.querySelector("#wizPane2 .wiz-lead");
+      if (lead) lead.textContent = reconnect ? "Reconnect the camera to a network" : "Connect the camera to a network";
       setWizardStep(step);
       welcomeModal.style.display = "flex";
       return true;
     }
     function closeWizard() {
       if (welcomeModal) welcomeModal.style.display = "none";
+      // Closing during an outage is an answer: stop reopening it until the
+      // camera has been online again. Nagging somebody who knows the venue WiFi
+      // is down helps nobody.
+      if (wizardReconnect && wizardStep) outageDismissed = true;
       wizardStep = 0;
     }
 
@@ -6490,20 +6520,61 @@ loadDeviceIp();
       if (text) text.textContent = "Checking…";
       let online = false;
       try {
-        const r = await fetch("/api/setup/status");
+        const r = await fetch("/api/setup/status?fresh=1");
         const d = await r.json();
         online = !!d.hasInternet;
-        if (d.registered) { closeWizard(); showRegistered(d); return; }
+        // During a reconnect the camera IS registered — that is not a reason to
+        // close the thing helping them get it back online.
+        if (d.registered && !wizardReconnect) { closeWizard(); showRegistered(d); return; }
       } catch { /* treat as offline */ }
       if (box) box.classList.toggle("online", online);
       if (dot) dot.textContent = online ? "🟢" : "🔴";
       if (text) text.textContent = online ? await describeUplink() : "No internet connection yet.";
       if (online) {
+        if (wizardReconnect) {
+          // Back on a network, and most likely a different one — so the address
+          // to reach this page has changed. Step 4 is exactly that answer.
+          setWizardStep(4);
+          return;
+        }
         const onlineText = document.getElementById("wizOnlineText");
         if (onlineText) onlineText.textContent = await describeUplink();
         setWizardStep(3);
       }
     }
+
+    /**
+     * Watch for a registered camera losing its connection.
+     *
+     * These cameras travel: a venue's WiFi changes, a box is carried to another
+     * room, a cable is pulled. Until now the page only ever asked about the
+     * network before registration, so a camera that went offline afterwards sat
+     * there looking fine and saying nothing.
+     *
+     * Deliberately quiet in two cases: while a stream is running, because the
+     * operator is working and a venue LAN with no route out is still carrying
+     * the match; and after they close it, until the camera has been online again.
+     */
+    const CONNECTIVITY_POLL_MS = 20000;
+    async function checkConnectivity() {
+      let d;
+      try {
+        d = await (await fetch("/api/setup/status")).json();
+      } catch {
+        return;   // the box itself is unreachable; the page has bigger problems
+      }
+      if (!d.registered) return;   // the first-run flow owns this case
+
+      if (d.hasInternet) {
+        outageDismissed = false;
+        if (wizardReconnect && wizardStep === 2) refreshWizardNetwork();
+        return;
+      }
+      if (typeof isCurrentlyStreaming !== "undefined" && isCurrentlyStreaming) return;
+      if (outageDismissed || wizardStep) return;
+      openWizard(2, { reconnect: true });
+    }
+    setInterval(checkConnectivity, CONNECTIVITY_POLL_MS);
 
     document.getElementById("wizStartBtn")?.addEventListener("click", () => setWizardStep(2));
     document.getElementById("wizRecheckBtn")?.addEventListener("click", () => refreshWizardNetwork());

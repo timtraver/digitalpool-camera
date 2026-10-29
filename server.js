@@ -1185,6 +1185,28 @@ function checkInternet() {
   });
 }
 
+// A probe costs up to 5 s and the UI polls for it, so the answer is shared for a
+// few seconds and concurrent callers wait on one request rather than starting
+// their own. `fresh` skips the cache, for the button whose entire job is to ask
+// again right now.
+let _internetCache = { at: 0, ok: false, inflight: null };
+const INTERNET_TTL_MS = 10000;
+
+function checkInternetCached({ fresh = false } = {}) {
+  if (!fresh && Date.now() - _internetCache.at < INTERNET_TTL_MS) {
+    return Promise.resolve(_internetCache.ok);
+  }
+  if (_internetCache.inflight) return _internetCache.inflight;
+  _internetCache.inflight = checkInternet().then((ok) => {
+    _internetCache = { at: Date.now(), ok, inflight: null };
+    return ok;
+  }).catch(() => {
+    _internetCache.inflight = null;
+    return false;
+  });
+  return _internetCache.inflight;
+}
+
 /**
  * The single answer to "may this user start a stream right now?", shared by the
  * REST route and both socket handlers so the three paths cannot drift apart.
@@ -1280,8 +1302,12 @@ app.get("/api/remote/status", requireAdmin, async (req, res) => {
 app.get("/api/setup/status", requireAdmin, async (req, res) => {
   const cfg = loadRemoteConfig();
   const registered = isRegistered();
-  // Skip slow internet probe when already registered — device clearly has connectivity
-  const hasInternet = registered ? true : await checkInternet();
+  // Probed for a registered device too. It used to be assumed true once
+  // registered — "the device clearly has connectivity" — which is only true of
+  // the moment it registered. A camera that moves between venues, or whose WiFi
+  // drops, is exactly the one that needs the UI to notice, and it could not.
+  // The probe is cached, so polling this endpoint stays cheap.
+  const hasInternet = await checkInternetCached({ fresh: req.query.fresh === "1" });
   let netbirdIp = null;
   try {
     const st = await netbirdGetStatus();
