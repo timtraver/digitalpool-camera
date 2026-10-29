@@ -2468,28 +2468,35 @@ footer {
 .wiz-pane { display: none; }
 .wiz-pane.active { display: block; }
 .wiz-lead {
-  color: rgba(255, 255, 255, 0.85);
-  font-size: 14px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 16px;
   font-weight: 600;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
+}
+.wiz-slogan {
+  color: #12c7ff;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  margin-bottom: 12px;
 }
 .wiz-body {
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 12px;
-  line-height: 1.6;
-  margin-bottom: 12px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 14px;
+  line-height: 1.65;
+  margin-bottom: 14px;
 }
 .wiz-actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
 }
-.wiz-actions .btn-wifi-action { flex: 1; font-size: 12px; min-width: 120px; }
+.wiz-actions .btn-wifi-action { flex: 1; font-size: 14px; min-width: 130px; padding: 11px 10px; }
 .wiz-status {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: 14px;
   padding: 10px;
   border-radius: 6px;
   margin-bottom: 12px;
@@ -2500,4 +2507,15 @@ footer {
 .wiz-status.online {
   background: rgba(74, 222, 128, 0.1);
   border-color: rgba(74, 222, 128, 0.4);
+}
+
+/* The wizard is read on a phone, standing at the camera — not on a desktop at
+   normal reading distance. Everything goes up a size there. */
+@media (pointer: coarse) {
+  .wiz-lead   { font-size: 19px; }
+  .wiz-slogan { font-size: 15px; }
+  .wiz-body   { font-size: 16px; line-height: 1.7; }
+  .wiz-status { font-size: 16px; }
+  .wiz-step   { font-size: 11px; padding: 8px 4px; }
+  .wiz-actions .btn-wifi-action { font-size: 16px; padding: 13px 12px; }
 }
