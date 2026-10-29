@@ -2546,3 +2546,27 @@ footer {
   .wiz-urls   { font-size: 16px; }
   .wiz-actions .btn-wifi-action { font-size: 16px; padding: 13px 12px; }
 }
+
+/* ── "still working" spinner ──────────────────────────────────────────────────
+   Registration calls a cloud function that authenticates, looks up venues and
+   writes device records; it can take most of a minute. A static "⏳" through
+   that reads as a frozen page, so the button spins and the message counts the
+   seconds — a number that changes is the only proof a page is still alive. */
+.btn-spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: rgba(255, 255, 255, 0.95);
+  border-radius: 50%;
+  animation: btn-spin 0.7s linear infinite;
+}
+@keyframes btn-spin { to { transform: rotate(360deg); } }
+
+/* Respect a person who has asked the system for less motion: keep the proof of
+   life (the ticking seconds) and drop the spin. */
+@media (prefers-reduced-motion: reduce) {
+  .btn-spinner { animation: none; border-top-color: rgba(255, 255, 255, 0.6); }
+}

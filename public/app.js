@@ -6857,6 +6857,9 @@ setInterval(loadDeviceIp, 15000);
 
     // Interpret a response from /api/setup/register or /api/setup/register/venue.
     function handleRegResponse(d) {
+      // Whatever the answer is, the waiting is over — every branch below writes
+      // its own message, and none of them want a counter still ticking under it.
+      regWorkDone();
       if (d.success) {
         pendingPassword = "";
         if (passwordInput) passwordInput.value = "";
@@ -6915,6 +6918,38 @@ setInterval(loadDeviceIp, 15000);
       registerBtn.disabled = false;
     }
 
+    // ── "still working" indicator ────────────────────────────────────────────
+    // The register call reaches a cloud function that authenticates, looks up
+    // venues and writes device records, and it can take most of a minute. A
+    // disabled button and a static hourglass look exactly like a page that has
+    // died, so the button spins and the message counts seconds: a number that
+    // changes is the only honest proof that something is still happening.
+    let _regWorkTimer = null, _regWorkRestore = null;
+
+    function regWorking(btn, what, write = showRegMsg) {
+      const started = Date.now();
+      if (btn) {
+        const original = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = `<span class="btn-spinner"></span>${what}…`;
+        _regWorkRestore = () => { btn.innerHTML = original; btn.disabled = false; };
+      }
+      const tick = () => {
+        const secs = Math.round((Date.now() - started) / 1000);
+        write(`${what}… ${secs}s — talking to DigitalPool, this can take up to a minute`);
+      };
+      tick();
+      clearInterval(_regWorkTimer);
+      _regWorkTimer = setInterval(tick, 1000);
+    }
+
+    /** Stop the indicator. Safe to call when it was never started. */
+    function regWorkDone() {
+      clearInterval(_regWorkTimer);
+      _regWorkTimer = null;
+      if (_regWorkRestore) { _regWorkRestore(); _regWorkRestore = null; }
+    }
+
     // Registration step 1 — verify credentials, list venues.  Shared by the
     // Register button and the "I've Subscribed — Try Again" button, so a retry
     // after buying a plan is the identical request rather than a near-copy.
@@ -6925,8 +6960,7 @@ setInterval(loadDeviceIp, 15000);
       if (!password) { showRegMsg("❌ DigitalPool password is required", true); return; }
       pendingEmail = email; pendingPassword = password;
       hideVenueSteps();
-      showRegMsg("⏳ Registering… this may take up to 60 s");
-      registerBtn.disabled = true;
+      regWorking(registerBtn, "Registering");
       try {
         const r = await fetch("/api/setup/register", {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -6935,6 +6969,7 @@ setInterval(loadDeviceIp, 15000);
         const d = await r.json();
         handleRegResponse(d);
       } catch (e) {
+        regWorkDone();
         showRegMsg(`❌ ${e.message}`, true);
         registerBtn.disabled = false;
       }
@@ -6962,8 +6997,7 @@ setInterval(loadDeviceIp, 15000);
         hideVenueSteps();
         return;
       }
-      venueConfirmBtn.disabled = true;
-      showRegMsg("⏳ Attaching this camera to the venue…");
+      regWorking(venueConfirmBtn, "Attaching this camera to the venue");
       try {
         const r = await fetch("/api/setup/register/venue", {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -6972,8 +7006,10 @@ setInterval(loadDeviceIp, 15000);
         const d = await r.json();
         handleRegResponse(d);
       } catch (e) {
+        regWorkDone();
         showRegMsg(`❌ ${e.message}`, true);
       } finally {
+        regWorkDone();
         venueConfirmBtn.disabled = false;
       }
     });
@@ -6996,8 +7032,7 @@ setInterval(loadDeviceIp, 15000);
         msg.style.color = isError ? "#f87171" : "#4ade80";
       };
 
-      showMsg("⏳ Removing peer from NetBird server and wiping local identity…");
-      reregBtn.disabled = true;
+      regWorking(reregBtn, "Removing this camera", showMsg);
 
       try {
         // /api/remote/wipe: deletes the peer from the NetBird server (if
@@ -7006,6 +7041,7 @@ setInterval(loadDeviceIp, 15000);
         // when the user submits the form below.
         const r = await fetch("/api/remote/wipe", { method: "POST" });
         const d = await r.json();
+        regWorkDone();
         if (d.success) {
           showMsg("✅ Old peer removed. Re-register in the pop-up to resume streaming.");
         } else {
@@ -7014,6 +7050,7 @@ setInterval(loadDeviceIp, 15000);
           return;
         }
       } catch (e) {
+        regWorkDone();
         showMsg(`❌ ${e.message}`, true);
         reregBtn.disabled = false;
         return;
