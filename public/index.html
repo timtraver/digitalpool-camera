@@ -1505,6 +1505,73 @@
       <!-- #regNoInternetArea and #regFormArea are moved into #regModalMount at
            runtime (see initRegistration in app.js) so the registration process
            appears front-and-center instead of tucked into the sidebar. -->
+      <!-- First-run wizard: what an unregistered camera shows before anything
+           else. Getting online is two steps and neither is obvious from the
+           settings page, so they are spelled out in order. -->
+      <div id="welcomeModal" class="reg-modal-backdrop" style="display:none">
+        <div class="reg-modal">
+          <div class="reg-modal-header">
+            <span class="reg-modal-title">👋 Welcome to DuoCast</span>
+            <button class="reg-modal-close" id="welcomeClose" title="Close" aria-label="Close">✕</button>
+          </div>
+          <div class="reg-modal-body">
+            <div class="wiz-steps">
+              <span class="wiz-step" id="wizTab1">1 · Welcome</span>
+              <span class="wiz-step" id="wizTab2">2 · Network</span>
+              <span class="wiz-step" id="wizTab3">3 · Register</span>
+            </div>
+
+            <!-- Step 1 -->
+            <div class="wiz-pane" id="wizPane1">
+              <div class="wiz-lead">Welcome to DigitalPool DuoCast.</div>
+              <div class="wiz-body">
+                This camera streams your table with a live scoreboard over the top.<br><br>
+                Two steps and it is ready:
+                <br>&nbsp;&nbsp;<strong>1.</strong> Give it a way onto the internet — a network cable, or your WiFi.
+                <br>&nbsp;&nbsp;<strong>2.</strong> Register it to your DigitalPool account.
+                <br><br>
+                You are on the camera's own WiFi right now, which is how you talk to it —
+                but it cannot reach the internet by itself.
+              </div>
+              <div class="wiz-actions">
+                <button class="btn-wifi-action" id="wizStartBtn">Get started →</button>
+              </div>
+            </div>
+
+            <!-- Step 2 -->
+            <div class="wiz-pane" id="wizPane2">
+              <div class="wiz-lead">Connect the camera to a network</div>
+              <div class="wiz-status" id="wizNetStatus">
+                <span id="wizNetDot">🔴</span><span id="wizNetText">Checking…</span>
+              </div>
+              <div class="wiz-body">
+                <strong>Easiest:</strong> plug a network cable from your router into the camera.
+                It picks the connection up on its own, with nothing to type.<br><br>
+                <strong>No cable?</strong> Choose a WiFi network below and enter its password.
+                (This needs the small WiFi adapter in one of the camera's USB ports.)
+              </div>
+              <div class="wiz-actions">
+                <button class="btn-wifi-action" id="wizWifiBtn">📶 Choose a WiFi network</button>
+                <button class="btn-wifi-action" id="wizRecheckBtn">🔄 Check again</button>
+              </div>
+            </div>
+
+            <!-- Step 3 -->
+            <div class="wiz-pane" id="wizPane3">
+              <div class="wiz-lead">Register this camera</div>
+              <div class="wiz-status online"><span>🟢</span><span id="wizOnlineText">The camera is online.</span></div>
+              <div class="wiz-body">
+                Sign in with the DigitalPool account that owns the venue, and pick which
+                venue this camera belongs to. You only do this once.
+              </div>
+              <div class="wiz-actions">
+                <button class="btn-wifi-action" id="wizRegisterBtn">Register this camera →</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div id="regModal" class="reg-modal-backdrop" style="display:none">
         <div class="reg-modal">
           <div class="reg-modal-header">

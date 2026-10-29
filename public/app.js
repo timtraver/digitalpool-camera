@@ -6370,6 +6370,108 @@ loadDeviceIp();
     function openRegModal()  { if (regModal) regModal.style.display = "flex"; }
     function closeRegModal() { if (regModal) regModal.style.display = "none"; }
 
+    // ── First-run wizard ──────────────────────────────────────────────────────
+    // An unregistered camera is two steps from working, and neither is apparent
+    // from a settings page: it needs a route to the internet (its own hotspot is
+    // not one), and then a registration. This walks through them in that order,
+    // because doing them in the other order simply fails.
+    const welcomeModal = document.getElementById("welcomeModal");
+    let wizardStep = 0;   // 0 = not showing
+
+    function setWizardStep(n) {
+      wizardStep = n;
+      for (const i of [1, 2, 3]) {
+        const tab  = document.getElementById(`wizTab${i}`);
+        const pane = document.getElementById(`wizPane${i}`);
+        if (pane) pane.classList.toggle("active", i === n);
+        if (tab) {
+          tab.classList.toggle("active", i === n);
+          tab.classList.toggle("done", i < n);
+        }
+      }
+      if (n === 2) refreshWizardNetwork();
+      // Step 3 can be arrived at directly (the poll opens it when a network
+      // appears while the operator is on the WiFi panel), so it names the
+      // connection itself rather than relying on step 2 having run.
+      if (n === 3) {
+        describeUplink().then((how) => {
+          const el = document.getElementById("wizOnlineText");
+          if (el) el.textContent = how;
+        });
+      }
+    }
+
+    function openWizard(step = 1) {
+      if (!welcomeModal) return false;
+      closeRegModal();
+      setWizardStep(step);
+      welcomeModal.style.display = "flex";
+      return true;
+    }
+    function closeWizard() {
+      if (welcomeModal) welcomeModal.style.display = "none";
+      wizardStep = 0;
+    }
+
+    /**
+     * How this camera is reaching the world, in the operator's terms.
+     *
+     * The gate is hasInternet — a real probe, not a cable in a socket — because
+     * a venue LAN with no route out still cannot register. The interface list is
+     * only there to name what worked ("Ethernet", "WiFi"), and the camera's own
+     * hotspot address is excluded from it: that one is how the operator is
+     * talking to the camera, never how the camera talks to DigitalPool.
+     */
+    async function describeUplink() {
+      try {
+        const r = await fetch("/api/network");
+        const d = await r.json();
+        const up = (d.addresses || []).filter((a) => !String(a.address).startsWith("192.168.50."));
+        const wired = up.find((a) => /^(en|eth)/.test(a.interface));
+        if (wired) return `Connected by network cable (${wired.address}).`;
+        const wifi = up.find((a) => /^wl/.test(a.interface));
+        if (wifi) return `Connected over WiFi (${wifi.address}).`;
+      } catch { /* fall through to the generic wording */ }
+      return "The camera is online.";
+    }
+
+    async function refreshWizardNetwork() {
+      const dot  = document.getElementById("wizNetDot");
+      const text = document.getElementById("wizNetText");
+      const box  = document.getElementById("wizNetStatus");
+      if (text) text.textContent = "Checking…";
+      let online = false;
+      try {
+        const r = await fetch("/api/setup/status");
+        const d = await r.json();
+        online = !!d.hasInternet;
+        if (d.registered) { closeWizard(); showRegistered(d); return; }
+      } catch { /* treat as offline */ }
+      if (box) box.classList.toggle("online", online);
+      if (dot) dot.textContent = online ? "🟢" : "🔴";
+      if (text) text.textContent = online ? await describeUplink() : "No internet connection yet.";
+      if (online) {
+        const onlineText = document.getElementById("wizOnlineText");
+        if (onlineText) onlineText.textContent = await describeUplink();
+        setWizardStep(3);
+      }
+    }
+
+    document.getElementById("wizStartBtn")?.addEventListener("click", () => setWizardStep(2));
+    document.getElementById("wizRecheckBtn")?.addEventListener("click", () => refreshWizardNetwork());
+    document.getElementById("welcomeClose")?.addEventListener("click", () => closeWizard());
+    welcomeModal?.addEventListener("click", (e) => { if (e.target === welcomeModal) closeWizard(); });
+    document.getElementById("wizWifiBtn")?.addEventListener("click", () => {
+      // The WiFi picker lives in the settings panel; sending them there beats a
+      // second copy of it that could drift from the first.
+      closeWizard();
+      goToNetworkSetup(true);
+    });
+    document.getElementById("wizRegisterBtn")?.addEventListener("click", () => {
+      closeWizard();
+      openRegModal();
+    });
+
     /**
      * Send the operator to "Network & WiFi Setup": close the modal so the panel
      * is reachable, expand it if collapsed, and scroll to it.
@@ -6479,7 +6581,11 @@ loadDeviceIp();
                 const notice = document.getElementById("netFirstNotice");
                 if (notice) notice.style.display = "none";
                 showUnregistered(true);
-                openRegModal();
+                // Don't interrupt somebody already filling in the form; this is
+                // for the operator who is still on the WiFi panel they were sent
+                // to, and has just watched it connect.
+                const regOpen = regModal && regModal.style.display === "flex";
+                if (!regOpen && !openWizard(3)) openRegModal();
               }
             } catch { /* ignore — keep polling */ }
           }, 15000);
@@ -6498,18 +6604,21 @@ loadDeviceIp();
         showRegistered(d);
       } else {
         showUnregistered(d.hasInternet);
-        // A box fresh out of the box has no network: the operator is on its
-        // hotspot, which routes nowhere. Registration cannot succeed yet, so
-        // send them to set up a network instead of opening a form that can only
-        // fail. showUnregistered(false) has already started the 15 s poll that
-        // opens this modal the moment a network appears.
-        if (d.hasInternet) openRegModal();
-        else goToNetworkSetup(true);
+        // The wizard is the front door for an unregistered camera. A box fresh
+        // out of its packaging has no network — the operator is on its hotspot,
+        // which routes nowhere — so a registration form would be a password
+        // prompt that cannot succeed. The wizard names the two steps and their
+        // order instead. showUnregistered(false) has already started the 15 s
+        // poll that picks things up the moment a network appears.
+        if (!openWizard(1)) {
+          if (d.hasInternet) openRegModal();
+          else goToNetworkSetup(true);
+        }
       }
     } catch {
       // Could not even ask this box: treat it as the no-network case.
       showUnregistered(false);
-      goToNetworkSetup(true);
+      if (!openWizard(1)) goToNetworkSetup(true);
     }
 
     // Sidebar "Register Device" button — (re)opens the modal with fresh state.

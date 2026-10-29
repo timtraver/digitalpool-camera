@@ -2412,3 +2412,92 @@ footer {
 #recordingsList .rec-icon { transition: background 0.15s, color 0.15s; }
 #recordingsList .rec-icon-dl:hover  { background: rgba(18,199,255,0.18); color: #7dd3fc !important; }
 #recordingsList .rec-icon-del:hover { background: rgba(239,68,68,0.2);  color: #fca5a5 !important; }
+
+/* ── Touch devices: stop iOS Safari zooming into form fields ──────────────────
+   Safari auto-zooms any field whose computed font-size is under 16px, and on
+   blur it does NOT zoom back out — the operator is left on a magnified page
+   scrolled somewhere off to the side, which is what the WiFi form did on a
+   phone. The fields here are 11-12px by design on a desktop, so the floor is
+   applied only where a touch keyboard can appear.
+
+   Deliberately NOT done with `maximum-scale=1` on the viewport: that would also
+   take away pinch-zoom, which is the one thing a person squinting at a camera
+   on a bar wall actually wants.
+
+   !important is load-bearing: the base rules are class-scoped (.wifi-form select
+   and friends), a media query adds no specificity of its own, and a bare
+   `select` would lose to every one of them. */
+@media (pointer: coarse) {
+  input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* ── First-run wizard ─────────────────────────────────────────────────────────
+   Shown to an unregistered camera. Steps are a progress indication, not
+   navigation: the operator cannot skip to registering before there is a
+   network, because registering would fail. */
+.wiz-steps {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.wiz-step {
+  flex: 1;
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.35);
+  padding: 6px 4px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid transparent;
+}
+.wiz-step.active {
+  color: #12c7ff;
+  border-color: rgba(18, 199, 255, 0.5);
+  background: rgba(18, 199, 255, 0.08);
+}
+.wiz-step.done {
+  color: rgba(74, 222, 128, 0.9);
+  background: rgba(74, 222, 128, 0.08);
+}
+.wiz-pane { display: none; }
+.wiz-pane.active { display: block; }
+.wiz-lead {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.wiz-body {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+.wiz-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.wiz-actions .btn-wifi-action { flex: 1; font-size: 12px; min-width: 120px; }
+.wiz-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 10px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: rgba(255, 255, 255, 0.75);
+}
+.wiz-status.online {
+  background: rgba(74, 222, 128, 0.1);
+  border-color: rgba(74, 222, 128, 0.4);
+}
