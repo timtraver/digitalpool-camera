@@ -426,6 +426,11 @@ async function tournamentBySlug(slug) {
   return tournament;
 }
 
+/** Drop a cached tournament record so the next read goes to DigitalPool. */
+function forgetTournament(slug) {
+  _tournamentCache.delete(slug);
+}
+
 // The same probe documents, as subscriptions. Derived from the query text
 // rather than written out again so the two can never drift: a watch that asked
 // a subtly different question than the poll it falls back to would show up as
@@ -610,6 +615,7 @@ module.exports = {
   fetchBinding,
   probeLive,
   watchLive,
+  forgetTournament,
   watchStats: () => overlayWatch.stats(),
   watchEvents: overlayWatch,
   hasLiveMatch,

@@ -141,6 +141,17 @@ class OverlayProducer extends EventEmitter {
   }
 
   /**
+   * Make the active engine re-read the overlay's data from scratch and
+   * re-subscribe to its table — see refresh() on each engine for what that
+   * means there. Returns false when there is no running overlay to refresh.
+   */
+  refresh() {
+    if (!this._refreshing || !this._active || typeof this._active.refresh !== "function") return false;
+    if (this._shadow) this._shadow.refresh();
+    return this._active.refresh();
+  }
+
+  /**
    * Tell the engine whether this camera is streaming.
    *
    * Only the local renderer acts on it, and only for Ad Center impressions —

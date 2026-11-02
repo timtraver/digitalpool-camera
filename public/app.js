@@ -4269,6 +4269,30 @@ overlaySelect.addEventListener("change", () => {
   applyOverlaySettings();
 });
 
+// Reload the running overlay's data from scratch — the overlay re-subscribes to
+// its table and redraws. For a scoreboard that has stopped following the match.
+document.getElementById("overlayRefresh")?.addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/overlay/refresh?cam=${activeCamIndex}`, { method: "POST" });
+    const d = await r.json();
+    if (d.ok) {
+      showOverlayUpdating();
+    } else if (overlayNeedsRestart) {
+      clearTimeout(_overlayUpdatingHideTimer);
+      overlayNeedsRestart.textContent = `⚠️ ${d.error || "Could not refresh the overlay"}`;
+      overlayNeedsRestart.className = "overlay-needs-restart";
+      overlayNeedsRestart.style.display = "";
+      _overlayUpdatingHideTimer = setTimeout(() => { overlayNeedsRestart.style.display = "none"; }, 4000);
+    }
+  } catch (err) {
+    console.warn("Overlay refresh failed:", err);
+  }
+  // A reload takes a few seconds to land; don't let repeated taps restart it.
+  setTimeout(() => { btn.disabled = false; }, 4000);
+});
+
 // The overlay list is fetched when "Remote Overlay" is switched on (below) and
 // when a camera's saved config loads with it already enabled (streamStatus
 // handler) — not unconditionally at startup.

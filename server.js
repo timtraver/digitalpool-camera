@@ -3212,6 +3212,21 @@ app.post("/api/overlay-url", express.json(), async (req, res) => {
   res.json({ success: true, overlayUrl: url || "" });
 });
 
+// Re-read a camera's overlay from scratch, for an overlay that has stopped
+// following its table: the browser engine reloads the page (which subscribes to
+// the table again), the local engine re-subscribes and re-reads the canvas and
+// match data. The result lands as an ordinary overlay frame and is hot-swapped
+// by mtime, so this is safe mid-stream.
+app.post("/api/overlay/refresh", requireAuth, (req, res) => {
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  const camPuppeteer = camIdx === 2 ? puppeteerOverlay2 : puppeteerOverlay;
+  if (!camPuppeteer || !camPuppeteer.refresh()) {
+    return res.json({ ok: false, error: "No remote overlay is running on this camera" });
+  }
+  console.log(`🔄 [Cam${camIdx}] Overlay refresh requested (${camPuppeteer.engine || "unknown"} engine)`);
+  res.json({ ok: true });
+});
+
 // Which overlay engine each camera is actually using, and why.
 //
 // The point of this endpoint is the rollout: with OVERLAY_ENGINE=auto a device

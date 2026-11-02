@@ -241,6 +241,27 @@ class SkiaOverlay extends EventEmitter {
     }
   }
 
+  /**
+   * Forget everything read so far and read it all again now: the canvas, the
+   * ads, the tournament record, the full match binding — not the probe — and a
+   * fresh subscription to the table. For an operator who believes the overlay
+   * has stopped following the table, which with the watch healthy can otherwise
+   * take up to WATCH_RECHECK_MS to correct itself. The last frame stays on screen
+   * until the new one is drawn. Returns false when no overlay is running.
+   */
+  refresh() {
+    if (this._stopped || !this._parsed || !this._parsed.supported) return false;
+    if (this._parsed.mode === "tournament") dataSource.forgetTournament(this._parsed.slug);
+    this._canvasFetchedAt = 0;
+    this._nextAdFetchAt = 0;
+    this._fresh = null;        // makes _readLiveState do the full read, not the probe
+    this._fingerprint = null;  // redraw even if nothing turned out to have changed
+    this._stopWatch();
+    this._startWatch();
+    this._kick();
+    return true;
+  }
+
   /** Re-enter the loop now rather than waiting out the current sleep. */
   _kick() {
     this._nextFetchAt = 0;

@@ -47,6 +47,9 @@ const PROTOCOL_TIMEOUT_MS = SHOT_TIMEOUT_MS + 15000;
 // and page reloads before the whole browser is relaunched.
 const SHOT_FAILURES_BEFORE_PAGE_RESET = 3;
 const PAGE_RESETS_BEFORE_BROWSER_RESET = 3;
+// Minimum wait after an operator-requested reload before the first capture, so
+// the page has re-subscribed and drawn its data rather than its empty shell.
+const RELOAD_SETTLE_MS = 3000;
 
 // Version-agnostic connectivity check.
 // Puppeteer 20.x exposes Browser.isConnected() (a method); v22 deprecated it in
@@ -424,6 +427,20 @@ class PuppeteerOverlay extends EventEmitter {
   }
 
   /**
+   * Reload the overlay page on the next cycle. The page keeps its own
+   * subscription to the table's data and nothing else ever reconnects it short
+   * of the hourly Chromium restart, so an operator whose scoreboard has stopped
+   * following the table can use this to make the page load and subscribe again.
+   * The current PNG stays on screen until the reloaded page's first capture.
+   * Returns false when there is no running overlay to reload.
+   */
+  refresh() {
+    if (!this._overlayUrl || !this._refreshActive) return false;
+    this._reloadRequested = true;
+    return true;
+  }
+
+  /**
    * Stop periodic refresh and cancel the browser-restart timer.
    */
   _stopPeriodicRefresh() {
@@ -641,9 +658,12 @@ class PuppeteerOverlay extends EventEmitter {
       await this._ensureBrowser();
 
       // First load only: navigate to the URL and wait for JS/React to render.
-      // After that, NEVER reload — the page updates itself via subscriptions.
-      if (this._currentLoadedUrl !== this._overlayUrl) {
-        console.log(`🌍 Navigating to overlay URL: ${this._overlayUrl}`);
+      // After that, NEVER reload — the page updates itself via subscriptions —
+      // unless an operator asked for it with refresh().
+      const reloading = this._reloadRequested && this._currentLoadedUrl === this._overlayUrl;
+      this._reloadRequested = false;
+      if (reloading || this._currentLoadedUrl !== this._overlayUrl) {
+        console.log(`🌍 ${reloading ? "Reloading overlay page on request" : "Navigating to overlay URL"}: ${this._overlayUrl}`);
         // Use "domcontentloaded" instead of "networkidle0" — overlay pages often have
         // persistent WebSocket / polling connections that prevent networkidle0 from
         // ever firing, causing a silent 30-second timeout.
@@ -656,9 +676,13 @@ class PuppeteerOverlay extends EventEmitter {
         this._currentLoadedUrl = this._overlayUrl;
         this._zoomDirty = true; // Always apply zoom after navigation
 
-        // Wait for JS frameworks to finish initial render
-        console.log(`⏳ Waiting ${this._jsDelay}ms for JS framework to render...`);
-        await new Promise(r => setTimeout(r, this._jsDelay));
+        // Wait for JS frameworks to finish initial render. A reload is replacing
+        // a good frame that is probably on a live stream, so give the page longer
+        // to get its data back — a capture taken before it arrives would put a
+        // blank scoreboard on air for a cycle.
+        const settleMs = reloading ? Math.max(this._jsDelay, RELOAD_SETTLE_MS) : this._jsDelay;
+        console.log(`⏳ Waiting ${settleMs}ms for JS framework to render...`);
+        await new Promise(r => setTimeout(r, settleMs));
 
         // Detect a client-side redirect (page.url() is cached — no CDP call, safe
         // even when the renderer is wedged). A redirect right after load is one
