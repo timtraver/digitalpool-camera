@@ -514,6 +514,19 @@ def main():
         flip_method = 0
     flip_str = f'! videoflip method={flip_method} ' if flip_method != 0 else ''
 
+    # Whether videoflip can be handed NV12 directly.  The "unreliable on NV12"
+    # finding came from the Rockchip stack (mppjpegdec output); on Intel the
+    # frames reaching videoflip are plain system-memory NV12 (the video/x-raw
+    # capsfilter after vajpegdec downloads them), and GStreamer 1.24's videoflip
+    # handles that correctly.  Verified on an N97: rotate-180 and vertical flip
+    # match the BGRA path to within the half-pixel chroma shift at hard colour
+    # edges, at ~1.9 ms/frame vs ~25 ms/frame for the BGRA round-trip.
+    # Leaving NV12 for a flip also forced the PNG overlay onto cairooverlay
+    # (per-frame Python), so a flipped camera cost ~1.6 cores at 1080p30.
+    # Rockchip is unmeasured and keeps the old behaviour.
+    flip_nv12_ok = encoder in ('vah264enc', 'vah265enc')
+    flip_needs_bgra = bool(flip_str) and not flip_nv12_ok
+
     bitrate_kbps = bitrate // 1000
 
     # Parse positions (format: "top-left" -> valignment=top, halignment=left)
@@ -747,11 +760,12 @@ def main():
     #     because every frame crosses into Python and drives pycairo under the GIL.
     #
     # The fast path needs cairo (only to DECODE the PNG, once per change), GstVideo,
-    # and no flip: videoflip is documented as unreliable on NV12 here, and the cairo
-    # path only got away with it by flipping on BGRA.  Set OVERLAY_MODE=cairo to revert.
+    # and no flip that needs BGRA: videoflip is unreliable on NV12 on Rockchip, and
+    # the cairo path only got away with it by flipping on BGRA (see flip_nv12_ok).
+    # Set OVERLAY_MODE=cairo to revert.
     overlay_mode    = os.environ.get('OVERLAY_MODE', 'composition').lower()
     use_composition = (overlay_path_given and _CAIRO_OK and _GSTVIDEO_OK
-                       and overlay_mode == 'composition' and not flip_str)
+                       and overlay_mode == 'composition' and not flip_needs_bgra)
 
     # overlaycomposition costs nothing while there is nothing to draw — the draw
     # callback just hands back None — so it is always worth having in place. The
@@ -848,11 +862,11 @@ def main():
         # Reachable when nothing in the overlay chain needs BGRA:
         #   • the PNG goes through overlaycomposition (metadata, blends in NV12), or
         #     there is no PNG overlay at all, AND
-        #   • no flip (videoflip is unreliable on NV12 on this stack).
+        #   • no flip, or one videoflip can do on NV12 (see flip_nv12_ok).
         # textoverlay and clockoverlay both accept NV12 directly — verified by
         # negotiation test, and benchmarked at zero measurable cost either way.
         # This removes ~23 MB/frame of memory traffic (1.4 GB/s at 1080p60).
-        nv12_overlay_path = (has_any_overlay and not flip_str
+        nv12_overlay_path = (has_any_overlay and not flip_needs_bgra
                              and (use_composition or not has_png_overlay))
 
         if nv12_overlay_path:
@@ -903,7 +917,8 @@ def main():
             f'{prescale}'
             f'{bgra_convert}'
             # Flip after BGRA conversion so videoflip always receives a format it
-            # fully supports (BGRA).  Overlays drawn after the flip are correct
+            # fully supports (BGRA) — or, on the NV12 path, straight on NV12 (only
+            # reachable when flip_nv12_ok).  Overlays drawn after the flip are correct
             # orientation because flip_str is empty when flip_method == 0.
             f'{flip_str}'
             # ── Thread boundary between colour conversion and compositing ──
@@ -1136,9 +1151,11 @@ def main():
         + ('' if input_type == 'ndi' else
            '! queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ')
         # No-overlay + flip: insert a format-safe round-trip so videoflip never
-        # receives NV12 (unreliable on this hardware).  Overlay path skips this
-        # because flip_str is already embedded inside overlay_section (after BGRA).
-        + (f'! videoconvert ! video/x-raw,format=I420 {flip_str}! videoconvert ! video/x-raw,format=NV12 '
+        # receives NV12 where that is unreliable (Rockchip); on Intel flip NV12
+        # in place.  Overlay path skips this because flip_str is already
+        # embedded inside overlay_section.
+        + ((flip_str if flip_nv12_ok else
+            f'! videoconvert ! video/x-raw,format=I420 {flip_str}! videoconvert ! video/x-raw,format=NV12 ')
            if flip_str and not has_any_overlay else '')
         + f'{overlay_section}'
         f'! tee name=t '
