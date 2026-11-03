@@ -162,12 +162,37 @@ const Q_TABLE_MATCH = `
   }`;
 
 // Venue mode. A venue table can be carrying either a tournament match or a
-// casual match (QR-started play with no event at all), so fetch both and prefer
-// the tournament one — the order extractVenueLiveData() resolves them in.
+// casual match (QR-started play, with or without an event), so fetch both and
+// prefer the tournament one — the order extractVenueLiveData() resolves them in.
+//
+// Like the web app, venue mode counts any table match that is not COMPLETED, so
+// a match called to the table shows before its first rack; tournament mode
+// (Q_TABLE_MATCH) stays IN_PROGRESS only, as the web app's does.
+//
+// Tournaments and casual matches are both read through the venue's events as
+// well as the venue itself, because neither alone finds them all:
+//   • venue.tournaments — tournaments whose own venue_id is this venue
+//   • venue.events.tournaments — every tournament in an event held here. An
+//     event's tournaments often point at a different venue row (a ballroom or a
+//     side room set up as its own venue), so venue.tournaments never sees them;
+//     the web app reaches them the same way, through the event.
+// Both only take tournaments with a match on this table. A big event can have
+// dozens of not-started tournaments sharing the same tables, which would push
+// the one actually being played past the limit.
 //
 // The web app reads this through GET_VENUE_LIVE_TABLE_QUERY, whose fields are
 // all aliased to one or two letters to keep the payload small for a browser.
 // Nothing here needs that, so this asks for the same data by its real names.
+const LIVE_ON_TABLE = `{ status: { _neq: COMPLETED }, pool_tables: { slug: { _eq: $table_slug },
+  tournament_match_table: { status: { _neq: COMPLETED } } } }`;
+
+// A table can hold the match being played and the next one called behind it,
+// both not COMPLETED, so these take a few rows and pickTableMatch() chooses.
+const TABLE_MATCHES = `tournament_match_table(where: { status: { _neq: COMPLETED } },
+                             order_by: { updated_at: desc }, limit: 5)`;
+const CASUAL_ON_TABLE = `matches(where: { status: { _neq: COMPLETED }, pool_table: { slug: { _eq: $table_slug } } },
+              order_by: { updated_at: desc }, limit: 1)`;
+
 const Q_VENUE_TABLE = `
   query DeviceVenueTable($venue_slug: String!, $table_slug: String!) {
     venues(where: { slug: { _eq: $venue_slug } }, limit: 1) {
@@ -177,32 +202,35 @@ const Q_VENUE_TABLE = `
         user { id city region }
         venue { id name city region }
       }
-      matches(where: { status: { _neq: COMPLETED }, pool_table: { slug: { _eq: $table_slug } } },
-              order_by: { updated_at: desc }, limit: 1) {
-        id name status race_to game_type updated_at
-        start_date_time end_date_time
-        player_name player_score player_race_to player_fargo player_country player_is_winner player_is_playing
-        opponent_name opponent_score opponent_race_to opponent_fargo opponent_country opponent_is_winner opponent_is_playing
-        pool_table { id slug label }
+      ${CASUAL_ON_TABLE} { ...VenueCasualMatch }
+      tournaments(where: ${LIVE_ON_TABLE}, order_by: { id: desc }, limit: 10) { ...VenueTableTournament }
+      events(where: { deleted_at: { _is_null: true } }) {
+        ${CASUAL_ON_TABLE} { ...VenueCasualMatch }
+        tournaments(where: ${LIVE_ON_TABLE}, order_by: { id: desc }, limit: 10) { ...VenueTableTournament }
       }
-      tournaments(where: { status: { _neq: COMPLETED }, pool_tables: { slug: { _eq: $table_slug } } },
-                  order_by: { id: desc }, limit: 10) {
-        id name slug event_id logo avatar game_type winners_race_to losers_race_to
-        venue { id name city region }
-        pool_tables(where: { slug: { _eq: $table_slug } }) {
-          id slug label
-          user { id city region }
-          tournament_match_table(where: { status: { _eq: IN_PROGRESS } },
-                                 order_by: { updated_at: desc }, limit: 1) {
-            id identifier status scheduled_time start_time end_time updated_at
-            challenger1_name challenger1_country challenger1_score challenger1_points
-            challenger1_race_to challenger1_skill_level challenger1_is_playing
-            challenger2_name challenger2_country challenger2_score challenger2_points
-            challenger2_race_to challenger2_skill_level challenger2_is_playing
-            challenger1 { id name team { id name } user { id avatar } }
-            challenger2 { id name team { id name } user { id avatar } }
-          }
-        }
+    }
+  }
+  fragment VenueCasualMatch on matches {
+    id name status race_to game_type updated_at
+    start_date_time end_date_time
+    player_name player_score player_race_to player_fargo player_country player_is_winner player_is_playing
+    opponent_name opponent_score opponent_race_to opponent_fargo opponent_country opponent_is_winner opponent_is_playing
+    pool_table { id slug label }
+  }
+  fragment VenueTableTournament on tournaments {
+    id name slug event_id logo avatar game_type winners_race_to losers_race_to
+    venue { id name city region }
+    pool_tables(where: { slug: { _eq: $table_slug } }) {
+      id slug label
+      user { id city region }
+      ${TABLE_MATCHES} {
+        id identifier status scheduled_time start_time end_time updated_at
+        challenger1_name challenger1_country challenger1_score challenger1_points
+        challenger1_race_to challenger1_skill_level challenger1_is_playing
+        challenger2_name challenger2_country challenger2_score challenger2_points
+        challenger2_race_to challenger2_skill_level challenger2_is_playing
+        challenger1 { id name team { id name } user { id avatar } }
+        challenger2 { id name team { id name } user { id avatar } }
       }
     }
   }`;
@@ -220,23 +248,25 @@ const Q_VENUE_TABLE = `
 //
 // They must agree with their full counterparts about what "something is on the
 // table" means, or the renderer would sit idle through a live match: the venue
-// probe looks in the same three places fetchVenueBinding() resolves, and the
+// probe looks in the same places fetchVenueBinding() resolves, and the
 // tournament probe uses the same IN_PROGRESS filter as Q_TABLE_MATCH.
 const Q_VENUE_PROBE = `
   query DeviceVenueProbe($venue_slug: String!, $table_slug: String!) {
     venues(where: { slug: { _eq: $venue_slug } }, limit: 1) {
       id
-      matches(where: { status: { _neq: COMPLETED }, pool_table: { slug: { _eq: $table_slug } } },
-              order_by: { updated_at: desc }, limit: 1) { id updated_at }
-      tournaments(where: { status: { _neq: COMPLETED }, pool_tables: { slug: { _eq: $table_slug } } },
-                  order_by: { id: desc }, limit: 10) {
-        id
-        pool_tables(where: { slug: { _eq: $table_slug } }) {
-          id
-          tournament_match_table(where: { status: { _eq: IN_PROGRESS } },
-                                 order_by: { updated_at: desc }, limit: 1) { id updated_at }
-        }
+      ${CASUAL_ON_TABLE} { id updated_at }
+      tournaments(where: ${LIVE_ON_TABLE}, order_by: { id: desc }, limit: 10) { ...VenueProbeTournament }
+      events(where: { deleted_at: { _is_null: true } }) {
+        ${CASUAL_ON_TABLE} { id updated_at }
+        tournaments(where: ${LIVE_ON_TABLE}, order_by: { id: desc }, limit: 10) { ...VenueProbeTournament }
       }
+    }
+  }
+  fragment VenueProbeTournament on tournaments {
+    id
+    pool_tables(where: { slug: { _eq: $table_slug } }) {
+      id
+      ${TABLE_MATCHES} { id status updated_at }
     }
   }`;
 
@@ -441,6 +471,35 @@ function asSubscription(query) {
 }
 
 /**
+ * Every tournament a venue query found, from the venue's own list and from its
+ * events', without repeats. A tournament that is both at this venue and in an
+ * event here comes back from both.
+ */
+function venueTournaments(venue) {
+  const seen = new Set();
+  const all = [...(venue.tournaments || []), ...(venue.events || []).flatMap((e) => e.tournaments || [])];
+  return all.filter((t) => !seen.has(t.id) && seen.add(t.id));
+}
+
+/**
+ * Casual matches on this table, from the venue's events first and then the
+ * venue itself — the order the web app looks in. Usually the same row twice.
+ */
+function venueCasualMatches(venue) {
+  return [...(venue.events || []).flatMap((e) => e.matches || []), ...(venue.matches || [])];
+}
+
+/**
+ * The match to show from a table's not-COMPLETED rows: the one being played if
+ * there is one, else the most recently updated (rows arrive newest first). A
+ * match called to the table behind the live one must not take its place.
+ */
+function pickTableMatch(rows) {
+  if (!rows || !rows.length) return null;
+  return rows.find((r) => r.status === "IN_PROGRESS") || rows[0];
+}
+
+/**
  * Read a probe response — poll or push, the shape is the same — and say whether
  * anything is on the table. Shared so the two transports cannot disagree.
  */
@@ -448,8 +507,8 @@ function probeVerdict(parsed, data) {
   if (parsed.mode === "venue") {
     const venue = data && data.venues && data.venues[0];
     if (!venue) throw new Error(`venue '${parsed.slug}' not found`);
-    const casual = !!(venue.matches && venue.matches[0]);
-    const onTournamentTable = (venue.tournaments || []).some((t) =>
+    const casual = venueCasualMatches(venue).length > 0;
+    const onTournamentTable = venueTournaments(venue).some((t) =>
       (t.pool_tables || []).some((pt) => pt.tournament_match_table && pt.tournament_match_table.length)
     );
     return { active: casual || onTournamentTable };
@@ -559,12 +618,15 @@ async function fetchVenueBinding(parsed) {
   //   3. a standalone tournament (event_id null)
   const withMatch = (t) => {
     const pt = (t.pool_tables || []).find((x) => x.tournament_match_table && x.tournament_match_table[0]);
-    return pt ? { tournament: t, table: pt, match: pt.tournament_match_table[0] } : null;
+    return pt ? { tournament: t, table: pt, match: pickTableMatch(pt.tournament_match_table) } : null;
   };
-  const tournaments = venue.tournaments || [];
-  const eventTournament = tournaments.filter((t) => t.event_id != null).map(withMatch).find(Boolean);
-  const standalone = tournaments.filter((t) => t.event_id == null).map(withMatch).find(Boolean);
-  const casual = venue.matches && venue.matches[0];
+  // Within each group, a tournament whose match is being played beats one that
+  // only has a match called to the table.
+  const best = (found) => found.find((f) => f.match.status === "IN_PROGRESS") || found[0];
+  const tournaments = venueTournaments(venue);
+  const eventTournament = best(tournaments.filter((t) => t.event_id != null).map(withMatch).filter(Boolean));
+  const standalone = best(tournaments.filter((t) => t.event_id == null).map(withMatch).filter(Boolean));
+  const casual = venueCasualMatches(venue)[0];
 
   const venueTable = (venue.pool_tables && venue.pool_tables[0]) || null;
   // The venue itself is the fallback source for the location when the winning
