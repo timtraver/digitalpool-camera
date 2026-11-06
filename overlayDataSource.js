@@ -137,6 +137,7 @@ const Q_TOURNAMENT = `
   query DeviceTournament($slug: String!) {
     tournaments(where: { slug: { _eq: $slug } }, limit: 1) {
       id name slug logo avatar game_type winners_race_to losers_race_to
+      tournament_stage_format stages { id winners_race_to losers_race_to }
       venue { id name city region }
     }
   }`;
@@ -150,7 +151,7 @@ const Q_TABLE_MATCH = `
       user { id city region }
       venue { id name city region }
       tournament_match_table(where: { status: { _eq: IN_PROGRESS } }, order_by: { updated_at: desc }, limit: 1) {
-        id identifier status scheduled_time start_time end_time updated_at
+        id identifier status scheduled_time start_time end_time updated_at stage_id
         challenger1_name challenger1_country challenger1_score challenger1_points
         challenger1_race_to challenger1_skill_level challenger1_is_playing
         challenger2_name challenger2_country challenger2_score challenger2_points
@@ -219,12 +220,13 @@ const Q_VENUE_TABLE = `
   }
   fragment VenueTableTournament on tournaments {
     id name slug event_id logo avatar game_type winners_race_to losers_race_to
+    tournament_stage_format stages { id winners_race_to losers_race_to }
     venue { id name city region }
     pool_tables(where: { slug: { _eq: $table_slug } }) {
       id slug label
       user { id city region }
       ${TABLE_MATCHES} {
-        id identifier status scheduled_time start_time end_time updated_at
+        id identifier status scheduled_time start_time end_time updated_at stage_id
         challenger1_name challenger1_country challenger1_score challenger1_points
         challenger1_race_to challenger1_skill_level challenger1_is_playing
         challenger2_name challenger2_country challenger2_score challenger2_points
@@ -380,9 +382,30 @@ function locationFor(tournament, table) {
   return (tournament && tournament.location) || "";
 }
 
+/**
+ * A tournament's race lengths as they apply to this match. Port of the race
+ * keys of resolveRaceSettings() in the web app's getMatchRaces.js: the match's
+ * stage wins when it sets a value, and in a multi-stage tournament the
+ * tournament-level columns are stale leftovers from before it was split into
+ * stages, so they are never fallen back to.
+ */
+function raceSettingsFor(tournament, match) {
+  const stage = match && match.stage_id != null
+    ? (tournament.stages || []).find((s) => s.id === match.stage_id)
+    : null;
+  const stageOwnsSettings = !!stage && tournament.tournament_stage_format === "multi";
+  const pick = (key) => {
+    if (stage && stage[key] != null) return stage[key];
+    if (stageOwnsSettings) return null;
+    return tournament[key] != null ? tournament[key] : null;
+  };
+  return { winners_race_to: pick("winners_race_to"), losers_race_to: pick("losers_race_to") };
+}
+
 function buildBinding(tournament, table, match) {
   if (!tournament && !table && !match) return EMPTY_BINDING;
   const location = locationFor(tournament, table);
+  const races = tournament ? raceSettingsFor(tournament, match) : null;
   return {
     tournament: tournament
       ? {
@@ -392,8 +415,8 @@ function buildBinding(tournament, table, match) {
           location,
           logo: tournament.logo || tournament.avatar || null,
           game_type: gameTypeLabel(tournament.game_type),
-          winners_race_to: tournament.winners_race_to,
-          losers_race_to: tournament.losers_race_to,
+          winners_race_to: races.winners_race_to,
+          losers_race_to: races.losers_race_to,
         }
       : { ...EMPTY_BINDING.tournament, location: location || "" },
     table: table ? { id: table.id, slug: table.slug, label: table.label } : EMPTY_BINDING.table,
