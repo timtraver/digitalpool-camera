@@ -940,7 +940,8 @@
           <!-- ── Recordings Card ── -->
           <!-- Recording is armed by a remote RTSP reader (Wowza pulling), not by
                a button here — the controls below configure it, the list retrieves
-               what it captured. See recordingManager.js. -->
+               what it captured, and Save & Start New splits a running set at a
+               match boundary. See recordingManager.js. -->
           <div class="settings-card-header" id="recordingsToggle">
             <span>🎥 Recordings</span>
             <span id="recordingsLiveBadge" style="display:none;background:rgba(239,68,68,0.18);border:1px solid rgba(239,68,68,0.5);border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;color:rgba(239,68,68,0.95);margin-left:8px">● REC</span>
@@ -951,6 +952,11 @@
             <div class="admin-section">
               <div id="recordingsStatus" style="font-size:12px;line-height:1.7;opacity:0.85;margin-bottom:10px">Loading…</div>
               <div id="recordingsActive"></div>
+              <!-- Shown by _recRender() only while something is recording. -->
+              <button class="btn-wifi-action" id="recSplitBtn" style="display:none">
+                ✂️ Save &amp; Start New Recording
+              </button>
+              <div class="wifi-msg" id="recSplitMsg"></div>
             </div>
 
             <!-- Settings (admin only — the API enforces this too) -->

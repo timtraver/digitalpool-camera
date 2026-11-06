@@ -4872,6 +4872,18 @@ app.delete("/api/recordings", requireAdmin, (req, res) => {
   }
 });
 
+// Save the in-progress set and continue in new files — the operator's "next
+// match" button. requireAuth, not requireAdmin: it destroys nothing, and the
+// person running the match is the one who knows where it ends.
+app.post("/api/recordings/split", requireAuth, async (req, res) => {
+  try {
+    res.json({ success: true, ...(await recordingManager.split()) });
+  } catch (err) {
+    const code = /nothing is recording|just started|busy/.test(err.message) ? 409 : 500;
+    res.status(code).json({ success: false, error: err.message });
+  }
+});
+
 // Manual retention run — the same sweep the 10-minute timer performs.
 app.post("/api/recordings/sweep", requireAdmin, async (req, res) => {
   try {

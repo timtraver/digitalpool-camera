@@ -7288,7 +7288,10 @@ setInterval(loadDeviceIp, 15000);
 // There is deliberately no "start recording" button. Recording follows the
 // consumer: it begins when an off-box RTSP client (Wowza) starts pulling and
 // ends after the configured hold-open window. This card configures that
-// behaviour and retrieves what it produced. See recordingManager.js.
+// behaviour and retrieves what it produced. The one manual control is "Save &
+// Start New", which closes the running set at a match boundary and carries on
+// in new files — it never starts recording that wasn't already happening.
+// See recordingManager.js.
 
 let _recState = null;
 let _recTimer = null;
@@ -7393,6 +7396,15 @@ function _recRender(st) {
           ${grace}
         </div>`;
     }).join("");
+  }
+
+  const splitBtn = document.getElementById("recSplitBtn");
+  if (splitBtn) {
+    const n = (st.active || []).length;
+    splitBtn.style.display = n ? "" : "none";
+    if (!splitBtn.disabled) {
+      splitBtn.textContent = n > 1 ? "✂️ Save & Start New Recordings" : "✂️ Save & Start New Recording";
+    }
   }
 
   // ── Stored files ──
@@ -7532,6 +7544,38 @@ function initRecordings() {
       _recRefresh();
     } catch (err) {
       say(err.message, false);
+    }
+  });
+
+  document.getElementById("recSplitBtn")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const msg = document.getElementById("recSplitMsg");
+    const show = (text, ok) => {
+      if (!msg) return;
+      msg.textContent = text;
+      msg.style.color = ok ? "rgba(34,197,94,0.95)" : "rgba(239,68,68,0.95)";
+      setTimeout(() => { if (msg.textContent === text) msg.textContent = ""; }, 6000);
+    };
+    if (!confirm("Save the current recording and continue in a new file?\n\n" +
+                 "Use this between matches. Every camera that is recording is split together.")) return;
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "Saving…";
+    try {
+      const r = await fetch("/api/recordings/split", { method: "POST" });
+      const d = await r.json();
+      if (!d.success) return show(d.error || "Split failed", false);
+      const saved = `Saved ${d.saved.length} file${d.saved.length === 1 ? "" : "s"}`;
+      show(d.started.length ? `${saved} — new recording started`
+           : d.lowSpace ? `${saved} — not restarted, free space is below the floor`
+           : `${saved} — reader is gone, not restarted`,
+           d.started.length > 0);
+      _recRefresh();
+    } catch (err) {
+      show(err.message, false);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
     }
   });
 

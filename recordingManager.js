@@ -191,6 +191,9 @@ class RecordingManager extends EventEmitter {
     this._ignoredSeen = new Set();  // addresses already explained in the log
     this._freeGB     = null;    // cached — `df` every 3 s is not free on an N97
     this._freeGBAt   = 0;
+    // Files a split has detached but whose ffmpeg is still flushing. They are
+    // no longer in `state`, yet must still read as in progress; see split().
+    this._finishing  = new Set();
   }
 
   // ── lifecycle ────────────────────────────────────────────────────────────
@@ -558,9 +561,100 @@ class RecordingManager extends EventEmitter {
     if (changed) this._emitState();
   }
 
+  // ── manual split ─────────────────────────────────────────────────────────
+
+  /**
+   * Save the current set of recordings and carry on in new files, e.g.
+   * between matches, so each match is its own download rather than one
+   * multi-hour file the operator has to trim.
+   *
+   * Every camera splits together and the new files share one timestamp, so
+   * the set still lines up as two angles of the same match.
+   *
+   * The new recorder starts BEFORE the old one is stopped. Stopping first
+   * would leave a gap: up to 5 s for ffmpeg to flush, plus the wait for the
+   * next keyframe. Overlapping costs a second ffmpeg remux for a few seconds,
+   * which is nothing, and the split loses no footage.
+   *
+   * A path in its grace window (reader gone) is only stopped, not restarted —
+   * nothing is pulling it, so a new file would just be the tail of an empty
+   * hold-open window.
+   */
+  async split() {
+    // Hold the poll lock so a tick cannot see a half-swapped path and start a
+    // third recorder, or stop the new one as reader-less.
+    const deadline = Date.now() + 10000;
+    while (this._polling) {
+      if (Date.now() > deadline) throw new Error("recorder is busy, try again");
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    this._polling = true;
+    try {
+      const recording = [...this.state.values()].filter((s) => s.proc && !s.stopping && !s.exited);
+      if (!recording.length) throw new Error("nothing is recording");
+
+      // Second-resolution names: a split straight after a start would reuse
+      // the file ffmpeg is still writing.
+      if (recording.some((s) => Date.now() - s.startedAt < 2000)) {
+        throw new Error("recording only just started, try again in a moment");
+      }
+
+      const freeGB = await this._freeGBCached();
+      const lowSpace = freeGB !== null && freeGB < this.config.minFreeGB;
+      const when = new Date();
+      const old = [];
+      const started = [];
+
+      for (const s of recording) {
+        // Detach the running ffmpeg onto its own record so _startRecording can
+        // reuse `s`. Its close handler already ignores a proc that is no longer
+        // s.proc, so the old one exiting cannot mark the new one dead.
+        const prev = { ...s };
+        const inGrace = !!s.graceUntil;
+        old.push(prev);
+        this._finishing.add(prev.name);
+        // Cleared before restarting, not after: _startRecording can bail out
+        // (store unwritable) and must not leave `s` naming the old file.
+        s.proc = null; s.name = null; s.file = null; s.exited = null;
+        s.startedAt = null; s.readerIp = null; s.graceUntil = null; s.stopping = false;
+
+        if (inGrace || lowSpace) continue;
+        await this._startRecording(s, prev.readerIp, when);
+        if (s.proc) started.push(s.name);
+      }
+
+      // Every camera must be clear of the grace deadline the old files were on.
+      if (!started.length) this._groupGraceUntil = null;
+
+      const saved = [];
+      await Promise.all(old.map(async (prev) => {
+        const name = prev.name;   // _finalize clears it
+        try {
+          await this._stopRecording(prev, "split manually");
+          saved.push(name);
+        } finally {
+          this._finishing.delete(name);
+        }
+      }));
+
+      // _finalize discards a file too small to be footage; report only what
+      // actually reached disk.
+      const kept = saved.filter((n) => fs.existsSync(path.join(RECORDINGS_DIR, n)));
+      console.log(
+        `🎥 Split by operator — saved ${kept.join(", ") || "nothing"}; ` +
+        (started.length ? `continuing in ${started.join(", ")}` : "not restarted") +
+        (lowSpace ? " (free space below floor)" : "")
+      );
+      this._emitState();
+      return { saved: kept, started, lowSpace };
+    } finally {
+      this._polling = false;
+    }
+  }
+
   // ── start / stop ─────────────────────────────────────────────────────────
 
-  async _startRecording(s, readerIp) {
+  async _startRecording(s, readerIp, when = new Date()) {
     if (!this._ensureDir()) {
       if (s.lastError !== "no-dir") {
         s.lastError = "no-dir";
@@ -569,7 +663,7 @@ class RecordingManager extends EventEmitter {
       return;
     }
 
-    const name = `dp-rec-${s.label}-${stamp()}.mp4`;
+    const name = `dp-rec-${s.label}-${stamp(when)}.mp4`;
     const file = path.join(RECORDINGS_DIR, name);
 
     // -c copy: remux only, no decode/encode. The N97 is already carrying two
@@ -814,7 +908,7 @@ class RecordingManager extends EventEmitter {
       const full = path.join(RECORDINGS_DIR, name);
       const meta = this._readSidecar(full) || {};
       const st   = (() => { try { return fs.statSync(full); } catch { return null; } })();
-      const live = active.get(name);
+      const live = active.get(name) || this._finishing.has(name);
       const startedAt = meta.startedAt ?? (st ? st.mtimeMs : null);
       const endedAt   = live ? null : (meta.endedAt ?? (st ? st.mtimeMs : null));
       return {
@@ -865,9 +959,7 @@ class RecordingManager extends EventEmitter {
   /** Refuses to delete a file that is currently being written. */
   remove(name) {
     if (!safeRecordingName(name)) throw new Error("bad recording name");
-    for (const s of this.state.values()) {
-      if (s.name === name) throw new Error("recording is still in progress");
-    }
+    if (this.isRecording(name)) throw new Error("recording is still in progress");
     const full = path.join(RECORDINGS_DIR, name);
     // Distinguish "already gone" from a real failure so the route can answer
     // 404 rather than a 500 that reads like the delete broke.
@@ -886,7 +978,10 @@ class RecordingManager extends EventEmitter {
    */
   async sweep() {
     if (!this.dirOk) return { deleted: [] };
-    const activeNames = new Set([...this.state.values()].map((s) => s.name).filter(Boolean));
+    const activeNames = new Set([
+      ...[...this.state.values()].map((s) => s.name).filter(Boolean),
+      ...this._finishing,
+    ]);
     const deleted = [];
 
     const candidates = this.list().filter((r) => !activeNames.has(r.name) && !r.recording);
@@ -969,6 +1064,7 @@ class RecordingManager extends EventEmitter {
   }
 
   isRecording(name) {
+    if (this._finishing.has(name)) return true;
     for (const s of this.state.values()) if (s.name === name) return true;
     return false;
   }
