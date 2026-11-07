@@ -1645,6 +1645,7 @@ Sample output every 5 minutes:
 | `MemoryMax=2500M` | Memory leak before it gets dangerous | Restarts the service cleanly |
 | `network-watchdog.timer` (every 10 min) | All uplinks unreachable for 20+ min (hotspot doesn't count) | Clean system reboot |
 | Hardware watchdog (`RuntimeWatchdogSec=60`) | Complete kernel freeze | Hardware-forced board reset |
+| Kernel panic-reboot sysctls (migration 0027) | Kernel crash, oops, or CPU soft/hard lockup | Kernel reboots itself after 10 s — independent of iTCO |
 | `monitor-camera.timer` (every 5 min) | Per-process memory trend | Logs to `/var/log/digitalpool-monitor.log` |
 
 ---
