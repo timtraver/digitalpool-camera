@@ -7493,6 +7493,7 @@ function _recFillForm(cfg) {
   const chk = document.getElementById("recEnabled");
   if (chk && document.activeElement !== chk) chk.checked = !!cfg.enabled;
   set("recGraceSeconds",  cfg.graceSeconds);
+  set("recSplitMinutes",  cfg.splitMinutes);
   set("recRetentionDays", cfg.retentionDays);
   set("recMaxTotalGB",    cfg.maxTotalGB);
   set("recMinFreeGB",     cfg.minFreeGB);
@@ -7517,6 +7518,7 @@ function initRecordings() {
         body: JSON.stringify({
           enabled:       !!document.getElementById("recEnabled")?.checked,
           graceSeconds:  num("recGraceSeconds"),
+          splitMinutes:  num("recSplitMinutes"),
           retentionDays: num("recRetentionDays"),
           maxTotalGB:    num("recMaxTotalGB"),
           minFreeGB:     num("recMinFreeGB"),

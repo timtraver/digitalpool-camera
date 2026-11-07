@@ -83,6 +83,8 @@ const DEFAULT_CONFIG = {
   // Comfortably past the 19 s Wowza took to reconnect on 2026-09-14, without
   // holding a file open long after a reader has genuinely finished.
   graceSeconds:  30,
+  // Start a new file this often (0 = never). See _maybeAutoSplit.
+  splitMinutes:  60,
   retentionDays: 7,
   maxTotalGB:    120,
   minFreeGB:     20,
@@ -188,6 +190,7 @@ class RecordingManager extends EventEmitter {
     this._sweepTimer = null;
     this._polling    = false;   // re-entrancy guard; a stop can take 5 s
     this._groupGraceUntil = null;  // shared stop deadline; see _pollOnce
+    this._autoSplitRetryAt = 0;    // backoff after a failed timed split
     this._ignoredSeen = new Set();  // addresses already explained in the log
     this._freeGB     = null;    // cached — `df` every 3 s is not free on an N97
     this._freeGBAt   = 0;
@@ -210,6 +213,7 @@ class RecordingManager extends EventEmitter {
     console.log(
       `🎥 Recording manager started — ${this.config.enabled ? "ENABLED" : "disabled"}, ` +
       `dir=${RECORDINGS_DIR}, grace=${this.config.graceSeconds}s, ` +
+      `split=${this.config.splitMinutes > 0 ? `${this.config.splitMinutes}min` : "off"}, ` +
       `retention=${this.config.retentionDays}d/${this.config.maxTotalGB}GB, floor=${this.config.minFreeGB}GB`
     );
   }
@@ -261,6 +265,12 @@ class RecordingManager extends EventEmitter {
 
     if ("enabled"       in patch) next.enabled       = !!patch.enabled;
     if ("graceSeconds"  in patch) next.graceSeconds  = n(patch.graceSeconds,  0,  3600, next.graceSeconds);
+    // 0 turns splitting off; anything else is held to at least 5 minutes so a
+    // typo can't make the recorder churn files.
+    if ("splitMinutes"  in patch) {
+      const m = n(patch.splitMinutes, 0, 1440, next.splitMinutes);
+      next.splitMinutes = m > 0 && m < 5 ? 5 : m;
+    }
     if ("retentionDays" in patch) next.retentionDays = n(patch.retentionDays, 1,   365, next.retentionDays);
     if ("maxTotalGB"    in patch) next.maxTotalGB    = n(patch.maxTotalGB,    1, 10000, next.maxTotalGB);
     if ("minFreeGB"     in patch) next.minFreeGB     = n(patch.minFreeGB,     1,  1000, next.minFreeGB);
@@ -415,6 +425,7 @@ class RecordingManager extends EventEmitter {
     this._polling = true;
     try {
       await this._pollOnce();
+      await this._maybeAutoSplit();
     } finally {
       this._polling = false;
     }
@@ -590,66 +601,106 @@ class RecordingManager extends EventEmitter {
     }
     this._polling = true;
     try {
-      const recording = [...this.state.values()].filter((s) => s.proc && !s.stopping && !s.exited);
-      if (!recording.length) throw new Error("nothing is recording");
-
-      // Second-resolution names: a split straight after a start would reuse
-      // the file ffmpeg is still writing.
-      if (recording.some((s) => Date.now() - s.startedAt < 2000)) {
-        throw new Error("recording only just started, try again in a moment");
-      }
-
-      const freeGB = await this._freeGBCached();
-      const lowSpace = freeGB !== null && freeGB < this.config.minFreeGB;
-      const when = new Date();
-      const old = [];
-      const started = [];
-
-      for (const s of recording) {
-        // Detach the running ffmpeg onto its own record so _startRecording can
-        // reuse `s`. Its close handler already ignores a proc that is no longer
-        // s.proc, so the old one exiting cannot mark the new one dead.
-        const prev = { ...s };
-        const inGrace = !!s.graceUntil;
-        old.push(prev);
-        this._finishing.add(prev.name);
-        // Cleared before restarting, not after: _startRecording can bail out
-        // (store unwritable) and must not leave `s` naming the old file.
-        s.proc = null; s.name = null; s.file = null; s.exited = null;
-        s.startedAt = null; s.readerIp = null; s.graceUntil = null; s.stopping = false;
-
-        if (inGrace || lowSpace) continue;
-        await this._startRecording(s, prev.readerIp, when);
-        if (s.proc) started.push(s.name);
-      }
-
-      // Every camera must be clear of the grace deadline the old files were on.
-      if (!started.length) this._groupGraceUntil = null;
-
-      const saved = [];
-      await Promise.all(old.map(async (prev) => {
-        const name = prev.name;   // _finalize clears it
-        try {
-          await this._stopRecording(prev, "split manually");
-          saved.push(name);
-        } finally {
-          this._finishing.delete(name);
-        }
-      }));
-
-      // _finalize discards a file too small to be footage; report only what
-      // actually reached disk.
-      const kept = saved.filter((n) => fs.existsSync(path.join(RECORDINGS_DIR, n)));
-      console.log(
-        `🎥 Split by operator — saved ${kept.join(", ") || "nothing"}; ` +
-        (started.length ? `continuing in ${started.join(", ")}` : "not restarted") +
-        (lowSpace ? " (free space below floor)" : "")
-      );
-      this._emitState();
-      return { saved: kept, started, lowSpace };
+      return await this._splitLocked("split manually", "Split by operator");
     } finally {
       this._polling = false;
     }
+  }
+
+  /**
+   * Split on a timer so no single file grows without bound.
+   *
+   * On 2026-11-07 a reader stayed connected overnight and cam2 wrote one
+   * 33.5 GB file across 15 hours, right up to the moment the box froze. A file
+   * that size takes ages to download, can't be copied to a FAT32 stick (4 GiB
+   * limit), and puts a whole night's footage at the mercy of one container.
+   * At ~2.15 GiB/hour, the 60-minute default keeps every file under that 4 GiB
+   * line with room to spare.
+   *
+   * Runs inside the poll lock (from _poll), and waits out a grace window rather
+   * than splitting into it: split() would only stop such a path, which is the
+   * poll loop's job anyway.
+   */
+  async _maybeAutoSplit() {
+    const minutes = this.config.splitMinutes;
+    if (!(minutes > 0)) return;
+    const now = Date.now();
+    if (now < this._autoSplitRetryAt) return;
+
+    const recording = [...this.state.values()].filter((s) => s.proc && !s.stopping && !s.exited);
+    if (!recording.length || recording.some((s) => s.graceUntil)) return;
+    // The oldest file decides, and every camera splits with it — the same rule
+    // as the operator's button, so the sets stay aligned for editing.
+    const oldest = Math.min(...recording.map((s) => s.startedAt));
+    if (now - oldest < minutes * 60 * 1000) return;
+
+    try {
+      await this._splitLocked(`split at ${minutes} min`, `Split automatically after ${minutes} min`);
+    } catch (err) {
+      // Don't retry every 3 s tick into the same failure.
+      this._autoSplitRetryAt = now + 60 * 1000;
+      console.error(`🎥 Automatic split failed, retrying in 60s: ${err.message}`);
+    }
+  }
+
+  async _splitLocked(reason, logPrefix) {
+    const recording = [...this.state.values()].filter((s) => s.proc && !s.stopping && !s.exited);
+    if (!recording.length) throw new Error("nothing is recording");
+
+    // Second-resolution names: a split straight after a start would reuse
+    // the file ffmpeg is still writing.
+    if (recording.some((s) => Date.now() - s.startedAt < 2000)) {
+      throw new Error("recording only just started, try again in a moment");
+    }
+
+    const freeGB = await this._freeGBCached();
+    const lowSpace = freeGB !== null && freeGB < this.config.minFreeGB;
+    const when = new Date();
+    const old = [];
+    const started = [];
+
+    for (const s of recording) {
+      // Detach the running ffmpeg onto its own record so _startRecording can
+      // reuse `s`. Its close handler already ignores a proc that is no longer
+      // s.proc, so the old one exiting cannot mark the new one dead.
+      const prev = { ...s };
+      const inGrace = !!s.graceUntil;
+      old.push(prev);
+      this._finishing.add(prev.name);
+      // Cleared before restarting, not after: _startRecording can bail out
+      // (store unwritable) and must not leave `s` naming the old file.
+      s.proc = null; s.name = null; s.file = null; s.exited = null;
+      s.startedAt = null; s.readerIp = null; s.graceUntil = null; s.stopping = false;
+
+      if (inGrace || lowSpace) continue;
+      await this._startRecording(s, prev.readerIp, when);
+      if (s.proc) started.push(s.name);
+    }
+
+    // Every camera must be clear of the grace deadline the old files were on.
+    if (!started.length) this._groupGraceUntil = null;
+
+    const saved = [];
+    await Promise.all(old.map(async (prev) => {
+      const name = prev.name;   // _finalize clears it
+      try {
+        await this._stopRecording(prev, reason);
+        saved.push(name);
+      } finally {
+        this._finishing.delete(name);
+      }
+    }));
+
+    // _finalize discards a file too small to be footage; report only what
+    // actually reached disk.
+    const kept = saved.filter((n) => fs.existsSync(path.join(RECORDINGS_DIR, n)));
+    console.log(
+      `🎥 ${logPrefix} — saved ${kept.join(", ") || "nothing"}; ` +
+      (started.length ? `continuing in ${started.join(", ")}` : "not restarted") +
+      (lowSpace ? " (free space below floor)" : "")
+    );
+    this._emitState();
+    return { saved: kept, started, lowSpace };
   }
 
   // ── start / stop ─────────────────────────────────────────────────────────

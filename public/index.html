@@ -979,6 +979,13 @@
                     Keeps one continuous file across a brief reconnect. On 2026-09-14 Wowza came back after 19 s.
                   </small>
 
+                  <label>Start a new file every <small>(minutes — 0 = never)</small></label>
+                  <input type="number" id="recSplitMinutes" min="0" max="1440" step="5" />
+                  <small style="opacity:0.7;display:block;margin:-4px 0 8px">
+                    All cameras split together without losing footage. 60 minutes is about 2.2 GB per camera,
+                    under the 4 GB limit of a FAT32 USB stick.
+                  </small>
+
                   <label>Delete recordings older than <small>(days)</small></label>
                   <input type="number" id="recRetentionDays" min="1" max="365" step="1" />
 
@@ -1663,6 +1670,6 @@
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-    <script src="app.js?v=20"></script>
+    <script src="app.js?v=21"></script>
   </body>
 </html>
