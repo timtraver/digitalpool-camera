@@ -136,7 +136,9 @@ serves SRT on **8891**, camera 2 on **8892**.
 cover streaming/receiver setup. `AUDIO.md` covers the two things done to the sound:
 how A/V sync is measured rather than configured (there is no offset setting), and the
 LADSPA background-music filter in `audio/`. `SUBSCRIPTION_CHECK.md` is the device↔cloud-function
-contract for subscription enforcement. `SYSTEM_IMAGE.md` covers golden-image capture and the
+contract for subscription enforcement. `BLUETOOTH_ONBOARDING.md` is the design (not yet built) for
+replacing hotspot onboarding with BLE setup from the DigitalPool mobile app, including the GATT
+protocol and the backend grant contract. `SYSTEM_IMAGE.md` covers golden-image capture and the
 self-installing USB built from it (`dp-create-image.sh` → `dp-build-recovery-iso.sh` →
 `dp-factory-install.sh` → `dp-restore.sh` → `dp-firstboot.sh`); `FACTORY_INSTALL.md` is the
 operator-facing copy of that flow written for the OEM factory, not for us. `.sh`/`.service`/`.timer`/`.rules` files at the repo root are
