@@ -28,6 +28,19 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=digitalpool-camera
 
+# BLE onboarding: bleBridge.js opens its unix socket in /run/digitalpool-camera
+# and ble/dp-ble.py (running as the same user) connects to it.
+#
+# That directory is deliberately NOT a RuntimeDirectory= of this unit. It used
+# to be, and it meant the directory only existed while this service was
+# running — so digitalpool-ble.service, which is independent of it on purpose,
+# could not even start at boot if it got there first, and died with
+# 226/NAMESPACE rather than anything that named the real problem. It is now
+# created at boot by /etc/tmpfiles.d/digitalpool-camera.conf (migration 0032),
+# owned by dp, 0700, and belongs to neither service. bleBridge.js removes a
+# stale socket at startup, which is what RuntimeDirectory was buying.
+# See BLUETOOTH_ONBOARDING.md §4.3.
+
 # Environment variables
 Environment=NODE_ENV=production
 Environment=PORT=3000

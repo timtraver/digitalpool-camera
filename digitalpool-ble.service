@@ -1,0 +1,49 @@
+[Unit]
+Description=DigitalPool BLE onboarding
+Documentation=file:/home/dp/digitalpool-camera/BLUETOOTH_ONBOARDING.md
+After=bluetooth.service
+Wants=bluetooth.service
+
+# Deliberately NOT bound to digitalpool-camera.service.  If Node restarts, this
+# keeps advertising and answers UNAVAILABLE, then reconnects to the socket with
+# backoff.  A phone that is mid-setup sees an honest error for a few seconds
+# instead of the camera vanishing from its list.
+
+[Service]
+Type=simple
+User=dp
+Group=dp
+SupplementaryGroups=bluetooth
+WorkingDirectory=/home/dp/digitalpool-camera
+# The adapter can come up soft-blocked after a suspend or a driver reload, and
+# dp cannot unblock it.  The leading + runs this one step as root.
+ExecStartPre=+/usr/sbin/rfkill unblock bluetooth
+ExecStart=/usr/bin/python3 -u /home/dp/digitalpool-camera/ble/dp-ble.py
+Restart=always
+RestartSec=3
+
+# It talks to bluetoothd over D-Bus and to Node over a unix socket.  Nothing
+# else, so it can give up almost everything.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The leading - means "ignore it if it is not there". Without it, systemd
+# cannot set up the mount namespace and the unit dies with 226/NAMESPACE
+# before ExecStart is even reached — a crash loop on any box where the
+# directory does not exist yet, which is every box at first install and any
+# boot where this service starts before digitalpool-camera. The directory is
+# created by /etc/tmpfiles.d/digitalpool-camera.conf (migration 0032); this
+# only has to survive the case where it somehow is not.
+ReadWritePaths=-/run/digitalpool-camera
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_BLUETOOTH AF_NETLINK
+MemoryMax=128M
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=digitalpool-ble
+
+[Install]
+WantedBy=multi-user.target
