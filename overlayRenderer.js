@@ -865,16 +865,132 @@ function wrapLines(ctx, text, maxWidth) {
   return lines;
 }
 
-function drawText(ctx, text, box, style) {
+// ── Fitted text ──────────────────────────────────────────────────────────────
+// Port of FitText.js. An element with "Fit" on keeps each line on ONE line and
+// shrinks the type until it fits, down to MIN_FIT_SCALE of the set size; past
+// that the line is cut with an ellipsis. With "2 lines" on, a doubles pair goes
+// one player per line, and a long single name breaks into two even lines when
+// that lets it be drawn bigger than shrinking would.
+const MIN_FIT_SCALE = 0.55;
+// Stacked lines need room for descenders even when the element's line height is 1.
+const STACKED_LINE_HEIGHT = 1.08;
+// A doubles pair arrives as one name joined by "&", "/", "+" or "and". Anything
+// else stays whole: one player, a team's own name, or three or more players.
+const PAIR_SEPARATOR = /\s*[&/+]\s*|\s+and\s+/i;
+
+function splitPair(name) {
+  const text = name == null ? "" : String(name).trim();
+  const parts = text.split(PAIR_SEPARATOR).map((part) => part.trim());
+  return parts.length === 2 && parts.every((part) => part.length > 1) ? parts : [text];
+}
+
+/** A line broken into two as evenly as its spaces allow, or null with no space to break at. */
+function balancedSplit(text) {
+  const words = String(text || "").split(" ").filter(Boolean);
+  let best = null;
+  for (let i = 1; i < words.length; i++) {
+    const lines = [words.slice(0, i).join(" "), words.slice(i).join(" ")];
+    const longest = Math.max(lines[0].length, lines[1].length);
+    if (!best || longest < best.longest) best = { lines, longest };
+  }
+  return best && best.lines;
+}
+
+function lineHeightFor(setLineHeight, count) {
+  return count > 1 ? Math.max(setLineHeight, STACKED_LINE_HEIGHT) : setLineHeight;
+}
+
+/**
+ * The size that fits `lineCount` lines into the box: no larger than the set
+ * size, narrow enough for the widest line (measured at `measuredAt` px), short
+ * enough for the lines together, never under `min`. Rounded DOWN to the half
+ * pixel, as the component does.
+ */
+function fitFontSize({ size, min, measuredAt, widths, boxWidth, boxHeight, lineCount, lineHeight }) {
+  let fit = size;
+  const widest = Math.max(0, ...widths);
+  if (widest > 0 && boxWidth > 0 && measuredAt > 0) fit = Math.min(fit, (measuredAt * boxWidth) / widest);
+  if (boxHeight > 0) fit = Math.min(fit, boxHeight / (lineCount * lineHeight));
+  return Math.max(min, Math.floor(fit * 2) / 2);
+}
+
+/**
+ * The size and lines FitText settles on.
+ *
+ * This iterates rather than solving in one step, because the component does and
+ * because the one-step answer is wrong: letter-spacing is a fixed number of
+ * pixels per character and does NOT scale with the type, so a line's width is
+ * not proportional to its font size. React re-measures at each new size until
+ * the answer stops moving; this is the same loop, bounded.
+ */
+function resolveFit(ctx, style, box, given, wrap) {
+  const size = style.fontSize || 32;
+  const setLineHeight = style.lineHeight || 1.2;
+  const min = Math.round(size * MIN_FIT_SCALE);
+  let lines = given;
+  let fontSize = size;
+  for (let pass = 0; pass < 10; pass++) {
+    ctx.font = fontString({ ...style, fontSize });
+    const widths = lines.map((line) => ctx.measureText(line).width);
+    const room = { size, min, measuredAt: fontSize, boxWidth: box.w, boxHeight: box.h };
+    const next = fitFontSize({
+      ...room, widths, lineCount: lines.length, lineHeight: lineHeightFor(setLineHeight, lines.length),
+    });
+    // Would breaking this one line in two let it be drawn bigger? Each half's
+    // width is estimated from its share of the characters, exactly as the
+    // component estimates it; the halves are then measured for real next pass.
+    if (wrap && lines.length === 1 && widths[0] > 0) {
+      const halves = balancedSplit(lines[0]);
+      if (halves) {
+        const share = (half) => (widths[0] * half.length) / lines[0].length;
+        const two = fitFontSize({
+          ...room, widths: halves.map(share), lineCount: 2, lineHeight: lineHeightFor(setLineHeight, 2),
+        });
+        if (two > next + 1) { lines = halves; continue; }
+      }
+    }
+    if (Math.abs(fontSize - next) < 0.5) break;   // settled; keep the drawn size
+    fontSize = next;
+  }
+  return { lines, fontSize, lineHeight: lineHeightFor(setLineHeight, lines.length) };
+}
+
+/** text-overflow: ellipsis — the longest prefix that still fits with the ellipsis on it. */
+function ellipsize(ctx, line, maxWidth) {
+  if (maxWidth <= 0 || ctx.measureText(line).width <= maxWidth) return line;
+  let lo = 0, hi = line.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (ctx.measureText(`${line.slice(0, mid)}\u2026`).width <= maxWidth) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo > 0 ? `${line.slice(0, lo)}\u2026` : "\u2026";
+}
+
+function drawText(ctx, text, box, style, opts = {}) {
   const content = applyTextTransform(text, style.textTransform);
   if (!content) return;
 
   ctx.font = fontString(style);
+  // letter-spacing has to be on the context BEFORE anything is measured, or
+  // the fitted size comes from widths the text will not actually be drawn at.
   if (style.letterSpacing) ctx.letterSpacing = `${style.letterSpacing}px`;
   else ctx.letterSpacing = "0px";
 
-  const lineHeight = (style.lineHeight || 1.2) * (style.fontSize || 32);
-  const lines = wrapLines(ctx, content, box.w);
+  let lines, fontSize = style.fontSize || 32, lineHeightFactor = style.lineHeight || 1.2;
+  if (opts.fit || opts.twoLines) {
+    const resolved = resolveFit(ctx, style, box, opts.twoLines ? splitPair(content) : [content], !!opts.twoLines);
+    fontSize = resolved.fontSize;
+    lineHeightFactor = resolved.lineHeight;
+    ctx.font = fontString({ ...style, fontSize });
+    // Each line is `white-space: nowrap` with an ellipsis — never wrapped.
+    lines = resolved.lines.map((line) => ellipsize(ctx, line, box.w));
+  } else {
+    // A plain div wraps at spaces, which is what the element renders without
+    // "Fit" on.
+    lines = wrapLines(ctx, content, box.w);
+  }
+  const lineHeight = lineHeightFactor * fontSize;
 
   // align-items: center on the flex container — the whole text block is centred
   // vertically in the content box, overflowing symmetrically when it is taller.
@@ -886,8 +1002,8 @@ function drawText(ctx, text, box, style) {
   ctx.textBaseline = "alphabetic";
 
   const metrics = ctx.measureText("Mg");
-  const ascent = metrics.fontBoundingBoxAscent ?? (style.fontSize || 32) * 0.8;
-  const descent = metrics.fontBoundingBoxDescent ?? (style.fontSize || 32) * 0.2;
+  const ascent = metrics.fontBoundingBoxAscent ?? fontSize * 0.8;
+  const descent = metrics.fontBoundingBoxDescent ?? fontSize * 0.2;
   // CSS half-leading: the font's content area is centred in the line box.
   const baselineOffset = (lineHeight - (ascent + descent)) / 2 + ascent;
 
@@ -1291,7 +1407,14 @@ function drawElement(ctx, element, binding, images, assets, now = Date.now(), an
     const pad = style.padding || 0;
     const bw = border ? border.width : 0;
     const inset = pad + bw;
-    drawText(ctx, text, { x: inset, y: inset, w: Math.max(0, w - inset * 2), h: Math.max(0, h - inset * 2) }, textStyle);
+    drawText(
+      ctx, text,
+      { x: inset, y: inset, w: Math.max(0, w - inset * 2), h: Math.max(0, h - inset * 2) },
+      textStyle,
+      // "2 lines" is offered on the player name only — it is the one field that
+      // can hold two people.
+      { fit: !!element.fit, twoLines: element.type === "player_name" && !!element.twoLines }
+    );
   }
 
   ctx.restore();
@@ -1428,5 +1551,5 @@ module.exports = {
   SUPPORTED,
   INHERIT_FAMILY,
   // exported for tests
-  _internals: { withoutExtraPngChunks, imageUrlFor, scaledForBox, carouselState, carouselImages, adsFor, adVenueIdFor, adCarouselState, resolveAdDuration, easeInOut, wrapLines, parseRadii, compensateShadowAlpha, countryShortCode, flagSourceFor, gameTypeImagePath, parseShadows, parseBorder, gradientPoints, matchClockText, applyTextTransform, objectFitRect, countryKey, countryCodeText, countryNameText, matchRoundText, breakingPlayer, countdownFor, countdownLengthSeconds, countdownSecondsLeft, formatCountdownClock, countdownRunning },
+  _internals: { withoutExtraPngChunks, imageUrlFor, scaledForBox, carouselState, carouselImages, adsFor, adVenueIdFor, adCarouselState, resolveAdDuration, easeInOut, wrapLines, parseRadii, compensateShadowAlpha, countryShortCode, flagSourceFor, gameTypeImagePath, parseShadows, parseBorder, gradientPoints, matchClockText, applyTextTransform, objectFitRect, countryKey, countryCodeText, countryNameText, matchRoundText, breakingPlayer, countdownFor, countdownLengthSeconds, countdownSecondsLeft, formatCountdownClock, countdownRunning, splitPair, balancedSplit, fitFontSize, ellipsize, resolveFit },
 };
