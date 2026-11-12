@@ -221,10 +221,18 @@ function applySubscriptionStatus(sub) {
   const planRow    = document.getElementById("regStatusSubscription");
   const checkedRow = document.getElementById("regStatusSubChecked");
 
-  if (banner) banner.style.display = subscriptionOk ? "none" : "";
-  if (bannerText && !subscriptionOk)
-    bannerText.textContent = sub.message || "An active DigitalPool subscription is required to stream.";
-  if (badge) badge.style.display = subscriptionOk ? "none" : "";
+  // Streaming no longer requires a subscription (Tim, 2026-11-11), so neither
+  // the banner nor the badge may claim it is blocked — they said "An active
+  // DigitalPool subscription is required to stream", which is now simply
+  // untrue, and a red banner over a camera that streams fine is worse than no
+  // banner at all. What the account HAS is still shown, in the rows below and
+  // in Admin Settings → Subscription, links included.
+  //
+  // Output modes that need the Advanced Streaming package are still locked,
+  // through lockedProtocols/applyProtocolLocks, which carries its own wording.
+  if (banner) banner.style.display = "none";
+  if (badge)  badge.style.display  = "none";
+  if (bannerText) bannerText.textContent = "";
 
   if (planRow) {
     if (sub.active === true) {
@@ -5178,6 +5186,25 @@ setInterval(loadDeviceIp, 15000);
       const d = await r.json();
       if (!d.success) return;
 
+      // The Device Hotspot card is hidden on a camera that has no hotspot —
+      // under BLE onboarding it never raises one, so offering an SSID and
+      // password for it would be offering a setting that does nothing. Shown
+      // only when the device says the hotspot applies, which keeps it working
+      // for boxes still on hotspot onboarding.
+      const hotspotCard = document.getElementById("hotspotCard");
+      if (hotspotCard) {
+        hotspotCard.style.display = d.hotspotAvailable === false ? "none" : "";
+      }
+      // The Ethernet-change warning offers the hotspot as a way back in. On a
+      // camera that has none, that is advice which would strand whoever
+      // follows it — the way back is the DigitalPool app over Bluetooth.
+      const ethHint = document.getElementById("ethFallbackHint");
+      if (ethHint) {
+        if (d.hotspotAvailable === false) {
+          ethHint.textContent = ", or reach the camera from the DigitalPool app over Bluetooth";
+        }
+      }
+
       // AP badge
       const badge = document.getElementById("apBadge");
       if (badge) {
@@ -5620,8 +5647,21 @@ setInterval(loadDeviceIp, 15000);
     window.location.href = "/login";
   });
 
+  // A session handed over from the mobile app (BLUETOOTH_ONBOARDING.md §9.2)
+  // belongs to a DigitalPool account, not to a local user in users.json. There
+  // is no local password to change, so the Change Password form would post to
+  // /api/users/app/password and fail with "user not found". Hide it, and offer
+  // the header name the app's identity instead of the placeholder username.
+  if (currentUser.via === "app") {
+    const details = document.getElementById("changePasswordDetails");
+    if (details) details.style.display = "none";
+    if (headerUsername && currentUser.displayName) {
+      headerUsername.textContent = `👤 ${currentUser.displayName}`;
+    }
+  }
+
   // Force-password-change banner — show it when forcePasswordChange is set and auto-open admin settings
-  if (currentUser.forcePasswordChange && !currentUser.hotspot) {
+  if (currentUser.forcePasswordChange && !currentUser.hotspot && currentUser.via !== "app") {
     const banner = document.getElementById("forcePasswordBanner");
     if (banner) banner.style.display = "block";
     // Auto-open the Admin Settings card and the Change Password section
@@ -6748,7 +6788,9 @@ setInterval(loadDeviceIp, 15000);
       if (noInternetArea)   noInternetArea.style.display   = "none";
       if (formArea)         formArea.style.display         = "none";
       if (statusArea)       statusArea.style.display       = "";
-      if (regStatusName)  regStatusName.textContent    = data.deviceName  || "—";
+      // Prefer the product spelling (DP-DuoCast-XXXX); fall back to the
+      // hostname on a box whose app predates displayName.
+      if (regStatusName)  regStatusName.textContent    = data.displayName || data.deviceName || "—";
       if (regStatusEmail) regStatusEmail.textContent   = data.ownerEmail  || "—";
       if (regStatusVenue) {
         const vName = data.venueName || "";
@@ -6830,7 +6872,7 @@ setInterval(loadDeviceIp, 15000);
       const r = await fetch("/api/setup/status");
       const d = await r.json();
       // Device name is fixed to this unit's hostname — display only, never editable.
-      if (nameInput  && d.deviceName)  nameInput.textContent = d.deviceName;
+      if (nameInput  && (d.displayName || d.deviceName))  nameInput.textContent = d.displayName || d.deviceName;
       if (emailInput && d.ownerEmail)  emailInput.value      = d.ownerEmail;
       if (d.registered) {
         showRegistered(d);
@@ -6858,7 +6900,7 @@ setInterval(loadDeviceIp, 15000);
       try {
         const r = await fetch("/api/setup/status");
         const d = await r.json();
-        if (nameInput  && d.deviceName) nameInput.textContent = d.deviceName;
+        if (nameInput  && (d.displayName || d.deviceName)) nameInput.textContent = d.displayName || d.deviceName;
         if (emailInput && d.ownerEmail) emailInput.value      = d.ownerEmail;
         if (d.registered) { showRegistered(d); return; }
         showUnregistered(d.hasInternet);
@@ -6911,8 +6953,6 @@ setInterval(loadDeviceIp, 15000);
     function hideVenueSteps() {
       if (venueArea)   venueArea.style.display   = "none";
       if (noVenueArea) noVenueArea.style.display = "none";
-      const noSub = document.getElementById("regNoSubscriptionArea");
-      if (noSub) noSub.style.display = "none";
     }
 
     // Interpret a response from /api/setup/register or /api/setup/register/venue.
@@ -6960,19 +7000,10 @@ setInterval(loadDeviceIp, 15000);
         registerBtn.disabled = false;
         return;
       }
-      // Account verified, but it has no subscription — registration is refused.
-      // Nothing about the camera can fix this, so show the way out: a link to go
-      // and buy a plan, and a retry that needs no retyping.
-      if (d.subscriptionRequired) {
-        hideVenueSteps();
-        const noSub = document.getElementById("regNoSubscriptionArea");
-        if (noSub) noSub.style.display = "";
-        // The block already states the problem in full — repeating the server's
-        // sentence above it just says the same thing twice.
-        if (regMsg) regMsg.textContent = "";
-        registerBtn.disabled = false;
-        return;
-      }
+      // Registering a camera no longer depends on a plan (Tim, 2026-11-11), so
+      // the server never sends subscriptionRequired from the register steps and
+      // the no-subscription block that used to show here has been removed.
+      // Subscription state still governs STREAMING — see streamStartGate().
       // Error
       showRegMsg(`❌ ${d.error || "Registration failed"}`, true);
       registerBtn.disabled = false;
@@ -7036,15 +7067,6 @@ setInterval(loadDeviceIp, 15000);
     }
 
     registerBtn?.addEventListener("click", runRegisterStep1);
-
-    // "I've Subscribed — Try Again": re-runs the very same step, so a plan
-    // bought on a phone a moment ago is picked up without retyping anything.
-    document.getElementById("regSubRetryBtn")?.addEventListener("click", async () => {
-      const btn = document.getElementById("regSubRetryBtn");
-      if (btn) { btn.disabled = true; btn.textContent = "⏳ Checking…"; }
-      await runRegisterStep1();
-      if (btn) { btn.disabled = false; btn.textContent = "✅ I've Subscribed — Try Again"; }
-    });
 
     // Confirm Venue button — step 2 (assign the picked venue)
     venueConfirmBtn?.addEventListener("click", async () => {

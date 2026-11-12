@@ -169,6 +169,17 @@
     const errorMsg = document.getElementById('errorMsg');
     const loginBtn = document.getElementById('loginBtn');
 
+    // A one-time link from the DigitalPool app (BLUETOOTH_ONBOARDING.md §9.2)
+    // lasts 120 seconds and works once, so landing here means it was already
+    // used or it went stale while the phone was choosing a browser. Say what
+    // to do about it rather than showing a bare login form the user was not
+    // expecting.
+    if (new URLSearchParams(location.search).get('handoff') === 'expired') {
+      errorMsg.textContent = 'That link has already been used or has expired. ' +
+                             'Open the camera again from the DigitalPool app.';
+      errorMsg.classList.add('visible');
+    }
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       errorMsg.classList.remove('visible');
