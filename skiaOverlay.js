@@ -579,7 +579,11 @@ class SkiaOverlay extends EventEmitter {
     if (!this._streamLive) return;
     if (!this._matchLive) return;
     for (const el of (this._canvas && this._canvas.elements) || []) {
-      if (el.visible === false || el.type !== "ad_center") continue;
+      // showsElement, not `visible`: an element the canvas hides for this
+      // binding — "only during a match", "ball count only" — was not drawn, so
+      // nobody saw its ad. This is billing data; counting it would overstate
+      // the venue's numbers.
+      if (el.type !== "ad_center" || !renderer.showsElement(el, binding)) continue;
       const ad = renderer.currentAd(el, binding, now);
       if (!ad) continue;
       ads.logImpression(ad, {

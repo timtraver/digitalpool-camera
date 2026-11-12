@@ -91,6 +91,14 @@ async function graphql(query, variables) {
 //   /venues/:venueSlug/tables/:tableSlug/overlays/:overlayId
 //   /events/:eventSlug/tables/:tableSlug/overlays/:overlayId
 //   /tournaments/:tournamentSlug/tables/:tableSlug/overlays/:overlayId
+// NOT matched, deliberately: `.../overlays/std-duocast_scoreboard`. A standard
+// overlay is a built-in layout held in the web app's code rather than a row in
+// user_overlays, so there is no canvas to fetch — drawing one locally would
+// mean vendoring all 31 layouts into this repo and keeping them in step with
+// examples.js, and a layout that drifted would render wrong rather than not at
+// all. Those URLs therefore fall through to Chromium, which is correct but not
+// free: a venue on a standard overlay keeps paying the browser's CPU. Revisit
+// if standard overlays turn out to be common in the field.
 const ROUTE = /\/(venues|events|tournaments)\/([^/]+)\/tables\/([^/]+)\/overlays\/(\d+)\/?$/;
 const MODE_FOR = { venues: "venue", events: "event", tournaments: "tournament" };
 

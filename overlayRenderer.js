@@ -21,11 +21,69 @@ function skia() {
 }
 
 // ── Fonts ────────────────────────────────────────────────────────────────────
-// `fontFamily: 'inherit'` in a saved overlay means "the web app's body font",
-// which is digitalpool-antd/src/index.css:86 — UniformCondensed first, then the
-// platform UI stack. The device has none of those system faces, so the bundled
-// UniformCondensed is what it resolves to in practice.
-const INHERIT_FAMILY = "UniformCondensed";
+// `fontFamily: 'inherit'` in a saved overlay means "the web app's body font".
+// This is OVERLAY_DEFAULT_FONT in OverlayCanvasRenderer.js, which is itself
+// src/index.css:86 — keep it in step with both. The device has none of the
+// platform faces, so the bundled UniformCondensed is what it resolves to in
+// practice; the rest is here so a box that somehow fails to register it still
+// draws letters rather than symbols.
+const INHERIT_FAMILY =
+  "UniformCondensed, 'SF Pro Display', -apple-system, 'system-ui', 'Segoe UI', Roboto, "
+  + "Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif";
+
+// NOT PORTED: fontVariantNumeric: 'tabular-nums', which ElementRenderer sets on
+// the score, points, skill level, clock and countdown. @napi-rs/canvas exposes
+// fontVariantCaps and fontVariationSettings but no numeric variant, and the
+// `tnum` OpenType feature is not reachable from the 2D context. The bundled
+// display faces (Teko, Oswald, Anton, Bebas Neue) and Roboto already draw
+// figures at a uniform width, so a score does not jitter as it climbs; a face
+// with proportional figures would. Revisit if the backend grows the property.
+
+// ── Font fallbacks ───────────────────────────────────────────────────────────
+// Port of fontStack.js. An overlay element names ONE font ("JetBrains Mono").
+// If the box drawing the stream cannot load it, the renderer falls back to
+// whatever the system offers first, and on a bare Linux box that can be a
+// symbol font — a UPL stream once showed "TABLE 1" as Zapf Dingbats. So every
+// face gets plain fallbacks behind it, of its own kind.
+//
+// This matters more here than it looks: 157 elements across the 211 overlays
+// venues actually run name a face this device does not bundle — Helvetica (53),
+// Inter (40), JetBrains Mono (19), Arial, Courier New, Impact, Georgia. The
+// conformance harness cannot see any of it, because it runs on a Mac where both
+// Chrome and Skia find the real system Helvetica. Only the appliance is bare.
+const FALLBACK_SANS = "-apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Liberation Sans', 'DejaVu Sans', sans-serif";
+const FALLBACK_MONO = "ui-monospace, Menlo, Consolas, 'Liberation Mono', 'DejaVu Sans Mono', monospace";
+const FALLBACK_SERIF = "Georgia, 'Times New Roman', 'Liberation Serif', 'DejaVu Serif', serif";
+
+// A stack that already ends in one of these, or in a CSS keyword, needs nothing.
+const GENERIC_FAMILIES = [
+  "serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui",
+  "ui-monospace", "ui-sans-serif", "ui-serif", "ui-rounded", "math", "emoji",
+];
+const CSS_FONT_KEYWORDS = ["inherit", "initial", "unset", "revert", "revert-layer"];
+
+const unquoteFamily = (name) => name.trim().replace(/^['"]|['"]$/g, "");
+
+/** The kind of face a family name suggests: monospace, serif, or (most) sans-serif. */
+function fontKind(family) {
+  const name = unquoteFamily(String(family || "").split(",")[0]).toLowerCase();
+  if (/mono|code|consol|courier|menlo/.test(name)) return "monospace";
+  if (!/sans/.test(name) && /serif|georgia|times|garamond|playfair|merriweather|baskerville|caslon/.test(name)) return "serif";
+  return "sans-serif";
+}
+
+/** `family` with plain fallbacks of its own kind behind it. */
+function fontStack(family) {
+  if (family == null) return family;
+  const value = String(family).trim();
+  if (!value) return value;
+  const last = unquoteFamily(value.split(",").pop()).toLowerCase();
+  if (CSS_FONT_KEYWORDS.includes(value.toLowerCase()) || GENERIC_FAMILIES.includes(last)) return value;
+  // One family with a space or a digit in its name is quoted, as CSS asks.
+  const named = !value.includes(",") && !/^['"]/.test(value) && /[\s\d]/.test(value) ? `'${value}'` : value;
+  const kind = fontKind(value);
+  return `${named}, ${kind === "monospace" ? FALLBACK_MONO : kind === "serif" ? FALLBACK_SERIF : FALLBACK_SANS}`;
+}
 
 let _fontsRegistered = false;
 function registerFonts(dir) {
@@ -713,7 +771,10 @@ function fontString(style) {
     : style.fontFamily;
   const weight = style.fontWeight || 400;
   const size = style.fontSize || 32;
-  return `${weight} ${size}px "${family}"`;
+  // NOT quoted as a whole — fontStack() quotes the individual names that need
+  // it, and wrapping the comma-separated list would make it one family nothing
+  // can match, which is the very failure the fallbacks are here to prevent.
+  return `${weight} ${size}px ${fontStack(family)}`;
 }
 
 // CSS linear-gradient(<angle>deg, …): 0deg points to the top and angles grow
@@ -1536,6 +1597,8 @@ function withoutExtraPngChunks(buf) {
  */
 function imageUrls(canvasDef, binding, assets) {
   const urls = new Set();
+  const bg = canvasDef && canvasDef.background;
+  if (bg && bg.type === "image" && bg.url) urls.add(bg.url);
   for (const el of (canvasDef && canvasDef.elements) || []) {
     if (!showsElement(el, binding)) continue;
     if (el.type === "image_carousel") {
@@ -1583,6 +1646,14 @@ function renderCanvas(canvasDef, binding, { images = new Map(), assets = null, n
     for (const s of bg.stops || []) grad.addColorStop(Math.max(0, Math.min(1, (s.position || 0) / 100)), s.color);
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, width, height);
+  } else if (bg.type === "image" && bg.url) {
+    // `url(...) center/cover no-repeat` — the picture covers the canvas and is
+    // centre-cropped, exactly as object-fit: cover does for an element.
+    const img = images && images.get(bg.url);
+    if (img) {
+      const r = objectFitRect("cover", width, height, img.width, img.height);
+      ctx.drawImage(scaledForBox(img, bg.url, r.w, r.h), r.x, r.y, r.w, r.h);
+    }
   }
 
   const elements = [...((canvasDef && canvasDef.elements) || [])]
@@ -1601,10 +1672,11 @@ module.exports = {
   loadImage,
   imageUrls,
   unsupportedTypes,
+  showsElement,
   nextAnimationAt,
   currentAd,
   SUPPORTED,
   INHERIT_FAMILY,
   // exported for tests
-  _internals: { withoutExtraPngChunks, imageUrlFor, scaledForBox, carouselState, carouselImages, adsFor, adVenueIdFor, adCarouselState, resolveAdDuration, easeInOut, wrapLines, parseRadii, compensateShadowAlpha, countryShortCode, flagSourceFor, gameTypeImagePath, parseShadows, parseBorder, gradientPoints, matchClockText, applyTextTransform, objectFitRect, countryKey, countryCodeText, countryNameText, matchRoundText, breakingPlayer, countdownFor, countdownLengthSeconds, countdownSecondsLeft, formatCountdownClock, countdownRunning, splitPair, balancedSplit, fitFontSize, ellipsize, resolveFit, hasMatch, keepsBallCount, showsElement, gradientAngle },
+  _internals: { withoutExtraPngChunks, imageUrlFor, scaledForBox, carouselState, carouselImages, adsFor, adVenueIdFor, adCarouselState, resolveAdDuration, easeInOut, wrapLines, parseRadii, compensateShadowAlpha, countryShortCode, flagSourceFor, gameTypeImagePath, parseShadows, parseBorder, gradientPoints, matchClockText, applyTextTransform, objectFitRect, countryKey, countryCodeText, countryNameText, matchRoundText, breakingPlayer, countdownFor, countdownLengthSeconds, countdownSecondsLeft, formatCountdownClock, countdownRunning, splitPair, balancedSplit, fitFontSize, ellipsize, resolveFit, hasMatch, keepsBallCount, showsElement, gradientAngle, fontStack, fontKind, fontString },
 };

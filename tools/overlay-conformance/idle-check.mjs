@@ -40,6 +40,7 @@ renderer.registerFonts(path.join(HERE, '..', '..', 'assets', 'fonts'));
 
 let totalDiff = 0, totalInk = 0;
 const rows = [];
+const failedImages = new Map();
 for (const key of keys) {
   const refPath = path.join(IDLE, `${key}.ref.png`);
   if (!fs.existsSync(refPath)) continue;
@@ -47,7 +48,13 @@ for (const key of keys) {
   const { canvas } = JSON.parse(fs.readFileSync(path.join(IDLE, `${key}.canvas.json`), 'utf8'));
   const urls = renderer.imageUrls(canvas, EMPTY, null);
   const images = new Map();
-  for (const u of urls) { try { images.set(u, await renderer.loadImage(u)); } catch { /* skip */ } }
+  for (const u of urls) {
+    try { images.set(u, await renderer.loadImage(u)); }
+    // A swallowed load failure makes this measurement lie: the reference draws
+    // the picture, the local render leaves a hole, and the diff is reported as
+    // a renderer difference. Say so instead.
+    catch (err) { failedImages.set(u, err.message); }
+  }
   const surface = renderer.renderCanvas(canvas, EMPTY, { images, now: 1000, animationNow: 1000 });
   const loc = PNG.sync.read(surface.toBuffer('image/png'));
   let ink = 0;
@@ -61,4 +68,8 @@ for (const key of keys) {
 rows.sort((a, b) => b.diff - a.diff);
 console.log(`${'overlay'.padEnd(34)} ${'drawn'.padStart(7)} ${'diff'.padStart(8)} ${'ink'.padStart(8)}`);
 for (const r of rows) console.log(`${r.key.padEnd(34)} ${`${r.drawn}/${r.total}`.padStart(7)} ${String(r.diff).padStart(8)} ${String(r.ink).padStart(8)}`);
+if (failedImages.size) {
+  console.log(`\n⚠️  ${failedImages.size} image URL(s) unreachable — the local render has a hole the reference does not`);
+  for (const [url, err] of failedImages) console.log(`   ${err}  ${url.slice(0, 90)}`);
+}
 console.log(`${'TOTAL'.padEnd(34)} ${''.padStart(7)} ${String(totalDiff).padStart(8)} ${String(totalInk).padStart(8)}   ${totalInk ? (totalDiff/totalInk*100).toFixed(1) : 0}% of ink`);
