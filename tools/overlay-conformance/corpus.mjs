@@ -11,7 +11,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const dataSource = require('../../overlayDataSource.js');
 
-const ANTD = '/Users/timtraver/Projects/digitalpool-antd';
+import { ANTD } from './antd.mjs';
 
 // elementTypes.js is dependency-free ESM, so the builder's own makeElement() and
 // DEFAULT_STYLE can be used directly rather than reimplemented here.
@@ -55,9 +55,43 @@ export function richBinding(sample) {
   };
 }
 
+/**
+ * Strip ES import statements and stub what they bound.
+ *
+ * These reference data files are evaluated with `new Function`, which cannot
+ * parse `import`. sampleBinding.js gained one in November (resolveRaceSettings,
+ * for the stage race-to) and the harness stopped loading entirely — it could
+ * not even read the reference it is supposed to score against. Stubbing rather
+ * than resolving is deliberate: what is wanted here is the literal
+ * SAMPLE_BINDING object, and the helpers that use those imports are not called.
+ * A stub that IS called throws by name, which is a readable failure.
+ */
+function stripImports(src) {
+  const names = [];
+  const stripped = src.replace(
+    /^import\s+(?:([\w$]+)\s*,?\s*)?(?:\{([^}]*)\})?\s*from\s*['"][^'"]+['"];?\s*$/gm,
+    (_line, dflt, braced) => {
+      if (dflt) names.push(dflt.trim());
+      if (braced) {
+        for (const part of braced.split(',')) {
+          const name = part.split(/\s+as\s+/).pop().trim();
+          if (name) names.push(name);
+        }
+      }
+      return '';
+    }
+  );
+  const stubs = names
+    .map((n) => `const ${n} = (...a) => { throw new Error('stubbed import ${n}() was called'); };`)
+    .join('\n');
+  return `${stubs}\n${stripped}`;
+}
+
 /** The builder's own sample binding, used so runs are deterministic. */
 export function sampleBinding() {
-  const src = fs.readFileSync(`${ANTD}/src/screens/overlay-builder/data/sampleBinding.js`, 'utf8')
+  const src = stripImports(
+    fs.readFileSync(`${ANTD}/src/screens/overlay-builder/data/sampleBinding.js`, 'utf8')
+  )
     .replace(/export const /g, 'const ')
     .replace(/export function /g, 'function ');
   return new Function(`${src}; return SAMPLE_BINDING;`)();
@@ -83,14 +117,14 @@ export async function databaseOverlays(limit = 40) {
  * rather than just the happy path.
  */
 export function kitchenSink() {
-  const { makeElement, DEFAULT_STYLE } = builderDefs();
-  const TYPES = [
-    'player_name', 'player_flag', 'player_score', 'player_points', 'player_avatar',
-    'player_skill_level', 'player_race_to', 'race_to', 'match_status', 'match_clock',
-    'table_label', 'tournament_name', 'tournament_location', 'tournament_game_type',
-    'tournament_game_type_image', 'tournament_logo', 'static_text', 'static_image',
-    'shape', 'image_carousel',
-  ];
+  const { makeElement, DEFAULT_STYLE, ELEMENT_TYPES } = builderDefs();
+  // Derived from the reference, never hardcoded. This list was a literal of 20
+  // types and the builder had grown to 26, so the fixture silently stopped
+  // exercising everything added after it was written — and the harness
+  // cheerfully reported "20/20 element types" and a 0.2% diff while five
+  // November types were not drawn at all. A gate that cannot see the work is
+  // worse than no gate, because it says "pass".
+  const TYPES = Object.keys(ELEMENT_TYPES);
   // Vary the styling deterministically so the fixture is stable run to run.
   const FONTS = ['inherit', 'Anton', 'Teko', 'Oswald', 'Roboto Condensed', 'UniformCondensed'];
   const ALIGN = ['left', 'center', 'right'];

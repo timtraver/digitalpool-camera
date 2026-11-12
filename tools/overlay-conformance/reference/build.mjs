@@ -9,7 +9,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const ANTD = '/Users/timtraver/Projects/digitalpool-antd';
+export { ANTD } from '../antd.mjs';
+import { ANTD } from '../antd.mjs';
 
 const antdAlias = {
   name: 'antd-alias',
@@ -29,6 +30,51 @@ const antdAlias = {
       }
       return undefined; // let esbuild resolve it normally
     });
+    // Stub the app infrastructure the renderer now reaches into.
+    //
+    // ElementRenderer gained `components/advertising/AdCarousel` in November,
+    // which pulls in Apollo and Firebase at module load. Those cannot
+    // initialise outside the real app, so the page threw before React drew
+    // anything and every capture came back blank — scored, silently, as a 97%
+    // difference blamed on every element type.
+    //
+    // Stubbing rather than configuring is the right call here: this harness
+    // compares DRAWING, and an ad carousel with no ad service has nothing to
+    // draw. The legacy `ad_center` type is required to draw nothing on air
+    // anyway (OVERLAY_ELEMENTS_2025_11 §7), so a stub that renders null is
+    // also the behaviour the device must match.
+    const STUBBED = [
+      /\/components\/advertising\/AdCarousel(\.jsx?)?$/,
+      /\/(apollo|firebase)(Client|Config)?(\.jsx?)?$/,
+    ];
+    build.onResolve({ filter: /.*/ }, (args) => {
+      if (!args.importer) return undefined;
+      const resolved = args.path.startsWith('.')
+        ? path.resolve(path.dirname(args.importer), args.path)
+        : args.path;
+      if (STUBBED.some((re) => re.test(resolved))) {
+        return { path: resolved, namespace: 'reference-stub' };
+      }
+      return undefined;
+    });
+    // CommonJS with a Proxy, so ANY named import is satisfied — these modules
+    // are imported for `auth`, `db`, `client` and more, and a stub that only
+    // has a default export fails the build instead of the render.
+    build.onLoad({ filter: /.*/, namespace: 'reference-stub' }, () => ({
+      contents: [
+        'function Stub() { return null; }',
+        'module.exports = new Proxy(Stub, {',
+        '  get: (target, key) => {',
+        "    if (key === '__esModule') return true;",
+        "    if (key === 'default') return Stub;",
+        '    if (key in target) return target[key];',
+        '    return Stub;',
+        '  },',
+        '});',
+      ].join('\n'),
+      loader: 'js',
+    }));
+
     // A path returned from onResolve is final — esbuild does no extension
     // probing on it — so do the .js/.jsx/index lookup here.
     build.onResolve({ filter: /^ANTD\// }, (args) => {

@@ -3,7 +3,8 @@
 // Run this whenever digitalpool-antd/src/utils/isoCountryCodes.js changes.
 import fs from 'node:fs';
 
-const SRC = '/Users/timtraver/Projects/digitalpool-antd/src/utils/isoCountryCodes.js';
+import { ANTD } from './antd.mjs';
+const SRC = `${ANTD}/src/utils/isoCountryCodes.js`;
 const DEST = new URL('../../overlayCountryCodes.js', import.meta.url).pathname;
 
 const src = fs.readFileSync(SRC, 'utf8').replace(/export const /g, 'const ');

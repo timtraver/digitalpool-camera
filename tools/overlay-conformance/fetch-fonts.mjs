@@ -12,7 +12,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 // The production bundle: overlayRenderer.registerFonts() reads this at startup
 // on the device, and the harness registers the very same files.
 const OUT = path.join(HERE, '..', '..', 'assets', 'fonts');
-const ANTD = '/Users/timtraver/Projects/digitalpool-antd';
+import { ANTD } from './antd.mjs';
 
 // family -> weights, verbatim from the antd Google Fonts link.
 const GOOGLE = {

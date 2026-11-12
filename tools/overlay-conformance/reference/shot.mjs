@@ -8,6 +8,30 @@ import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import { buildReference, ANTD } from './build.mjs';
 
+/**
+ * Print page errors and console errors from the reference render.
+ *
+ * A silent failure here is the worst kind: the capture succeeds, the PNG is
+ * empty, and every downstream number is computed against nothing.
+ */
+function attachPageDiagnostics(page) {
+  page.on('pageerror', (err) => {
+    console.error(`   ⚠ reference page error: ${err.message.split('\n')[0]}`);
+  });
+  page.on('console', (msg) => {
+    if (msg.type() !== 'error') return;
+    const text = msg.text();
+    // React's dev build repeats prop warnings for every element; one is enough.
+    if (/Warning:/.test(text)) return;
+    console.error(`   ⚠ reference console: ${text.split('\n')[0].slice(0, 200)}`);
+  });
+  page.on('requestfailed', (req) => {
+    const url = req.url();
+    if (url.startsWith('data:')) return;
+    console.error(`   ⚠ reference request failed: ${url.slice(0, 120)}`);
+  });
+}
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
@@ -63,6 +87,11 @@ export async function captureCanvases(items, outDir) {
   });
   try {
     const page = await browser.newPage();
+    // Surface what the page says. Without this a React exception renders a
+    // blank canvas and the harness compares it to the local render as though
+    // the blank were an answer — scoring 97% and blaming every element type,
+    // when the truth was that the reference never drew at all.
+    attachPageDiagnostics(page);
     await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 });
     await page.goto(`http://127.0.0.1:${port}/page.html`, { waitUntil: 'networkidle0' });
     fs.mkdirSync(outDir, { recursive: true });
@@ -97,6 +126,11 @@ export async function captureAll(outDir) {
   });
   try {
     const page = await browser.newPage();
+    // Surface what the page says. Without this a React exception renders a
+    // blank canvas and the harness compares it to the local render as though
+    // the blank were an answer — scoring 97% and blaming every element type,
+    // when the truth was that the reference never drew at all.
+    attachPageDiagnostics(page);
     await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 });
 
     await page.goto(`http://127.0.0.1:${port}/page.html`, { waitUntil: 'networkidle0' });
