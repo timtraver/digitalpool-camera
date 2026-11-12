@@ -79,24 +79,54 @@ also killed by the service's `ExecStopPost`).
 
 **`authManager.js`** — bcrypt users persisted to `users.json`; guards `requireAuth`/`requireAdmin`.
 
-**`subscriptionManager.js`** — the device may only stream while the DigitalPool account
-it is registered to holds a subscription, and *what* it may do depends on the package:
-a base plan can push to the venue's own YouTube/Facebook/RTMP and carries the DigitalPool
-branded overlay; the **Advanced Streaming** package adds the RTSP/SRT Server output modes
-our datacenter pulls, plus the venue's own overlays. Registration needs *some* active
-subscription but not a camera one — somebody already paying DigitalPool should not have to
-buy a second plan to set a camera up — and the entitlement is re-verified every 14 days (identity-based — the
-password is never kept). Enforcement is one-sided on purpose: only an explicit "not
-subscribed" blocks immediately; an unreachable service changes nothing until the last good
-answer is 21 days stale; a feature flag the service does not mention is granted, not
-withheld; and a running stream is never torn down. Two single points of truth:
-`streamStartGate()` (registration + subscription + output mode) and `effectiveOverlay()`
-(whose overlay is composited), both in `server.js`. See `SUBSCRIPTION_CHECK.md` for the
+**`subscriptionManager.js`** — **a subscription is no longer required to register or to
+stream** (changed 2026-11-11). `streamStartGate()` requires only that the device is
+*registered*. What a subscription still decides is the **package**: the **Advanced
+Streaming** package unlocks the RTSP/SRT Server output modes our datacenter pulls (via
+`gateProtocol()`) and the venue's own overlays (via `effectiveOverlay()`); without it a
+camera pushes to the venue's own YouTube/Facebook/RTMP and carries the DigitalPool branded
+overlay. So the manager still runs, still checks every 14 days and still reports — Admin
+Settings shows the plan, and the camera's own UI may link to digitalpool.com (that
+restriction applies only to the mobile app) — it just no longer *blocks* anything except
+those two package-gated features.
+
+Nothing shown while registering mentions plans, pricing or Enterprise. Note that
+`subscriptionRefusal()` is still called on every registration response even though it
+refuses nothing: that call is what **records** the subscription facts the package gates
+later read, so deleting it would leave a freshly-registered box with no idea what it is
+entitled to. Identity-based — the password is never kept. Enforcement is one-sided on purpose: an unreachable service changes
+nothing until the last good answer is 21 days stale; a feature flag the service does not
+mention is granted, not withheld; and a running stream is never torn down. Two single
+points of truth: `streamStartGate()` (registration + output-mode package) and
+`effectiveOverlay()` (whose overlay is composited), both in `server.js`. See `SUBSCRIPTION_CHECK.md` for the
 cloud-function contract — the backend half is not implemented yet, and until it reports
 subscriptions nothing is blocked.
 
 **`wifiManager.js`** — manages the always-on AP hotspot (`DigitalPool-Camera`) via `nmcli`,
 running concurrently with client WiFi (AP+STA). Onboard chip runs the AP; USB dongle is the client.
+AP+STA is an N100 (`iwlwifi`) capability only — the N97's `rtw_8821ce` supports no interface
+combination at all, so there the radio is the hotspot *or* the client, never both.
+
+> **No hotspot under BLE onboarding (decided 2026-11-10):** with `ONBOARDING_MODE=ble` the
+> camera never raises its AP. `wifiManager._startAP()` refuses outright, `dp-hotspot.sh`
+> stands down at boot, and the AP profile is pinned to `autoconnect=no`. Bluetooth is the
+> recovery path, including on a box with no network. The trade-off is that a venue with
+> client isolation has no fallback — see `BLUETOOTH_ONBOARDING.md` §14.4.
+
+> **Device naming (changed 2026-11-10):** the hostname is `dp-duocast-<last 4 of MAC>`
+> (lowercase — NetBird and mediamtx derive from it); everything a person reads shows
+> `DP-DuoCast-XXXX` from `getDisplayName()`. Migration `0031` renames boxes still on the
+> old `dp-stream-XXXX`, skipping any an operator renamed by hand.
+
+**`bleBridge.js` + `ble/dp-ble.py`** — BLE onboarding: a phone sets the box's network and
+registers it over Bluetooth instead of through the setup hotspot, so the onboard WiFi is free
+to be the internet connection. The Python daemon (`digitalpool-ble.service`) owns the radio —
+GATT, advertising as `DP-DuoCast-<last 4 of MAC>`, pairing, chunking — and pipes whole messages
+over `/run/digitalpool-camera/ble.sock` to `bleBridge.js`, which does all the deciding. Gated by
+`ONBOARDING_MODE=auto|ble|hotspot` in `.env`, read by the daemon (not systemd) so a box can be
+switched without root. `ble/tools/dpble-cli.py` drives the protocol from a laptop.
+**See `BLUETOOTH_ONBOARDING.md`** — it is the contract shared with `digitalpool-app` and the
+backend, and records what the hardware actually does.
 
 **`public/`** — static frontend served by Express: `index.html` + `app.js` (~4900 lines),
 `login.html`, `overlay.html`. No framework, no bundler.
@@ -136,9 +166,10 @@ serves SRT on **8891**, camera 2 on **8892**.
 cover streaming/receiver setup. `AUDIO.md` covers the two things done to the sound:
 how A/V sync is measured rather than configured (there is no offset setting), and the
 LADSPA background-music filter in `audio/`. `SUBSCRIPTION_CHECK.md` is the device↔cloud-function
-contract for subscription enforcement. `BLUETOOTH_ONBOARDING.md` is the design (not yet built) for
+contract for subscription enforcement. `BLUETOOTH_ONBOARDING.md` is the design for
 replacing hotspot onboarding with BLE setup from the DigitalPool mobile app, including the GATT
-protocol and the backend grant contract. `SYSTEM_IMAGE.md` covers golden-image capture and the
+protocol and the backend grant contract; M0 (hardware) and M1 (read-only BLE) are built and
+running, M2 onwards is not. `SYSTEM_IMAGE.md` covers golden-image capture and the
 self-installing USB built from it (`dp-create-image.sh` → `dp-build-recovery-iso.sh` →
 `dp-factory-install.sh` → `dp-restore.sh` → `dp-firstboot.sh`); `FACTORY_INSTALL.md` is the
 operator-facing copy of that flow written for the OEM factory, not for us. `.sh`/`.service`/`.timer`/`.rules` files at the repo root are
