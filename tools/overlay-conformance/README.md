@@ -27,7 +27,7 @@ Three corpora:
 |---|---|
 | *(default)* | the 14 built-in layouts in `overlay-builder/data/examples.js` |
 | `--db` | every overlay the device can actually read from DigitalPool — what venues really run |
-| `--kitchen` | a synthetic layout containing **all 20 element types**, so no type is scored only by hoping an example happened to use it |
+| `--kitchen` | a synthetic layout containing **every element type the builder defines**, read from `ELEMENT_TYPES` rather than listed, so a type added to the builder cannot quietly go unscored |
 | `--all` | `--db` + `--kitchen` |
 
 Bindings come from the builder's `SAMPLE_BINDING`, enriched with real avatar and

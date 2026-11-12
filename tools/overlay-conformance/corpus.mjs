@@ -116,6 +116,16 @@ export async function databaseOverlays(limit = 40) {
  * borders, radii, shadows, rotation, alignment and transforms are all compared
  * rather than just the happy path.
  */
+/**
+ * Every element type the builder can produce, read from the builder. Never a
+ * literal: the one this replaced listed 20 types while the builder had grown
+ * to 26, so the run reported "NOT IMPLEMENTED: (none)" while five November
+ * types were neither drawn nor missed.
+ */
+export function builderTypes() {
+  return Object.keys(builderDefs().ELEMENT_TYPES);
+}
+
 export function kitchenSink() {
   const { makeElement, DEFAULT_STYLE, ELEMENT_TYPES } = builderDefs();
   // Derived from the reference, never hardcoded. This list was a literal of 20
@@ -169,6 +179,15 @@ export function kitchenSink() {
         { color: '#0f2027', position: 0 }, { color: '#2c5364', position: 100 },
       ] };
       el.stroke = { width: 2, color: '#ffd700', opacity: 0.6 };
+    }
+    if (type === 'break_indicator') {
+      // A break indicator only draws on the side of the player whose break it
+      // is, so left to the grid's alternating `player` it was a coin toss
+      // whether this fixture exercised the drawn case at all — and it did not:
+      // the element scored a perfect 0 by being blank on both sides. Pin it to
+      // the player SAMPLE_BINDING has at the table.
+      el.breakMode = 'shooting';
+      el.player = 1;
     }
     if (type === 'image_carousel') {
       el.images = CAROUSEL_IMAGES;

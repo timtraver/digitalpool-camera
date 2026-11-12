@@ -17,7 +17,7 @@ import { createRequire } from 'node:module';
 import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
 import { captureAll, captureCanvases } from './reference/shot.mjs';
-import { databaseOverlays, kitchenSink, richBinding, sampleBinding } from './corpus.mjs';
+import { builderTypes, databaseOverlays, kitchenSink, richBinding, sampleBinding } from './corpus.mjs';
 
 const require = createRequire(import.meta.url);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -279,13 +279,8 @@ for (const [type, a] of [...byType.entries()].sort((x, y) => y[1].diff - x[1].di
 // types nothing can draw yet.
 const exercised = new Set(byType.keys());
 const untested = [...renderer.SUPPORTED].filter((t) => !exercised.has(t)).sort();
-const ALL_TYPES = [
-  'player_name', 'player_flag', 'player_score', 'player_points', 'player_avatar',
-  'player_skill_level', 'player_race_to', 'race_to', 'match_status', 'match_clock',
-  'table_label', 'tournament_name', 'tournament_location', 'tournament_game_type',
-  'tournament_game_type_image', 'tournament_logo', 'static_text', 'static_image',
-  'shape', 'image_carousel',
-];
+// Read from the builder, never listed here — see builderTypes().
+const ALL_TYPES = builderTypes();
 const missing = ALL_TYPES.filter((t) => !renderer.SUPPORTED.has(t));
 if (failedImages.size) {
   console.log(`\n⚠️  ${failedImages.size} image URL(s) unreachable — elements using them were EXCLUDED from the score`);

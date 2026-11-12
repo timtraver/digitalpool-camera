@@ -194,14 +194,21 @@ function resolveAdVenueId(element, binding) {
     const fixed = parseInt(element.venueId, 10);
     return Number.isFinite(fixed) && fixed > 0 ? fixed : null;
   }
-  const fromBinding = binding && binding.venue && binding.venue.id;
+  const venue = (binding && binding.venue) || null;
+  const fromBinding = venue && venue.id;
   if (fromBinding) return parseInt(fromBinding, 10) || null;
+  // The overlay URL named an event and that event has no venue row. The
+  // appliance's own venue is NOT a sensible stand-in: a camera mirrored onto
+  // another venue's tournament would run THIS venue's ads on THEIR broadcast,
+  // which is a commercial problem rather than a cosmetic one. No venue, no ads.
+  if (venue && venue.resolved) return null;
   return fallbackVenueId();
 }
 
 /**
- * The venue to use when the overlay URL named none — this appliance's own,
- * unless OVERLAY_AD_DEVICE_VENUE=0 turns the fallback off.
+ * The venue to use when no overlay URL was resolved at all — this appliance's
+ * own, unless OVERLAY_AD_DEVICE_VENUE=0 turns the fallback off. A URL that WAS
+ * resolved and found no venue does not reach here; see resolveAdVenueId().
  */
 function fallbackVenueId() {
   if (process.env.OVERLAY_AD_DEVICE_VENUE === "0") return null;

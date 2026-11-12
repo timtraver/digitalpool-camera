@@ -42,11 +42,12 @@ function registerFonts(dir) {
 // ── Element support ──────────────────────────────────────────────────────────
 const SUPPORTED = new Set([
   "player_name", "player_score", "player_points", "player_skill_level", "player_race_to",
-  "race_to", "match_status", "match_clock", "table_label",
+  "player_country_code", "player_country_name",
+  "race_to", "match_status", "match_clock", "match_round", "match_countdown", "table_label",
   "tournament_name", "tournament_location", "tournament_game_type",
   "static_text", "static_image", "shape",
   "player_avatar", "tournament_logo", "tournament_game_type_image",
-  "player_flag", "image_carousel", "ad_center",
+  "player_flag", "break_indicator", "image_carousel", "ad_center",
 ]);
 
 function unsupportedTypes(canvas) {
@@ -82,8 +83,16 @@ function textFor(element, binding, now = Date.now()) {
       const r = m.race_to || t.winners_race_to;
       return r ? `Race to ${r}` : "";
     }
+    case "player_country_code":
+      return countryCodeText(m[`${player}_country`], element.codeFormat === "iso2" ? "iso2" : "iso3");
+    case "player_country_name":
+      return countryNameText(m[`${player}_country`]);
     case "match_status":       return m.identifier || "";
+    case "match_round":        return matchRoundText(m, t.tournament_type);
     case "match_clock":        return matchClockText(m.start_time, m.end_time, now);
+    // match_countdown is textual too, but it also recolours itself inside
+    // warnSeconds and can decide to draw nothing at all, so drawElement reads
+    // countdownFor() directly rather than going through here.
     case "table_label":        return tbl.label || "";
     case "tournament_name":    return t.name || "";
     case "tournament_location":return t.location || "";
@@ -92,6 +101,120 @@ function textFor(element, binding, now = Date.now()) {
     default:                   return null;
   }
 }
+
+// ── Countdown ────────────────────────────────────────────────────────────────
+// Port of countdownLengthSeconds / getCountdownSecondsLeft / formatCountdown /
+// formatCountdownClock, and of the MatchCountdown component's own logic.
+const DEFAULT_MATCH_TIME_LIMIT_SECONDS = 7200;
+
+/**
+ * How long a timed match runs, in seconds. 'custom' is the element's own length
+ * whatever the event is set to; 'tournament' is the event's match time limit,
+ * and null at an event that does not play timed matches — which is how the
+ * element knows to stay off the screen there.
+ */
+function countdownLengthSeconds(element, t) {
+  if (element.lengthSource === "custom") {
+    const own = Number(element.seconds);
+    return Number.isFinite(own) && own > 0 ? Math.round(own) : 0;
+  }
+  if (!t || t.enable_match_clock !== true) return null;
+  const limit = Number(t.match_time_limit);
+  return Number.isFinite(limit) && limit > 0 ? Math.round(limit) : DEFAULT_MATCH_TIME_LIMIT_SECONDS;
+}
+
+/** Seconds left, negative once time is up. Before the match starts, all of it. */
+function countdownSecondsLeft(startTime, totalSeconds, now) {
+  const total = Math.round(totalSeconds);
+  if (!startTime) return total;
+  const start = new Date(startTime).getTime();
+  if (!Number.isFinite(start)) return total;
+  const elapsed = Math.floor((now - start) / 1000);
+  return total - Math.max(0, elapsed);
+}
+
+/** Minutes and seconds, even past an hour: 754 -> "12:34", 3725 -> "62:05". */
+function formatCountdown(seconds) {
+  const abs = Math.abs(Math.trunc(seconds));
+  return `${Math.floor(abs / 60)}:${String(abs % 60).padStart(2, "0")}`;
+}
+
+/** The same, with hours split out once an hour or more is left. */
+function formatCountdownClock(secondsLeft, countdownFormat) {
+  const mmss = formatCountdown(secondsLeft);
+  if (countdownFormat === "mmss") return mmss;
+  const abs = Math.abs(Math.trunc(secondsLeft));
+  if (abs < 3600) return mmss;
+  const h = Math.floor(abs / 3600);
+  const m = Math.floor((abs % 3600) / 60);
+  return `${h}:${String(m).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
+}
+
+/**
+ * What a Countdown element draws right now: { text, color }, or null to draw
+ * nothing. Null covers both an event that does not time its matches and an
+ * expired countdown set to hide.
+ *
+ * The clock freezes at end_time, so a finished match is not still counting.
+ */
+function countdownFor(element, binding, now) {
+  const m = (binding && binding.match) || {};
+  const t = (binding && binding.tournament) || {};
+  const total = countdownLengthSeconds(element, t);
+  if (total === null) return null;
+  const at = m.end_time ? new Date(m.end_time).getTime() : now;
+  const left = countdownSecondsLeft(m.start_time, total, at);
+  const expired = left <= 0;
+  const atZero = element.atZero || "count_up";
+  if (expired && atZero === "hide") return null;
+  const shown = expired && atZero === "hold" ? 0 : left;
+  const warnAt = Number(element.warnSeconds);
+  const warning = Number.isFinite(warnAt) && warnAt > 0 && left <= warnAt;
+  const style = element.style || {};
+  return {
+    text: `${shown < 0 ? "-" : ""}${formatCountdownClock(shown, element.countdownFormat)}`,
+    color: warning ? element.warnColor || "#ff4d4f" : style.color,
+  };
+}
+
+/** Whether a countdown is still ticking, so the render loop knows to come back. */
+function countdownRunning(element, binding) {
+  const m = (binding && binding.match) || {};
+  if (!m.start_time || m.end_time) return false;
+  return countdownLengthSeconds(element, (binding && binding.tournament) || {}) !== null;
+}
+
+// ── Break indicator ──────────────────────────────────────────────────────────
+// Port of breakFormat.js. Alternate break is settled by the score alone: the
+// racks played are the two scores added, and the break changes hands each rack,
+// so an even count means whoever broke first breaks this one. Which player that
+// is cannot be read off the match (the lag happens at the table), so the
+// element carries it as `firstBreak`. 'shooting' instead follows the scorer's
+// is_playing flags, which is what a winner-breaks match needs.
+function breakScore(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function breakingPlayer(m, element) {
+  if (element.breakMode === "shooting") {
+    if (!m) return null;
+    if (m.challenger1_is_playing) return 1;
+    if (m.challenger2_is_playing) return 2;
+    return null;
+  }
+  const first = Number(element.firstBreak) === 2 ? 2 : 1;
+  const racks = breakScore(m && m.challenger1_score) + breakScore(m && m.challenger2_score);
+  return racks % 2 === 0 ? first : first === 1 ? 2 : 1;
+}
+
+// A cue ball drawn rather than shipped as an image, so the indicator stays
+// crisp at any size and needs no asset. The web app draws the same two values
+// as CSS; these are their canvas equivalents.
+const CUE_BALL_STOPS = [
+  [0, "#ffffff"], [0.42, "#f6f6f6"], [0.74, "#d8d8d8"], [1, "#a9a9a9"],
+];
+const CUE_BALL_SHADOW = "inset -2px -5px 10px rgba(0, 0, 0, 0.22), 0 2px 6px rgba(0, 0, 0, 0.35)";
 
 // ElementRenderer's MatchClock: elapsed time as H:MMm, frozen at end_time.
 function matchClockText(startTime, endTime, now = Date.now()) {
@@ -106,20 +229,100 @@ function matchClockText(startTime, endTime, now = Date.now()) {
 // country NAME ("United States"), sometimes an ISO-3 code, and the flag CDN wants
 // ISO-2.
 let _codes = null;
-function countryShortCode(name) {
-  if (!name) return null;
-  if (!_codes) _codes = require("./overlayCountryCodes.js");
-  const needle = String(name).toLowerCase().trim();
-  for (const [key, value] of Object.entries(_codes.isoCountries)) {
-    if (key === needle || value.toLowerCase() === needle) return value.toLowerCase();
-  }
-  for (const [key, value] of Object.entries(_codes.isoCountries3)) {
-    if (key === needle || value.toLowerCase() === needle) {
-      const iso2 = _codes.isoCountries[key];
-      if (iso2) return iso2.toLowerCase();
+// Both ISO tables are keyed by the lowercase country name. The reverse lookups
+// are built once and resolved inputs cached, because these run per element per
+// frame — the linear scan this replaced walked ~250 entries twice for every
+// flag on every redraw.
+let _byIso2 = null, _byIso3 = null;
+const _countryKeyCache = new Map();
+
+function countryTables() {
+  if (!_codes) {
+    _codes = require("./overlayCountryCodes.js");
+    _byIso2 = {};
+    _byIso3 = {};
+    for (const key of Object.keys(_codes.isoCountries)) {
+      _byIso2[String(_codes.isoCountries[key]).toLowerCase()] = key;
+    }
+    for (const key of Object.keys(_codes.isoCountries3)) {
+      _byIso3[String(_codes.isoCountries3[key]).toLowerCase()] = key;
     }
   }
-  return null;
+  return _codes;
+}
+
+/**
+ * The lowercase ISO country-name key for a name, a 2-letter code or a 3-letter
+ * code; "" when unknown. Port of countryKey() in countryFields.js.
+ *
+ * A match carries whatever the player's profile holds in challengerN_country —
+ * usually a full name, sometimes a code — so every country element resolves to
+ * this key first and then renders the form it wants.
+ */
+function countryKey(value) {
+  const input = value == null ? "" : String(value).toLowerCase().trim();
+  if (!input) return "";
+  if (_countryKeyCache.has(input)) return _countryKeyCache.get(input);
+  const codes = countryTables();
+  const key = codes.isoCountries[input] ? input : _byIso2[input] || _byIso3[input] || "";
+  _countryKeyCache.set(input, key);
+  return key;
+}
+
+function countryShortCode(name) {
+  const key = countryKey(name);
+  if (!key) return null;
+  const iso2 = countryTables().isoCountries[key];
+  return iso2 ? String(iso2).toLowerCase() : null;
+}
+
+// Port of countryCode()/countryName() in countryFields.js.
+const COUNTRY_SMALL_WORDS = ["and", "of", "the", "da", "du", "des"];
+
+/** A country's ISO-3 code (USA, PHI) or ISO-2 with 'iso2'. Uppercase; "" when unknown. */
+function countryCodeText(value, format) {
+  const key = countryKey(value);
+  if (!key) return "";
+  const codes = countryTables();
+  const code = format === "iso2" ? codes.isoCountries[key] : codes.isoCountries3[key];
+  return code ? String(code).toUpperCase() : "";
+}
+
+/**
+ * A country's full name. A value that is already a name passes through exactly
+ * as the match holds it, so the overlay reads the same as the rest of the site;
+ * a code is title-cased from the ISO table.
+ */
+function countryNameText(value) {
+  const key = countryKey(value);
+  if (!key) return "";
+  const raw = String(value).trim();
+  if (countryTables().isoCountries[raw.toLowerCase()]) return raw;
+  return key
+    .split(" ")
+    .map((word, i) => (i > 0 && COUNTRY_SMALL_WORDS.includes(word) ? word : word.charAt(0).toUpperCase() + word.slice(1)))
+    .join(" ");
+}
+
+/**
+ * A match's round name. Port of matchRoundName() in matchRound.js: 'Finals',
+ * 'Consolidation Finals', 'Semi Finals', 'Round 2 Losers', 'Round 3 Winners',
+ * or plain 'Round 4' in a single elimination or round robin. Empty when the
+ * round is not known, so the element draws nothing rather than half a label.
+ */
+function matchRoundText(m, format) {
+  if (!m) return "";
+  if (m.is_finals) return "Finals";
+  if (m.is_consolidation_finals) return "Consolidation Finals";
+  if (m.is_semi_finals) return "Semi Finals";
+  const raw = m.round;
+  if (raw === null || raw === undefined || raw === "") return "";
+  const round = Number(raw);
+  if (!Number.isFinite(round) || round === 0) return "";
+  if (round < 0) return `Round ${-round} Losers`;
+  const f = String(format || "");
+  if (f === "single_elimination" || f.includes("round_robin")) return `Round ${round}`;
+  return `Round ${round} Winners`;
 }
 
 // CircleFlag.js hard-codes six flags that the CDN does not serve correctly (or at
@@ -177,6 +380,9 @@ function imageUrlFor(element, binding, assets) {
   switch (element.type) {
     case "player_flag":     return flagSourceFor(m[`${player}_country`], assets);
     case "static_image":    return element.imageUrl || null;
+    // Only so the picture is preloaded; drawBreakIndicator() paints it, since
+    // it also has to decide whether this player's indicator shows at all.
+    case "break_indicator": return element.indicatorStyle === "image" ? element.imageUrl || null : null;
     case "player_avatar":   return m[`${player}_avatarImg`] || null;
     case "tournament_logo": return t.logo || null;
     case "tournament_game_type_image":
@@ -252,6 +458,15 @@ function nextAnimationAt(canvasDef, now, binding = null) {
   let soonest = null;
   for (const el of (canvasDef && canvasDef.elements) || []) {
     if (el.visible === false) continue;
+    // A running countdown moves every second, and the seconds are the whole
+    // point of it: one that redrew in minutes would sit on "1:00" for a minute
+    // at the end, which is exactly when anyone is watching it.
+    if (el.type === "match_countdown") {
+      if (!countdownRunning(el, binding)) continue;
+      const next = now + (1000 - (now % 1000));
+      if (soonest === null || next < soonest) soonest = next;
+      continue;
+    }
     if (el.type === "ad_center") {
       const ads = adsFor(el, binding);
       if (ads.length <= 1) continue;
@@ -398,6 +613,10 @@ function parseShadows(value) {
       out.push({
         x: lengths[0], y: lengths[1], blur: lengths[2] || 0, spread: lengths[3] || 0,
         color: color || "#000",
+        // An inset shadow falls INSIDE the box, over the background. Ignoring
+        // the keyword drew it as an outer shadow — a dark halo around an
+        // element that was supposed to look recessed.
+        inset: /\binset\b/i.test(part),
       });
     }
   }
@@ -724,7 +943,94 @@ function drawBoxShadows(ctx, shadows, trace, w, h) {
   }
 }
 
+/**
+ * The inset half of box-shadow: the shadow the area OUTSIDE the shape casts
+ * inward across it. Drawn by clipping to the shape and then filling everything
+ * except the shape — the fill itself lands outside the clip and is invisible,
+ * and only the part of its shadow that spills inward is painted.
+ */
+function drawInsetShadows(ctx, shadows, trace, w, h) {
+  const { createCanvas } = skia();
+  for (const sh of shadows) {
+    const pad = Math.ceil(sh.blur * 2 + Math.abs(sh.x) + Math.abs(sh.y) + Math.abs(sh.spread) + 4);
+    const tmp = createCanvas(Math.ceil(w) + pad * 2, Math.ceil(h) + pad * 2);
+    const t = tmp.getContext("2d");
+    t.translate(pad, pad);
+    trace(t);
+    t.clip();
+    t.shadowColor = compensateShadowAlpha(sh.color);
+    t.shadowBlur = sh.blur;
+    t.shadowOffsetX = sh.x;
+    t.shadowOffsetY = sh.y;
+    t.fillStyle = "#000";
+    // The shape FIRST: every trace helper starts with beginPath(), so adding
+    // the surrounding rect before it would simply be discarded — and the fill
+    // below would then paint the shape itself solid black inside the clip.
+    trace(t);
+    t.rect(-pad, -pad, Math.ceil(w) + pad * 2, Math.ceil(h) + pad * 2);
+    t.fill("evenodd");
+    ctx.drawImage(tmp, -pad, -pad);
+  }
+}
+
 // ── Element drawing ──────────────────────────────────────────────────────────
+
+/**
+ * The Break Indicator: a cue ball, a flat dot, or an image of your own, on the
+ * side of the player whose break it is.
+ *
+ * The web component keeps BOTH players' indicators on the canvas in the
+ * builder, showing the one that is off at 0.22 opacity so it can still be
+ * placed. A device is never the builder, so the one that is off draws nothing
+ * at all — a pair of them then reads as the ball moving across the scoreboard.
+ */
+function drawBreakIndicator(ctx, element, binding, w, h, style, images, insetShadows) {
+  const m = (binding && binding.match) || {};
+  const breaking = breakingPlayer(m, element);
+  if (breaking !== (element.player === 2 ? 2 : 1)) return;
+
+  if (element.indicatorStyle === "image") {
+    const url = element.imageUrl || null;
+    if (!url) return;
+    const img = images && images.get(url);
+    if (!img) return;
+    const r = objectFitRect(element.objectFit || "contain", w, h, img.width, img.height);
+    ctx.drawImage(scaledForBox(img, url, r.w, r.h), r.x, r.y, r.w, r.h);
+    return;
+  }
+
+  const flat = element.indicatorStyle === "dot";
+  ellipsePath(ctx, 0, 0, w, h);
+  if (flat) {
+    ctx.fillStyle = style.color || "#ffffff";
+  } else {
+    // radial-gradient(circle at 35% 28%, …). A `circle` with no size given is
+    // farthest-corner: the radius reaches the corner furthest from the centre.
+    const cx = w * 0.35, cy = h * 0.28;
+    const r = Math.max(
+      Math.hypot(cx, cy), Math.hypot(w - cx, cy),
+      Math.hypot(cx, h - cy), Math.hypot(w - cx, h - cy)
+    );
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    for (const [stop, color] of CUE_BALL_STOPS) g.addColorStop(stop, color);
+    ctx.fillStyle = g;
+  }
+  ctx.fill();
+
+  if (insetShadows && insetShadows.length) {
+    drawInsetShadows(ctx, insetShadows, (c) => ellipsePath(c, 0, 0, w, h), w, h);
+  }
+
+  const border = parseBorder(style.border);
+  if (border) {
+    const i = border.width / 2;
+    ellipsePath(ctx, i, i, w - border.width, h - border.width);
+    ctx.lineWidth = border.width;
+    ctx.strokeStyle = border.color;
+    ctx.stroke();
+  }
+}
+
 function drawShape(ctx, element, w, h, style) {
   const fill = element.fill || { type: "solid", color: "#1890ff" };
   const fillAlpha = fill.opacity != null ? fill.opacity : 1;
@@ -772,20 +1078,24 @@ function drawElement(ctx, element, binding, images, assets, now = Date.now(), an
   ctx.translate(-w / 2, -h / 2);
   ctx.globalAlpha = element.opacity != null ? element.opacity : 1;
 
-  // box-shadow is painted before the clip: overflow:hidden clips an element's
-  // content, never its shadow.
-  const boxShadows = parseShadows(style.boxShadow);
-  if (boxShadows.length) {
-    const isCircle = element.type === "shape" && element.shapeType === "circle";
-    const radius = style.borderRadius;
-    drawBoxShadows(
-      ctx,
-      boxShadows,
-      (c) => (isCircle ? ellipsePath(c, 0, 0, w, h) : roundRectPath(c, 0, 0, w, h, radius)),
-      w,
-      h
-    );
-  }
+  // A cue-ball break indicator carries its own shadow when the element sets
+  // none, the same way the web component does.
+  const shadowCss = element.type === "break_indicator" && element.indicatorStyle !== "dot"
+    && element.indicatorStyle !== "image"
+    ? style.boxShadow || CUE_BALL_SHADOW
+    : style.boxShadow;
+  const allShadows = parseShadows(shadowCss);
+  const insetShadows = allShadows.filter((sh) => sh.inset);
+  // A break indicator is a circle filling the box; a shape says so itself.
+  const isCircle = (element.type === "shape" && element.shapeType === "circle")
+    || element.type === "break_indicator";
+  const traceBox = (c) => (isCircle ? ellipsePath(c, 0, 0, w, h) : roundRectPath(c, 0, 0, w, h, style.borderRadius));
+
+  // The outer shadows are painted before the clip: overflow:hidden clips an
+  // element's content, never its shadow. The inset ones go on afterwards, over
+  // the background, which is where CSS puts them.
+  const outerShadows = allShadows.filter((sh) => !sh.inset);
+  if (outerShadows.length) drawBoxShadows(ctx, outerShadows, traceBox, w, h);
 
   // overflow: hidden on the element box.
   ctx.save();
@@ -794,6 +1104,16 @@ function drawElement(ctx, element, binding, images, assets, now = Date.now(), an
 
   if (element.type === "shape") {
     drawShape(ctx, element, w, h, style);
+    ctx.restore();
+    ctx.restore();
+    return;
+  }
+
+  // The web component returns a bare circle for this one rather than the usual
+  // element box, so it takes nothing from the style but the colour, the border
+  // and the shadow — no background, no padding.
+  if (element.type === "break_indicator") {
+    drawBreakIndicator(ctx, element, binding, w, h, style, images, insetShadows);
     ctx.restore();
     ctx.restore();
     return;
@@ -813,20 +1133,24 @@ function drawElement(ctx, element, binding, images, assets, now = Date.now(), an
     ctx.strokeStyle = border.color;
     ctx.stroke();
   }
+  if (insetShadows.length) drawInsetShadows(ctx, insetShadows, traceBox, w, h);
 
   if (element.type === "image_carousel") {
     // ImageCarousel fills the element box (its container is width/height 100%
     // with overflow hidden) and keeps the element's border-radius.
     const list = carouselImages(element);
     if (!list.length) {
-      // Same empty state the component renders, so a misconfigured element looks
-      // the same on the device as it does in the builder.
-      ctx.fillStyle = "rgba(0,0,0,0.4)";
-      roundRectPath(ctx, 0, 0, w, h, style.borderRadius);
-      ctx.fill();
-      drawText(ctx, "Image Carousel (add images)", { x: 0, y: 0, w, h }, {
-        ...style, color: "#ffffff", fontSize: 14, textAlign: "center", textTransform: "none", textShadow: "none",
-      });
+      // A carousel with no images draws NOTHING.
+      //
+      // This used to paint a dark panel captioned "Image Carousel (add
+      // images)", on the belief that it matched the component. It does not:
+      // ImageCarousel gates that placeholder on `preview`, which is the
+      // builder, and returns null on a live render — the same rule the image
+      // elements already follow. A device is never the builder, so the
+      // caption was being burned into real broadcasts. It was also by far the
+      // largest single conformance failure in the example set: on
+      // block_scoreboard this one element was 56,751 of the overlay's 58,311
+      // differing pixels.
       ctx.restore();
       ctx.restore();
       return;
@@ -945,12 +1269,29 @@ function drawElement(ctx, element, binding, images, assets, now = Date.now(), an
     return;
   }
 
-  const text = textFor(element, binding, now);
+  // A countdown recolours itself inside warnSeconds, and draws nothing at all
+  // at an event that does not time its matches or once it has expired and is
+  // set to hide — so it resolves its own text rather than going through
+  // textFor().
+  let text, textStyle = style;
+  if (element.type === "match_countdown") {
+    const cd = countdownFor(element, binding, now);
+    if (!cd) {
+      ctx.restore();
+      ctx.restore();
+      return;
+    }
+    text = cd.text;
+    if (cd.color !== style.color) textStyle = { ...style, color: cd.color };
+  } else {
+    text = textFor(element, binding, now);
+  }
+
   if (text) {
     const pad = style.padding || 0;
     const bw = border ? border.width : 0;
     const inset = pad + bw;
-    drawText(ctx, text, { x: inset, y: inset, w: Math.max(0, w - inset * 2), h: Math.max(0, h - inset * 2) }, style);
+    drawText(ctx, text, { x: inset, y: inset, w: Math.max(0, w - inset * 2), h: Math.max(0, h - inset * 2) }, textStyle);
   }
 
   ctx.restore();
@@ -1087,5 +1428,5 @@ module.exports = {
   SUPPORTED,
   INHERIT_FAMILY,
   // exported for tests
-  _internals: { withoutExtraPngChunks, imageUrlFor, scaledForBox, carouselState, carouselImages, adsFor, adVenueIdFor, adCarouselState, resolveAdDuration, easeInOut, wrapLines, parseRadii, compensateShadowAlpha, countryShortCode, flagSourceFor, gameTypeImagePath, parseShadows, parseBorder, gradientPoints, matchClockText, applyTextTransform, objectFitRect },
+  _internals: { withoutExtraPngChunks, imageUrlFor, scaledForBox, carouselState, carouselImages, adsFor, adVenueIdFor, adCarouselState, resolveAdDuration, easeInOut, wrapLines, parseRadii, compensateShadowAlpha, countryShortCode, flagSourceFor, gameTypeImagePath, parseShadows, parseBorder, gradientPoints, matchClockText, applyTextTransform, objectFitRect, countryKey, countryCodeText, countryNameText, matchRoundText, breakingPlayer, countdownFor, countdownLengthSeconds, countdownSecondsLeft, formatCountdownClock, countdownRunning },
 };

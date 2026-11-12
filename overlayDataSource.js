@@ -137,7 +137,9 @@ const Q_TOURNAMENT = `
   query DeviceTournament($slug: String!) {
     tournaments(where: { slug: { _eq: $slug } }, limit: 1) {
       id name slug logo avatar game_type winners_race_to losers_race_to
-      tournament_stage_format stages { id winners_race_to losers_race_to }
+      tournament_type tournament_format enable_match_clock match_time_limit
+      tournament_stage_format
+      stages { id number status tournament_type tournament_format winners_race_to losers_race_to }
       venue { id name city region }
     }
   }`;
@@ -151,7 +153,8 @@ const Q_TABLE_MATCH = `
       user { id city region }
       venue { id name city region }
       tournament_match_table(where: { status: { _eq: IN_PROGRESS } }, order_by: { updated_at: desc }, limit: 1) {
-        id identifier status scheduled_time start_time end_time updated_at stage_id
+        id identifier status scheduled_time start_time end_time updated_at stage_id stage_number
+        round is_semi_finals is_finals is_consolidation_finals
         challenger1_name challenger1_country challenger1_score challenger1_points
         challenger1_race_to challenger1_skill_level challenger1_is_playing
         challenger2_name challenger2_country challenger2_score challenger2_points
@@ -220,13 +223,16 @@ const Q_VENUE_TABLE = `
   }
   fragment VenueTableTournament on tournaments {
     id name slug event_id logo avatar game_type winners_race_to losers_race_to
-    tournament_stage_format stages { id winners_race_to losers_race_to }
+    tournament_type tournament_format enable_match_clock match_time_limit
+    tournament_stage_format
+    stages { id number status tournament_type tournament_format winners_race_to losers_race_to }
     venue { id name city region }
     pool_tables(where: { slug: { _eq: $table_slug } }) {
       id slug label
       user { id city region }
       ${TABLE_MATCHES} {
-        id identifier status scheduled_time start_time end_time updated_at stage_id
+        id identifier status scheduled_time start_time end_time updated_at stage_id stage_number
+        round is_semi_finals is_finals is_consolidation_finals
         challenger1_name challenger1_country challenger1_score challenger1_points
         challenger1_race_to challenger1_skill_level challenger1_is_playing
         challenger2_name challenger2_country challenger2_score challenger2_points
@@ -338,10 +344,16 @@ const EMPTY_BINDING = {
   // there even when the table is empty. ad_center elements set to "Automatic"
   // read it. Mirrors withBindingVenue() in sampleBinding.js.
   venue: { id: null },
-  tournament: { id: null, name: "", slug: "", location: "", logo: null, game_type: "", winners_race_to: null, losers_race_to: null },
+  tournament: {
+    id: null, name: "", slug: "", location: "", logo: null, game_type: "",
+    winners_race_to: null, losers_race_to: null,
+    // The bracket format a round is named against, and the event's match clock.
+    tournament_type: "", enable_match_clock: false, match_time_limit: null,
+  },
   table: { id: null, slug: "", label: "" },
   match: {
     identifier: "", race_to: null, status: "", scheduled_time: null, start_time: null, end_time: null,
+    round: null, is_semi_finals: false, is_finals: false, is_consolidation_finals: false,
     challenger1_name: "", challenger1_country: "", challenger1_score: "", challenger1_points: "",
     challenger1_race_to: "", challenger1_skill_level: "", challenger1_avatarImg: null, challenger1_is_playing: false,
     challenger2_name: "", challenger2_country: "", challenger2_score: "", challenger2_points: "",
@@ -402,6 +414,47 @@ function raceSettingsFor(tournament, match) {
   return { winners_race_to: pick("winners_race_to"), losers_race_to: pick("losers_race_to") };
 }
 
+/**
+ * The stage a live match belongs to. Port of resolveBindingStage() in
+ * sampleBinding.js: by the match's stage id, then its stage number, otherwise
+ * the stage running now.
+ *
+ * raceSettingsFor() deliberately does NOT use this — it is a port of a
+ * different web function (getMatchRaces' resolveRaceSettings), which only
+ * matches by stage_id and treats a multi-stage tournament's top-level columns
+ * as stale. Keeping them separate keeps each faithful to its own original.
+ */
+function bindingStage(tournament, match) {
+  const stages = (tournament && tournament.stages) || [];
+  if (!Array.isArray(stages) || !stages.length) return null;
+  if (match) {
+    if (match.stage_id != null) {
+      const byId = stages.find((st) => st && st.id === match.stage_id);
+      if (byId) return byId;
+    }
+    if (match.stage_number != null) {
+      const byNumber = stages.find((st) => st && String(st.number) === String(match.stage_number));
+      if (byNumber) return byNumber;
+    }
+  }
+  return stages.find((st) => st && st.status === "IN_PROGRESS")
+    || stages.find((st) => st && st.status !== "COMPLETED")
+    || stages[stages.length - 1];
+}
+
+/**
+ * The bracket format a match's round is named against. Port of
+ * resolveTournamentFormat(): a tournament run in stages keeps its format on
+ * each stage, the same way it keeps its races there, so the match's stage wins
+ * and the tournament-level column is the fallback.
+ */
+function tournamentFormatFor(tournament, match) {
+  if (!tournament) return "";
+  const stage = bindingStage(tournament, match);
+  return (stage && (stage.tournament_type || stage.tournament_format))
+    || tournament.tournament_type || tournament.tournament_format || "";
+}
+
 function buildBinding(tournament, table, match) {
   if (!tournament && !table && !match) return EMPTY_BINDING;
   const location = locationFor(tournament, table);
@@ -417,6 +470,9 @@ function buildBinding(tournament, table, match) {
           game_type: gameTypeLabel(tournament.game_type),
           winners_race_to: races.winners_race_to,
           losers_race_to: races.losers_race_to,
+          tournament_type: tournamentFormatFor(tournament, match),
+          enable_match_clock: tournament.enable_match_clock === true,
+          match_time_limit: tournament.match_time_limit != null ? Number(tournament.match_time_limit) : null,
         }
       : { ...EMPTY_BINDING.tournament, location: location || "" },
     table: table ? { id: table.id, slug: table.slug, label: table.label } : EMPTY_BINDING.table,
@@ -424,6 +480,12 @@ function buildBinding(tournament, table, match) {
       ? {
           identifier: match.identifier,
           race_to: match.race_to,
+          // A casual match has no bracket, so these stay null/false there and
+          // match_round draws nothing — which is what it should do.
+          round: match.round != null ? match.round : null,
+          is_semi_finals: Boolean(match.is_semi_finals),
+          is_finals: Boolean(match.is_finals),
+          is_consolidation_finals: Boolean(match.is_consolidation_finals),
           status: match.status,
           scheduled_time: match.scheduled_time,
           start_time: match.start_time,
@@ -458,7 +520,16 @@ function buildBinding(tournament, table, match) {
  */
 function withBindingVenue(binding, venueId) {
   const id = parseInt(venueId, 10);
-  return { ...binding, venue: { id: Number.isFinite(id) && id > 0 ? id : null } };
+  return {
+    ...binding,
+    venue: {
+      id: Number.isFinite(id) && id > 0 ? id : null,
+      // The overlay URL was resolved and this is its answer, including when the
+      // answer is "no venue". Ad Center needs to tell that apart from a binding
+      // that was never asked — see resolveAdVenueId().
+      resolved: true,
+    },
+  };
 }
 
 // The tournament record — name, logo, game type, race lengths — is not
