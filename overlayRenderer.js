@@ -13,6 +13,8 @@
 // to decide whether a given overlay can be drawn locally at all.
 const fs = require("fs");
 const path = require("path");
+const http = require("http");
+const https = require("https");
 
 let _skia = null;
 function skia() {
@@ -1547,11 +1549,61 @@ function drawElement(ctx, element, binding, images, assets, now = Date.now(), an
  * `new Image(); img.src = buf` reports a width and height but draws nothing —
  * loadImage is the only form that works.
  */
+// Handed a URL, @napi-rs/canvas fetches it with NO User-Agent header, and
+// d2cqpja9v01i02.cloudfront.net — which serves every picture an overlay can
+// carry — answers 403 to a request without one. Any User-Agent at all is
+// accepted, so the bytes are fetched here and the decoder is handed a Buffer.
+//
+// The appliance itself was NOT affected: skiaOverlay fetches image bytes
+// through global fetch (undici), which does send a User-Agent, and passes the
+// Buffer in. What was affected is every caller that passes a URL — in practice
+// tools/overlay-conformance, where it meant the harness quietly dropped every
+// image-bearing element from the score while reporting a healthy number. It
+// did print the unreachable URLs; nobody read that line.
+//
+// Doing the fetch here also gets a timeout, which loadImage(url) has none of:
+// a CDN that accepts the connection and then stops talking would otherwise
+// hang the caller indefinitely, which is how this was noticed.
+const IMAGE_FETCH_TIMEOUT_MS = 15000;
+const IMAGE_USER_AGENT = "digitalpool-camera";
+
+function fetchImageBytes(url, redirectsLeft = 3) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, value) => { if (!settled) { settled = true; fn(value); } };
+    const mod = url.startsWith("https:") ? https : http;
+    const req = mod.get(
+      url,
+      { headers: { "User-Agent": IMAGE_USER_AGENT, Accept: "image/*,*/*" }, timeout: IMAGE_FETCH_TIMEOUT_MS },
+      (res) => {
+        const { statusCode, headers } = res;
+        if (statusCode >= 300 && statusCode < 400 && headers.location && redirectsLeft > 0) {
+          res.resume();
+          return finish(resolve, fetchImageBytes(new URL(headers.location, url).href, redirectsLeft - 1));
+        }
+        if (statusCode !== 200) {
+          res.resume();
+          return finish(reject, new Error(`remote source rejected with status code ${statusCode}`));
+        }
+        const chunks = [];
+        res.on("data", (c) => chunks.push(c));
+        res.on("end", () => finish(resolve, Buffer.concat(chunks)));
+        res.on("error", (err) => finish(reject, err));
+      }
+    );
+    req.on("timeout", () => req.destroy(new Error(`image fetch timed out after ${IMAGE_FETCH_TIMEOUT_MS}ms`)));
+    req.on("error", (err) => finish(reject, err));
+  });
+}
+
 async function loadImage(source) {
+  const payload = typeof source === "string" && /^https?:\/\//i.test(source)
+    ? await fetchImageBytes(source)
+    : source;
   try {
-    return await skia().loadImage(source);
+    return await skia().loadImage(payload);
   } catch (err) {
-    const stripped = Buffer.isBuffer(source) ? withoutExtraPngChunks(source) : null;
+    const stripped = Buffer.isBuffer(payload) ? withoutExtraPngChunks(payload) : null;
     if (!stripped) throw err;
     return skia().loadImage(stripped);
   }
