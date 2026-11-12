@@ -17,6 +17,19 @@
 
 set -euo pipefail
 
+# ── Onboarding mode gate ────────────────────────────────────────────────────
+# Under BLE onboarding the onboard radio is the venue internet connection and
+# the hotspot is started on demand instead (BLUETOOTH_ONBOARDING.md §2 D6).
+# Bringing the AP up here would take the radio straight back off the network
+# the box was told to join, on every reboot.
+ENV_FILE="/home/dp/digitalpool-camera/.env"
+ONBOARDING_MODE="$(grep -h '^ONBOARDING_MODE=' "$ENV_FILE" 2>/dev/null \
+                   | tail -1 | cut -d= -f2 | tr -d '[:space:]')"
+if [ "${ONBOARDING_MODE:-auto}" = "ble" ]; then
+    echo "ONBOARDING_MODE=ble — not starting the hotspot; the app starts it on demand."
+    exit 0
+fi
+
 PROFILE_NAME="DigitalPool-Hotspot"
 DEFAULT_SSID="DigitalPool-Camera"
 DEFAULT_PASSWORD="Digitalpool"
@@ -37,7 +50,11 @@ MAX_IFACE_WAIT=90
 IFACE_WAITED=0
 IFACE=""
 while [ "$IFACE_WAITED" -lt "$MAX_IFACE_WAIT" ]; do
-    IFACE=$(nmcli -t -f DEVICE,TYPE device 2>/dev/null | grep ':wifi' | head -1 | cut -d: -f1 || true)
+    # Match the TYPE field exactly.  `grep ':wifi'` also matches `:wifi-p2p`,
+    # and every iwlwifi card (every N100) exposes a `p2p-dev-*` control device
+    # that can neither scan nor run an AP.
+    IFACE=$(nmcli -t -f DEVICE,TYPE device 2>/dev/null \
+            | awk -F: '$2 == "wifi" && $1 !~ /^p2p-dev-/ { print $1; exit }' || true)
     if [ -z "$IFACE" ]; then
         IFACE=$(ip link show 2>/dev/null | grep -Eo 'wl[^:]+' | head -1 || true)
     fi
