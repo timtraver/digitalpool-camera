@@ -145,8 +145,8 @@ const Q_TOURNAMENT = `
 // Mirrors GET_TOURNAMENT_STREAM_TABLE_OVERLAY_QUERY, trimmed to the fields the
 // binding actually reads.
 const Q_TABLE_MATCH = `
-  query DeviceTableMatch($tournament_id: Int!, $table_slug: String!) {
-    pool_tables(where: { tournament_id: { _eq: $tournament_id }, slug: { _eq: $table_slug } }, limit: 1) {
+  query DeviceTableMatch($tournament_id: Int!, $table_id: Int!) {
+    pool_tables(where: { tournament_id: { _eq: $tournament_id }, id: { _eq: $table_id } }, limit: 1) {
       id slug label
       user { id city region }
       venue { id name city region }
@@ -273,8 +273,8 @@ const Q_VENUE_PROBE = `
   }`;
 
 const Q_TOURNAMENT_PROBE = `
-  query DeviceTournamentProbe($tournament_id: Int!, $table_slug: String!) {
-    pool_tables(where: { tournament_id: { _eq: $tournament_id }, slug: { _eq: $table_slug } }, limit: 1) {
+  query DeviceTournamentProbe($tournament_id: Int!, $table_id: Int!) {
+    pool_tables(where: { tournament_id: { _eq: $tournament_id }, id: { _eq: $table_id } }, limit: 1) {
       id
       tournament_match_table(where: { status: { _eq: IN_PROGRESS } },
                              order_by: { updated_at: desc }, limit: 1) { id updated_at }
@@ -479,9 +479,92 @@ async function tournamentBySlug(slug) {
   return tournament;
 }
 
-/** Drop a cached tournament record so the next read goes to DigitalPool. */
+/**
+ * Drop a cached tournament record so the next read goes to DigitalPool. The
+ * resolved tables go with it: this is the operator's "the overlay has stopped
+ * following the table" button, and a table whose row was deleted and recreated
+ * is one of the ways that happens. The cache holds a handful of entries, so
+ * clearing all of it costs one extra query on the next read.
+ */
 function forgetTournament(slug) {
   _tournamentCache.delete(slug);
+  _tableCache.clear();
+}
+
+// ── Which table is this overlay for? ────────────────────────────────────────
+//
+// The URL names a table by slug, but the thing that produced the URL did not
+// always have a slug to use. A table mirrored onto a camera is identified by
+// its LABEL ("Table 7"), and the website turns a label into a URL segment with
+// the same slugify it uses everywhere else. Querying `slug: { _eq: ... }` with
+// a slugified label therefore matched nothing, and a table whose slug column is
+// null could never be matched by slug at all.
+//
+// Both failures look identical from outside: the query succeeds, returns no
+// row, and the overlay draws the blank-but-valid binding an empty table
+// produces. An overlay pointed at the wrong table and an overlay pointed at an
+// idle table are the same picture, so this is resolved once, explicitly, and
+// everything downstream keys on the table's id.
+const Q_TOURNAMENT_TABLES = `
+  query DeviceTournamentTables($tournament_id: Int!) {
+    pool_tables(where: { tournament_id: { _eq: $tournament_id } }, order_by: { id: asc }) {
+      id slug label
+    }
+  }`;
+
+// The website's slugify, with the SAME options getVenueCameras.js passes —
+// which is where the mirrored table's URL segment is produced.
+//
+// The real package is vendored (vendor/slugify.js, v1.6.6, MIT) rather than
+// reimplemented because the obvious reimplementation is subtly wrong: slugify
+// substitutes from a character map before applying `remove` (so "&" becomes
+// "and" and "$" becomes "dollar"), turns a literal "-" into a space, folds
+// accents, and collapses runs of whitespace. Hand-rolled, "Table  3" and
+// "Table - 4" both resolve to nothing, and nothing is indistinguishable here
+// from an idle table.
+const slugify = require("./vendor/slugify.js");
+const SLUGIFY_OPTS = { replacement: "-", remove: /[*+~.,()"#!:\/@]/g, lower: true };
+function slugifyLabel(label) {
+  if (!label) return "";
+  return slugify(String(label), SLUGIFY_OPTS);
+}
+
+const _tableCache = new Map();        // `${tournamentId}:${requested}` → { at, table }
+const TABLE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * The pool_tables row a tournament overlay URL's table segment refers to, or
+ * null when the tournament has no such table.
+ *
+ * Tried in order of how sure the answer is: an exact slug, then a label that
+ * slugifies to what was asked for, then a slug that does. Resolution is cached
+ * for TABLE_TTL_MS; pass `{ refresh: true }` to re-read, which the callers do
+ * when a lookup by the cached id finds no row — tournament tables can be
+ * deleted and recreated with new ids, and a stale id is another silent blank.
+ */
+async function tournamentTable(tournamentId, requested, { refresh = false } = {}) {
+  const key = `${tournamentId}:${requested}`;
+  if (!refresh) {
+    const hit = _tableCache.get(key);
+    if (hit && Date.now() - hit.at < TABLE_TTL_MS) return hit.table;
+  }
+  const d = await graphql(Q_TOURNAMENT_TABLES, { tournament_id: tournamentId });
+  const rows = d.pool_tables || [];
+  // `want` is empty only for an empty segment, and an empty slugified label
+  // would then match the first table with no label at all — a wrong table is
+  // worse than no table, so the fallbacks are skipped in that case.
+  const want = slugifyLabel(requested);
+  const table =
+    rows.find((t) => t.slug === requested) ||
+    (want && rows.find((t) => slugifyLabel(t.label) === want)) ||
+    (want && rows.find((t) => slugifyLabel(t.slug) === want)) ||
+    null;
+  if (table && table.slug !== requested) {
+    console.log(`🎱 Overlay table '${requested}' resolved by label to `
+      + `'${table.label || table.slug || table.id}' (id ${table.id})`);
+  }
+  _tableCache.set(key, { at: Date.now(), table });
+  return table;
 }
 
 // The same probe documents, as subscriptions. Derived from the query text
@@ -556,7 +639,14 @@ async function probeLive(parsed) {
     throw new Error(`overlay mode '${parsed.mode}' not implemented locally`);
   }
   const tournament = await tournamentBySlug(parsed.slug);
-  const d = await graphql(Q_TOURNAMENT_PROBE, { tournament_id: tournament.id, table_slug: parsed.tableSlug });
+  let known = await tournamentTable(tournament.id, parsed.tableSlug);
+  if (!known) return { active: false };
+  let d = await graphql(Q_TOURNAMENT_PROBE, { tournament_id: tournament.id, table_id: known.id });
+  if (!(d.pool_tables && d.pool_tables[0])) {
+    known = await tournamentTable(tournament.id, parsed.tableSlug, { refresh: true });
+    if (!known) return { active: false };
+    d = await graphql(Q_TOURNAMENT_PROBE, { tournament_id: tournament.id, table_id: known.id });
+  }
   return probeVerdict(parsed, d);
 }
 
@@ -576,10 +666,14 @@ async function watchLive(parsed, onActive) {
     variables = { venue_slug: parsed.slug, table_slug: parsed.tableSlug };
   } else if (parsed.mode === "tournament") {
     query = asSubscription(Q_TOURNAMENT_PROBE);
-    // Resolving the tournament is a one-off query; the id is then fixed for the
-    // life of the subscription.
+    // Resolving the tournament and its table are one-off queries; the ids are
+    // then fixed for the life of the subscription. A table that cannot be
+    // resolved throws, which the caller already handles by polling instead —
+    // and polling re-resolves, so a table created later is picked up.
     const tournament = await tournamentBySlug(parsed.slug);
-    variables = { tournament_id: tournament.id, table_slug: parsed.tableSlug };
+    const known = await tournamentTable(tournament.id, parsed.tableSlug);
+    if (!known) throw new Error(`table '${parsed.tableSlug}' not found in tournament '${parsed.slug}'`);
+    variables = { tournament_id: tournament.id, table_id: known.id };
   } else {
     throw new Error(`overlay mode '${parsed.mode}' not implemented locally`);
   }
@@ -615,7 +709,22 @@ async function fetchBinding(parsed) {
   }
   const tournament = await tournamentBySlug(parsed.slug);
 
-  const d = await graphql(Q_TABLE_MATCH, { tournament_id: tournament.id, table_slug: parsed.tableSlug });
+  // No such table in this tournament: the same blank-but-valid binding an idle
+  // table produces, which is what this has always returned for an unmatched
+  // slug. The renderer draws the layout with no match in it.
+  let known = await tournamentTable(tournament.id, parsed.tableSlug);
+  if (!known) return withBindingVenue(buildBinding(tournament, null, null),
+    (tournament.venue && tournament.venue.id) || null);
+
+  let d = await graphql(Q_TABLE_MATCH, { tournament_id: tournament.id, table_id: known.id });
+  // The id resolved earlier no longer exists — re-resolve once rather than
+  // draw a blank overlay for the rest of the TTL.
+  if (!(d.pool_tables && d.pool_tables[0])) {
+    known = await tournamentTable(tournament.id, parsed.tableSlug, { refresh: true });
+    d = known
+      ? await graphql(Q_TABLE_MATCH, { tournament_id: tournament.id, table_id: known.id })
+      : { pool_tables: [] };
+  }
   const table = d.pool_tables && d.pool_tables[0];
   const match = table && table.tournament_match_table && table.tournament_match_table[0];
   // resolveOverlayVenueId() takes the tournament's venue in this mode. The
@@ -710,5 +819,5 @@ module.exports = {
   graphqlUrl,
   EMPTY_BINDING,
   SUPPORTED_MODES,
-  _internals: { graphql, gameTypeLabel, locationFor, venueLabel },
+  _internals: { graphql, gameTypeLabel, locationFor, venueLabel, slugifyLabel },
 };

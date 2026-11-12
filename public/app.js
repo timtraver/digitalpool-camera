@@ -4203,10 +4203,15 @@ overlayUrl.addEventListener("keydown", (e) => {
 });
 
 // ── Overlay picker (overlays from the user's DigitalPool account) ────────────
-// The list is account-wide (owner's own + venue-public overlays), so it is
-// fetched once and re-used for both cameras. Selecting an item just sets
-// overlayUrl.value and flows through the existing applyOverlaySettings() path.
+// The list is the owner's own overlays plus the venue's public ones, and it is
+// fetched PER CAMERA: a venue can point each camera at a different tournament
+// table, and the overlay mirrored onto that table comes back in the same
+// answer. `availableOverlaysCam` records which camera the list in hand belongs
+// to, so switching tabs refetches instead of showing the other camera's.
+// Selecting an item just sets overlayUrl.value and flows through the existing
+// applyOverlaySettings() path.
 let availableOverlays = [];
+let availableOverlaysCam = 0;
 
 function populateOverlaySelect() {
   // Rebuild options: — None —, [My Overlays], [Venue Overlays], Custom URL…
@@ -4249,12 +4254,18 @@ function reconcileOverlaySelect() {
 
 async function loadOverlayList(force = false) {
   try {
-    const resp = await fetch(force ? "/api/overlays?refresh=1" : "/api/overlays");
+    const cam = activeCamIndex;
+    const resp = await fetch(`/api/overlays?cam=${cam}${force ? "&refresh=1" : ""}`);
     const data = await resp.json();
+    // The tab may have been switched while this was in flight; a late answer
+    // for the camera no longer on screen must not overwrite the current one.
+    if (cam !== activeCamIndex) return;
     availableOverlays = data.ok && Array.isArray(data.overlays) ? data.overlays : [];
+    availableOverlaysCam = cam;
   } catch (e) {
     console.warn("Could not load overlay list:", e);
     availableOverlays = [];
+    availableOverlaysCam = 0;
   }
   populateOverlaySelect();
   reconcileOverlaySelect();
@@ -4354,7 +4365,10 @@ socket.on("streamStatus", (status) => {
     overlayUrl.value = status.config.overlayUrl || "";
     // If this camera already has remote overlay on, make sure the picker is
     // populated (cache is fine here); otherwise just re-sync the selection.
-    if (remoteOverlayEnabled.checked && availableOverlays.length === 0) {
+    // Refetch when there is no list yet, and also when the one in hand was
+    // fetched for the other camera — the two can differ.
+    if (remoteOverlayEnabled.checked
+        && (availableOverlays.length === 0 || availableOverlaysCam !== activeCamIndex)) {
       loadOverlayList();
     } else {
       reconcileOverlaySelect();

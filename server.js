@@ -3752,7 +3752,11 @@ app.get("/api/overlay/engine", requireAuth, (req, res) => {
 // account — the owner's own custom overlays plus public overlays for the venue.
 // Identity-based (no password), keyed on the identifiers stored in remote.json
 // during registration; same cloud function + client as register/deregister.
-let _overlayListCache = { at: 0, overlays: null };
+// Cached per camera, not per device. The list is camera-specific because a
+// venue can point each camera at a different tournament table, and the
+// mirrored overlay comes back in this answer — one shared cache would serve
+// camera 1's mirror to camera 2 for the next minute.
+const _overlayListCache = { 1: { at: 0, overlays: null }, 2: { at: 0, overlays: null } };
 const OVERLAY_LIST_TTL_MS = 60000;
 app.get("/api/overlays", async (req, res) => {
   const cfg = loadRemoteConfig();
@@ -3760,11 +3764,17 @@ app.get("/api/overlays", async (req, res) => {
     return res.json({ ok: false, error: "device not registered", overlays: [] });
   }
 
+  // Which of this box's two cameras is asking. The backend resolves the mirror
+  // from (device, camera); omitting it made it fall back to the box's first
+  // camera, so camera 2 was handed camera 1's answer.
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  const cache = _overlayListCache[camIdx];
+
   // Serve a recent cached list so re-opening the panel doesn't re-hit the function.
   if (req.query.refresh !== "1"
-      && _overlayListCache.overlays
-      && Date.now() - _overlayListCache.at < OVERLAY_LIST_TTL_MS) {
-    return res.json({ ok: true, overlays: _overlayListCache.overlays, cached: true });
+      && cache.overlays
+      && Date.now() - cache.at < OVERLAY_LIST_TTL_MS) {
+    return res.json({ ok: true, overlays: cache.overlays, cached: true });
   }
 
   let result;
@@ -3773,7 +3783,10 @@ app.get("/api/overlays", async (req, res) => {
       action:     "listOverlays",
       ownerEmail: cfg.ownerEmail || "",
       venueId:    cfg.venueId    || "",
-      deviceId:   cfg.deviceId   || "",
+      // No deviceId: registration has never written one into remote.json, so
+      // this only ever sent "". The box is identified by its MAC, and the
+      // camera by `camera`.
+      camera:     camIdx,
       macAddress: cfg.macAddress || getPrimaryMac(),
     });
   } catch (e) {
@@ -3795,7 +3808,7 @@ app.get("/api/overlays", async (req, res) => {
     }))
     .filter((o) => o.url);
 
-  _overlayListCache = { at: Date.now(), overlays };
+  _overlayListCache[camIdx] = { at: Date.now(), overlays };
   res.json({ ok: true, overlays });
 });
 
