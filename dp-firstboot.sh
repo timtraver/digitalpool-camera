@@ -6,7 +6,7 @@
 # clone into a unique unit, then permanently disables itself so it never runs again.
 #
 #   • Fresh machine-id  (generated FIRST so the hostname can borrow its entropy)
-#   • Neutral unique hostname  dp-stream-<4 hex>  (operator renames via the UI)
+#   • Neutral unique hostname  dp-duocast-<4 hex> (operator renames via the UI)
 #   • Fresh SSH host keys
 #   • Wiped NetBird peer identity  (re-registers on next activation)
 #   • Deleted WiFi profiles  (so the hotspot is rebuilt with THIS unit's SSID,
@@ -41,7 +41,7 @@ rm -f /etc/machine-id /var/lib/dbus/machine-id
 systemd-machine-id-setup
 MID="$(cat /etc/machine-id 2>/dev/null || echo 0000)"
 
-# ── 2. Hostname — dp-stream-<last 4 of primary MAC> ─────────────────────────────
+# ── 2. Hostname — dp-duocast-<last 4 of primary MAC> ────────────────────────────
 # Derive the suffix from a real NIC's burned-in MAC (stable across reboots, and
 # unique per unit).  Prefer wired (en*/eth*), then WiFi (wl*), then any physical
 # interface; fall back to the machine-id if no NIC MAC can be read.
@@ -65,7 +65,11 @@ else
     echo "No NIC MAC found — falling back to machine-id suffix ${SUFFIX}"
 fi
 
-NEW_HOSTNAME="dp-stream-${SUFFIX}"
+# Lowercase on purpose. This is the canonical identifier: the NetBird peer
+# name and the mediamtx host entries are derived from it, so it has to stay
+# DNS-safe. The product spelling a person sees — DP-DuoCast-XXXX — is computed
+# from the same MAC by getDisplayName() in server.js, so the two always agree.
+NEW_HOSTNAME="dp-duocast-${SUFFIX}"
 echo "Setting hostname to ${NEW_HOSTNAME}…"
 # /etc/hostname is what survives the reboot at the end of this script, so it is
 # written directly and first. hostnamectl alone used to do this job, but it talks
