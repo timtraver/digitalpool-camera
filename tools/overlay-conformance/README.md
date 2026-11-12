@@ -34,6 +34,23 @@ Bindings come from the builder's `SAMPLE_BINDING`, enriched with real avatar and
 logo URLs so image-bearing types are actually exercised rather than drawing empty
 placeholders.
 
+## Between matches
+
+`run.mjs` scores a table with a live match on it, because every binding in
+every corpus carries one. A venue box spends most of its day in the other
+state, and the elements that are supposed to *disappear* there (`matchOnly`,
+`ballCountOnly`) are invisible to a run that never reaches it.
+
+```bash
+node run.mjs            # leaves inflated canvases in out/
+node idle-check.mjs     # re-captures them against an EMPTY binding
+```
+
+This is how the idle-table bug was found: before `showsElement` was ported the
+device drew the complete scoreboard — names, zeroed scores, the lot — where the
+web app draws nothing, and the two sides differed by 86.5% of ink. Both now
+agree exactly.
+
 ## Running it
 
 ```bash

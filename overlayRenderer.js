@@ -50,6 +50,40 @@ const SUPPORTED = new Set([
   "player_flag", "break_indicator", "image_carousel", "ad_center",
 ]);
 
+// ── Which elements draw ──────────────────────────────────────────────────────
+// Port of showsElement() in OverlayCanvasRenderer.
+//
+// An element set to "Only during a match" waits for one, so a scoreboard is not
+// an empty bar between matches — which is the state a venue box spends most of
+// its day in. The builder draws every element regardless; a device is never the
+// builder.
+
+/** A table between matches has no match, and its names are blank. */
+function hasMatch(binding) {
+  const match = binding && binding.match;
+  return Boolean(match && (match.challenger1_name || match.challenger2_name));
+}
+
+// Games where a player's points ARE the ball count in the rack. The scorer
+// keeps points for these only, so elsewhere they sit at 0.
+const BALL_COUNT_GAMES = ["ONE_POCKET", "BANK_POOL"];
+
+/**
+ * Whether the match keeps a ball count. A Points element set to "Ball count
+ * only" waits for this, so it is not a pair of zeros in 9-ball.
+ */
+function keepsBallCount(binding) {
+  const match = (binding && binding.match) || {};
+  if (BALL_COUNT_GAMES.includes(match.game_type_key)) return true;
+  return Number(match.challenger1_points) > 0 || Number(match.challenger2_points) > 0;
+}
+
+function showsElement(element, binding) {
+  if (element.visible === false) return false;
+  if (element.ballCountOnly && !keepsBallCount(binding)) return false;
+  return !element.matchOnly || hasMatch(binding);
+}
+
 function unsupportedTypes(canvas) {
   const out = new Set();
   for (const el of (canvas && canvas.elements) || []) {
@@ -457,7 +491,7 @@ function carouselState(element, now) {
 function nextAnimationAt(canvasDef, now, binding = null) {
   let soonest = null;
   for (const el of (canvasDef && canvasDef.elements) || []) {
-    if (el.visible === false) continue;
+    if (!showsElement(el, binding)) continue;
     // A running countdown moves every second, and the seconds are the whole
     // point of it: one that redrew in minutes would sit on "1:00" for a minute
     // at the end, which is exactly when anyone is watching it.
@@ -685,6 +719,27 @@ function fontString(style) {
 // CSS linear-gradient(<angle>deg, …): 0deg points to the top and angles grow
 // clockwise, whereas canvas gradients are two points in box coordinates. Project
 // the angle onto the box and return the start/end points of the gradient line.
+// Port of gradients.js. A gradient is stored as { direction, angle, stops }.
+// `direction` is a preset and wins; anything else falls back to `angle`, the
+// CSS angle in degrees, which is what overlays saved before directions existed
+// carry. The builder writes the preset's angle alongside it, so the two
+// normally agree — but reading only `angle`, as this did, draws a gradient the
+// wrong way round whenever they do not.
+const DEFAULT_GRADIENT_ANGLE = 90;
+const GRADIENT_ANGLE_BY_DIRECTION = {
+  "to-right": 90, "to-left": 270, "to-bottom": 180, "to-top": 0,
+  "to-bottom-right": 135, "to-bottom-left": 225, "to-top-right": 45, "to-top-left": 315,
+};
+
+function gradientAngle(fill) {
+  const direction = fill && fill.direction;
+  if (direction && GRADIENT_ANGLE_BY_DIRECTION[direction] !== undefined) {
+    return GRADIENT_ANGLE_BY_DIRECTION[direction];
+  }
+  const n = Number(fill && fill.angle);
+  return Number.isFinite(n) ? n : DEFAULT_GRADIENT_ANGLE;
+}
+
 function gradientPoints(angleDeg, w, h) {
   const rad = ((angleDeg % 360) + 360) % 360 * (Math.PI / 180);
   const dx = Math.sin(rad);
@@ -1156,7 +1211,7 @@ function drawShape(ctx, element, w, h, style) {
   const trace = () => (isCircle ? ellipsePath(ctx, 0, 0, w, h) : roundRectPath(ctx, 0, 0, w, h, radius));
 
   if (fill.type === "gradient") {
-    const [x0, y0, x1, y1] = gradientPoints(fill.angle != null ? fill.angle : 90, w, h);
+    const [x0, y0, x1, y1] = gradientPoints(gradientAngle(fill), w, h);
     const grad = ctx.createLinearGradient(x0, y0, x1, y1);
     for (const stop of fill.stops || []) {
       grad.addColorStop(Math.max(0, Math.min(1, (stop.position || 0) / 100)), colorWithAlpha(stop.color, fillAlpha));
@@ -1482,7 +1537,7 @@ function withoutExtraPngChunks(buf) {
 function imageUrls(canvasDef, binding, assets) {
   const urls = new Set();
   for (const el of (canvasDef && canvasDef.elements) || []) {
-    if (el.visible === false) continue;
+    if (!showsElement(el, binding)) continue;
     if (el.type === "image_carousel") {
       for (const u of carouselImages(el)) urls.add(u);
       continue;
@@ -1523,7 +1578,7 @@ function renderCanvas(canvasDef, binding, { images = new Map(), assets = null, n
     ctx.fillStyle = bg.color;
     ctx.fillRect(0, 0, width, height);
   } else if (bg.type === "gradient") {
-    const [x0, y0, x1, y1] = gradientPoints(bg.angle != null ? bg.angle : 90, width, height);
+    const [x0, y0, x1, y1] = gradientPoints(gradientAngle(bg), width, height);
     const grad = ctx.createLinearGradient(x0, y0, x1, y1);
     for (const s of bg.stops || []) grad.addColorStop(Math.max(0, Math.min(1, (s.position || 0) / 100)), s.color);
     ctx.fillStyle = grad;
@@ -1531,7 +1586,7 @@ function renderCanvas(canvasDef, binding, { images = new Map(), assets = null, n
   }
 
   const elements = [...((canvasDef && canvasDef.elements) || [])]
-    .filter((el) => el.visible !== false)
+    .filter((el) => showsElement(el, binding))
     .sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));
   for (const el of elements) {
     if (!SUPPORTED.has(el.type)) continue;
@@ -1551,5 +1606,5 @@ module.exports = {
   SUPPORTED,
   INHERIT_FAMILY,
   // exported for tests
-  _internals: { withoutExtraPngChunks, imageUrlFor, scaledForBox, carouselState, carouselImages, adsFor, adVenueIdFor, adCarouselState, resolveAdDuration, easeInOut, wrapLines, parseRadii, compensateShadowAlpha, countryShortCode, flagSourceFor, gameTypeImagePath, parseShadows, parseBorder, gradientPoints, matchClockText, applyTextTransform, objectFitRect, countryKey, countryCodeText, countryNameText, matchRoundText, breakingPlayer, countdownFor, countdownLengthSeconds, countdownSecondsLeft, formatCountdownClock, countdownRunning, splitPair, balancedSplit, fitFontSize, ellipsize, resolveFit },
+  _internals: { withoutExtraPngChunks, imageUrlFor, scaledForBox, carouselState, carouselImages, adsFor, adVenueIdFor, adCarouselState, resolveAdDuration, easeInOut, wrapLines, parseRadii, compensateShadowAlpha, countryShortCode, flagSourceFor, gameTypeImagePath, parseShadows, parseBorder, gradientPoints, matchClockText, applyTextTransform, objectFitRect, countryKey, countryCodeText, countryNameText, matchRoundText, breakingPlayer, countdownFor, countdownLengthSeconds, countdownSecondsLeft, formatCountdownClock, countdownRunning, splitPair, balancedSplit, fitFontSize, ellipsize, resolveFit, hasMatch, keepsBallCount, showsElement, gradientAngle },
 };

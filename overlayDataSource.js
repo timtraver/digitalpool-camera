@@ -354,6 +354,7 @@ const EMPTY_BINDING = {
   match: {
     identifier: "", race_to: null, status: "", scheduled_time: null, start_time: null, end_time: null,
     round: null, is_semi_finals: false, is_finals: false, is_consolidation_finals: false,
+    game_type_key: null,
     challenger1_name: "", challenger1_country: "", challenger1_score: "", challenger1_points: "",
     challenger1_race_to: "", challenger1_skill_level: "", challenger1_avatarImg: null, challenger1_is_playing: false,
     challenger2_name: "", challenger2_country: "", challenger2_score: "", challenger2_points: "",
@@ -482,6 +483,11 @@ function buildBinding(tournament, table, match) {
           race_to: match.race_to,
           // A casual match has no bracket, so these stay null/false there and
           // match_round draws nothing — which is what it should do.
+          // The RAW game-type enum, not the label tournament.game_type carries.
+          // A "Ball count only" Points element reads it to tell one pocket and
+          // bank pool — where points ARE the ball count — from 9-ball, where
+          // they sit at 0 and the element should stay off.
+          game_type_key: (tournament && tournament.game_type) || match.game_type || null,
           round: match.round != null ? match.round : null,
           is_semi_finals: Boolean(match.is_semi_finals),
           is_finals: Boolean(match.is_finals),

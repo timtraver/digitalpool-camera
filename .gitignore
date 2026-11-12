@@ -147,6 +147,7 @@ table-names.json
 # Overlay conformance harness (dev tooling — generated artifacts)
 tools/overlay-conformance/node_modules/
 tools/overlay-conformance/out/
+tools/overlay-conformance/out-idle/
 tools/overlay-conformance/reference/out/
 
 # Python bytecode (regenerated on import; a stale copy here just churns commits)
