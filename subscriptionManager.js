@@ -461,6 +461,23 @@ function checkNow(reason = "manual") {
       return { ok: false, error: e.message, status: getStatus() };
     }
 
+    // Did the service say, unambiguously, that this device is no longer
+    // registered to any venue?  Deliberately narrow: a 200 whose body says
+    // ok:true and device_registered === false, and nothing else. A missing
+    // field, a non-200, an ok:false or anything but a literal `false` means
+    // "do not know", and "do not know" must never deregister a camera.
+    //
+    // This is the only remote-triggered destructive action on the device, so
+    // it is worth being explicit about why it is safe: the field is omitted by
+    // the backend when its own lookup fails, so an outage reads as silence
+    // rather than as removal, and the one-sided enforcement in this file's
+    // header applies here too.
+    if (resp.statusCode === 200
+        && resp.body?.ok === true
+        && resp.body?.device_registered === false) {
+      notifyDeviceRemoved();
+    }
+
     // Parse before judging the status code: a 402/403 that carries an explicit
     // "not subscribed" is an answer, not a failure.
     const parsed = parseSubscription(resp.body);
@@ -562,6 +579,21 @@ const WORDED_REFUSAL_RE = /\bsubscriptions?\b|\bsubscribed?\b|\bplan\b/i;
  * @param {{statusCode?: number, body?: object}|object} resp  response, or a bare body
  * @returns {{refused: boolean, reason: string|null, message: string, parsed: object}}
  */
+/**
+ * Called when DigitalPool reports this device is no longer registered anywhere
+ * — removed on the website, where nothing else would ever tell the box.
+ * server.js supplies the handler; this file only recognises the condition.
+ */
+let onDeviceRemoved = null;
+function notifyDeviceRemoved() {
+  if (typeof onDeviceRemoved !== "function") return;
+  try {
+    onDeviceRemoved();
+  } catch (e) {
+    console.warn("onDeviceRemoved handler threw:", e.message);
+  }
+}
+
 function classifyRegistration(resp) {
   const hasEnvelope = resp && typeof resp === "object" && ("body" in resp || "statusCode" in resp);
   const body       = hasEnvelope ? resp.body : resp;
@@ -619,6 +651,7 @@ function getStatus() {
 
 module.exports = {
   init, start, stop,
+  setOnDeviceRemoved: (fn) => { onDeviceRemoved = fn; },
   checkNow, gate, gateProtocol, can, features, getStatus, clear,
   recordRegistrationResult, classifyRegistration, parseSubscription,
   FEATURES, DATACENTER_PROTOCOLS, STATE_FILE,

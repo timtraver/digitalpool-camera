@@ -19,6 +19,7 @@ const os = require("os");
 const CameraController = require("./cameraController");
 const StreamController = require("./streamController");
 const WifiManager = require("./wifiManager");
+const BleBridge   = require("./bleBridge");
 const authManager = require("./authManager");
 const { RecordingManager, safeRecordingName } = require("./recordingManager");
 const { StreamAudience } = require("./streamAudience");
@@ -190,6 +191,9 @@ function requireAuth(req, res, next) {
   if (req.path === "/api/mediamtx/auth") return next();
   // Health-check — used by the update poller to detect when the server is back up
   if (req.path === "/api/status") return next();
+  // Reachability probe — the mobile app asks this before opening the web UI,
+  // which is necessarily before it has a session (§10 step 5).
+  if (req.path === "/api/ping") return next();
 
   if (isHotspotRequest(req))          return next();   // hotspot bypass
   if (req.session && req.session.user) return next();  // logged-in session
@@ -381,9 +385,38 @@ function buildControlRanges(hwControls) {
 const wifiManager = new WifiManager();
 wifiManager.startMonitor()
   .then(ok => ok
-    ? console.log("✅ WiFi Manager: hotspot monitor running")
+    ? console.log((process.env.ONBOARDING_MODE || "auto") === "ble"
+        ? "✅ WiFi Manager: running (BLE onboarding — no hotspot)"
+        : "✅ WiFi Manager: hotspot monitor running")
     : console.warn("⚠️  WiFi Manager: no wireless interface found — hotspot API limited"))
   .catch(err => console.error("❌ WiFi Manager monitor error:", err.message));
+
+// BLE onboarding bridge — the Node half of the phone-sets-the-network flow.
+// ble/dp-ble.py owns the radio and connects to the socket this opens; see
+// BLUETOOTH_ONBOARDING.md §4.3.  Starting the listener costs nothing on a box
+// with no Bluetooth: the daemon simply never connects, and a device pinned to
+// ONBOARDING_MODE=hotspot does not run the daemon at all.
+let bleBridge = null;
+if ((process.env.ONBOARDING_MODE || "auto") !== "hotspot") {
+  bleBridge = new BleBridge({
+    socketPath:          process.env.BLE_SOCKET || "/run/digitalpool-camera/ble.sock",
+    getDeviceName:       () => getDeviceName(),
+    getPrimaryMac:       () => getPrimaryMac(),
+    isRegistered:        () => isRegistered(),
+    loadRemoteConfig:    () => loadRemoteConfig(),
+    checkInternetCached: (opts) => checkInternetCached(opts),
+    createHandoffToken:  (identity) => createHandoffToken(identity),
+    getDisplayName:      () => getDisplayName(),
+    registerWith:        (credentials, opts) => registerWith(credentials, opts),
+    removeRegistration:  (idToken) => removeRegistration(idToken),
+    looksLikeIdToken:    (token) => looksLikeIdToken(token),
+    wifiManager,
+    log: (...args) => console.log("🔵 BLE:", ...args),
+  });
+  bleBridge.start()
+    .then(ok => ok && console.log("✅ BLE onboarding bridge listening"))
+    .catch(err => console.error("❌ BLE bridge failed to start:", err.message));
+}
 
 // Initialize Puppeteer overlay (if available) — one instance per camera
 let puppeteerOverlay = null;   // Camera 1
@@ -705,6 +738,105 @@ app.get("/api/auth/me", (req, res) => {
   res.json({ user: req.session.user });
 });
 
+/**
+ * GET /api/ping — "can this phone reach this camera, and is it the right one?"
+ *
+ * The app calls this before opening the web UI (§10 step 5). Two reasons it is
+ * a real endpoint rather than a GET of `/`:
+ *
+ *   * `/` redirects to /login when there is no session, so the app would be
+ *     measuring reachability by the shape of a redirect, and paying for an
+ *     HTML response to do it.
+ *   * **It answers a question the app cannot otherwise ask.** The address came
+ *     from `net.status` over Bluetooth, and a LAN address is a lease, not an
+ *     identity — by the time somebody taps "Manage Device" the router may have
+ *     given it to a different device. `shortId` lets the app confirm it
+ *     reached the camera it was talking to rather than whatever now answers on
+ *     that IP, which matters because the next thing it does is hand over a
+ *     one-time admin login.
+ *
+ * Unauthenticated by necessity, and deliberately thin: the name and shortId
+ * are already broadcast to anyone in Bluetooth range (§5.2), so this exposes
+ * nothing new. No venue, no owner, no registration state.
+ */
+app.get("/api/ping", (req, res) => {
+  const mac = getPrimaryMac();
+  res.json({
+    ok: true,
+    name: getDisplayName(),
+    shortId: mac ? mac.replace(/:/g, "").slice(-4) : "",
+    proto: 1,
+  });
+});
+
+// ── One-time login links from the mobile app (BLUETOOTH_ONBOARDING.md §9.2) ──
+//
+// The app has already established who the user is, over an encrypted BLE link.
+// Rather than make them type the shared admin password into a phone, it asks
+// the box for a single-use link and opens it in an in-app browser; the box
+// turns that link into a logged-in session.
+//
+// This is a password-free admin login, so the properties that keep it safe
+// matter more than the convenience:
+//
+//   * A token is ONLY ever minted over BLE (bleBridge.cmdWebLink). There is no
+//     HTTP route that issues one, so being able to reach this box over the
+//     network is not enough to get one.
+//   * 32 random bytes — 256 bits. Guessing is not a threat; the short life and
+//     single use are about a link leaking after the fact (shoulder-surfing, a
+//     screenshot, an in-app browser's history).
+//   * In memory only. A restart invalidates every outstanding token, which is
+//     the right default for something this powerful.
+//   * Single use, 120 seconds.
+//
+// Until grants land (§7) the BLE side additionally refuses to mint one unless
+// BLE_DEV_NO_AUTH=1, so a stranger in range cannot get themselves an admin
+// session on a box in a bar.
+const HANDOFF_TTL_MS = 120 * 1000;
+const _handoffTokens = new Map();   // token -> { identity, expiresAt }
+
+function createHandoffToken(identity) {
+  const now = Date.now();
+  // Opportunistic sweep — this map only ever holds a handful of entries, and
+  // an expired token must not linger in memory longer than it has to.
+  for (const [key, value] of _handoffTokens) {
+    if (value.expiresAt <= now) _handoffTokens.delete(key);
+  }
+  const token = require("crypto").randomBytes(32).toString("hex");
+  _handoffTokens.set(token, { identity, expiresAt: now + HANDOFF_TTL_MS });
+  return { token, expiresIn: Math.round(HANDOFF_TTL_MS / 1000) };
+}
+
+function consumeHandoffToken(token) {
+  if (typeof token !== "string" || !token) return null;
+  const entry = _handoffTokens.get(token);
+  if (!entry) return null;
+  _handoffTokens.delete(token);          // single use, consumed even if expired
+  if (entry.expiresAt <= Date.now()) return null;
+  return entry.identity;
+}
+
+app.get("/auth/handoff", (req, res) => {
+  const identity = consumeHandoffToken(req.query.t);
+  if (!identity) {
+    // Deliberately the same answer for "never existed", "already used" and
+    // "expired" — there is nothing useful to tell a browser here, and the app
+    // can always mint another.
+    return res.redirect("/login?handoff=expired");
+  }
+  req.session.user = {
+    username:            identity.username,
+    displayName:         identity.displayName,
+    role:                "admin",
+    // The app user never had a local password and does not need one, so the
+    // first-login prompt would be a dead end.
+    forcePasswordChange: false,
+    via:                 "app",
+  };
+  console.log(`🔑 App handoff: signed in as ${identity.username} (${identity.displayName})`);
+  req.session.save(() => res.redirect("/"));
+});
+
 // ── Apply auth guard to everything below ────────────────────────────────────
 app.use(requireAuth);
 
@@ -823,6 +955,26 @@ function getDeviceName() {
  * back to WiFi (wl) then any other physical NIC only when no wired port exists.
  * Returns "" if none can be read.
  */
+/**
+ * The product name for this unit: `DP-DuoCast-B1B5`.
+ *
+ * Deliberately separate from getDeviceName(). That one is the canonical
+ * identifier — the hostname — and has to stay lowercase and DNS-safe because
+ * the NetBird peer name and the mediamtx host entries are derived from it.
+ * This is the human-facing form, and it is what the app's scan list, the web
+ * UI and the sticker on the box all show. The two always share their last four
+ * hex digits, so a box has one identity with two spellings.
+ *
+ * Derived from the MAC rather than from the hostname so that it is right even
+ * on a box an operator has renamed, and so it matches what ble/dp-ble.py and
+ * bleBridge.js compute independently.
+ */
+function getDisplayName() {
+  const mac = getPrimaryMac();
+  const suffix = mac ? mac.replace(/:/g, "").slice(-4).toUpperCase() : "0000";
+  return `DP-DuoCast-${suffix}`;
+}
+
 function getPrimaryMac() {
   const NET_DIR = "/sys/class/net";
   // Lower rank = higher priority: wired ethernet first, then WiFi, then other.
@@ -998,70 +1150,320 @@ async function getLocalWanIp() {
  * must keep registering against a cloud function that has not been updated yet
  * (see SUBSCRIPTION_CHECK.md).
  */
-function refusedForSubscription(res, resp) {
+/**
+ * Did this registration response carry a subscription refusal?
+ *
+ * **Registering a camera no longer depends on a plan** (Tim, 2026-11-11), so
+ * this no longer blocks anything. It is still called on every registration
+ * response, for a reason that is easy to delete by accident: asking the
+ * question is what RECORDS the subscription facts the device later runs on.
+ * `classifyRegistration()` → `recordRegistrationResult()` → `applyParsed()` is
+ * how `streamStartGate()` and `effectiveOverlay()` learn what this account
+ * has. Stop calling it and a box registers fine, then streams with no idea
+ * what it is entitled to until its next scheduled check.
+ *
+ * What the answer is used for now is wording: an older backend that still
+ * refuses with a 402 would otherwise have its plan-and-pricing sentence shown
+ * during registration, which is exactly what is not wanted.
+ *
+ * Returns null when nothing was refused, or a description of the refusal.
+ */
+function subscriptionRefusal(resp) {
   const { refused, reason, message, parsed } = subscriptionManager.classifyRegistration(resp);
-  if (!refused) return false;
-
+  if (!refused) return null;
   const label = parsed.plan || parsed.status || (reason === "worded" ? "stated in the error text" : "none");
-  console.log(`⛔ Registration refused — no active DigitalPool subscription [${reason}] (${label}): ${message || "no message"}`);
-  res.status(402).json({
-    // Prefer the service's own wording — it is more specific than anything we
-    // can say from here, and it is what the operator reads.
-    error: message || "This DigitalPool account does not have an active subscription. "
-                    + "Subscribe at digitalpool.com, then register this camera again.",
-    subscriptionRequired: true,
+  // Not "refused" any more — registration carries on. Saying otherwise in the
+  // journal is actively misleading now: it appeared one line above
+  // "✅ Device registered" on the first real app registration, which is exactly
+  // the sort of thing that sends somebody debugging a problem that is not there.
+  console.log(`🧾 Registration: account has no active subscription [${reason}] (${label})`
+            + `${message ? ` — ${message}` : ""} — registering anyway`);
+  return {
+    message: message || "This DigitalPool account does not have an active subscription. "
+                      + "Subscribe at digitalpool.com, then register this camera again.",
     subscription: { plan: parsed.plan, status: parsed.status, expiresAt: parsed.expiresAt },
-  });
-  return true;
+  };
+}
+
+
+/**
+ * Does this look like a Firebase ID token?
+ *
+ * A shape check, not a validity check — only the backend can say whether a
+ * token is genuine, and it does (`admin.auth().verifyIdToken`). The point here
+ * is to refuse obvious rubbish before putting it on the wire, since the value
+ * arrives over Bluetooth from whatever chose to connect.
+ */
+/**
+ * What a registration failure says when the real reason was a plan.
+ *
+ * Nothing shown while somebody is setting a camera up mentions plans, pricing
+ * or Enterprise (Tim, 2026-11-11). A current backend never refuses for those
+ * reasons at all; this only covers a box talking to an older one, where the
+ * alternative would be relaying its "subscribe at..." sentence verbatim.
+ */
+const PLAIN_REGISTRATION_FAILURE =
+  "The camera could not be registered. Try again, and contact DigitalPool support if it keeps failing.";
+
+/**
+ * Turn a refused registration response into a code the app can act on.
+ *
+ * **The status code decides first.** An earlier version asked
+ * `statusCode === 401 || ok === false || success === false` in one breath, so
+ * ANY refusal carrying `success:false` became AUTH_FAILED whatever its status
+ * — and the backend answers a missing venue with 404 and `success:false`. The
+ * app duly told the user their sign-in had failed when the real problem was
+ * the venue, which is the worst kind of wrong message: specific, confident and
+ * about the wrong thing. Seen on 2026-11-11 as
+ * `AUTH_FAILED "Venue not found"`.
+ *
+ * Returns a refusal object, or null when the response is not a refusal.
+ */
+function classifyRegistrationRefusal(resp, planRefusal) {
+  const wording = (fallback) => (planRefusal ? PLAIN_REGISTRATION_FAILURE
+                                             : (resp.body?.error || fallback));
+  if (resp.statusCode === 401) {
+    return {
+      state: "refused", code: "AUTH_FAILED",
+      message: wording("DigitalPool did not accept that sign-in"),
+    };
+  }
+  if (resp.statusCode >= 400) {
+    return {
+      state: "refused", code: "REGISTRATION_FAILED",
+      message: wording(`Registration service error (HTTP ${resp.statusCode})`),
+    };
+  }
+  // A 2xx that still says no. The only thing it can mean is that the identity
+  // was not accepted — a specific problem would have carried a status.
+  if (resp.body?.ok === false || resp.body?.success === false) {
+    return {
+      state: "refused", code: "AUTH_FAILED",
+      message: wording("DigitalPool did not accept that sign-in"),
+    };
+  }
+  return null;
+}
+
+function looksLikeIdToken(token) {
+  return typeof token === "string"
+    && token.length >= 100 && token.length <= 8192
+    && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token);
 }
 
 /**
- * Call the cloud function's `assign` action and, on success, persist the device
- * as registered (venue id/name, device id, NetBird IP).  Sends the HTTP response.
- * The password is used only for this call and never written to disk.
+ * The credentials half of a registration call.
+ *
+ * Two ways in. The web UI sends the operator's DigitalPool email and password.
+ * The mobile app sends the signed-in user's **Firebase ID token** instead, so
+ * nobody types a password into a phone to set up a camera — the login they
+ * already did is the authentication, and the backend verifies the token.
+ *
+ * Neither is ever written to disk, and neither is ever logged. What persists
+ * is `userId` and `ownerEmail` from the response, which is what the recurring
+ * subscription check is keyed by.
  */
-async function finalizeRegistration(res, { email, password, venueId, venueName, venueSlug, deviceName, ip }) {
+function registrationCredentials(credentials) {
+  if (credentials && credentials.idToken) return { idToken: credentials.idToken };
+  return { email: credentials.email, password: credentials.password };
+}
+
+/**
+ * Register this device, returning a result rather than writing to a response.
+ *
+ * This is the one registration path; `/api/setup/register` and the BLE
+ * `register.start` are both thin callers of it, so the web UI and the app
+ * cannot drift apart (§9.1). The ordering is the ordering registration has
+ * always had, and each step is here for a reason:
+ *
+ *   1. NetBird first, because the device has to report an IP it actually has.
+ *   2. Persist name/email/IP/MAC before calling out, so a crash mid-flight
+ *      does not lose what we knew.
+ *   3. Classify a subscription refusal BEFORE treating ok:false as an auth
+ *      failure — a refusal legitimately arrives as ok:false, and reading it as
+ *      "wrong password" sends the operator off fixing the wrong thing.
+ *
+ * Returns one of:
+ *   { state: "registered",  venue, ip, ... }
+ *   { state: "chooseVenue", venues, assignedVenueId, ip }
+ *   { state: "needVenue",   ip }
+ *   { state: "refused",     code, message, url? }
+ *
+ * `onProgress(stage)` reports "netbird" | "verifying" | "assigning".
+ */
+async function registerWith(credentials, {
+  venueId = "", venueName = "", venueSlug = "",
+  newVenue = null,
+  tableId = "", newTable = null,
+  alwaysChooseVenue = false,
+  onProgress = () => {},
+} = {}) {
+  const deviceName = getDeviceName();
   const macAddress = getPrimaryMac();
-  const localIp    = await getLocalWanIp();
-  let assign;
+  const auth = registrationCredentials(credentials);
+
+  onProgress("netbird");
+  let ip;
   try {
-    assign = await callDigitalPoolRegister({ action: "assign", email, password, venueId, deviceName, macAddress, netbirdIp: ip, local_ip: localIp });
+    ip = await ensureNetbirdUp();
   } catch (e) {
-    return res.status(502).json({ error: `Could not reach DigitalPool registration service: ${e.message}` });
+    return { state: "refused", code: "REGISTRATION_FAILED", message: e.message };
+  }
+  if (!ip) {
+    return {
+      state: "refused", code: "REGISTRATION_FAILED",
+      message: "NetBird did not receive an IP within 90 s. Check service logs.",
+    };
   }
 
-  // Subscription gate first, for the same reason as in /api/setup/register: a
-  // refusal arrives as ok:false and would otherwise read as a rejected login.
-  if (refusedForSubscription(res, assign)) return;
+  const cfg0 = loadRemoteConfig();
+  cfg0.deviceName = deviceName;
+  if (auth.email) cfg0.ownerEmail = auth.email;
+  cfg0.netbirdIp  = ip;
+  cfg0.macAddress = macAddress;
+  saveRemoteConfig(cfg0);
 
-  if (assign.statusCode === 401 || assign.body?.ok === false)
-    return res.status(401).json({ error: assign.body?.error || "DigitalPool rejected the registration" });
-  if (assign.statusCode >= 400)
-    return res.status(502).json({ error: assign.body?.error || `Registration service error (HTTP ${assign.statusCode})` });
+  const localIp = await getLocalWanIp();
+
+  // When a venue is already chosen — an existing one, or a new one to create —
+  // this is the assign step; otherwise verify first and find out what the
+  // account has.
+  if (!venueId && !newVenue) {
+    onProgress("verifying");
+    let verify;
+    try {
+      verify = await callDigitalPoolRegister({
+        action: "verify", ...auth, deviceName, macAddress, netbirdIp: ip, local_ip: localIp,
+      });
+    } catch (e) {
+      return {
+        state: "refused", code: "NO_INTERNET",
+        message: `Could not reach DigitalPool: ${e.message}`,
+      };
+    }
+
+    // Records the subscription facts; never refuses. See subscriptionRefusal().
+    const noted = subscriptionRefusal(verify);
+    // Both spellings: the cloud function answers `success:false` on a rejected
+    // sign-in and `ok:false` elsewhere, and subscriptionManager already treats
+    // the two as equivalent. Checking only one would let an HTTP 200 refusal
+    // fall through to the success path and be read for a venue list it does
+    // not have.
+    const verifyRefusal = classifyRegistrationRefusal(verify, noted);
+    if (verifyRefusal) return verifyRefusal;
+
+    const verifiedUserId = verify.body?.user_id || verify.body?.userId || verify.body?.uid || "";
+    const verifiedEmail  = verify.body?.email || verify.body?.ownerEmail || "";
+    if (verifiedUserId || verifiedEmail) {
+      const c = loadRemoteConfig();
+      if (verifiedUserId) c.userId = verifiedUserId;
+      // With an ID token the box never sees an email until the backend says
+      // one, so this is where ownerEmail comes from on the app path.
+      if (verifiedEmail && !c.ownerEmail) c.ownerEmail = verifiedEmail;
+      saveRemoteConfig(c);
+    }
+
+    const rawVenues = Array.isArray(verify.body?.venues) ? verify.body.venues : [];
+    const venues = rawVenues.map(v => ({
+      id:   v.venue_id   || v.id   || "",
+      name: v.venue_name || v.name || "",
+      slug: v.venue_slug || v.slug || "",
+      city: v.city || v.venue_city || "",
+    })).filter(v => v.id);
+    const assignedVenueId = verify.body?.assigned_venue_id || verify.body?.assignedVenueId || null;
+
+    // The app always picks the venue, including when there is one obvious
+    // candidate and including when there are none — it offers "Create a new
+    // venue", so an empty list is a usable answer rather than a dead end
+    // (Tim, 2026-11-11). Auto-selecting is what made registration appear to
+    // choose a venue name on its own.
+    //
+    // The web setup page has no create option, so it keeps the old behaviour:
+    // auto-select the obvious one, and say needVenue when there is nothing.
+    if (alwaysChooseVenue) return { state: "chooseVenue", venues, assignedVenueId, ip };
+
+    if (venues.length === 0) return { state: "needVenue", ip };
+
+    const selected = assignedVenueId
+      ? venues.find(v => v.id === assignedVenueId)
+      : (venues.length === 1 ? venues[0] : null);
+    if (!selected) return { state: "chooseVenue", venues, assignedVenueId, ip };
+
+    venueId   = selected.id;
+    venueName = selected.name || "";
+    venueSlug = selected.slug || "";
+  }
+
+  onProgress("assigning");
+  let assign;
+  try {
+    // Either an existing venue by id, or a new one to create — never both.
+    const venueArgs = newVenue ? { newVenue } : { venueId };
+    // Same for the table, and both are optional: with neither, the backend
+    // picks the venue's first table or creates "Table 1", which is what the
+    // web setup page relies on.
+    const tableArgs = newTable ? { newTable } : (tableId ? { tableId } : {});
+    assign = await callDigitalPoolRegister({
+      action: "assign", ...auth, ...venueArgs, ...tableArgs,
+      deviceName, macAddress, netbirdIp: ip, local_ip: localIp,
+    });
+  } catch (e) {
+    return {
+      state: "refused", code: "NO_INTERNET",
+      message: `Could not reach DigitalPool: ${e.message}`,
+    };
+  }
+
+  const noted = subscriptionRefusal(assign);
+  const assignRefusal = classifyRegistrationRefusal(assign, noted);
+  if (assignRefusal) return assignRefusal;
 
   const cfg = loadRemoteConfig();
   cfg.deviceName   = deviceName;
-  cfg.ownerEmail   = email;
-  // The account id is what the recurring subscription check is keyed by — it is
-  // the one piece of the operator's identity we keep, since the password is not.
+  cfg.ownerEmail   = assign.body?.email || assign.body?.ownerEmail || auth.email || cfg.ownerEmail || "";
+  cfg.displayName  = assign.body?.display_name || assign.body?.displayName || cfg.displayName || "";
   cfg.userId       = assign.body?.user_id || assign.body?.userId || assign.body?.uid || cfg.userId || "";
   cfg.netbirdIp    = ip;
   cfg.macAddress   = macAddress;
+  // With newVenue the id only exists in the response — there is nothing to
+  // fall back to, which is why a backend that does not echo venue_id would
+  // show up here as a registered box with no venue rather than an error.
   cfg.venueId      = assign.body?.venue_id   || assign.body?.venueId   || venueId;
-  // Prefer the values the registration response returns; fall back to what we
-  // already knew (from the verify venue list / the operator's picker choice).
-  cfg.venueName    = assign.body?.venue_name || assign.body?.venueName || venueName || "";
+  cfg.venueName    = assign.body?.venue_name || assign.body?.venueName || venueName
+                     || (newVenue ? newVenue.name : "") || "";
   cfg.venueSlug    = assign.body?.venue_slug || assign.body?.venueSlug || venueSlug || "";
-  cfg.deviceId     = assign.body?.device_id  || assign.body?.deviceId  || "";
+  // The response has never carried `device_id`; it returns `devices[]` — the
+  // venue_devices rows it created, two per box ("… Camera 1" and "Camera 2").
+  // The first is this device's record; both ids are kept because the second
+  // camera's row is just as real and a deregister may want either.
+  const assignedDevices = Array.isArray(assign.body?.devices) ? assign.body.devices : [];
+  cfg.deviceIds    = assignedDevices.map(d => d && d.id).filter(Boolean);
+  cfg.deviceId     = assign.body?.device_id || assign.body?.deviceId
+                     || cfg.deviceIds[0] || "";
+  // The table this DEVICE was registered to. Deliberately not fed into
+  // tableNames/tableNameFor(), which answer a different question — which table
+  // each CAMERA is pointed at, from its overlay URL. One box can carry two
+  // cameras on two tables, so collapsing the two would be wrong.
+  const assignedTable = assign.body?.table || null;
+  cfg.tableId      = assignedTable?.id    || assign.body?.table_id    || tableId || "";
+  cfg.tableName    = assignedTable?.label || assign.body?.table_label
+                     || (newTable ? newTable.label : "") || "";
   cfg.registered   = true;
   cfg.registeredAt = new Date().toISOString();
   saveRemoteConfig(cfg);
-  console.log(`✅ Device registered: ${deviceName} / ${email} → venue ${cfg.venueName || cfg.venueId} — NetBird IP ${ip}`);
-  return res.json({
-    success: true, ip, deviceName, ownerEmail: email,
-    venueId: cfg.venueId, venueName: cfg.venueName, venueSlug: cfg.venueSlug, deviceId: cfg.deviceId,
+  console.log(`✅ Device registered: ${deviceName} / ${cfg.ownerEmail} → venue ${cfg.venueName || cfg.venueId}`
+            + `${cfg.tableName ? `, ${cfg.tableName}` : ""} — NetBird IP ${ip}`);
+
+  return {
+    state: "registered", ip, deviceName,
+    ownerEmail: cfg.ownerEmail,
+    venue: { id: cfg.venueId, name: cfg.venueName, slug: cfg.venueSlug },
+    table: cfg.tableId || cfg.tableName
+      ? { id: cfg.tableId, label: cfg.tableName }
+      : null,
+    deviceId: cfg.deviceId,
     subscription: subscriptionManager.getStatus(),
-  });
+  };
 }
 
 // ── NetBird Management API helpers ───────────────────────────────────────────
@@ -1230,11 +1632,16 @@ function streamStartGate(username, config, sc) {
       registrationRequired: true,
     };
   }
-  const sub = subscriptionManager.gate();
-  if (!sub.allowed) {
-    console.log(`⛔ Stream start blocked — ${sub.code}`);
-    return { error: sub.message, subscriptionRequired: true, subscriptionCode: sub.code };
-  }
+  // Streaming no longer requires a subscription (Tim, 2026-11-11). Registration
+  // above is the bar; a registered camera streams whether or not the account
+  // holds a plan. subscriptionManager keeps checking and keeps reporting —
+  // Admin Settings still shows what the account has, and the UI still links to
+  // DigitalPool — it just no longer stops anything here.
+  //
+  // The package check below is deliberately left in place: it is a different
+  // question. "Does this account have a plan at all" is no longer asked; "does
+  // it have the package for the output modes our datacenter pays to receive"
+  // still is.
   // Output mode: RTSP/SRT Server reach DigitalPool's datacenter and need the
   // Advanced Streaming package.  RTMP push (and its YouTube/Facebook presets)
   // goes to the venue's own destination and is fine on any plan.
@@ -1317,6 +1724,9 @@ app.get("/api/setup/status", requireAdmin, async (req, res) => {
     registered,
     hasInternet,
     deviceName:   getDeviceName(),
+    // The product spelling, for anything a person reads.  getDeviceName() stays
+    // the canonical lowercase identifier the backend and NetBird know it by.
+    displayName:  getDisplayName(),
     ownerEmail:   cfg.ownerEmail   || "",
     venueName:    cfg.venueName    || "",
     venueId:      cfg.venueId      || "",
@@ -1526,6 +1936,33 @@ app.put("/api/branding/overlay", requireDpAdmin, express.json(), async (req, res
 //   • no venue        → { needVenue: true }
 // Per design: NetBird stays up even if verification fails (the peer is kept).
 // The password is used only for the cloud-function calls and is never persisted.
+/** Map a registerWith() refusal onto the HTTP shapes the web UI expects. */
+function sendRegistrationResult(res, result, { ip } = {}) {
+  switch (result.state) {
+    case "needVenue":
+      return res.json({ needVenue: true, ip: result.ip });
+    case "chooseVenue":
+      return res.json({ chooseVenue: true, venues: result.venues, ip: result.ip });
+    case "registered":
+      return res.json({
+        success: true, ip: result.ip, deviceName: result.deviceName,
+        ownerEmail: result.ownerEmail,
+        venueId: result.venue.id, venueName: result.venue.name, venueSlug: result.venue.slug,
+        deviceId: result.deviceId, subscription: result.subscription,
+      });
+    default: {
+      // No SUBSCRIPTION_REQUIRED any more — registering a camera does not
+      // depend on a plan (Tim, 2026-11-11). The web UI's no-subscription block
+      // is unreachable from here and has been removed with it.
+      if (result.code === "AUTH_FAILED") return res.status(401).json({ error: result.message });
+      if (result.code === "NO_INTERNET") return res.status(502).json({ error: result.message });
+      return res.status(500).json({ error: result.message });
+    }
+  }
+}
+
+// POST /api/setup/register — step 1 from the web UI.  A thin wrapper over
+// registerWith(), which the BLE path also calls, so the two cannot drift (§9.1).
 app.post("/api/setup/register", requireAdmin, express.json(), async (req, res) => {
   const email    = (req.body?.email || req.body?.ownerEmail || "").trim().toLowerCase();
   const password = req.body?.password || "";
@@ -1534,92 +1971,14 @@ app.post("/api/setup/register", requireAdmin, express.json(), async (req, res) =
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
     return res.status(400).json({ error: "Invalid email address" });
 
-  const deviceName = getDeviceName();
-  const macAddress = getPrimaryMac();
-
-  // 1. Join the VPN first so we have an IP to report to DigitalPool.
-  let ip;
   try {
-    ip = await ensureNetbirdUp();
+    return sendRegistrationResult(res, await registerWith({ email, password }));
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
-  if (!ip)
-    return res.status(500).json({ error: "NetBird did not receive an IP within 90 s. Check service logs." });
-
-  // Persist name + email + IP + MAC immediately (never the password) so they
-  // survive a crash mid-registration.  `registered` stays false until a venue
-  // is assigned.
-  const cfg = loadRemoteConfig();
-  cfg.deviceName = deviceName;
-  cfg.ownerEmail = email;
-  cfg.netbirdIp  = ip;
-  cfg.macAddress = macAddress;
-  saveRemoteConfig(cfg);
-
-  // 2. Verify credentials + fetch venues.
-  const localIp = await getLocalWanIp();
-  let verify;
-  try {
-    verify = await callDigitalPoolRegister({ action: "verify", email, password, deviceName, macAddress, netbirdIp: ip, local_ip: localIp });
-  } catch (e) {
-    return res.status(502).json({ error: `Could not reach DigitalPool registration service: ${e.message}` });
-  }
-
-  // A subscription refusal legitimately arrives as ok:false / 4xx, so the body
-  // is judged for subscription content FIRST.  Checking auth failure first sent
-  // "no subscription" back as "Invalid DigitalPool credentials" — the wrong
-  // message, and without the subscriptionRequired flag the UI needs to offer a
-  // way out.  A genuine auth error carries no subscription information and
-  // falls straight through.
-  if (refusedForSubscription(res, verify)) return;
-
-  if (verify.statusCode === 401 || verify.body?.ok === false)
-    return res.status(401).json({ error: verify.body?.error || "Invalid DigitalPool credentials" });
-  if (verify.statusCode >= 400)
-    return res.status(502).json({ error: verify.body?.error || `Registration service error (HTTP ${verify.statusCode})` });
-
-  // Credentials are good — record the account id for the recurring subscription check.
-  const verifiedUserId = verify.body?.user_id || verify.body?.userId || verify.body?.uid || "";
-  if (verifiedUserId) {
-    const c = loadRemoteConfig();
-    c.userId = verifiedUserId;
-    saveRemoteConfig(c);
-  }
-
-  // Normalise the venue list to { id, name } regardless of the field casing the
-  // function returns (venue_id/venue_name or id/name).
-  const rawVenues = Array.isArray(verify.body?.venues) ? verify.body.venues : [];
-  const venues = rawVenues.map(v => ({
-    id:   v.venue_id   || v.id   || "",
-    name: v.venue_name || v.name || "",
-    slug: v.venue_slug || v.slug || "",
-  })).filter(v => v.id);
-  const assignedVenueId = verify.body?.assigned_venue_id || verify.body?.assignedVenueId || null;
-
-  if (venues.length === 0)
-    return res.json({ needVenue: true, ip });
-
-  // Auto-select when there's exactly one venue, or one already assigned to this device.
-  let venueId = null, venueName = "", venueSlug = "";
-  const selected = assignedVenueId
-    ? venues.find(v => v.id === assignedVenueId)
-    : (venues.length === 1 ? venues[0] : null);
-  if (selected) {
-    venueId   = selected.id;
-    venueName = selected.name || "";
-    venueSlug = selected.slug || "";
-  }
-
-  if (!venueId)
-    return res.json({ chooseVenue: true, venues, ip });
-
-  // 3. Assign + finalize.
-  return finalizeRegistration(res, { email, password, venueId, venueName, venueSlug, deviceName, ip });
 });
 
 // POST /api/setup/register/venue — step 2, called when the operator picks a venue.
-// Body: { email, password, venueId }.  NetBird is already up from step 1.
 app.post("/api/setup/register/venue", requireAdmin, express.json(), async (req, res) => {
   const email     = (req.body?.email || "").trim().toLowerCase();
   const password  = req.body?.password  || "";
@@ -1629,19 +1988,12 @@ app.post("/api/setup/register/venue", requireAdmin, express.json(), async (req, 
   if (!email || !password || !venueId)
     return res.status(400).json({ error: "Email, password and venue are required" });
 
-  const deviceName = getDeviceName();
-
-  // NetBird should already be up from step 1 — fetch the current IP; bring it up
-  // again only as a fallback (e.g. daemon restarted between steps).
-  let ip = "";
-  try { const st = await netbirdGetStatus(); ip = st.ip || ""; } catch { /* not running */ }
-  if (!ip) {
-    try { ip = await ensureNetbirdUp(); } catch (e) { return res.status(500).json({ error: e.message }); }
+  try {
+    const result = await registerWith({ email, password }, { venueId, venueName, venueSlug });
+    return sendRegistrationResult(res, result);
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
   }
-  if (!ip)
-    return res.status(500).json({ error: "NetBird IP unavailable — restart registration." });
-
-  return finalizeRegistration(res, { email, password, venueId, venueName, venueSlug, deviceName, ip });
 });
 
 app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) => {
@@ -1746,89 +2098,235 @@ app.post("/api/remote/disable", requireAdmin, async (req, res) => {
 // POST /api/remote/wipe — delete this peer from the NetBird server AND wipe
 // local identity, but do NOT run netbird up.  The UI then shows the registration
 // form so the user can submit fresh details via /api/setup/register.
+/**
+ * Everything a deregistration does ON THIS BOX, with no opinion about why.
+ *
+ * Three callers, deliberately sharing one implementation because getting a
+ * partial wipe is worse than not wiping: `/api/remote/wipe` (the web UI),
+ * `register.remove` over BLE, and the subscription check noticing the device
+ * was removed on the website (§9.5). Each decides *whether* to wipe; this
+ * decides *what* that means.
+ *
+ * Does NOT call the backend — the callers do that, because what they send and
+ * how they treat a refusal differ.
+ */
+async function wipeDeviceLocally({ reason = "deregistered" } = {}) {
+  const log = [];
+
+  // A deregistered device must not keep streaming, and streamStartGate() only
+  // blocks NEW streams — an already-running one would otherwise carry on.
+  if (streamController.isStreaming || streamController2.isStreaming) {
+    log.push("🔄 Stopping active stream(s) before deregister…");
+    try { await streamController.stopStream(); }  catch { /* not streaming */ }
+    try { await streamController2.stopStream(); } catch { /* not streaming */ }
+    log.push("✅ Stream(s) stopped");
+  }
+
+  // NetBird, server side first (best-effort — needs NETBIRD_API_TOKEN).
+  try {
+    const deleted = await netbirdDeleteCurrentPeer();
+    log.push(deleted
+      ? `✅ Peer deleted from NetBird server (id: ${deleted})`
+      : "⚠️ Peer not found on server — may already be gone");
+  } catch (e) {
+    log.push(`⚠️ Server-side delete skipped: ${e.message}`);
+    console.warn("netbirdDeleteCurrentPeer:", e.message);
+  }
+
+  log.push("🔄 Stopping netbird daemon…");
+  await execAsync("sudo /usr/bin/systemctl stop netbird").catch(() => {});
+  await new Promise(r => setTimeout(r, 1000));
+
+  log.push("🔄 Clearing local node state…");
+  await execAsync("sudo rm -rf /var/lib/netbird/").catch(e => {
+    throw new Error(`rm -rf /var/lib/netbird/ failed: ${e.stderr || e.message}`);
+  });
+
+  log.push("🔄 Starting fresh daemon…");
+  await execAsync("sudo /usr/bin/systemctl start netbird").catch(() => {});
+  await new Promise(r => setTimeout(r, 1500));
+
+  // Clear registered state + venue association.  Name/email/MAC are kept, for
+  // pre-fill and because the MAC is this box's identity either way.
+  const cfg = loadRemoteConfig();
+  cfg.registered   = false;
+  cfg.registeredAt = null;
+  cfg.venueId      = "";
+  cfg.venueName    = "";
+  cfg.venueSlug    = "";
+  cfg.deviceId     = "";
+  cfg.userId       = "";
+  cfg.tableId      = "";
+  cfg.tableName    = "";
+  saveRemoteConfig(cfg);
+  // The cached subscription belonged to the previous owner's account — drop it
+  // so the next registration decides the entitlement from scratch.
+  subscriptionManager.clear();
+
+  // Tell the BLE advertisement immediately rather than waiting for its
+  // 15-second refresh. The app decides which list a box belongs in from the
+  // advertised `registered` bit, so a box that still claims to be registered
+  // after a wipe belongs to no list at all — the backend no longer counts it
+  // among the owner's devices, and "Nearby Unregistered Boxes" filters it out.
+  if (bleBridge) {
+    bleBridge.lastBits = null;          // force a push even if nothing else moved
+    bleBridge._pushAdvState().catch(() => { /* advertising is best-effort */ });
+  }
+
+  log.push(`✅ Wipe complete (${reason}) — ready for re-registration`);
+  console.log(log.join("\n"));
+  return { log, cfg };
+}
+
+/**
+ * Ask the backend to remove this device's record.
+ *
+ * `credentials` is `{ idToken }` from the app, or `{}` for the web UI path
+ * which identifies the device by the stored email and ids instead. Returns
+ * `{ ok, statusCode, error }` and never throws.
+ */
+async function callBackendDeregister(credentials = {}) {
+  const cfg = loadRemoteConfig();
+  try {
+    const resp = await callDigitalPoolRegister({
+      action:     "deregister",
+      ...(credentials.idToken ? { idToken: credentials.idToken } : { email: cfg.ownerEmail || "" }),
+      deviceName: getDeviceName(),
+      macAddress: cfg.macAddress || getPrimaryMac(),
+      netbirdIp:  cfg.netbirdIp  || "",
+      venueId:    cfg.venueId    || "",
+      deviceId:   cfg.deviceId   || "",
+    });
+    const refused = resp.statusCode >= 400
+      || resp.body?.ok === false || resp.body?.success === false;
+    // `removedCount: 0` means the call succeeded and removed NOTHING.
+    //
+    // This is not hypothetical. The deregister action deployed on 2026-11-11
+    // ignores `idToken` completely and answers
+    //   200 {"success":true,"action":"deregister","removedCount":0,"removed":[]}
+    // to any caller, with any token, valid or not. Taking that as agreement
+    // would wipe the box locally while the venue kept the device — the exact
+    // split-brain the caller ordering exists to prevent — and, because
+    // register.* needs no grant, anyone in Bluetooth range could do it.
+    //
+    // So a removal is only believed when the backend says it removed
+    // something. A backend that does not report the field at all is trusted,
+    // since that is the older contract.
+    const removedNothing = typeof resp.body?.removedCount === "number"
+      && resp.body.removedCount === 0;
+    // …with one exception the backend states explicitly: the token verified,
+    // and there was no device row to remove because it had already gone (a
+    // removal done on the website). Without this, such a box could never be
+    // reset from the app at all — the guard above would refuse it forever.
+    //
+    // It is not a way round the guard: only a backend that verifies the token
+    // sends this field, and the version deployed on 2026-11-11 does not know
+    // it exists, so today it is never present and nothing is weakened.
+    const notRegisteredUpstream = resp.body?.notRegistered === true;
+    return {
+      ok: !refused && (!removedNothing || notRegisteredUpstream),
+      removedNothing: removedNothing && !notRegisteredUpstream,
+      notRegisteredUpstream,
+      statusCode: resp.statusCode,
+      error: resp.body?.error || resp.body?.message || "",
+    };
+  } catch (e) {
+    return { ok: false, statusCode: 0, error: e.message };
+  }
+}
+
+/**
+ * Remove this camera's registration at the app user's request (§9.6).
+ *
+ * The backend decides whether this person may: only the venue's owner or an
+ * active manager can remove a box, checked against the Firebase ID token. So
+ * the ordering here is the opposite of the web UI's — **nothing is wiped
+ * locally unless the backend agreed**. A box that wiped itself on a refusal
+ * would be deregistered on the device and still present in the venue, which is
+ * the worst of both and needs someone on site to undo.
+ *
+ * Returns { ok } or { ok: false, code, message }.
+ */
+async function removeRegistration(idToken) {
+  if (!isRegistered()) {
+    return { ok: false, code: "NOT_REGISTERED", message: "This camera is not registered." };
+  }
+  const dereg = await callBackendDeregister({ idToken });
+  if (!dereg.ok) {
+    if (dereg.removedNothing) {
+      console.warn("⛔ Deregister removed nothing upstream — refusing to wipe locally. "
+                 + "Either this account may not remove this camera, or the backend "
+                 + "does not yet verify ID tokens for deregister.");
+      return {
+        ok: false, code: "NOT_AUTHORIZED",
+        message: "This camera could not be removed. Only the owner or a manager of "
+               + "its venue can remove it.",
+      };
+    }
+    if (dereg.statusCode === 401) {
+      return {
+        ok: false, code: "AUTH_FAILED",
+        message: "That sign-in was not accepted. Sign in to the app again and retry.",
+      };
+    }
+    if (dereg.statusCode === 403) {
+      // The backend's own words name the venue; ours do not need to.
+      return {
+        ok: false, code: "NOT_AUTHORIZED",
+        message: "Only the owner or a manager of this camera's venue can remove it.",
+      };
+    }
+    console.warn(`⛔ Deregister refused (HTTP ${dereg.statusCode}): ${dereg.error}`);
+    return {
+      ok: false, code: "REGISTRATION_FAILED",
+      message: "The camera could not be removed. Try again, and contact DigitalPool support if it keeps failing.",
+    };
+  }
+  await wipeDeviceLocally({ reason: "removed from the app" });
+  return { ok: true };
+}
+
+/**
+ * DigitalPool says this device is no longer registered to any venue (§9.5).
+ *
+ * This is the only path by which a removal done on the WEBSITE ever reaches
+ * the box — nothing else calls home — and without it such a box advertises
+ * itself as registered indefinitely, landing in neither of the app's lists.
+ *
+ * Guarded hard, because it is the one destructive action a remote party can
+ * trigger: subscriptionManager only calls this on HTTP 200 with ok:true and a
+ * literal `device_registered: false`. A missing field, an outage, or any other
+ * answer means "do not know", and "do not know" never removes a camera. It is
+ * also serialised, so a check that overlaps a wipe cannot start a second one.
+ */
+let _selfWipeInFlight = null;
+function onRemovedUpstream() {
+  if (_selfWipeInFlight) return _selfWipeInFlight;
+  if (!isRegistered()) return Promise.resolve();
+  console.warn("⚠️  DigitalPool reports this device is no longer registered to a venue "
+             + "— it was removed on the website. Clearing local registration.");
+  _selfWipeInFlight = wipeDeviceLocally({ reason: "removed on DigitalPool" })
+    .catch((e) => console.error("❌ Self-wipe failed:", e.message))
+    .finally(() => { _selfWipeInFlight = null; });
+  return _selfWipeInFlight;
+}
+subscriptionManager.setOnDeviceRemoved(onRemovedUpstream);
+
 app.post("/api/remote/wipe", requireAdmin, async (req, res) => {
   const log = [];
   try {
-    // 0. Stop any active stream(s) first — a deregistered device must not keep
-    //    streaming, and streamStartGate() only blocks NEW streams (an already-
-    //    running one would otherwise continue after the wipe).
-    if (streamController.isStreaming || streamController2.isStreaming) {
-      log.push("🔄 Stopping active stream(s) before deregister…");
-      try { await streamController.stopStream(); }  catch { /* not streaming */ }
-      try { await streamController2.stopStream(); } catch { /* not streaming */ }
-      log.push("✅ Stream(s) stopped");
-    }
-
-    // 1. Remove the device record from DigitalPool via the cloud function
-    //    (identity-based deregister — no password).  Best-effort: a failure here
-    //    must not block the local + NetBird de-registration.  Done first, while
-    //    the stored identifiers are still available.
+    // Best-effort for the web UI: a backend refusal must not leave the box
+    // stuck registered to a venue the operator is standing in front of.
     const cfg0 = loadRemoteConfig();
     if (cfg0.deviceId || cfg0.macAddress || cfg0.netbirdIp) {
-      try {
-        const dereg = await callDigitalPoolRegister({
-          action:     "deregister",
-          email:      cfg0.ownerEmail || "",
-          deviceName: getDeviceName(),
-          macAddress: cfg0.macAddress || getPrimaryMac(),
-          netbirdIp:  cfg0.netbirdIp  || "",
-          venueId:    cfg0.venueId    || "",
-          deviceId:   cfg0.deviceId   || "",
-        });
-        if (dereg.statusCode >= 400 || dereg.body?.ok === false) {
-          log.push(`⚠️ DigitalPool deregister returned HTTP ${dereg.statusCode}: ${dereg.body?.error || "error"} — continuing local wipe`);
-        } else {
-          log.push("✅ Device removed from DigitalPool");
-        }
-      } catch (e) {
-        log.push(`⚠️ DigitalPool deregister failed: ${e.message} — continuing local wipe`);
-        console.warn("DigitalPool deregister:", e.message);
-      }
+      const dereg = await callBackendDeregister();
+      log.push(dereg.ok
+        ? "✅ Device removed from DigitalPool"
+        : `⚠️ DigitalPool deregister returned HTTP ${dereg.statusCode}: ${dereg.error || "error"} — continuing local wipe`);
     }
 
-    // 2. Delete from NetBird server (best-effort — needs NETBIRD_API_TOKEN)
-    try {
-      const deleted = await netbirdDeleteCurrentPeer();
-      log.push(deleted
-        ? `✅ Peer deleted from NetBird server (id: ${deleted})`
-        : "⚠️ Peer not found on server — may already be gone");
-    } catch (e) {
-      // Missing token or API error — warn but continue with local wipe
-      log.push(`⚠️ Server-side delete skipped: ${e.message}`);
-      console.warn("netbirdDeleteCurrentPeer:", e.message);
-    }
-
-    // 3. Stop daemon, clear local identity
-    log.push("🔄 Stopping netbird daemon…");
-    await execAsync("sudo /usr/bin/systemctl stop netbird").catch(() => {});
-    await new Promise(r => setTimeout(r, 1000));
-
-    log.push("🔄 Clearing local node state…");
-    await execAsync("sudo rm -rf /var/lib/netbird/").catch(e => {
-      throw new Error(`rm -rf /var/lib/netbird/ failed: ${e.stderr || e.message}`);
-    });
-
-    log.push("🔄 Starting fresh daemon…");
-    await execAsync("sudo /usr/bin/systemctl start netbird").catch(() => {});
-    await new Promise(r => setTimeout(r, 1500));
-
-    // 4. Clear registered state + venue association (the device no longer exists
-    //    on DigitalPool).  Keep name/email/MAC for pre-fill and identity.
-    const cfg = loadRemoteConfig();
-    cfg.registered   = false;
-    cfg.registeredAt = null;
-    cfg.venueId      = "";
-    cfg.venueName    = "";
-    cfg.venueSlug    = "";
-    cfg.deviceId     = "";
-    cfg.userId       = "";
-    saveRemoteConfig(cfg);
-    // The cached subscription belonged to the previous owner's account — drop it
-    // so the next registration decides the entitlement from scratch.
-    subscriptionManager.clear();
-
-    log.push("✅ Wipe complete — ready for re-registration");
-    console.log(log.join("\n"));
+    const { log: wipeLog, cfg } = await wipeDeviceLocally({ reason: "web UI" });
+    log.push(...wipeLog);
     res.json({ success: true, deviceName: cfg.deviceName, ownerEmail: cfg.ownerEmail, log });
   } catch (e) {
     console.error("❌ /api/remote/wipe error:", e.message);
@@ -7639,6 +8137,10 @@ async function _gracefulShutdown() {
 // TimeoutStopSec=10 in the service file gives us a 3 s buffer before systemd
 // SIGKILLs the entire cgroup.
 function _startShutdown() {
+  // Close the BLE socket first and synchronously: the daemon notices straight
+  // away, starts answering UNAVAILABLE, and a phone sees an honest error
+  // instead of a request that never comes back.
+  try { if (bleBridge) bleBridge.stop(); } catch (_) { /* shutting down */ }
   setTimeout(() => {
     console.error("⚠️  Shutdown deadline exceeded — forcing exit");
     process.exit(1);
