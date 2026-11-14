@@ -4,8 +4,9 @@
  * ble/dp-ble.py owns the radio: GATT, advertising, pairing, chunking. It
  * forwards whole messages here over a unix socket and knows nothing about what
  * is in them. Everything that decides anything lives on this side, so the app
- * and the web UI go through the same code — wifiManager for networks, the same
- * registration path, the same subscription gate.
+ * and the web UI go through the same code — wifiManager for networks, and the
+ * same registration path. (There is no subscription gate to share any more;
+ * see subscriptionManager's ENFORCE_PACKAGES.)
  *
  * See BLUETOOTH_ONBOARDING.md §4.3 for the socket protocol and §6 for the
  * message envelope.

@@ -1,6 +1,17 @@
-// Subscription enforcement — the device may only stream while the DigitalPool
-// account that registered it holds a subscription, and WHAT it may do depends on
-// which package that subscription includes:
+// Subscription reporting — and, when ENFORCE_PACKAGES is turned back on,
+// enforcement.
+//
+// ** NOTHING IS ENFORCED AT THE MOMENT (Tim, 2026-11-14). ** Registering does
+// not need a subscription, streaming does not need a subscription, and neither
+// does any output mode or the venue's own overlays. The account's plan is still
+// fetched, still re-checked every 14 days and still reported — Admin Settings
+// shows what the account has — it simply does not stop anything. Flip
+// ENFORCE_PACKAGES to true to restore the behaviour described below, which is
+// the only change needed; every gate reads it.
+//
+// The rest of this header describes what enforcement MEANS when it is on, so
+// that turning it back on is a one-line decision rather than an archaeology
+// exercise:
 //
 //   • Any plan (base)        — the software runs, and the stream can be pushed to
 //                              the venue's own YouTube / Facebook / RTMP target.
@@ -18,10 +29,12 @@
 //
 // Two moments matter:
 //
-//   1. Registration.  /api/setup/register sends the operator's email+password to
-//      the `registerCameraDevice` cloud function; that function now also reports
-//      the account's subscription.  No subscription → registration is refused,
-//      so an unsubscribed account can never get as far as a registered device.
+//   1. Registration.  /api/setup/register sends the operator's identity to the
+//      `registerCameraDevice` cloud function; that function also reports the
+//      account's subscription.  (Registration itself has not been refused for a
+//      missing subscription since 2026-11-11 — subscriptionRefusal() in
+//      server.js records the answer and lets registration continue — so this
+//      moment is now only about LEARNING what the account holds.)
 //
 //   2. Every ~14 days after that.  The password is never persisted, so the
 //      recurring check is identity-based: it sends the account id recorded at
@@ -44,6 +57,22 @@
 const fsSync = require("fs");
 const path = require("path");
 const { callDigitalPoolFunction } = require("./digitalpoolApi");
+
+/**
+ * The master switch. False means: report the subscription, enforce nothing.
+ *
+ * It is a constant rather than an env var on purpose — whether DigitalPool
+ * withholds features from an account is a product decision, not something a
+ * venue should be able to change by editing a file on the box it owns.
+ *
+ * What turning it back on restores, and nothing else:
+ *   • gate()         — an explicit "not subscribed" shuts the base gate again
+ *   • can()          — package flags are honoured
+ *   • gateProtocol() — RTSP Server / SRT Server need the datacenter package
+ *   and through those two, effectiveOverlay() in server.js goes back to
+ *   substituting the DigitalPool branded overlay for the venue's own.
+ */
+const ENFORCE_PACKAGES = false;
 
 const STATE_FILE = path.join(__dirname, "subscription.json");
 
@@ -308,9 +337,15 @@ function applyParsed(parsed, source) {
   if (changed) {
     const label = state.plan ? `${state.plan}${state.status ? ` (${state.status})` : ""}` : (state.status || "—");
     const pkgs = FEATURES.filter((f) => state.features[f] !== false).join(", ") || "none";
+    // The "no subscription" line is deliberately NOT a ⛔ while enforcement is
+    // off: nothing is being blocked, and a stop sign in the journal sends
+    // somebody debugging a problem that does not exist. The same mistake was
+    // fixed in server.js subscriptionRefusal() for the same reason.
     console.log(parsed.active
       ? `✅ Subscription verified (${source}): ${label} — packages: ${pkgs}`
-      : `⛔ No active DigitalPool subscription (${source}): ${label}`);
+      : ENFORCE_PACKAGES
+        ? `⛔ No active DigitalPool subscription (${source}): ${label}`
+        : `🧾 Account has no active subscription (${source}): ${label} — nothing is gated on it`);
     notify();
   }
 }
@@ -337,6 +372,9 @@ function notify() {
  * safe to call on every stream start.
  */
 function gate() {
+  // Nothing is enforced; the status is still reported truthfully through
+  // getStatus(), which is what Admin Settings shows.
+  if (!ENFORCE_PACKAGES) return { allowed: true, code: "enforcement_off", message: "" };
   if (state.active === false) {
     return {
       allowed: false,
@@ -368,15 +406,18 @@ function gate() {
  * gate is shut, gate() is what refuses, and every package reads as unavailable.
  */
 function can(feature) {
+  if (!ENFORCE_PACKAGES) return true;
   if (!gate().allowed) return false;
   return state.features[feature] !== false;
 }
 
 /** Both packages as plain booleans, for the API and the UI. */
 function features() {
-  const base = gate().allowed;
-  const out = { subscribed: base };
-  for (const f of FEATURES) out[f] = base && state.features[f] !== false;
+  // Mirrors can(), so the UI and the gates can never disagree about what is
+  // available — with enforcement off that means every package reads as
+  // granted, whatever flags the service sent.
+  const out = { subscribed: gate().allowed };
+  for (const f of FEATURES) out[f] = can(f);
   return out;
 }
 
@@ -388,6 +429,7 @@ function features() {
  * only a base plan.
  */
 function gateProtocol(protocol) {
+  if (!ENFORCE_PACKAGES) return null;
   const p = String(protocol || "").toLowerCase();
   if (!DATACENTER_PROTOCOLS.has(p)) return null;
   if (can("datacenter")) return null;

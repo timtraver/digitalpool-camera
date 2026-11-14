@@ -79,16 +79,24 @@ also killed by the service's `ExecStopPost`).
 
 **`authManager.js`** — bcrypt users persisted to `users.json`; guards `requireAuth`/`requireAdmin`.
 
-**`subscriptionManager.js`** — **a subscription is no longer required to register or to
-stream** (changed 2026-11-11). `streamStartGate()` requires only that the device is
-*registered*. What a subscription still decides is the **package**: the **Advanced
-Streaming** package unlocks the RTSP/SRT Server output modes our datacenter pulls (via
-`gateProtocol()`) and the venue's own overlays (via `effectiveOverlay()`); without it a
-camera pushes to the venue's own YouTube/Facebook/RTMP and carries the DigitalPool branded
-overlay. So the manager still runs, still checks every 14 days and still reports — Admin
-Settings shows the plan, and the camera's own UI may link to digitalpool.com (that
-restriction applies only to the mobile app) — it just no longer *blocks* anything except
-those two package-gated features.
+**`subscriptionManager.js`** — **nothing is gated on a subscription** (changed
+2026-11-14; registration and streaming were ungated 2026-11-11, the packages followed).
+The single switch is `ENFORCE_PACKAGES` at the top of the file, currently `false`: with it
+off `gate()`, `can()` and `gateProtocol()` all answer "allowed" whatever the service
+reported, so registration, streaming, every output mode and the venue's own overlays work
+on an account with no plan at all. `streamStartGate()` requires only that the device is
+*registered*.
+
+The manager still runs, still checks every 14 days and still reports truthfully —
+`getStatus()` keeps the real `active`/`plan`/`status`, Admin Settings shows the plan, and
+the camera's own UI may link to digitalpool.com (that restriction applies only to the
+mobile app). It just no longer blocks anything.
+
+Turning `ENFORCE_PACKAGES` back to `true` restores the package model in one line: the
+**Advanced Streaming** package unlocks the RTSP/SRT Server output modes our datacenter
+pulls (via `gateProtocol()`) and the venue's own overlays (via `effectiveOverlay()`);
+without it a camera pushes to the venue's own YouTube/Facebook/RTMP and carries the
+DigitalPool branded overlay.
 
 Nothing shown while registering mentions plans, pricing or Enterprise. Note that
 `subscriptionRefusal()` is still called on every registration response even though it
