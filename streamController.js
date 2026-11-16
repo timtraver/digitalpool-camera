@@ -7,6 +7,28 @@ const path = require("path");
 const tsTimestamps = require("./tsTimestamps");
 const audioFilter = require("./audioFilter");
 
+// ── Stream keys ──────────────────────────────────────────────────────────────
+/**
+ * A push destination with its stream key masked: the scheme, host and
+ * application stay (they are what a connection error is usually about), the
+ * last path segment does not.
+ *
+ * For YouTube, Facebook or a restreamer, that last segment IS the credential —
+ * anyone holding it can broadcast to the venue's channel. It has no place in a
+ * message that gets shown, copied into a support ticket or pasted into a chat.
+ */
+function redactStreamKey(destination) {
+  const dest = String(destination || "").trim();
+  if (!dest) return "(none set)";
+  const m = dest.match(/^(\w+:\/\/[^/]+)(\/.*)?$/);
+  if (!m) return dest;
+  const segments = (m[2] || "").split("/").filter(Boolean);
+  if (segments.length < 2) return dest;          // no key to hide
+  const key = segments[segments.length - 1];
+  const shown = key.length > 4 ? `${key.slice(0, 2)}${"•".repeat(6)}` : "••••••";
+  return `${m[1]}/${segments.slice(0, -1).join("/")}/${shown}`;
+}
+
 // ── MPEG-TS PTS extractor ────────────────────────────────────────────────────
 // Scans a raw MPEG-TS buffer and returns the first PTS value found in any PES
 // packet, converted from 90 kHz ticks to seconds. Returns null if no PTS is
@@ -1332,6 +1354,32 @@ class StreamController extends EventEmitter {
 
               // Build a human-readable reason from the buffered stderr.
               let reason = `ffmpeg exited with code ${code}`;
+
+              // ── A destination that refused us said WHY; pass it on ──────────
+              // ffmpeg's exit code for a failed output open is just a number,
+              // and the one thing that explains it — the streaming server's own
+              // words — is already in the stderr we buffer. It was being thrown
+              // away, so a venue that got the application name or the stream key
+              // wrong saw "ffmpeg exited with code 171" and nothing else, while
+              // the server had told us exactly what was wrong. Seen 2026-11-15
+              // pushing to a Wowza with no "restream" application:
+              //   [rtmp] Server error: Connection failed: Application folder
+              //          ([install-location]/applications/restream) is missing.
+              const isOutputErr = /Error opening output|Could not write header|Unknown connect error|Connection refused|Connection timed out|No route to host|Name or service not known/i.test(ffmpegStderrBuf);
+              if (isOutputErr && !isAudioErr) {
+                const said =
+                  (ffmpegStderrBuf.match(/Server error:\s*([^\n\r]+)/i) || [])[1]
+                  || (ffmpegStderrBuf.match(/Unknown connect error\s*\(([^)\n]*)\)/i) || [])[1]
+                  || (ffmpegStderrBuf.match(/\b(Connection refused|Connection timed out|No route to host|Name or service not known)\b/i) || [])[1];
+                const lines = [
+                  "❌ The streaming destination refused the connection.",
+                  said ? `The server said: ${said.trim()}` : null,
+                  `Destination: ${redactStreamKey(this.streamConfig.destination)}`,
+                  "Check the Server URL and Stream Key in Stream Settings → Output.",
+                ];
+                reason = lines.filter(Boolean).join("\n");
+              }
+
               if (isAudioErr) {
                 const devMatch = ffmpegStderrBuf.match(/cannot open audio device (\S+)/);
                 const badDev = devMatch ? devMatch[1] : (this.streamConfig.audioDevice || "plughw:2,0");
