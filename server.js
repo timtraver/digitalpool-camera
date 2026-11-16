@@ -22,6 +22,7 @@ const WifiManager = require("./wifiManager");
 const BleBridge   = require("./bleBridge");
 const authManager = require("./authManager");
 const { RecordingManager, safeRecordingName } = require("./recordingManager");
+const destinations = require("./destinations");
 const { StreamAudience } = require("./streamAudience");
 const { AlertMailer } = require("./alertMailer");
 const { callDigitalPoolFunction } = require("./digitalpoolApi");
@@ -413,6 +414,7 @@ if ((process.env.ONBOARDING_MODE || "auto") !== "hotspot") {
     streamStatus:        () => bleStreamStatus(),
     streamStart:         (camIdx) => bleStreamStart(camIdx),
     streamStop:          (camIdx) => bleStreamStop(camIdx),
+    destinations,
     wifiManager,
     log: (...args) => console.log("🔵 BLE:", ...args),
   });
@@ -2392,6 +2394,17 @@ async function wipeDeviceLocally({ reason = "deregistered" } = {}) {
   // The cached subscription belonged to the previous owner's account — drop it
   // so the next registration decides the entitlement from scratch.
   subscriptionManager.clear();
+
+  // Likewise the linked YouTube / Facebook accounts (§6.13). These are the
+  // one thing on a deregistered box that could still DO something to the
+  // previous owner: a refresh token here broadcasts to their channel. A box
+  // sold on, returned, or moved between venues must not arrive holding it.
+  try {
+    destinations.clearAll();
+    log.push("✅ Linked broadcast accounts cleared");
+  } catch (e) {
+    log.push(`⚠️ Could not clear broadcast accounts: ${e.message}`);
+  }
 
   // Tell the BLE advertisement immediately rather than waiting for its
   // 15-second refresh. The app decides which list a box belongs in from the
@@ -7413,6 +7426,7 @@ server.listen(PORT, async () => {
   streamAudience.start();
   // Recurring subscription verification (first attempt ~90 s after boot).
   subscriptionManager.start();
+  destinations.init({ log: (...a) => console.log("📺 Destinations:", ...a) });
   console.log(`Camera device: ${CAMERA_DEVICE}`);
   console.log(`Access the interface at http://localhost:${PORT}`);
 

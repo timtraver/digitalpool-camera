@@ -122,6 +122,9 @@ class BleBridge {
     this.streamStatus = deps.streamStatus || null;
     this.streamStart = deps.streamStart || null;
     this.streamStop = deps.streamStop || null;
+    // §6.13. Absent on a box whose server.js does not supply it, which
+    // info.commands already told the app.
+    this.destinations = deps.destinations || null;
     this.log = deps.log || ((...a) => console.log("[ble]", ...a));
 
     this.server = null;
@@ -165,6 +168,17 @@ class BleBridge {
       "stream.status": { scopes: null,    handler: () => this.cmdStreamStatus() },
       "stream.start":  { scopes: GRANTED, handler: (a) => this.cmdStreamStart(a) },
       "stream.stop":   { scopes: GRANTED, handler: (a) => this.cmdStreamStop(a) },
+
+      // §6.13. Linking a broadcast account, and pointing a camera at one, are
+      // both changes — GRANTED, like wifi.*. `dest.status` is a read, but it
+      // is NOT public: it names the venue's YouTube channel and Facebook page,
+      // which is more than a stranger in the car park should learn by
+      // connecting. That is the one place this differs from stream.status.
+      "dest.status":         { scopes: GRANTED, handler: () => this.cmdDestStatus() },
+      "dest.assign":         { scopes: GRANTED, handler: (a) => this.cmdDestAssign(a) },
+      "dest.clear":          { scopes: GRANTED, handler: (a) => this.cmdDestClear(a) },
+      "dest.youtube.begin":  { scopes: GRANTED, handler: () => this.cmdDestBegin("youtube") },
+      "dest.facebook.begin": { scopes: GRANTED, handler: () => this.cmdDestBegin("facebook") },
     };
 
     /**
@@ -889,6 +903,54 @@ class BleBridge {
       return await this.streamStop(camera);
     } catch (err) {
       throw new BleError(err.bleCode || "STREAM_FAILED", err.message || "The stream did not stop");
+    }
+  }
+
+  // ── §6.13 dest.* ─────────────────────────────────────────────────────────
+
+  _destinations() {
+    if (!this.destinations) {
+      throw new BleError("UNKNOWN_COMMAND", "This camera's firmware cannot hold broadcast accounts");
+    }
+    return this.destinations;
+  }
+
+  /**
+   * Destination errors carry wording an operator reads — the app shows
+   * `message` verbatim — so they are passed through rather than replaced.
+   */
+  _destCall(fn) {
+    try {
+      return fn();
+    } catch (err) {
+      throw new BleError(err.bleCode || "INTERNAL", err.message || "That did not work");
+    }
+  }
+
+  async cmdDestStatus() {
+    const d = this._destinations();
+    return this._destCall(() => d.status());
+  }
+
+  async cmdDestAssign(args) {
+    const d = this._destinations();
+    // `kind: null` is "None" and is a legitimate value, so an absent key and
+    // an explicit null must mean the same thing rather than one being an error.
+    const kind = args && Object.prototype.hasOwnProperty.call(args, "kind") ? args.kind : null;
+    return this._destCall(() => d.assign(args && args.camera, kind));
+  }
+
+  async cmdDestClear(args) {
+    const d = this._destinations();
+    return this._destCall(() => d.clear(args && args.kind));
+  }
+
+  async cmdDestBegin(kind) {
+    const d = this._destinations();
+    try {
+      return await d.begin(kind);
+    } catch (err) {
+      throw new BleError(err.bleCode || "DEST_LINK_FAILED", err.message || "The sign-in could not be started");
     }
   }
 

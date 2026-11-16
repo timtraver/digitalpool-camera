@@ -1081,9 +1081,12 @@ Omitted entirely when the box has no LAN address. It is **not** behind the hando
 that token authenticates a *login*, and a preview stream is not a login. If the preview
 needs protecting, that is a separate decision about MediaMTX, not a reuse of this token.
 
-### 6.13 `dest.*` — YouTube and Facebook from the box (PROPOSED)
+### 6.13 `dest.*` — YouTube and Facebook from the box
 
-Design only, 2026-11-16. Tim chose, having heard the stolen-box risk, that the **box holds
+Linking and per-camera assignment are **built** as of 2026-11-16 (`destinations.js`).
+Broadcast creation is not — it waits on the match signal below.
+
+Designed 2026-11-16. Tim chose, having heard the stolen-box risk, that the **box holds
 the tokens** and creates a per-match broadcast itself. This records how, and what that
 choice costs.
 
@@ -1108,9 +1111,15 @@ Credentials are **per box**, destinations are **per camera**. A box links one Yo
 account and one Facebook account; each camera is then pointed at one of them, because the
 two cameras are usually two tables being broadcast separately.
 
+All five are `scopes: GRANTED`, **including `dest.status`**. It is a read, but unlike
+`stream.status` it names the venue's YouTube channel and Facebook page, and a stranger in
+the car park should not learn those by connecting.
+
 ```
-dest.status                    → { youtube: { linked, channelTitle, expiresAt },
-                                   facebook: { linked, pageName, expiresAt },
+dest.status                    → { youtube: { linked, channelTitle, expiresAt,
+                                               linking, lastError, configured },
+                                   facebook: { linked, pageName, expiresAt,
+                                               linking, lastError, configured },
                                    cameras: { "1": "youtube", "2": null } }
 dest.assign { camera, kind }   → sets which linked destination that camera broadcasts to
 dest.clear  { kind }           → forgets those credentials; any camera using them reverts
