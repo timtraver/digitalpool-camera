@@ -1081,6 +1081,93 @@ Omitted entirely when the box has no LAN address. It is **not** behind the hando
 that token authenticates a *login*, and a preview stream is not a login. If the preview
 needs protecting, that is a separate decision about MediaMTX, not a reuse of this token.
 
+### 6.13 `dest.*` — YouTube and Facebook from the box (PROPOSED)
+
+Design only, 2026-11-16. Tim chose, having heard the stolen-box risk, that the **box holds
+the tokens** and creates a per-match broadcast itself. This records how, and what that
+choice costs.
+
+#### What a trigger actually exists
+
+**There is no `matchStatusUpdate` command on this box.** Nothing pushes to it from
+DigitalPool at all — it reads Hasura and the cloud function, and the datacenter starts
+pulling RTSP when a match starts, which is a Wowza-side decision the box never hears about.
+
+What it *does* have is better suited anyway: `overlayDataSource` already polls the bound
+tournament table and knows when a match goes live and who is playing — `probeLive()` for
+the cheap "is anything on this table" question and `fetchBinding()` for the names. That is
+exactly what a broadcast title needs, and it costs no new transport.
+
+The catch: that poll runs inside the overlay renderer, so a camera with no overlay
+configured has no match signal. Driving broadcasts from it means lifting the poll out of
+`skiaOverlay` so it runs whenever a camera is bound to a table, overlay or not.
+
+#### Which destination a camera uses
+
+Credentials are **per box**, destinations are **per camera**. A box links one YouTube
+account and one Facebook account; each camera is then pointed at one of them, because the
+two cameras are usually two tables being broadcast separately.
+
+```
+dest.status                    → { youtube: { linked, channelTitle, expiresAt },
+                                   facebook: { linked, pageName, expiresAt },
+                                   cameras: { "1": "youtube", "2": null } }
+dest.assign { camera, kind }   → sets which linked destination that camera broadcasts to
+dest.clear  { kind }           → forgets those credentials; any camera using them reverts
+```
+
+Two cameras on one channel means two concurrent live broadcasts on that channel. Both
+platforms allow it, within per-channel limits that are theirs to enforce, not ours to
+predict — so `dest.assign` does not try to stop it, and a refusal at broadcast-creation
+time is reported as `lastError` like any other.
+
+#### Linking
+
+```
+dest.youtube.begin  → { verification_url, user_code, expires_in, interval }
+dest.facebook.begin → { verification_url, user_code, expires_in, interval }
+```
+
+OAuth 2.0 Device Authorization Grant for YouTube (the `youtube` scope is permitted for
+limited-input clients); Facebook's Login for Devices for the other — **confirm that is still
+offered before building it**, and fall back to the phone passing a long-lived Page token if
+it is not.
+
+Both are `scopes: GRANTED`. The box polls the token endpoint itself at `interval` until it
+gets tokens or `expires_in` passes; the phone opens `verification_url` and polls
+`dest.status` until `linked` turns true. No secret crosses the BLE link in either
+direction, which is the main thing the device flow buys us.
+
+#### Where the tokens live, and what that is worth
+
+`/var/lib/digitalpool-camera/destinations.json`, mode `0600`.
+
+**Owned by `dp`, not root, and the difference is worth stating plainly.** The Node process
+that must use these tokens runs as `dp`. Making the file root-owned would mean a setuid
+helper to hand them over, which is more attack surface than it removes — anyone who can run
+code as `dp` can simply ask the helper. Root ownership here would be a comfort, not a
+control.
+
+Outside the repo directory on purpose: a deploy is an `rsync` into `/home/dp/digitalpool-camera`,
+and credentials living there would be clobbered by one and copied by any backup of it.
+
+`wipeDeviceLocally()` clears this file along with the registration — a box handed to another
+venue must not arrive still able to broadcast to the last one's channel.
+
+#### What this does not protect against, on the record
+
+A refresh token on a box on a shelf in a bar is a long-lived credential in an unattended
+place. The box has no secure element; `0600` stops another local account reading it and
+stops nothing else. Anyone who walks off with the box can broadcast to that venue's channel
+until somebody notices, and revocation is per-account, so revoking takes out every box that
+account has linked.
+
+The alternative — the backend holding the credentials and handing the box a per-match
+ingest URL — was considered and declined. It is recorded here because the trade is real and
+whoever reads this next should not have to rediscover it: that design keeps nothing worth
+stealing on the hardware, at the cost of needing internet to start a broadcast, which a box
+pushing to YouTube needs regardless.
+
 ## 7. Authentication
 
 ### 7.1 Threat model
