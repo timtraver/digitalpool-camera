@@ -410,6 +410,9 @@ if ((process.env.ONBOARDING_MODE || "auto") !== "hotspot") {
     registerWith:        (credentials, opts) => registerWith(credentials, opts),
     removeRegistration:  (idToken) => removeRegistration(idToken),
     looksLikeIdToken:    (token) => looksLikeIdToken(token),
+    streamStatus:        () => bleStreamStatus(),
+    streamStart:         (camIdx) => bleStreamStart(camIdx),
+    streamStop:          (camIdx) => bleStreamStop(camIdx),
     wifiManager,
     log: (...args) => console.log("🔵 BLE:", ...args),
   });
@@ -612,6 +615,233 @@ streamController2.on("bitrate", (mbps) => {
 streamController2.on("drift", (ppm) => {
   io.emit("streamDrift", { ppm, cameraIndex: 2 });
 });
+
+// ── Live stream state, for the app over BLE ──────────────────────────────────
+// BLUETOOTH_ONBOARDING.md §6.12. The pipeline already announces everything the
+// phone needs, but it announces it and forgets: bitrate and fps arrive as
+// events and are never stored, and nothing retains when a stream went live or
+// what the last failure said. A phone that connects mid-stream would otherwise
+// have to wait for the next tick to learn anything.
+//
+// These listeners are attached ALONGSIDE the Socket.IO ones above rather than
+// folded into them — an EventEmitter takes as many as it likes, and keeping
+// them separate means the web UI's behaviour cannot be changed by accident
+// while editing the app's.
+const _bleStream = {
+  1: { state: "idle", liveSince: null, bitrateMbps: null, fps: null, lastError: null },
+  2: { state: "idle", liveSince: null, bitrateMbps: null, fps: null, lastError: null },
+};
+
+// A bitrate tick is once a second and a notification costs 10 ms of airtime at
+// the current framing (§6.12), so pushing every one would spend a noticeable
+// share of the link on a number nobody reads that fast. State changes are
+// pushed immediately; bitrate no more than this often.
+const BLE_STREAM_RATE_MS = 5000;
+const _bleStreamPushedAt = { 1: 0, 2: 0 };
+
+function pushBleStreamState(camIdx, { force = false } = {}) {
+  if (!bleBridge) return;
+  const now = Date.now();
+  if (!force && now - _bleStreamPushedAt[camIdx] < BLE_STREAM_RATE_MS) return;
+  _bleStreamPushedAt[camIdx] = now;
+  const live = _bleStream[camIdx];
+  bleBridge.broadcast("stream.state", {
+    camera: camIdx,
+    state: live.state,
+    liveSince: live.liveSince,
+    bitrateMbps: live.bitrateMbps,
+    fps: live.fps,
+    lastError: live.lastError,
+  });
+}
+
+function trackStreamForBle(sc, camIdx) {
+  const live = _bleStream[camIdx];
+  sc.on("preparing", () => {
+    live.state = "starting";
+    live.lastError = null;
+    pushBleStreamState(camIdx, { force: true });
+  });
+  sc.on("started", () => {
+    live.state = "streaming";
+    live.liveSince = new Date().toISOString();
+    live.lastError = null;
+    pushBleStreamState(camIdx, { force: true });
+  });
+  sc.on("stopped", () => {
+    // An error already set the state and the text; a stop that follows one must
+    // not erase why it stopped, which is the only thing worth telling anybody.
+    if (live.state !== "error") live.state = "idle";
+    live.liveSince = null;
+    live.bitrateMbps = null;
+    live.fps = null;
+    pushBleStreamState(camIdx, { force: true });
+  });
+  sc.on("error", (error) => {
+    live.state = "error";
+    live.lastError = typeof error === "string" ? error : (error && error.message) || "Stream failed";
+    pushBleStreamState(camIdx, { force: true });
+  });
+  sc.on("bitrate", (mbps) => {
+    live.bitrateMbps = mbps;
+    pushBleStreamState(camIdx);
+  });
+  sc.on("fps", (fps) => { live.fps = fps; });
+}
+trackStreamForBle(streamController, 1);
+trackStreamForBle(streamController2, 2);
+
+/** The destination kind, as §6.12 defines it — from the SAVED config. */
+function bleDestinationKind(sc, camIdx) {
+  const cfg = sc.streamConfig || {};
+  // `youtube` and `facebook` are UI-only aliases that streamController
+  // normalises to `rtmp` when a stream starts, so a running pipeline cannot be
+  // asked which of the three it is. The saved value is the only place that
+  // still knows.
+  const saved = String(cfg.protocol || "").toLowerCase();
+  if (saved === "youtube" || saved === "facebook") return saved;
+  if (saved === "rtsp" || saved === "srt") {
+    // Our datacenter pulls these; a venue pointing them anywhere else is still
+    // "rtsp"/"srt" to the app, which only uses the kind to pick an icon.
+    return saved;
+  }
+  if (saved === "rtmp") {
+    const dest = String(cfg.destination || "");
+    if (/youtube\./i.test(dest)) return "youtube";
+    if (/facebook\./i.test(dest)) return "facebook";
+    return dest ? "rtmp" : "digitalpool";
+  }
+  return saved || "digitalpool";
+}
+
+/** The HLS preview URL, or null when the box has no LAN address to offer. */
+function bleHlsPreview(camIdx) {
+  const sc = getSC(camIdx);
+  const ip = sc && typeof sc._getLocalIP === "function" ? sc._getLocalIP() : null;
+  if (!ip || ip === "127.0.0.1") return null;
+  const path = camIdx === 2 ? "live2" : "live";
+  return { hls: `http://${ip}:8888/${path}/index.m3u8`, lanOnly: true };
+}
+
+/** §6.12 `stream.status`. One entry per camera slot. */
+function bleStreamStatus() {
+  const cfg = loadRemoteConfig();
+  const devices = Array.isArray(cfg.devices) ? cfg.devices : [];
+  const cameras = [1, 2].map((camIdx) => {
+    const sc = getSC(camIdx);
+    const live = _bleStream[camIdx];
+    const source = getActiveSource(camIdx);
+    let present = false;
+    if (source.type === "usb") {
+      present = fsSync.existsSync(source.device || (camIdx === 2 ? CAMERA_DEVICE_2 : CAMERA_DEVICE));
+    } else if (source.type === "rtsp") present = !!source.rtspUrl;
+    else if (source.type === "rtmp") present = !!source.rtmpUrl;
+    else if (source.type === "ndi")  present = !!source.ndiName;
+
+    // The controller is the authority on whether a pipeline is up; the tracker
+    // adds what it cannot say — that a start is still in flight, and why the
+    // last one failed. Reconciling them here means a phone that connects
+    // mid-stream is told the truth rather than whatever this process happened
+    // to witness.
+    let state = live.state;
+    if (sc.isStreaming && state !== "starting") state = "streaming";
+    else if (!sc.isStreaming && state === "streaming") state = "idle";
+    const dest = (sc.streamConfig && sc.streamConfig.destination) || "";
+    const device = devices.find((d) => Number(d.camera) === camIdx) || null;
+    return {
+      camera: camIdx,
+      name: (sc.streamConfig && sc.streamConfig.name) || tableNames.get(camIdx) || null,
+      present,
+      state,
+      // A camera with nothing configured and nothing running has no destination
+      // to describe; one that is live always does, even pushing to a default.
+      destination: (dest || state !== "idle")
+        ? { kind: bleDestinationKind(sc, camIdx), url: StreamController.redactStreamKey(dest) }
+        : null,
+      liveSince: live.liveSince,
+      bitrateMbps: live.bitrateMbps,
+      fps: live.fps,
+      recording: recordingManager.isCameraRecording(camIdx),
+      deviceId: device ? String(device.id || device.device_id || "") || null : null,
+      lastError: live.lastError,
+      preview: bleHlsPreview(camIdx),
+    };
+  });
+  return { cameras };
+}
+
+/** §6.12 `stream.start` — returns the RESULTING state, not an ack. */
+async function bleStreamStart(camIdx) {
+  const sc = getSC(camIdx);
+  if (sc.isStreaming) {
+    return { camera: camIdx, state: "streaming", liveSince: _bleStream[camIdx].liveSince, already: true };
+  }
+  const source = getActiveSource(camIdx);
+  if (source.type === "none") {
+    const err = new Error("No camera is assigned to this slot");
+    err.bleCode = "NO_CAMERA";
+    throw err;
+  }
+  // The gate is registration-only now (fb90305), but go through it rather than
+  // around it so the BLE path can never become the one that skips a check the
+  // web UI makes.
+  const refusal = streamStartGate(null, sc.streamConfig, sc);
+  if (refusal) {
+    const err = new Error(refusal.error);
+    err.bleCode = refusal.registrationRequired ? "NOT_REGISTERED" : "STREAM_FAILED";
+    throw err;
+  }
+
+  _bleStream[camIdx].lastError = null;
+  const settled = waitForStreamOutcome(camIdx);
+  await sc.startStream(sc.streamConfig, { skipEntitlementCheck: true });
+  const outcome = await settled;
+  if (outcome.state !== "streaming") {
+    const err = new Error(outcome.lastError || "The stream did not start");
+    err.bleCode = "STREAM_FAILED";
+    throw err;
+  }
+  return { camera: camIdx, state: "streaming", liveSince: _bleStream[camIdx].liveSince };
+}
+
+/**
+ * Wait for the pipeline to say what happened, up to §6.12's 15 s.
+ *
+ * Starting is asynchronous and fails LATE — a box here answered a bad RTMP
+ * destination 1.4 s after spawn, long after any ack would have gone out
+ * claiming success. §6.3 allows a request to stay outstanding, so waiting is
+ * free and the alternative is lying.
+ */
+function waitForStreamOutcome(camIdx, timeoutMs = 15000) {
+  const sc = getSC(camIdx);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (state) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      sc.removeListener("started", onStarted);
+      sc.removeListener("error", onError);
+      sc.removeListener("stopped", onStopped);
+      resolve({ state, lastError: _bleStream[camIdx].lastError });
+    };
+    const onStarted = () => finish("streaming");
+    const onError   = () => finish("error");
+    const onStopped = () => finish(sc.isStreaming ? "streaming" : "idle");
+    const timer = setTimeout(() => finish(sc.isStreaming ? "streaming" : "error"), timeoutMs);
+    sc.once("started", onStarted);
+    sc.once("error", onError);
+    sc.once("stopped", onStopped);
+  });
+}
+
+/** §6.12 `stream.stop`. Idempotent — stopping an idle camera is not an error. */
+async function bleStreamStop(camIdx) {
+  const sc = getSC(camIdx);
+  if (!sc.isStreaming) return { camera: camIdx, state: _bleStream[camIdx].state, already: true };
+  await sc.stopStream();
+  return { camera: camIdx, state: "idle" };
+}
 
 // ── CPU load broadcasting ─────────────────────────────────────────────────────
 // Reads /proc/stat every 2 seconds and broadcasts the CPU usage percentage

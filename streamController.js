@@ -3326,3 +3326,4 @@ class StreamController extends EventEmitter {
 }
 
 module.exports = StreamController;
+module.exports.redactStreamKey = redactStreamKey;

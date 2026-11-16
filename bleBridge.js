@@ -117,6 +117,11 @@ class BleBridge {
     this.removeRegistration = deps.removeRegistration || null;
     this.looksLikeIdToken = deps.looksLikeIdToken || (() => false);
     this.getDisplayName = deps.getDisplayName || (() => "");
+    // §6.12. A box whose server.js does not supply these answers
+    // UNKNOWN_COMMAND, which is what info.commands already told the app.
+    this.streamStatus = deps.streamStatus || null;
+    this.streamStart = deps.streamStart || null;
+    this.streamStop = deps.streamStop || null;
     this.log = deps.log || ((...a) => console.log("[ble]", ...a));
 
     this.server = null;
@@ -152,6 +157,14 @@ class BleBridge {
       "register.status": { scopes: null, handler: () => this.cmdRegisterStatus() },
       "register.remove": { scopes: null, handler: (a) => this.cmdRegisterRemove(a) },
       "session.end":     { scopes: null, handler: (a, c) => this.cmdSessionEnd(c) },
+
+      // §6.12. Reading what the cameras are doing needs no grant, like `info`
+      // and `net.status`. Starting or stopping a broadcast does — it is the
+      // same bar as wifi.*, because starting a stream from the car park is not
+      // a read.
+      "stream.status": { scopes: null,    handler: () => this.cmdStreamStatus() },
+      "stream.start":  { scopes: GRANTED, handler: (a) => this.cmdStreamStart(a) },
+      "stream.stop":   { scopes: GRANTED, handler: (a) => this.cmdStreamStop(a) },
     };
 
     /**
@@ -360,6 +373,17 @@ class BleBridge {
   /** Unprompted event to the phone (§6.3). */
   emit(conn, event, data) {
     this._send(conn, { event, data });
+  }
+
+  /**
+   * The same event to every connected phone.
+   *
+   * Used for `stream.state` (§6.12), which is about the box rather than about
+   * whoever asked — two phones watching one box should see a stream start at
+   * the same moment, and neither of them asked for it.
+   */
+  broadcast(event, data) {
+    for (const conn of this.connections.keys()) this.emit(conn, event, data);
   }
 
   kick(conn) {
@@ -821,6 +845,53 @@ class BleBridge {
    * its own, only inside a URL bound to an address the phone can actually
    * reach, so there is nothing useful to copy out of a log.
    */
+  // ── §6.12 stream.* ───────────────────────────────────────────────────────
+
+  /** Both camera slots, whether or not a camera is plugged into either. */
+  async cmdStreamStatus() {
+    if (!this.streamStatus) {
+      throw new BleError("UNKNOWN_COMMAND", "This camera's firmware cannot report stream state");
+    }
+    return this.streamStatus();
+  }
+
+  /**
+   * Which camera slot an argument names. A box has two, and a request that
+   * does not say which is a bug in the caller rather than something to guess:
+   * starting the wrong camera's broadcast is not a recoverable mistake.
+   */
+  _cameraArg(args) {
+    const raw = args && args.camera;
+    if (raw !== 1 && raw !== 2 && raw !== "1" && raw !== "2") {
+      throw new BleError("BAD_REQUEST", "camera must be 1 or 2");
+    }
+    return Number(raw);
+  }
+
+  async cmdStreamStart(args) {
+    if (!this.streamStart) {
+      throw new BleError("UNKNOWN_COMMAND", "This camera's firmware cannot start a stream");
+    }
+    const camera = this._cameraArg(args);
+    try {
+      return await this.streamStart(camera);
+    } catch (err) {
+      throw new BleError(err.bleCode || "STREAM_FAILED", err.message || "The stream did not start");
+    }
+  }
+
+  async cmdStreamStop(args) {
+    if (!this.streamStop) {
+      throw new BleError("UNKNOWN_COMMAND", "This camera's firmware cannot stop a stream");
+    }
+    const camera = this._cameraArg(args);
+    try {
+      return await this.streamStop(camera);
+    } catch (err) {
+      throw new BleError(err.bleCode || "STREAM_FAILED", err.message || "The stream did not stop");
+    }
+  }
+
   async cmdWebLink() {
     if (!this.createHandoffToken) {
       throw new BleError("INTERNAL", "This camera cannot issue login links");

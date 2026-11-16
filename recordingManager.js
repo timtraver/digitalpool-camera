@@ -1114,6 +1114,14 @@ class RecordingManager extends EventEmitter {
     return path.join(RECORDINGS_DIR, name);
   }
 
+  /** Is this camera slot recording right now? `streamId` is 1 or 2. */
+  isCameraRecording(streamId) {
+    for (const s of this.state.values()) {
+      if (Number(s.streamId) === Number(streamId) && s.proc) return true;
+    }
+    return false;
+  }
+
   isRecording(name) {
     if (this._finishing.has(name)) return true;
     for (const s of this.state.values()) if (s.name === name) return true;

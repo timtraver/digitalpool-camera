@@ -951,10 +951,13 @@ app looks at `info.commands`. Breaking changes raise `proto`, and the app refuse
 
 ---
 
-### 6.12 `stream.*` and `camera.*` — PROPOSED, not built
+### 6.12 `stream.*` and `camera.*`
 
-Status: a proposal from the camera side, 2026-11-16, for the app's DuoCast box screen.
-Nothing below exists yet. Numbers that constrain the design are measured, not estimated.
+Phase 1 (`stream.status`, `stream.state`, `stream.start`, `stream.stop`) is **built**
+as of 2026-11-16. `camera.snapshot` is not, and should not be until `AcquireNotify`.
+
+For the app's DuoCast box screen. Numbers that constrain the design are measured, not
+estimated.
 
 **Authorization.** `stream.status` is `scopes: null` — a phone that can connect can read it,
 like `info` and `net.status`. `stream.start` and `stream.stop` are `scopes: GRANTED`, the
@@ -983,7 +986,7 @@ same bar as `wifi.*`: starting a broadcast from the car park is not a read.
 | Field | Source on the box today |
 |---|---|
 | `present` | `cameraPresent` logic in server.js — a `/dev/video*` that exists for USB, a configured URL for RTSP/RTMP/NDI |
-| `state` | `idle` \| `starting` \| `streaming` \| `recording` \| `error`. Derived from `isStreaming` plus the `preparing`/`started`/`stopped` transitions already emitted to Socket.IO |
+| `state` | `idle` \| `starting` \| `streaming` \| `error`. Derived from `isStreaming` plus the `preparing`/`started`/`stopped` transitions already emitted to Socket.IO. **Not** `recording` — a box records *while* streaming (a reader pulling RTSP is what arms it), so that is the separate boolean below rather than a state that would hide the stream |
 | `destination.kind` | `digitalpool` \| `youtube` \| `facebook` \| `rtmp` \| `srt` \| `rtsp`. `youtube`/`facebook` are UI aliases that normalise to `rtmp` in streamController, so the kind has to be read from the saved config, not the running protocol |
 | `destination.url` | **Masked** by `redactStreamKey()`. The last path segment is the credential |
 | `recording` | `recordingManager.isRecording()` |
