@@ -680,7 +680,7 @@ Requests may be sent while another is outstanding; responses can come back in an
 | `BUSY` | A conflicting operation is running (e.g. two `wifi.connect`) |
 | `NO_INTERNET` | The operation needs internet and the box has none |
 | `WIFI_NOT_FOUND`, `WIFI_AUTH_FAILED`, `WIFI_TIMEOUT`, `WIFI_FAILED` | WiFi connect outcomes |
-| ~~`SUBSCRIPTION_REQUIRED`~~ | **Removed 2026-11-11.** Registering a camera no longer depends on a plan, and nothing shown during registration mentions plans, pricing or Enterprise. A box talking to an older backend that still answers 402 reports `REGISTRATION_FAILED` with neutral wording rather than relaying the backend's "subscribe at…" sentence. Subscription state still governs **streaming** (`streamStartGate()`). |
+| ~~`SUBSCRIPTION_REQUIRED`~~ | **Removed 2026-11-11.** Registering a camera no longer depends on a plan, and nothing shown during registration mentions plans, pricing or Enterprise. A box talking to an older backend that still answers 402 reports `REGISTRATION_FAILED` with neutral wording rather than relaying the backend's "subscribe at…" sentence. **Since 2026-11-14 a subscription governs nothing at all** — see `ENFORCE_PACKAGES` in subscriptionManager.js. |
 | `REGISTRATION_FAILED` | Any other registration refusal. `message` carries the backend's text. |
 | `UNAVAILABLE` | Node isn't running. Sent by the daemon itself. |
 | `INTERNAL` | Bug. Details are in the journal. |
@@ -950,6 +950,133 @@ app looks at `info.commands`. Breaking changes raise `proto`, and the app refuse
 `proto` values above the highest it knows, with "Update the DigitalPool app".
 
 ---
+
+### 6.12 `stream.*` and `camera.*` — PROPOSED, not built
+
+Status: a proposal from the camera side, 2026-11-16, for the app's DuoCast box screen.
+Nothing below exists yet. Numbers that constrain the design are measured, not estimated.
+
+**Authorization.** `stream.status` is `scopes: null` — a phone that can connect can read it,
+like `info` and `net.status`. `stream.start` and `stream.stop` are `scopes: GRANTED`, the
+same bar as `wifi.*`: starting a broadcast from the car park is not a read.
+
+#### `stream.status` → one entry per camera slot
+
+```json
+{ "id": 7, "ok": true, "result": { "cameras": [
+  { "camera": 1,
+    "present": true,
+    "state": "streaming",
+    "destination": { "kind": "youtube", "url": "rtmp://a.rtmp.youtube.com/live2/ab••••••" },
+    "liveSince": "2026-11-16T03:12:44Z",
+    "bitrateMbps": 4.8,
+    "fps": 30,
+    "recording": false,
+    "deviceId": "88121",
+    "lastError": null },
+  { "camera": 2, "present": false, "state": "idle", "destination": null,
+    "liveSince": null, "bitrateMbps": null, "fps": null, "recording": false,
+    "deviceId": null, "lastError": null }
+] } }
+```
+
+| Field | Source on the box today |
+|---|---|
+| `present` | `cameraPresent` logic in server.js — a `/dev/video*` that exists for USB, a configured URL for RTSP/RTMP/NDI |
+| `state` | `idle` \| `starting` \| `streaming` \| `recording` \| `error`. Derived from `isStreaming` plus the `preparing`/`started`/`stopped` transitions already emitted to Socket.IO |
+| `destination.kind` | `digitalpool` \| `youtube` \| `facebook` \| `rtmp` \| `srt` \| `rtsp`. `youtube`/`facebook` are UI aliases that normalise to `rtmp` in streamController, so the kind has to be read from the saved config, not the running protocol |
+| `destination.url` | **Masked** by `redactStreamKey()`. The last path segment is the credential |
+| `recording` | `recordingManager.isRecording()` |
+| `deviceId` | `remote.json` `devices[]`, matched on camera index |
+| `bitrateMbps`, `fps` | **New work.** Both are emitted as events and never stored; the box must keep the last value per camera |
+| `liveSince`, `lastError` | **New work.** Neither is retained today |
+
+`lastError` is the operator-facing text, not an exit code — the same string the UI gets.
+Tonight's real one, for shape: `"The streaming destination refused the connection. The
+server said: Connection failed: Application folder (…/applications/restream) is missing."`
+
+#### `stream.state` event
+
+```json
+{ "event": "stream.state", "data": { "camera": 1, "state": "error",
+  "lastError": "…", "bitrateMbps": null } }
+```
+
+Pushed on every transition, and on a bitrate change no more than once every 5 s — a
+notification costs 10 ms of airtime (see below), and a per-second bitrate tick on two
+cameras would use a sixth of the link for a number nobody reads that fast.
+
+#### `stream.start` / `stream.stop` `{ camera: 1|2 }`
+
+Both return the **resulting** state, not an ack. Starting is asynchronous and can fail
+seconds in — tonight's RTMP rejection surfaced 1.4 s after spawn — so the handler waits for
+the pipeline to reach `started` or `error`, up to **15 s**, and returns whichever happened:
+
+```json
+{ "id": 9, "ok": true, "result": { "camera": 1, "state": "streaming", "liveSince": "…" } }
+{ "id": 9, "ok": false, "error": { "code": "STREAM_FAILED", "message": "<lastError>" } }
+```
+
+A 15 s wait is safe: §6.3 already allows requests to be outstanding concurrently and
+responses to return out of order. New error codes: `STREAM_FAILED`, `NO_CAMERA`,
+`ALREADY_STREAMING` (not an error for `stop`, which is idempotent).
+
+#### `camera.snapshot` — do not build this yet
+
+Not at the current framing. Measured, from `ble/dp-ble.py`:
+
+- `TX_PACING_MS = 10` — one notification every 10 ms.
+- TX body = `negotiated_mtu() - 3 - CHUNK_HEADER` = `23 - 3 - 3` = **17 bytes**.
+- Throughput is therefore **1,700 bytes/second**, and §6.2's 255-chunk ceiling caps one
+  message at **4,335 bytes**, about **2.6 s** on the wire.
+- JSON cannot carry binary, so a JPEG costs another 4/3 in base64: the largest image that
+  fits a single message is **~3.2 KB**.
+
+A 320×180 JPEG is 8–20 KB. It does not fit, and would not fit if the cap were raised —
+15 KB at 1,700 B/s is **8.8 s**, nearly 12 s after base64, per frame.
+
+The blocker is `negotiated_mtu()` returning 23, which is deliberate and documented above:
+there is no source on the box for the true notification MTU short of **`AcquireNotify`**.
+That is the prerequisite. With a real MTU near 247 the body is 241 bytes — 14× — and
+`AcquireNotify` also replaces `PropertiesChanged` with a socket, so the 10 ms pacing can
+go. A 15 KB snapshot then lands in well under a second. **Do `AcquireNotify` first, with a
+phone to test against; revisit the snapshot after.**
+
+#### Live preview over the LAN — use this instead
+
+The box already serves, all cleartext, nothing on 80 or 443:
+
+| Port | What |
+|---|---|
+| 8888 | MediaMTX **HLS** |
+| 8889 | MediaMTX **WHEP** (WebRTC, what the web UI uses, proxied over Socket.IO) |
+| 8554 | RTSP |
+| 3000 | the app's own HTTP server |
+
+HLS on 8888 is the one to use from a phone: a plain URL, no signalling, and it plays in
+both platforms' native players. Latency is a few seconds, which is fine for "is the camera
+pointed at the table".
+
+**The cleartext problem is the app's to solve, not the box's.** A box on a venue LAN has a
+private IP, and no CA will issue a certificate for `192.168.1.10`; a self-signed cert makes
+it worse, not better, by training people through a warning. Both platforms already have the
+intended exception for exactly this case:
+
+- Android: a `network_security_config.xml` permitting cleartext to private ranges only.
+- iOS: `NSAllowsLocalNetworking` under ATS.
+
+This applies to `web.link` too, which hands back `http://<lan-ip>:3000/…` and has the same
+constraint today.
+
+`stream.status` should carry the URL so the app never builds it:
+
+```json
+"preview": { "hls": "http://192.168.1.10:8888/live/index.m3u8", "lanOnly": true }
+```
+
+Omitted entirely when the box has no LAN address. It is **not** behind the handoff token —
+that token authenticates a *login*, and a preview stream is not a login. If the preview
+needs protecting, that is a separate decision about MediaMTX, not a reuse of this token.
 
 ## 7. Authentication
 
