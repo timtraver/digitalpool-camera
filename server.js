@@ -988,6 +988,54 @@ async function bleOverlayList(camIdx, args = {}) {
   };
 }
 
+/**
+ * Rebuild a camera's idle preview so it picks up an overlay change.
+ *
+ * The idle preview is a gst-launch pipeline that decides at BUILD time whether
+ * to include gdkpixbufoverlay, so it cannot add or drop the element by itself.
+ *
+ * **Draining the in-flight start first is the whole point.**
+ * startPersistentIdlePreview() silently no-ops while another start is running —
+ * boot warm-up, a source change, an auto-restart, /video/stream — so calling it
+ * during one drops the rebuild on the floor and leaves the preview showing the
+ * old overlay until something else restarts it. That is exactly what was
+ * reported from the app, and the web UI's updateOverlay handler already carried
+ * a comment warning about this trap. I walked into it anyway; this is the same
+ * drain, in a function both can call.
+ */
+async function rebuildIdlePreview(camIdx, reason) {
+  let q = camIdx === 2 ? _idlePreviewStartQueue2 : _idlePreviewStartQueue;
+  while (q) {
+    try { await q; } catch (_) { /* a failed start still clears the way */ }
+    q = camIdx === 2 ? _idlePreviewStartQueue2 : _idlePreviewStartQueue;
+  }
+  console.log(`📸 [Cam${camIdx}] ${reason} — rebuilding idle preview`);
+  await startPersistentIdlePreview(camIdx);
+  io.emit("refreshIdlePreview", { cameraIndex: camIdx });
+}
+
+/**
+ * Take a camera's overlay off the screen.
+ *
+ * Stopping the producer is what actually clears it: that DELETES the overlay
+ * PNG, and the pipeline notices the file is gone on its next poll and drops the
+ * composition. Nothing else does — applyEffectiveOverlay() only stops the
+ * refresh timer, which leaves the last rendered PNG on disk with its old mtime,
+ * and a running pipeline happily composites it forever.
+ *
+ * Shared with the web UI's updateOverlay handler so the two cannot disagree
+ * about what "None" means.
+ */
+async function stopOverlayProducer(camIdx, why) {
+  const camPuppeteer = camIdx === 2 ? puppeteerOverlay2 : puppeteerOverlay;
+  if (!camPuppeteer) return false;
+  console.log(`🛑 [Cam${camIdx}] ${why} — stopping the overlay renderer...`);
+  await camPuppeteer.stop();
+  if (camIdx === 2) puppeteerOverlay2 = null;
+  else puppeteerOverlay = null;
+  return true;
+}
+
 /** §6.15 `overlay.set`. */
 async function bleOverlaySet(camIdx, args = {}) {
   const raw = args.id;
@@ -1032,8 +1080,31 @@ async function bleOverlaySet(camIdx, args = {}) {
   // picked up by mtime, so nothing rebuilds the pipeline.
   const sc = getSC(camIdx);
   sc.updateOverlay({ remoteOverlayEnabled: !!url, overlayUrl: url });
-  await applyEffectiveOverlay(camIdx);
+
+  if (!url) {
+    // Clearing is NOT the same path as setting, and treating it as one was the
+    // bug: applyEffectiveOverlay() stops the refresh timer and nothing else, so
+    // the last PNG stayed on disk and the pipeline kept drawing it. The
+    // producer has to be stopped — that deletes the files — and the idle
+    // preview rebuilt, because it bakes gdkpixbufoverlay in at build time and
+    // cannot drop the element by itself.
+    await stopOverlayProducer(camIdx, "Overlay set to None over BLE");
+  } else {
+    await applyEffectiveOverlay(camIdx);
+  }
   syncOverlayStreamLive(camIdx);
+
+  // A running stream needs no rebuild — its pipeline hot-swaps the PNG by mtime
+  // and its tee to /preview follows. An idle one does, and it is NOT awaited:
+  // draining the start queue and respawning took 4.9 s when measured, which is
+  // half the app's request timeout spent holding a BLE command slot on a link
+  // that carries 1,700 bytes a second. The reply says the overlay was set,
+  // which is true the moment the config is written; the preview catches up a
+  // second or two later, which is what the app asked for.
+  if (!sc.isStreaming) {
+    rebuildIdlePreview(camIdx, `Overlay set to ${id || "none"} over BLE`)
+      .catch((e) => console.warn(`⚠️  [Cam${camIdx}] idle preview rebuild: ${e.message}`));
+  }
 
   // Setting the SAME overlay again is a refresh, deliberately: it re-reads the
   // design and redraws. applyEffectiveOverlay() does nothing when the renderer
@@ -1052,6 +1123,28 @@ async function bleOverlaySet(camIdx, args = {}) {
   return { camera: camIdx, current: bleCurrentOverlay(camIdx) };
 }
 
+// Which table each camera is on can change in DigitalPool at any time — a
+// camera gets reassigned on the devices tab, or by duocastCameras set_table —
+// and tableNames refreshes on a SIX HOUR timer, which was fine when its only
+// job was labelling alert emails. The app puts it on screen, so a stale label
+// is wrong in front of somebody. This kicks a refresh when the cached answer
+// is older than a minute, without blocking the status that asked: the caller
+// gets what is cached now, the next one gets the new value.
+const TABLE_NAME_MAX_AGE_MS = 60 * 1000;
+let _tableNamesRefreshedAt = 0;
+let _tableNamesRefreshing = false;
+
+function freshenTableNames() {
+  const now = Date.now();
+  if (_tableNamesRefreshing || now - _tableNamesRefreshedAt < TABLE_NAME_MAX_AGE_MS) return;
+  _tableNamesRefreshing = true;
+  _tableNamesRefreshedAt = now;
+  Promise.resolve()
+    .then(() => tableNames.refresh())
+    .catch((e) => console.warn(`table names refresh: ${e.message}`))
+    .finally(() => { _tableNamesRefreshing = false; });
+}
+
 /** §6.12 `stream.status`. One entry per camera slot. */
 function bleStreamStatus() {
   const cfg = loadRemoteConfig();
@@ -1062,6 +1155,7 @@ function bleStreamStatus() {
   // array at all, which the array-only lookup read as "not registered yet".
   const devices = Array.isArray(cfg.devices) ? cfg.devices : [];
   const scalarDeviceId = !devices.length && cfg.deviceId ? String(cfg.deviceId) : null;
+  freshenTableNames();
   const cameras = [1, 2].map((camIdx) => {
     const sc = getSC(camIdx);
     const live = _bleStream[camIdx];
@@ -1086,12 +1180,16 @@ function bleStreamStatus() {
     const device = devices.find((d) => Number(d.camera) === camIdx) || null;
     return {
       camera: camIdx,
-      // An absent camera has no table. tableNames caches a label per slot for
-      // alert subject lines, and on a one-camera box both slots can hold the
-      // same one — 85E4 has {"1":"Table 1","2":"Table 1"}. Letting an empty
-      // slot inherit it puts two cameras called "Table 1" in the app's list,
-      // which reads as a bug in the app rather than an empty slot in the box.
-      name: present ? ((sc.streamConfig && sc.streamConfig.name) || tableNames.get(camIdx) || null) : null,
+      // Two different things, kept apart because the app shows them together
+      // as "<table> - Camera <n>":
+      //   name  — a custom label for this camera, if the box has one
+      //   table — the table its venue_devices row points at, refreshed above
+      // An absent camera has neither. tableNames caches a label per slot, and
+      // on a one-camera box both slots can hold the same one — 85E4 has
+      // {"1":"Table 1","2":"Table 1"} — so letting an empty slot inherit it
+      // put two cameras called "Table 1" in the app's list.
+      name: present ? ((sc.streamConfig && sc.streamConfig.name) || null) : null,
+      table: present ? (tableNames.get(camIdx) || null) : null,
       present,
       state,
       // A saved protocol IS a destination, whether or not there is a URL to go
@@ -7652,14 +7750,10 @@ io.on("connection", (socket) => {
       // and both have to take what is already on screen away. Stopping the
       // producer deletes the overlay files, and the pipeline notices they are
       // gone on its next poll and clears the composition.
-      const why =
-        overlayConfig.remoteOverlayEnabled === false
-          ? "Remote overlay disabled"
-          : "No overlay selected";
-      console.log(`🛑 [Cam${camIdx}] ${why} — stopping the overlay renderer...`);
-      await camPuppeteer.stop();
-      if (camIdx === 2) puppeteerOverlay2 = null;
-      else puppeteerOverlay = null;
+      await stopOverlayProducer(
+        camIdx,
+        overlayConfig.remoteOverlayEnabled === false ? "Remote overlay disabled" : "No overlay selected"
+      );
     }
 
     // Broadcast state and write JSON (never render local scoreboard HTML)
