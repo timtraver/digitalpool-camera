@@ -414,6 +414,9 @@ if ((process.env.ONBOARDING_MODE || "auto") !== "hotspot") {
     streamStatus:        () => bleStreamStatus(),
     streamStart:         (camIdx) => bleStreamStart(camIdx),
     streamStop:          (camIdx) => bleStreamStop(camIdx),
+    cameraMove:          (camIdx, args) => bleCameraMove(camIdx, args),
+    cameraHome:          (camIdx) => bleCameraHome(camIdx),
+    cameraHomeSave:      (camIdx) => bleCameraHomeSave(camIdx),
     destinations,
     wifiManager,
     log: (...args) => console.log("🔵 BLE:", ...args),
@@ -739,6 +742,151 @@ function bleHlsPreview(camIdx, present) {
   return { hls: `http://${ip}:8888/${mtxPath}/index.m3u8`, lanOnly: true };
 }
 
+// ── §6.14 camera.* — moving a camera from the app ────────────────────────────
+//
+// One step is 3600 hardware units out of a 936000 pan range — 260 steps end to
+// end — so a single step per call would take 78 s to sweep at the app's 300 ms
+// repeat. `speed` buys that back.
+const PTZ_SPEED_STEPS = { 1: 2, 2: 6, 3: 15 };
+
+/**
+ * What this camera can actually be told to do, per axis.
+ *
+ * Per camera and NOT per box, because the two in the field are not the same
+ * camera: 85E4 exposes zoom_absolute and nothing else, while b1b5 has pan,
+ * tilt, zoom and the rate controls. A box-level flag would draw pan buttons on
+ * a camera with no pan motor.
+ *
+ * `confident: false` means absolute controls exist but the USB descriptor could
+ * not confirm a motor is attached. It is reported, not enforced: writing to a
+ * fixed camera's pan_absolute is harmless, and hiding the controls on a real
+ * PTZ camera is the worse of the two mistakes.
+ */
+function blePtzCapability(camIdx) {
+  const cam = getCam(camIdx);
+  // ONLY what was read from the camera that is plugged in. `cam.controls` is a
+  // hardcoded OBSBOT table used as a fallback elsewhere and describes nothing
+  // about this device — falling back to it reported pan, tilt, zoom and focus
+  // all true for an empty camera 2 slot on 85E4.
+  const hw = cam.discoveredControls;
+  const detected = _detection[camIdx] && _detection[camIdx].ptz;
+  const confident = detected ? !!detected.confident : true;
+  if (!hw || getActiveSource(camIdx).type !== "usb") {
+    return { pan: false, tilt: false, zoom: false, focus: false, confident };
+  }
+
+  // An operator who switched PTZ off means pan and tilt are off, whatever the
+  // hardware lists. It does NOT mean zoom is off — see below.
+  const ptzOff = getCapabilityMode(camIdx, "ptz") === "off";
+  return {
+    pan: !ptzOff && !!hw.pan_absolute,
+    tilt: !ptzOff && !!hw.tilt_absolute,
+    // Zoom is deliberately NOT gated on the PTZ detection. That detection
+    // answers "is there a motor to pan and tilt with", and on 85E4 it says no
+    // — correctly, it is a fixed lens. But that camera exposes zoom_absolute
+    // 0-50, the web UI zooms it, and gating zoom on the PTZ answer reported
+    // zoom: false for a control that works.
+    zoom: !!hw.zoom_absolute,
+    focus: !!hw.focus_absolute && resolveCapability(camIdx, "focus").supported,
+    confident,
+  };
+}
+
+/**
+ * Where a camera is now, in the shape §6.14 returns after every move.
+ *
+ * An axis the camera does not have reports null rather than a number.
+ * `currentPan` is this controller's own counter and holds a stale value on a
+ * camera with no pan motor — 85E4 answered `pan: -46800` for a fixed lens,
+ * which is a number the app could draw a slider from and nothing could move.
+ */
+function blePtzPosition(camIdx) {
+  const cam = getCam(camIdx);
+  const caps = blePtzCapability(camIdx);
+  return {
+    camera: camIdx,
+    pan: caps.pan ? (cam.currentPan ?? null) : null,
+    tilt: caps.tilt ? (cam.currentTilt ?? null) : null,
+    zoom: caps.zoom ? (cam.config ? (cam.config.zoom_absolute ?? null) : null) : null,
+  };
+}
+
+function blePtzError(code, message) {
+  const err = new Error(message);
+  err.bleCode = code;
+  return err;
+}
+
+/**
+ * §6.14 `camera.move`. One discrete move per call — the app repeats while a
+ * button is held, and stopping is what happens when the repeats stop.
+ *
+ * There is deliberately no dead-man timeout, because the runaway it would
+ * guard against cannot happen here: every move is an absolute write that has
+ * already finished when this returns. A dropped link means no further command,
+ * and the camera stays where it is. The rate controls (pan_speed,
+ * zoom_continuous) are the shape that CAN run away, and are not used.
+ */
+async function bleCameraMove(camIdx, args = {}) {
+  const dir = (v) => (v === 1 || v === -1 ? v : Number(v) === 1 ? 1 : Number(v) === -1 ? -1 : 0);
+  const pan = dir(args.pan), tilt = dir(args.tilt), zoom = dir(args.zoom);
+  const speedRaw = Number(args.speed);
+  const speed = PTZ_SPEED_STEPS[speedRaw] ? speedRaw : 2;
+  const steps = PTZ_SPEED_STEPS[speed];
+
+  if (!pan && !tilt && !zoom) return blePtzPosition(camIdx);   // a no-op, not an error
+
+  const caps = blePtzCapability(camIdx);
+  for (const [axis, want] of [["pan", pan], ["tilt", tilt], ["zoom", zoom]]) {
+    if (want && !caps[axis]) {
+      throw blePtzError("NO_PTZ", `This camera cannot ${axis}.`);
+    }
+  }
+
+  const cam = getCam(camIdx);
+  if (pan) {
+    // Some cameras have the pan motor wired opposite to the button convention.
+    // The web UI corrects for it, so this must too or the same box would pan
+    // one way from the browser and the other from the phone.
+    const inverted = getSC(camIdx).streamConfig?.panInverted || false;
+    await cam.pan((inverted ? -pan : pan) * steps);
+  }
+  if (tilt) await cam.tilt(tilt * steps);
+  if (zoom) {
+    const hw = (cam.discoveredControls || cam.controls || {}).zoom_absolute || { min: 0, max: 100, step: 1 };
+    const current = Number(cam.config?.zoom_absolute ?? hw.min ?? 0);
+    const next = Math.max(hw.min, Math.min(hw.max, current + zoom * steps * (hw.step || 1)));
+    if (next !== current) await cam.zoom(next);
+  }
+  // Same as every other PTZ entry point: a camera that was moved should come
+  // back on its own if nobody moves it again.
+  armAutoHome(camIdx, "ble camera.move");
+  return blePtzPosition(camIdx);
+}
+
+/** §6.14 `camera.home` — the saved startup position, which already exists. */
+async function bleCameraHome(camIdx) {
+  const cam = getCam(camIdx);
+  if (!cam.loadStartupPosition()) {
+    throw blePtzError("NO_HOME", "No home position has been saved for this camera yet.");
+  }
+  cancelAutoHome(camIdx);        // already going home; nothing for it to return
+  await cam.applyStartupPosition();
+  return blePtzPosition(camIdx);
+}
+
+/** §6.14 `camera.home.save` — home becomes wherever the camera is now. */
+function bleCameraHomeSave(camIdx) {
+  const caps = blePtzCapability(camIdx);
+  if (!caps.pan && !caps.tilt && !caps.zoom) {
+    throw blePtzError("NO_PTZ", "This camera has no position to save.");
+  }
+  cancelAutoHome(camIdx);        // home is here now, so there is nothing to return to
+  const result = getCam(camIdx).saveStartupPosition();
+  if (!result.success) throw blePtzError("INTERNAL", result.error || "Could not save the home position");
+  return blePtzPosition(camIdx);
+}
+
 /** §6.12 `stream.status`. One entry per camera slot. */
 function bleStreamStatus() {
   const cfg = loadRemoteConfig();
@@ -792,6 +940,7 @@ function bleStreamStatus() {
       deviceId: device ? String(device.id || device.device_id || "") || null
                        : (camIdx === 1 ? scalarDeviceId : null),
       lastError: live.lastError,
+      ptz: blePtzCapability(camIdx),
       preview: bleHlsPreview(camIdx, present),
     };
   });

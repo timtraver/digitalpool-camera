@@ -125,6 +125,10 @@ class BleBridge {
     // §6.13. Absent on a box whose server.js does not supply it, which
     // info.commands already told the app.
     this.destinations = deps.destinations || null;
+    // §6.14
+    this.cameraMove = deps.cameraMove || null;
+    this.cameraHome = deps.cameraHome || null;
+    this.cameraHomeSave = deps.cameraHomeSave || null;
     this.log = deps.log || ((...a) => console.log("[ble]", ...a));
 
     this.server = null;
@@ -179,6 +183,14 @@ class BleBridge {
       "dest.clear":          { scopes: GRANTED, handler: (a) => this.cmdDestClear(a) },
       "dest.youtube.begin":  { scopes: GRANTED, handler: () => this.cmdDestBegin("youtube") },
       "dest.facebook.begin": { scopes: GRANTED, handler: () => this.cmdDestBegin("facebook") },
+
+      // §6.14. Everything that moves a camera is GRANTED. The capability block
+      // the app draws its controls from rides on stream.status and stays
+      // public: knowing a camera CAN pan reveals nothing, and the app needs it
+      // before anyone has a grant.
+      "camera.move":      { scopes: GRANTED, handler: (a) => this.cmdCameraMove(a) },
+      "camera.home":      { scopes: GRANTED, handler: (a) => this.cmdCameraHome(a) },
+      "camera.home.save": { scopes: GRANTED, handler: (a) => this.cmdCameraHomeSave(a) },
     };
 
     /**
@@ -905,6 +917,23 @@ class BleBridge {
       throw new BleError(err.bleCode || "STREAM_FAILED", err.message || "The stream did not stop");
     }
   }
+
+  // ── §6.14 camera.* ───────────────────────────────────────────────────────
+
+  async _camera(fn, name, args) {
+    if (!fn) throw new BleError("UNKNOWN_COMMAND", `This camera's firmware cannot ${name}`);
+    const camera = this._cameraArg(args);
+    try {
+      return await fn(camera, args || {});
+    } catch (err) {
+      // NO_PTZ and NO_HOME carry wording the app shows as-is.
+      throw new BleError(err.bleCode || "INTERNAL", err.message || "That did not work");
+    }
+  }
+
+  cmdCameraMove(args)     { return this._camera(this.cameraMove, "move a camera", args); }
+  cmdCameraHome(args)     { return this._camera(this.cameraHome, "recall a home position", args); }
+  cmdCameraHomeSave(args) { return this._camera(this.cameraHomeSave, "save a home position", args); }
 
   // ── §6.13 dest.* ─────────────────────────────────────────────────────────
 

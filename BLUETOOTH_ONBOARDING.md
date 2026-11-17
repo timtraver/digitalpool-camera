@@ -1187,10 +1187,10 @@ whoever reads this next should not have to rediscover it: that design keeps noth
 stealing on the hardware, at the cost of needing internet to start a broadcast, which a box
 pushing to YouTube needs regardless.
 
-### 6.14 `camera.*` — moving a camera from the app (PROPOSED)
+### 6.14 `camera.*` — moving a camera from the app
 
-Design only, 2026-11-17, for aiming a camera while watching the §6.12 preview. Both
-numbers below were measured on the boxes, not estimated.
+**Built** 2026-11-17, for aiming a camera while watching the §6.12 preview. Both numbers
+below were measured on the boxes, not estimated. Home only — no numbered preset slots.
 
 #### The two cameras in the field are not the same camera
 
@@ -1211,8 +1211,21 @@ half the hardware we own, which is why capability is per camera and not per box.
 ```
 
 Booleans, not ranges — the app sends a direction, not a position, so a range would be
-bytes it never uses on a 17-byte-chunk link. Taken from `discoveredControls`, which is read
-from the hardware at activation.
+bytes it never uses on a 17-byte-chunk link.
+
+Read from `discoveredControls` and **only** from there. The controller keeps a hardcoded
+OBSBOT control table as a fallback for other purposes; using it here reported pan, tilt,
+zoom and focus all `true` for an **empty** camera 2 slot.
+
+**Zoom is not gated on the PTZ detection.** That detection answers "is there a motor to pan
+and tilt with", and on 85E4 it correctly says no — a fixed lens. But that camera exposes
+`zoom_absolute` 0–50, the web UI zooms it happily, and gating zoom on the PTZ answer
+reported `zoom: false` for a control that works. An operator's explicit "PTZ off" override
+suppresses pan and tilt, not zoom.
+
+A position reports `null` for an axis the camera does not have. `currentPan` is the
+controller's own counter and holds a stale value on a camera with no pan motor — 85E4
+answered `pan: -46800` for a fixed lens, a number the app could have drawn a slider from.
 
 **The not-confident case: show the controls anyway.** `confident: false` means the camera
 exposes absolute pan/tilt/zoom but the USB descriptor could not confirm a motor is attached
