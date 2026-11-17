@@ -716,13 +716,27 @@ function bleDestinationKind(sc, camIdx) {
   return saved || "digitalpool";
 }
 
-/** The HLS preview URL, or null when the box has no LAN address to offer. */
-function bleHlsPreview(camIdx) {
+/**
+ * The HLS preview URL, or null when there is nothing to watch.
+ *
+ * The path is the controller's own `previewPath` (/preview, /preview2) and NOT
+ * the outgoing stream's (/live, /live2). That distinction is the whole thing:
+ * `live` only exists while a stream is running, and the preview is wanted most
+ * when one is NOT — aiming a camera at a table before a match. `previewPath`
+ * carries video in both states, because the idle preview publishes to it
+ * (streamController.js:2116) and the streaming pipeline tees to it as well
+ * (:2935). One URL, always live, no new command and no on-demand plumbing.
+ *
+ * Confirmed on b1b5 with both cameras idle: MediaMTX had `preview` ready and
+ * no `live` path at all, which is exactly what the app saw as a 404.
+ */
+function bleHlsPreview(camIdx, present) {
+  if (!present) return null;          // nothing publishes for an empty slot
   const sc = getSC(camIdx);
   const ip = sc && typeof sc._getLocalIP === "function" ? sc._getLocalIP() : null;
   if (!ip || ip === "127.0.0.1") return null;
-  const path = camIdx === 2 ? "live2" : "live";
-  return { hls: `http://${ip}:8888/${path}/index.m3u8`, lanOnly: true };
+  const mtxPath = String(sc.previewPath || (camIdx === 2 ? "/preview2" : "/preview")).replace(/^\//, "");
+  return { hls: `http://${ip}:8888/${mtxPath}/index.m3u8`, lanOnly: true };
 }
 
 /** §6.12 `stream.status`. One entry per camera slot. */
@@ -778,7 +792,7 @@ function bleStreamStatus() {
       deviceId: device ? String(device.id || device.device_id || "") || null
                        : (camIdx === 1 ? scalarDeviceId : null),
       lastError: live.lastError,
-      preview: bleHlsPreview(camIdx),
+      preview: bleHlsPreview(camIdx, present),
     };
   });
   return { cameras };

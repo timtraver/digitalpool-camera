@@ -1074,8 +1074,18 @@ constraint today.
 `stream.status` should carry the URL so the app never builds it:
 
 ```json
-"preview": { "hls": "http://192.168.1.10:8888/live/index.m3u8", "lanOnly": true }
+"preview": { "hls": "http://192.168.1.10:8888/preview/index.m3u8", "lanOnly": true }
 ```
+
+The path is the camera's **`previewPath`** (`/preview`, `/preview2`), not the outgoing
+stream's (`/live`, `/live2`), and the difference is the whole point. `live` exists only
+while a stream is running, and the preview is wanted most when one is **not** — aiming a
+camera at a table before a match. `previewPath` carries video in both states: the idle
+preview publishes to it, and the streaming pipeline tees to it as well. One URL, always
+live, no on-demand command needed.
+
+`preview` is `null` for a camera that is not present, because nothing publishes for an
+empty slot.
 
 Omitted entirely when the box has no LAN address. It is **not** behind the handoff token —
 that token authenticates a *login*, and a preview stream is not a login. If the preview
