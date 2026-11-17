@@ -3023,6 +3023,7 @@ class StreamController extends EventEmitter {
     this._stopBitrateMonitoring();
     const http = require("http");
     let prevBytes = null;
+    let prevInBytes = null;
     let prevTime  = null;
 
     const poll = () => {
@@ -3041,12 +3042,24 @@ class StreamController extends EventEmitter {
               const bytes = typeof data.bytesSent === "number" ? data.bytesSent : null;
               if (bytes === null) return;
               const now = Date.now();
+              // bytesReceived is what this camera is PUBLISHING — the encode
+              // rate — and does not move with the number of viewers. "bitrate"
+              // (egress) is right for the web UI's Total Out graph and reads as
+              // 0 on a healthy stream nobody is watching, which is the correct
+              // answer to a question the phone is not asking. Both are emitted
+              // so each caller can use the one it means.
+              const inBytes = typeof data.bytesReceived === "number" ? data.bytesReceived : null;
               if (prevBytes !== null && bytes >= prevBytes) {
                 const elapsed = (now - prevTime) / 1000;
                 const mbps = (bytes - prevBytes) * 8 / elapsed / 1_000_000;
                 this.emit("bitrate", parseFloat(mbps.toFixed(2)));
+                if (inBytes !== null && prevInBytes !== null && inBytes >= prevInBytes) {
+                  const inMbps = (inBytes - prevInBytes) * 8 / elapsed / 1_000_000;
+                  this.emit("bitrateIn", parseFloat(inMbps.toFixed(2)));
+                }
               }
               prevBytes = bytes;
+              prevInBytes = inBytes;
               prevTime  = now;
             } catch (_) {
               // JSON parse error — skip tick
@@ -3068,6 +3081,7 @@ class StreamController extends EventEmitter {
       this._bitrateInterval = null;
     }
     this.emit("bitrate", null);
+    this.emit("bitrateIn", null);
   }
 
   /** This stream's MediaMTX path name, without the leading slash ("live", "live2"). */

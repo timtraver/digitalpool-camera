@@ -988,10 +988,12 @@ same bar as `wifi.*`: starting a broadcast from the car park is not a read.
 | `present` | `cameraPresent` logic in server.js — a `/dev/video*` that exists for USB, a configured URL for RTSP/RTMP/NDI |
 | `state` | `idle` \| `starting` \| `streaming` \| `error`. Derived from `isStreaming` plus the `preparing`/`started`/`stopped` transitions already emitted to Socket.IO. **Not** `recording` — a box records *while* streaming (a reader pulling RTSP is what arms it), so that is the separate boolean below rather than a state that would hide the stream |
 | `destination.kind` | `digitalpool` \| `youtube` \| `facebook` \| `rtmp` \| `srt` \| `rtsp`. `youtube`/`facebook` are UI aliases that normalise to `rtmp` in streamController, so the kind has to be read from the saved config, not the running protocol |
-| `destination.url` | **Masked** by `redactStreamKey()`. The last path segment is the credential |
+| `destination` | `null` only when NOTHING is configured. A saved protocol is a destination even with no URL — rtsp/srt pulled by Wowza have none, and neither does rtmp aimed at the local MediaMTX. Requiring a URL reported `null` for a correctly configured camera and the app greyed out Start |
+| `destination.url` | **Masked** by `redactStreamKey()`; `null` when the protocol needs none. The last path segment is the credential |
 | `recording` | `recordingManager.isRecording()` |
 | `deviceId` | `remote.json` `devices[]`, matched on camera index |
-| `bitrateMbps`, `fps` | **New work.** Both are emitted as events and never stored; the box must keep the last value per camera |
+| `bitrateMbps` | The rate this camera is **publishing** (MediaMTX `bytesReceived`), not what it is sending to readers. The web UI's bitrate is egress, for its Total Out graph, and reads 0 on a healthy stream nobody is watching — right there, wrong next to "streaming" on a phone |
+| `fps` | the encoder's rate |
 | `liveSince`, `lastError` | **New work.** Neither is retained today |
 
 `lastError` is the operator-facing text, not an exit code — the same string the UI gets.

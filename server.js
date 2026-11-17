@@ -687,7 +687,11 @@ function trackStreamForBle(sc, camIdx) {
     live.lastError = typeof error === "string" ? error : (error && error.message) || "Stream failed";
     pushBleStreamState(camIdx, { force: true });
   });
-  sc.on("bitrate", (mbps) => {
+  // The PUBLISH rate, not the egress rate. "bitrate" is bytes MediaMTX sent to
+  // readers, which is 0 on a perfectly healthy stream nobody is watching —
+  // right for the web UI's Total Out graph, wrong next to "streaming" on a
+  // phone. b1b5 camera 2 was publishing 5.2 Mbps and reporting 0.
+  sc.on("bitrateIn", (mbps) => {
     live.bitrateMbps = mbps;
     pushBleStreamState(camIdx);
   });
@@ -917,6 +921,7 @@ function bleStreamStatus() {
     if (sc.isStreaming && state !== "starting") state = "streaming";
     else if (!sc.isStreaming && state === "streaming") state = "idle";
     const dest = (sc.streamConfig && sc.streamConfig.destination) || "";
+    const savedProtocol = String((sc.streamConfig && sc.streamConfig.protocol) || "").trim();
     const device = devices.find((d) => Number(d.camera) === camIdx) || null;
     return {
       camera: camIdx,
@@ -928,10 +933,15 @@ function bleStreamStatus() {
       name: present ? ((sc.streamConfig && sc.streamConfig.name) || tableNames.get(camIdx) || null) : null,
       present,
       state,
-      // A camera with nothing configured and nothing running has no destination
-      // to describe; one that is live always does, even pushing to a default.
-      destination: (dest || state !== "idle")
-        ? { kind: bleDestinationKind(sc, camIdx), url: StreamController.redactStreamKey(dest) }
+      // A saved protocol IS a destination, whether or not there is a URL to go
+      // with it. The normal DigitalPool setup — rtsp or srt, pulled by Wowza —
+      // has no URL at all, and so did rtmp with no target, which publishes to
+      // the local MediaMTX. Requiring a URL reported `destination: null` for a
+      // perfectly configured camera, and the app read that as "nowhere to
+      // stream" and greyed out Start. null now means only that nothing at all
+      // is configured, which with protocol defaulting to "rtsp" is rare.
+      destination: savedProtocol
+        ? { kind: bleDestinationKind(sc, camIdx), url: dest ? StreamController.redactStreamKey(dest) : null }
         : null,
       liveSince: live.liveSince,
       bitrateMbps: live.bitrateMbps,
@@ -955,8 +965,22 @@ async function bleStreamStart(camIdx) {
   }
   const source = getActiveSource(camIdx);
   if (source.type === "none") {
-    const err = new Error("No camera is assigned to this slot");
+    const err = new Error(
+      `No camera is assigned to camera ${camIdx} on this box. `
+      + "Open the camera's web page, go to Camera Settings and choose a camera for this slot."
+    );
     err.bleCode = "NO_CAMERA";
+    throw err;
+  }
+  // Rare — protocol defaults to "rtsp" — but a config with none would fail
+  // deep in the pipeline builder with "Unsupported protocol: ", which is not
+  // a sentence anybody can act on.
+  if (!String((sc.streamConfig && sc.streamConfig.protocol) || "").trim()) {
+    const err = new Error(
+      "This camera has no output mode set. Open the camera's web page, go to "
+      + "Stream Settings → Output and choose one."
+    );
+    err.bleCode = "NOT_CONFIGURED";
     throw err;
   }
   // The gate is registration-only now (fb90305), but go through it rather than
