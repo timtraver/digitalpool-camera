@@ -2278,6 +2278,15 @@ function netbirdApiRequest(method, apiPath, body = null) {
  * cannot be found or the API token is not configured — the local wipe can still
  * proceed in that case.
  */
+/**
+ * Delete this box's peer from the NetBird server.
+ *
+ * NO LONGER CALLED BY wipeDeviceLocally() as of 2026-11-17 — a deregistered
+ * box now keeps its peer and its address on purpose. Kept because a genuine
+ * factory reset, where the hardware is leaving DigitalPool entirely, is a
+ * different question from "this box changed hands between venues", and that is
+ * the call that would want it.
+ */
 async function netbirdDeleteCurrentPeer() {
   let localIp;
   try {
@@ -2881,29 +2890,22 @@ async function wipeDeviceLocally({ reason = "deregistered" } = {}) {
     log.push("✅ Stream(s) stopped");
   }
 
-  // NetBird, server side first (best-effort — needs NETBIRD_API_TOKEN).
-  try {
-    const deleted = await netbirdDeleteCurrentPeer();
-    log.push(deleted
-      ? `✅ Peer deleted from NetBird server (id: ${deleted})`
-      : "⚠️ Peer not found on server — may already be gone");
-  } catch (e) {
-    log.push(`⚠️ Server-side delete skipped: ${e.message}`);
-    console.warn("netbirdDeleteCurrentPeer:", e.message);
-  }
-
-  log.push("🔄 Stopping netbird daemon…");
-  await execAsync("sudo /usr/bin/systemctl stop netbird").catch(() => {});
-  await new Promise(r => setTimeout(r, 1000));
-
-  log.push("🔄 Clearing local node state…");
-  await execAsync("sudo rm -rf /var/lib/netbird/").catch(e => {
-    throw new Error(`rm -rf /var/lib/netbird/ failed: ${e.stderr || e.message}`);
-  });
-
-  log.push("🔄 Starting fresh daemon…");
-  await execAsync("sudo /usr/bin/systemctl start netbird").catch(() => {});
-  await new Promise(r => setTimeout(r, 1500));
+  // NetBird is deliberately LEFT ALONE (Tim, 2026-11-17).
+  //
+  // This used to delete the peer from the NetBird server, stop the daemon,
+  // `rm -rf /var/lib/netbird/` and restart it — so a deregistered box lost its
+  // peer identity and its address, came back as a new peer if it ever
+  // re-enrolled, and was unreachable in between. That is the opposite of what
+  // is wanted: NetBird is OUR management network, not the venue's, and a box
+  // being moved between accounts is exactly the one somebody needs to reach.
+  // The backend now keeps each box's last NetBird address permanently, keyed
+  // by MAC, which only works if the box is still answering at it.
+  //
+  // So removal wipes the DIGITALPOOL registration — remote.json, the
+  // subscription, the linked broadcast accounts — and nothing else. The peer,
+  // its key under /var/lib/netbird, the setup key in .env and the running
+  // daemon all survive, and re-registering to a different account reuses them.
+  log.push("🔗 NetBird left enrolled — the box stays reachable at the same address");
 
   // Clear registered state + venue association.  Name/email/MAC are kept, for
   // pre-fill and because the MAC is this box's identity either way.
