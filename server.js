@@ -414,6 +414,7 @@ if ((process.env.ONBOARDING_MODE || "auto") !== "hotspot") {
     streamStatus:        () => bleStreamStatus(),
     streamStart:         (camIdx) => bleStreamStart(camIdx),
     streamStop:          (camIdx) => bleStreamStop(camIdx),
+    streamDestinationSet: (camIdx, args) => bleStreamDestinationSet(camIdx, args),
     cameraMove:          (camIdx, args) => bleCameraMove(camIdx, args),
     cameraHome:          (camIdx) => bleCameraHome(camIdx),
     cameraHomeSave:      (camIdx) => bleCameraHomeSave(camIdx),
@@ -635,9 +636,16 @@ streamController2.on("drift", (ppm) => {
 // them separate means the web UI's behaviour cannot be changed by accident
 // while editing the app's.
 const _bleStream = {
-  1: { state: "idle", liveSince: null, bitrateMbps: null, fps: null, lastError: null },
-  2: { state: "idle", liveSince: null, bitrateMbps: null, fps: null, lastError: null },
+  1: { state: "idle", liveSince: null, bitrateMbps: null, fps: null, lastError: null, lastErrorAt: 0 },
+  2: { state: "idle", liveSince: null, bitrateMbps: null, fps: null, lastError: null, lastErrorAt: 0 },
 };
+
+// True while a BLE stream.start is in flight for that camera. Starting is noisy
+// — the idle preview is killed, a previous pipeline is torn down — and the
+// transient `stopped` and `error` events that produces are not the outcome.
+// While this is set, the tracker records what happened but does not announce
+// "error"; bleStreamStart() pushes the real state once it knows it.
+const _bleStreamStarting = { 1: false, 2: false };
 
 // A bitrate tick is once a second and a notification costs 10 ms of airtime at
 // the current framing (§6.12), so pushing every one would spend a noticeable
@@ -667,6 +675,7 @@ function trackStreamForBle(sc, camIdx) {
   sc.on("preparing", () => {
     live.state = "starting";
     live.lastError = null;
+    live.lastErrorAt = 0;
     pushBleStreamState(camIdx, { force: true });
   });
   sc.on("started", () => {
@@ -676,6 +685,10 @@ function trackStreamForBle(sc, camIdx) {
     pushBleStreamState(camIdx, { force: true });
   });
   sc.on("stopped", () => {
+    // Tearing down the idle preview and any previous pipeline is part of
+    // STARTING. Announcing "idle" here would contradict the start that is
+    // still running, and it is what made a successful start report a failure.
+    if (_bleStreamStarting[camIdx]) return;
     // A stop somebody ASKED for is clean, and clears whatever went wrong
     // before it — the operator has acted, and a stale error under an idle
     // camera is just confusing. An exit nobody asked for keeps its reason:
@@ -692,8 +705,13 @@ function trackStreamForBle(sc, camIdx) {
     pushBleStreamState(camIdx, { force: true });
   });
   sc.on("error", (error) => {
-    live.state = "error";
     live.lastError = typeof error === "string" ? error : (error && error.message) || "Stream failed";
+    live.lastErrorAt = Date.now();
+    // Mid-start this is noise, not an outcome — a first attempt that exits and
+    // retries would otherwise push an error to the phone for a stream that
+    // goes on to work. The start decides and announces.
+    if (_bleStreamStarting[camIdx]) return;
+    live.state = "error";
     pushBleStreamState(camIdx, { force: true });
   });
   // The PUBLISH rate, not the egress rate. "bitrate" is bytes MediaMTX sent to
@@ -1268,7 +1286,14 @@ function bleStreamStatus() {
       // stream" and greyed out Start. null now means only that nothing at all
       // is configured, which with protocol defaulting to "rtsp" is rare.
       destination: savedProtocol
-        ? { kind: bleDestinationKind(sc, camIdx), url: dest ? StreamController.redactStreamKey(dest) : null }
+        ? {
+            kind: bleDestinationKind(sc, camIdx),
+            url: dest ? StreamController.redactStreamKey(dest) : null,
+            // What the phone called it when it set the key, e.g.
+            // "YouTube · My Channel", so the camera row can say where it goes
+            // without the app having to recognise an RTMP hostname.
+            label: (sc.streamConfig && sc.streamConfig.destinationLabel) || null,
+          }
         : null,
       liveSince: live.liveSince,
       bitrateMbps: live.bitrateMbps,
@@ -1321,47 +1346,168 @@ async function bleStreamStart(camIdx) {
     throw err;
   }
 
-  _bleStream[camIdx].lastError = null;
-  const settled = waitForStreamOutcome(camIdx);
-  await sc.startStream(sc.streamConfig, { skipEntitlementCheck: true });
-  const outcome = await settled;
+  const live = _bleStream[camIdx];
+  live.lastError = null;
+  live.lastErrorAt = 0;
+  _bleStreamStarting[camIdx] = true;
+  let outcome;
+  try {
+    await sc.startStream(sc.streamConfig, { skipEntitlementCheck: true });
+    outcome = await waitForStreamOutcome(camIdx);
+  } finally {
+    _bleStreamStarting[camIdx] = false;
+  }
+
+  // Whatever happened, the phone hears it once, from here.
+  live.state = outcome.state;
+  if (outcome.state === "streaming") {
+    live.lastError = null;
+    if (!live.liveSince) live.liveSince = new Date().toISOString();
+  }
+  pushBleStreamState(camIdx, { force: true });
+
   if (outcome.state !== "streaming") {
     const err = new Error(outcome.lastError || "The stream did not start");
     err.bleCode = "STREAM_FAILED";
     throw err;
   }
-  return { camera: camIdx, state: "streaming", liveSince: _bleStream[camIdx].liveSince };
+  return { camera: camIdx, state: "streaming", liveSince: live.liveSince };
 }
 
 /**
  * Wait for the pipeline to say what happened, up to §6.12's 15 s.
  *
- * Starting is asynchronous and fails LATE — a box here answered a bad RTMP
- * destination 1.4 s after spawn, long after any ack would have gone out
- * claiming success. §6.3 allows a request to stay outstanding, so waiting is
- * free and the alternative is lying.
+ * **Polls `isStreaming` rather than racing the events**, which is the point.
+ * Starting is noisy: startStream() kills the idle preview and tears down any
+ * previous pipeline, so `stopped` fires while isStreaming is still false, and a
+ * first attempt can exit and retry. Resolving on the FIRST of
+ * started/error/stopped therefore answered "idle" — and so STREAM_FAILED — for
+ * a camera that went on to stream perfectly. That is exactly what the app saw:
+ * an error straight away, with the stream running.
+ *
+ * A start that ends up streaming can no longer report an error. One that really
+ * fails still answers early, once an error has stood unrecovered for
+ * STREAM_ERROR_GRACE_MS, rather than making somebody wait out the full timeout
+ * for news that is already in.
  */
+const STREAM_ERROR_GRACE_MS = 3000;
+
 function waitForStreamOutcome(camIdx, timeoutMs = 15000) {
   const sc = getSC(camIdx);
+  const live = _bleStream[camIdx];
+  const deadline = Date.now() + timeoutMs;
   return new Promise((resolve) => {
-    let done = false;
-    const finish = (state) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      sc.removeListener("started", onStarted);
-      sc.removeListener("error", onError);
-      sc.removeListener("stopped", onStopped);
-      resolve({ state, lastError: _bleStream[camIdx].lastError });
+    const tick = () => {
+      // The controller is the authority. If it says it is streaming, it is,
+      // whatever was emitted on the way here.
+      if (sc.isStreaming) return resolve({ state: "streaming", lastError: null });
+      const erroredFor = live.lastErrorAt ? Date.now() - live.lastErrorAt : 0;
+      if (live.lastError && erroredFor >= STREAM_ERROR_GRACE_MS) {
+        return resolve({ state: "error", lastError: live.lastError });
+      }
+      if (Date.now() >= deadline) {
+        return resolve({ state: live.lastError ? "error" : "idle", lastError: live.lastError || null });
+      }
+      setTimeout(tick, 250);
     };
-    const onStarted = () => finish("streaming");
-    const onError   = () => finish("error");
-    const onStopped = () => finish(sc.isStreaming ? "streaming" : "idle");
-    const timer = setTimeout(() => finish(sc.isStreaming ? "streaming" : "error"), timeoutMs);
-    sc.once("started", onStarted);
-    sc.once("error", onError);
-    sc.once("stopped", onStopped);
+    tick();
   });
+}
+
+/**
+ * §6.16 `stream.destination.set` — where a camera sends its video.
+ *
+ * Two kinds:
+ *   digitalpool — back to the datacenter pull (rtsp). No URL, no key.
+ *   rtmp        — a push the phone supplies: a YouTube reusable stream key, a
+ *                 Facebook Page's persistent key, or any RTMP target.
+ *
+ * The protocol is baked into the pipeline when it is built, so a live camera
+ * has to be restarted for a change to take effect. That is the operator's call
+ * and not ours: a live camera refuses with STREAM_LIVE unless `restart: true`
+ * is sent, so the app can ask first and the box never cuts a broadcast itself.
+ */
+async function bleStreamDestinationSet(camIdx, args = {}) {
+  const kind = String(args.kind || "").toLowerCase();
+  if (kind !== "digitalpool" && kind !== "rtmp") {
+    const err = new Error('kind must be "digitalpool" or "rtmp"');
+    err.bleCode = "BAD_REQUEST";
+    throw err;
+  }
+
+  let protocol = "rtsp";
+  let destination = "";
+  let label = null;
+
+  if (kind === "rtmp") {
+    const server = String(args.server || "").trim().replace(/\/+$/, "");
+    const key = String(args.key || "").trim();
+    if (!/^rtmps?:\/\/[^/\s]+/i.test(server)) {
+      const err = new Error("Give an RTMP server address, like rtmp://a.rtmp.youtube.com/live2");
+      err.bleCode = "BAD_REQUEST";
+      throw err;
+    }
+    if (!key) {
+      const err = new Error("Give the stream key for that destination.");
+      err.bleCode = "BAD_REQUEST";
+      throw err;
+    }
+    protocol = "rtmp";
+    destination = `${server}/${key}`;
+    label = args.label ? String(args.label).slice(0, 120) : null;
+  }
+
+  const sc = getSC(camIdx);
+  const changed = (sc.streamConfig.protocol || "") !== protocol
+               || (sc.streamConfig.destination || "") !== destination;
+
+  const wasStreaming = sc.isStreaming;
+  if (wasStreaming && changed && args.restart !== true) {
+    const err = new Error(
+      "This camera is live. Changing where it streams restarts it, which "
+      + "interrupts the broadcast. Send restart: true to go ahead."
+    );
+    err.bleCode = "STREAM_LIVE";
+    throw err;
+  }
+
+  if (wasStreaming && changed) {
+    await bleStreamStop(camIdx);
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+
+  sc.updateConfig({ protocol, destination, destinationLabel: label });
+
+  // One destination per camera. A key the phone set replaces whatever
+  // dest.assign pointed this camera at — otherwise the box holds two answers
+  // to "where does this go" and picks one at broadcast time.
+  try {
+    const assigned = destinations.status().cameras[camIdx];
+    if (assigned) {
+      destinations.assign(camIdx, null);
+      console.log(`📺 [Cam${camIdx}] Cleared ${assigned} assignment — the phone set a destination directly`);
+    }
+  } catch (e) {
+    console.warn(`⚠️  [Cam${camIdx}] could not clear dest.assign: ${e.message}`);
+  }
+
+  let restarted = false;
+  if (wasStreaming && changed) {
+    await bleStreamStart(camIdx);
+    restarted = true;
+  }
+
+  console.log(`📡 [Cam${camIdx}] Destination set over BLE: ${kind}${label ? ` (${label})` : ""}`);
+  io.emit("streamStatus", { ...sc.getStatus(), cameraIndex: camIdx });
+  return {
+    camera: camIdx,
+    destination: {
+      kind: bleDestinationKind(sc, camIdx),
+      url: destination ? StreamController.redactStreamKey(destination) : null,
+      label,
+    },
+    restarted,
+  };
 }
 
 /** §6.12 `stream.stop`. Idempotent — stopping an idle camera is not an error. */

@@ -138,6 +138,8 @@ class BleBridge {
     // §6.15
     this.overlayList = deps.overlayList || null;
     this.overlaySet = deps.overlaySet || null;
+    // §6.16
+    this.streamDestinationSet = deps.streamDestinationSet || null;
     this.log = deps.log || ((...a) => console.log("[ble]", ...a));
 
     this.server = null;
@@ -206,6 +208,9 @@ class BleBridge {
       // stream.status.
       "overlay.list": { scopes: GRANTED, handler: (a) => this.cmdOverlayList(a) },
       "overlay.set":  { scopes: GRANTED, handler: (a) => this.cmdOverlaySet(a) },
+
+      // §6.16. Changing where a camera streams is as privileged as starting it.
+      "stream.destination.set": { scopes: GRANTED, handler: (a) => this.cmdStreamDestinationSet(a) },
     };
 
     /**
@@ -961,6 +966,9 @@ class BleBridge {
 
   cmdOverlayList(args) { return this._camera(this.overlayList, "list overlays", args); }
   cmdOverlaySet(args)  { return this._camera(this.overlaySet, "set an overlay", args); }
+  cmdStreamDestinationSet(args) {
+    return this._camera(this.streamDestinationSet, "change where a camera streams", args);
+  }
 
   // ── §6.13 dest.* ─────────────────────────────────────────────────────────
 

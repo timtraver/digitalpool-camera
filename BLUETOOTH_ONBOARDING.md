@@ -1397,6 +1397,35 @@ has the list and can fill it in.
 own overlays, which is more than a stranger in range should learn, and this is the same
 reasoning as `dest.status` (§6.13) rather than `stream.status` (§6.12).
 
+### 6.16 `stream.destination.set` — where a camera sends its video
+
+```
+stream.destination.set { camera, kind: "digitalpool" | "rtmp",
+                         server?, key?, label?, restart? }
+  → { camera, destination: { kind, url, label }, restarted }
+```
+
+`scopes: GRANTED`. Changing where a camera streams is as privileged as starting it.
+
+| kind | effect |
+|---|---|
+| `digitalpool` | back to the datacenter pull — protocol `rtsp`, no URL, no key |
+| `rtmp` | a push the phone supplies: `server` + `key`, e.g. a YouTube reusable stream key or a Facebook Page's persistent key |
+
+`label` is whatever the phone wants the row to say — "YouTube · My Channel" — and comes
+back in `stream.status`'s `destination.label`, so the app need not recognise an RTMP
+hostname to describe it. `url` is masked by `redactStreamKey()`; the last segment is the
+credential.
+
+**A live camera refuses.** The protocol is baked into the pipeline at build time, so
+changing it means a restart, and a restart interrupts somebody's broadcast. A streaming
+camera answers `STREAM_LIVE` unless `restart: true` is sent, so the app asks first and the
+box never cuts a broadcast on its own. An idle camera just applies it.
+
+**This replaces `dest.assign` for that camera.** Setting a key here clears whatever
+`dest.assign` (§6.13) pointed the camera at. One destination per camera: otherwise the box
+holds two answers to "where does this go" and picks one at broadcast time.
+
 ## 7. Authentication
 
 ### 7.1 Threat model
