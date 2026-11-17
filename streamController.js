@@ -933,7 +933,7 @@ class StreamController extends EventEmitter {
         }
 
         // If GStreamer failed (non-zero exit code), ensure camera is released
-        if (code !== 0 && code !== null) {
+        if (code !== 0 && code !== null && !this._stopRequested) {
           console.error(`❌ GStreamer failed with exit code ${code}`);
           console.error("💡 Common causes:");
           console.error("   - Missing plugin (e.g., srtsink for SRT)");
@@ -1286,6 +1286,18 @@ class StreamController extends EventEmitter {
           this.ffmpegProcess.on("close", (code) => {
             console.log(`ffmpeg exited with code ${code}`);
             this.ffmpegProcess = null;
+
+            // A stop we asked for is not a failure. ffmpeg exits 255 when it is
+            // signalled, which is exactly what stopStream() does to it, so
+            // every deliberate stop — from the app, the web UI or an
+            // auto-stop — was being reported as "ffmpeg exited with code 255"
+            // and pushed to the phone as a stream.state error AFTER the app
+            // had already cleared it locally. _stopRequested is set before the
+            // kill for precisely this reason and was simply not consulted here.
+            if (this._stopRequested) {
+              console.log(`🛑 [Cam${this.streamId}] ffmpeg exited (${code}) after a requested stop`);
+              return;
+            }
 
             if (code !== 0 && code !== null) {
               const isBusy = ffmpegStderrBuf.includes("Device or resource busy") ||

@@ -1244,6 +1244,16 @@ camera.move { camera: 1|2, pan: -1|0|1, tilt: -1|0|1, zoom: -1|0|1, speed?: 1|2|
   → { camera, pan, tilt, zoom }   the position after the move
 ```
 
+**Signs are what the viewer sees**, matching the web UI's arrows: `pan: +1` moves the view
+right, `tilt: +1` moves it up, `zoom: +1` moves it closer.
+
+Beware when reading the code: this codebase's internal step sign is the **opposite** for
+pan and the **same** for tilt — `public/app.js` sends Pan Left as `+steps` and Tilt Up as
+`+steps`. A view-right request is therefore a negative step count. Passing the app's `+1`
+straight through panned left, which is how this was found. `panInverted` is applied after
+that sign, in the same order as the web UI, or one box would pan one way from the browser
+and the other from the phone.
+
 **There is no "start moving" and no dead-man timeout, and that is the safe shape rather
 than a compromise.** `cameraController` moves by writing `pan_absolute` — it reads the
 current position, adds `steps × 3600`, clamps to the hardware range and writes it. Each

@@ -674,9 +674,16 @@ function trackStreamForBle(sc, camIdx) {
     pushBleStreamState(camIdx, { force: true });
   });
   sc.on("stopped", () => {
-    // An error already set the state and the text; a stop that follows one must
-    // not erase why it stopped, which is the only thing worth telling anybody.
-    if (live.state !== "error") live.state = "idle";
+    // A stop somebody ASKED for is clean, and clears whatever went wrong
+    // before it — the operator has acted, and a stale error under an idle
+    // camera is just confusing. An exit nobody asked for keeps its reason:
+    // that is the only thing worth telling anyone.
+    if (sc._stopRequested) {
+      live.state = "idle";
+      live.lastError = null;
+    } else if (live.state !== "error") {
+      live.state = "idle";
+    }
     live.liveSince = null;
     live.bitrateMbps = null;
     live.fps = null;
@@ -849,11 +856,23 @@ async function bleCameraMove(camIdx, args = {}) {
 
   const cam = getCam(camIdx);
   if (pan) {
-    // Some cameras have the pan motor wired opposite to the button convention.
-    // The web UI corrects for it, so this must too or the same box would pan
-    // one way from the browser and the other from the phone.
+    // §6.14 defines pan +1 as "the view moves right", which is what the app's
+    // right arrow means. This codebase's step sign is the OPPOSITE for pan and
+    // the SAME for tilt, which is genuinely surprising and was got wrong here:
+    //
+    //   public/app.js:919-920   Pan Left  = +steps   Pan Right = -steps
+    //   public/app.js:921-922   Tilt Up   = +steps   Tilt Down = -steps
+    //
+    // So a view-right request is a NEGATIVE step count, and passing +1 through
+    // unchanged panned left — exactly the reversal reported from the app.
+    // Tilt needs no flip and gets none.
+    const viewSteps = -pan * steps;
+    // Some cameras have the pan motor wired opposite to that convention. The
+    // web UI corrects for it after applying the button's sign, so this must
+    // too, in the same order, or the same box would pan one way from the
+    // browser and the other from the phone.
     const inverted = getSC(camIdx).streamConfig?.panInverted || false;
-    await cam.pan((inverted ? -pan : pan) * steps);
+    await cam.pan(inverted ? -viewSteps : viewSteps);
   }
   if (tilt) await cam.tilt(tilt * steps);
   if (zoom) {
