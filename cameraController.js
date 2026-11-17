@@ -2,7 +2,21 @@ const { exec } = require("child_process");
 const { promisify } = require("util");
 const fs = require("fs");
 const path = require("path");
-const execAsync = promisify(exec);
+// Every v4l2-ctl call goes through this, and every one of them gets a timeout.
+//
+// They had none. A v4l2-ctl that wedges — and these cameras do go busy; the
+// boot log says "PTZ settle timed out after 12000ms ... camera may still be
+// busy" — left a promise that never settled. PTZ commands are serialised on
+// _ptzQueue, so ONE hung call blocked every pan, tilt and zoom after it, for
+// the life of the process. Over BLE that is a request that never gets a reply,
+// which is exactly the TIMEOUT the app reported.
+//
+// 8 s is enormous for a call measured at 2-7 ms. Anything that slow is stuck,
+// and failing is better than hanging: the queue drains and the next command
+// works.
+const _execRaw = promisify(exec);
+const execAsync = (cmd, opts = {}) =>
+  _execRaw(cmd, { timeout: 8000, killSignal: "SIGKILL", ...opts });
 
 class CameraController {
   constructor(device = "/dev/video0", options = {}) {
@@ -1007,10 +1021,14 @@ class CameraController {
    */
   async pan(steps) {
     // Enqueue — waits for any in-flight pan/tilt to finish before executing.
-    const result = await (this._ptzQueue = this._ptzQueue.then(() =>
-      this._panImmediate(steps),
-    ));
-    return result;
+    // The chain must survive a failure. Assigning the rejected promise back to
+    // _ptzQueue poisoned it: every later .then() inherited the rejection and
+    // its handler never ran, so one bad pan broke pan, tilt and zoom until the
+    // process restarted. The queue keeps a settled branch; the caller still
+    // gets the error.
+    const run = this._ptzQueue.then(() => this._panImmediate(steps));
+    this._ptzQueue = run.catch(() => {});
+    return await run;
   }
 
   async _panImmediate(steps) {
@@ -1038,10 +1056,14 @@ class CameraController {
    */
   async tilt(steps) {
     // Enqueue — waits for any in-flight pan/tilt to finish before executing.
-    const result = await (this._ptzQueue = this._ptzQueue.then(() =>
-      this._tiltImmediate(steps),
-    ));
-    return result;
+    // The chain must survive a failure. Assigning the rejected promise back to
+    // _ptzQueue poisoned it: every later .then() inherited the rejection and
+    // its handler never ran, so one bad tilt broke pan, tilt and zoom until the
+    // process restarted. The queue keeps a settled branch; the caller still
+    // gets the error.
+    const run = this._ptzQueue.then(() => this._tiltImmediate(steps));
+    this._ptzQueue = run.catch(() => {});
+    return await run;
   }
 
   async _tiltImmediate(steps) {

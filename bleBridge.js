@@ -38,6 +38,12 @@ const BLE_NAME_PREFIX = "DP-DuoCast-";
 /** §7.3 — the scopes that may change this camera's network. */
 const GRANTED = ["claim", "manage"];
 
+// A handler slower than this is logged with its duration. The app's request
+// timeout is 10 s; anything approaching a second is worth seeing, because the
+// notification path only carries 1,700 bytes/second and a slow handler stacks
+// on top of whatever is already queued.
+const SLOW_COMMAND_MS = 1000;
+
 /** §5.2 advertisement state bits. */
 const STATE = {
   REGISTERED: 1 << 0,
@@ -129,6 +135,9 @@ class BleBridge {
     this.cameraMove = deps.cameraMove || null;
     this.cameraHome = deps.cameraHome || null;
     this.cameraHomeSave = deps.cameraHomeSave || null;
+    // §6.15
+    this.overlayList = deps.overlayList || null;
+    this.overlaySet = deps.overlaySet || null;
     this.log = deps.log || ((...a) => console.log("[ble]", ...a));
 
     this.server = null;
@@ -191,6 +200,12 @@ class BleBridge {
       "camera.move":      { scopes: GRANTED, handler: (a) => this.cmdCameraMove(a) },
       "camera.home":      { scopes: GRANTED, handler: (a) => this.cmdCameraHome(a) },
       "camera.home.save": { scopes: GRANTED, handler: (a) => this.cmdCameraHomeSave(a) },
+
+      // §6.15. Both GRANTED, including the read: `overlay.list` names the
+      // account's own overlays, which follows dest.status rather than
+      // stream.status.
+      "overlay.list": { scopes: GRANTED, handler: (a) => this.cmdOverlayList(a) },
+      "overlay.set":  { scopes: GRANTED, handler: (a) => this.cmdOverlaySet(a) },
     };
 
     /**
@@ -464,12 +479,19 @@ class BleBridge {
     }
     if (state) state.busy.add(name);
 
+    const startedAt = Date.now();
     try {
       const result = await entry.handler(request.args || {}, conn);
+      const tookMs = Date.now() - startedAt;
       reply({ ok: true, result });
       // Only the commands that change something, so the journal stays
       // readable while still showing what a session actually did.
       if (name !== "info" && name !== "net.status") this.log(`${name} ok`);
+      // A handler that takes this long is why a phone reports a timeout, and
+      // until now the journal showed nothing at all for a successful command —
+      // so "the reply took over 10 s" could not be told apart from "the reply
+      // never came". Anything over a second gets a line with the number in it.
+      if (tookMs >= SLOW_COMMAND_MS) this.log(`⏱  ${name} took ${tookMs}ms`);
     } catch (err) {
       if (err instanceof BleError) {
         fail(err.code, err.message);
@@ -934,6 +956,11 @@ class BleBridge {
   cmdCameraMove(args)     { return this._camera(this.cameraMove, "move a camera", args); }
   cmdCameraHome(args)     { return this._camera(this.cameraHome, "recall a home position", args); }
   cmdCameraHomeSave(args) { return this._camera(this.cameraHomeSave, "save a home position", args); }
+
+  // ── §6.15 overlay.* ──────────────────────────────────────────────────────
+
+  cmdOverlayList(args) { return this._camera(this.overlayList, "list overlays", args); }
+  cmdOverlaySet(args)  { return this._camera(this.overlaySet, "set an overlay", args); }
 
   // ── §6.13 dest.* ─────────────────────────────────────────────────────────
 

@@ -417,6 +417,8 @@ if ((process.env.ONBOARDING_MODE || "auto") !== "hotspot") {
     cameraMove:          (camIdx, args) => bleCameraMove(camIdx, args),
     cameraHome:          (camIdx) => bleCameraHome(camIdx),
     cameraHomeSave:      (camIdx) => bleCameraHomeSave(camIdx),
+    overlayList:         (camIdx, args) => bleOverlayList(camIdx, args),
+    overlaySet:          (camIdx, args) => bleOverlaySet(camIdx, args),
     destinations,
     wifiManager,
     log: (...args) => console.log("🔵 BLE:", ...args),
@@ -910,6 +912,146 @@ function bleCameraHomeSave(camIdx) {
   return blePtzPosition(camIdx);
 }
 
+// ── §6.15 overlay.* — choosing a camera's overlay from the app ───────────────
+//
+// The box sends `mine` + `builtin` + `none` and NOT `public`. Measured on a
+// real account: 55 overlays, 10,564 bytes of JSON, against §6.2's 4,335-byte
+// ceiling — the full list is refused outright rather than merely slow. The app
+// fetches public overlays from DigitalPool itself, which it can, because they
+// are public.
+//
+// What cannot move to the app is validation: since it chooses from its own
+// query, overlay.set can arrive with any id at all, and the only thing stopping
+// a phone naming another account's overlay is the check here.
+
+/** The DigitalPool branded layer, as a pickable entry. */
+const BUILTIN_OVERLAY_ID = "builtin:digitalpool";
+const NONE_OVERLAY_ID = "none";
+
+/** Which overlay a camera is showing now, as §6.15 reports it. */
+function bleCurrentOverlay(camIdx) {
+  const sc = getSC(camIdx);
+  const cfg = sc.streamConfig || {};
+  const url = (cfg.overlayUrl || "").trim();
+  if (!cfg.remoteOverlayEnabled || !url) return null;
+  if (url === brandedOverlay().url) {
+    return { id: BUILTIN_OVERLAY_ID, name: "DigitalPool" };
+  }
+  // Best effort on the name: it comes from the cached list, and is null when
+  // the box has not fetched one since boot. The app has the list and fills it.
+  const cached = _overlayListCache[camIdx].overlays || [];
+  const hit = cached.find((o) => o.url === url);
+  return { id: hit ? hit.id : url, name: hit ? hit.name : null };
+}
+
+/** §6.15 `overlay.list`. */
+async function bleOverlayList(camIdx, args = {}) {
+  const offset = Math.max(0, parseInt(args.offset, 10) || 0);
+  const limitRaw = parseInt(args.limit, 10);
+  const limit = Math.max(1, Math.min(Number.isFinite(limitRaw) ? limitRaw : 50, 100));
+
+  let mine = [];
+  try {
+    const { overlays } = await fetchOverlayList(camIdx);
+    mine = overlays.filter((o) => o.scope === "mine");
+  } catch (e) {
+    // An unregistered box, or one that cannot reach DigitalPool, still has
+    // "none" and the branded layer to offer. Failing the whole command would
+    // leave the app unable to turn an overlay OFF.
+    if (!e.notRegistered && !e.upstream) throw e;
+    console.warn(`overlay.list [Cam${camIdx}]: ${e.message} — offering builtin and none only`);
+  }
+
+  const all = [
+    { id: NONE_OVERLAY_ID, name: "No overlay", scope: "none" },
+    { id: BUILTIN_OVERLAY_ID, name: "DigitalPool", scope: "builtin",
+      description: "The DigitalPool branded layer." },
+    ...mine.map((o) => ({
+      id: o.id, name: o.name, scope: "mine",
+      ...(o.description ? { description: o.description } : {}),
+      ...(o.thumbnail_url ? { thumbnail_url: o.thumbnail_url } : {}),
+    })),
+  ];
+
+  const current = bleCurrentOverlay(camIdx);
+  return {
+    items: all.slice(offset, offset + limit),
+    total: all.length,
+    offset,
+    limit,
+    current: current ? current.id : null,
+    // effectiveOverlay()'s answer: will this account's OWN overlay actually be
+    // drawn, or replaced by the branded one? Always true since ENFORCE_PACKAGES
+    // went false (2026-11-14) — kept because it matters the moment enforcement
+    // returns, and the app must never offer an overlay the box would replace.
+    customAllowed: subscriptionManager.can("overlays"),
+  };
+}
+
+/** §6.15 `overlay.set`. */
+async function bleOverlaySet(camIdx, args = {}) {
+  const raw = args.id;
+  const id = raw === null || raw === undefined || raw === NONE_OVERLAY_ID ? null : String(raw);
+
+  let url = "";
+  if (id === BUILTIN_OVERLAY_ID) {
+    const branded = brandedOverlay();
+    if (!branded.url) {
+      const err = new Error("This camera has no DigitalPool layer configured.");
+      err.bleCode = "OVERLAY_NOT_ALLOWED";
+      throw err;
+    }
+    url = branded.url;
+  } else if (id !== null) {
+    // Validated against the FULL list — the one that includes public — because
+    // the app picks public overlays from its own query and the box never sent
+    // them. Without this, any id the phone invented would be rendered.
+    let overlays = [];
+    try {
+      ({ overlays } = await fetchOverlayList(camIdx));
+    } catch (e) {
+      const err = new Error(
+        e.notRegistered
+          ? "This camera is not registered to a DigitalPool account, so it cannot use that overlay."
+          : `This camera could not check that overlay with DigitalPool: ${e.message}`
+      );
+      err.bleCode = e.bleCode || "INTERNAL";
+      throw err;
+    }
+    const hit = overlays.find((o) => String(o.id) === id);
+    if (!hit) {
+      const err = new Error("That overlay is not available to this camera's DigitalPool account.");
+      err.bleCode = "OVERLAY_NOT_ALLOWED";
+      throw err;
+    }
+    url = hit.url;
+  }
+
+  // The same path the web UI's panel takes, so the two cannot drift: persist
+  // on the controller, then retarget the live renderer. The composited PNG is
+  // picked up by mtime, so nothing rebuilds the pipeline.
+  const sc = getSC(camIdx);
+  sc.updateOverlay({ remoteOverlayEnabled: !!url, overlayUrl: url });
+  await applyEffectiveOverlay(camIdx);
+  syncOverlayStreamLive(camIdx);
+
+  // Setting the SAME overlay again is a refresh, deliberately: it re-reads the
+  // design and redraws. applyEffectiveOverlay() does nothing when the renderer
+  // is already pointed at that URL, which is right for a retarget and wrong
+  // for the "it has stopped following the table, try again" case the operator
+  // is actually in. This is the same call /api/overlay/refresh makes.
+  if (url) {
+    const producer = camIdx === 2 ? puppeteerOverlay2 : puppeteerOverlay;
+    if (producer && typeof producer.refresh === "function") {
+      try { producer.refresh(); } catch (e) { console.warn(`overlay refresh [Cam${camIdx}]: ${e.message}`); }
+    }
+  }
+  io.emit("streamStatus", { ...sc.getStatus(), cameraIndex: camIdx });
+
+  console.log(`🎨 [Cam${camIdx}] Overlay set over BLE: ${id || "none"}`);
+  return { camera: camIdx, current: bleCurrentOverlay(camIdx) };
+}
+
 /** §6.12 `stream.status`. One entry per camera slot. */
 function bleStreamStatus() {
   const cfg = loadRemoteConfig();
@@ -970,6 +1112,7 @@ function bleStreamStatus() {
                        : (camIdx === 1 ? scalarDeviceId : null),
       lastError: live.lastError,
       ptz: blePtzCapability(camIdx),
+      overlay: bleCurrentOverlay(camIdx),
       preview: bleHlsPreview(camIdx, present),
     };
   });
@@ -4219,23 +4362,27 @@ app.get("/api/overlay/engine", requireAuth, (req, res) => {
 // camera 1's mirror to camera 2 for the next minute.
 const _overlayListCache = { 1: { at: 0, overlays: null }, 2: { at: 0, overlays: null } };
 const OVERLAY_LIST_TTL_MS = 60000;
-app.get("/api/overlays", async (req, res) => {
+/**
+ * The overlays this camera's account may use, from DigitalPool.
+ *
+ * Shared by the web route and the BLE §6.15 commands so the two cannot offer
+ * different sets — and, more importantly, so `overlay.set` validates against
+ * exactly what `overlay.list` was built from.
+ *
+ * Throws with a message an operator reads; the callers decide how to report it.
+ */
+async function fetchOverlayList(camIdx, { refresh = false } = {}) {
   const cfg = loadRemoteConfig();
   if (!cfg.registered) {
-    return res.json({ ok: false, error: "device not registered", overlays: [] });
+    const err = new Error("This camera is not registered to a DigitalPool account yet.");
+    err.bleCode = "NOT_REGISTERED";
+    err.notRegistered = true;
+    throw err;
   }
 
-  // Which of this box's two cameras is asking. The backend resolves the mirror
-  // from (device, camera); omitting it made it fall back to the box's first
-  // camera, so camera 2 was handed camera 1's answer.
-  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
   const cache = _overlayListCache[camIdx];
-
-  // Serve a recent cached list so re-opening the panel doesn't re-hit the function.
-  if (req.query.refresh !== "1"
-      && cache.overlays
-      && Date.now() - cache.at < OVERLAY_LIST_TTL_MS) {
-    return res.json({ ok: true, overlays: cache.overlays, cached: true });
+  if (!refresh && cache.overlays && Date.now() - cache.at < OVERLAY_LIST_TTL_MS) {
+    return { overlays: cache.overlays, cached: true };
   }
 
   let result;
@@ -4252,25 +4399,50 @@ app.get("/api/overlays", async (req, res) => {
     });
   } catch (e) {
     console.warn("listOverlays failed:", e.message);
-    return res.status(502).json({ ok: false, error: `Could not reach DigitalPool overlay service: ${e.message}`, overlays: [] });
+    const err = new Error(`Could not reach DigitalPool to list overlays: ${e.message}`);
+    err.bleCode = "NO_INTERNET";
+    err.upstream = true;
+    throw err;
   }
 
   if (result.statusCode >= 400 || result.body?.ok === false) {
-    return res.status(502).json({ ok: false, error: result.body?.error || `Overlay service error (HTTP ${result.statusCode})`, overlays: [] });
+    const err = new Error(result.body?.error || `Overlay service error (HTTP ${result.statusCode})`);
+    err.bleCode = "INTERNAL";
+    err.upstream = true;
+    throw err;
   }
 
-  // Normalize: keep only entries with a usable URL; default missing scope to public.
+  // Normalize: keep only entries with a usable URL; default missing scope to
+  // public. description and thumbnail_url are carried through for §6.15 — the
+  // web UI ignores them, and dropping them here meant the BLE list could not
+  // show what the backend already knew.
   const overlays = (Array.isArray(result.body?.overlays) ? result.body.overlays : [])
     .map((o) => ({
       id:    o.id ?? o.url ?? "",
       name:  o.name || o.title || o.url || "Overlay",
       url:   typeof o.url === "string" ? o.url.trim() : "",
       scope: o.scope === "mine" ? "mine" : "public",
+      ...(o.description ? { description: o.description } : {}),
+      ...(o.thumbnail_url ? { thumbnail_url: o.thumbnail_url } : {}),
     }))
     .filter((o) => o.url);
 
   _overlayListCache[camIdx] = { at: Date.now(), overlays };
-  res.json({ ok: true, overlays });
+  return { overlays, cached: false };
+}
+
+app.get("/api/overlays", async (req, res) => {
+  // Which of this box's two cameras is asking. The backend resolves the mirror
+  // from (device, camera); omitting it made it fall back to the box's first
+  // camera, so camera 2 was handed camera 1's answer.
+  const camIdx = parseInt(req.query.cam) === 2 ? 2 : 1;
+  try {
+    const { overlays, cached } = await fetchOverlayList(camIdx, { refresh: req.query.refresh === "1" });
+    res.json({ ok: true, overlays, ...(cached ? { cached: true } : {}) });
+  } catch (e) {
+    if (e.notRegistered) return res.json({ ok: false, error: "device not registered", overlays: [] });
+    res.status(502).json({ ok: false, error: e.message, overlays: [] });
+  }
 });
 
 // API endpoint to get all controls
