@@ -1187,6 +1187,114 @@ whoever reads this next should not have to rediscover it: that design keeps noth
 stealing on the hardware, at the cost of needing internet to start a broadcast, which a box
 pushing to YouTube needs regardless.
 
+### 6.14 `camera.*` — moving a camera from the app (PROPOSED)
+
+Design only, 2026-11-17, for aiming a camera while watching the §6.12 preview. Both
+numbers below were measured on the boxes, not estimated.
+
+#### The two cameras in the field are not the same camera
+
+Surveyed 2026-11-17:
+
+| box | pan | tilt | zoom | continuous controls |
+|---|---|---|---|---|
+| **85E4** | — | — | `zoom_absolute` 0–50 | — |
+| **B1B5** | `pan_absolute` ±468000, step 3600 | `tilt_absolute` ±324000, step 3600 | `zoom_absolute` 0–100 | `pan_speed`, `tilt_speed`, `zoom_continuous` |
+
+85E4 has **no pan or tilt at all**. Any contract that assumes a box can pan is wrong on
+half the hardware we own, which is why capability is per camera and not per box.
+
+#### Capability, in `stream.status`
+
+```json
+"ptz": { "pan": true, "tilt": true, "zoom": true, "focus": false, "confident": true }
+```
+
+Booleans, not ranges — the app sends a direction, not a position, so a range would be
+bytes it never uses on a 17-byte-chunk link. Taken from `discoveredControls`, which is read
+from the hardware at activation.
+
+**The not-confident case: show the controls anyway.** `confident: false` means the camera
+exposes absolute pan/tilt/zoom but the USB descriptor could not confirm a motor is attached
+(`cameraController.js` `detectPtz()`). Writing to a fixed camera's `pan_absolute` is
+harmless — it accepts the value and nothing moves. Hiding the controls on a real PTZ camera
+is the worse error of the two, so `confident` is reported for the app to caveat with, not
+to gate on. Note this does not arise on 85E4: that camera exposes no pan control at all, so
+it is `pan: false` with `confident: true`.
+
+#### `camera.move` — repeat to continue, not start/stop
+
+```
+camera.move { camera: 1|2, pan: -1|0|1, tilt: -1|0|1, zoom: -1|0|1, speed?: 1|2|3 }
+  → { camera, pan, tilt, zoom }   the position after the move
+```
+
+**There is no "start moving" and no dead-man timeout, and that is the safe shape rather
+than a compromise.** `cameraController` moves by writing `pan_absolute` — it reads the
+current position, adds `steps × 3600`, clamps to the hardware range and writes it. Each
+call is one discrete move that is already over when the reply goes out. A camera therefore
+*cannot* run away: if the BLE link drops mid-press, the box issues nothing further and the
+camera stops where it is. The failure the dead-man timeout was meant to prevent does not
+exist on this path.
+
+The app holds the button and repeats every ~300 ms; all-zeros is not a stop command and
+need not be sent, because stopping is what happens when the repeats stop.
+
+`speed` scales steps per call, because one step is 3600 units out of a 936000 pan range —
+260 steps end to end, which at 3.3 calls a second would take 78 s to sweep:
+
+| speed | steps/call | full pan sweep |
+|---|---|---|
+| 1 | 2 | ~39 s |
+| 2 (default) | 6 | ~13 s |
+| 3 | 15 | ~5 s |
+
+The box deliberately does **not** use `pan_speed`/`zoom_continuous` even where they exist
+(B1B5 has all three). Those are rate controls: they start motion that continues until
+something stops it, which is exactly the runaway the step model cannot have.
+
+#### The two numbers
+
+**1. PTZ command latency: 2–7 ms.** Measured on B1B5, six consecutive single-step
+`pan_absolute` writes: 6, 4, 2, 7, 2, 2 ms; reads 2 ms each. That is the whole cost
+including process spawn. At one call per 300 ms it is under 2% duty, and the queue
+(`_ptzQueue`) will never be the bottleneck. The camera's *motor* keeps moving after the
+write returns — the reply means "accepted", not "finished".
+
+**2. 300 ms resends fit, comfortably.**
+
+- *Phone → box:* an 80-byte command is **one** chunk at any real MTU (iOS negotiates
+  182–509, Android requests 517), so one write-with-response per tick — roughly one
+  connection interval, 15–30 ms. About 10% of the link's opportunity at 300 ms.
+- *Box → phone:* §6.3 requires exactly one response per request. Keep it small: a position
+  reply of ~60 bytes is 4 chunks at 17 bytes, and at `TX_PACING_MS = 10` that is **40 ms of
+  TX per tick**, or ~13% of the notification path.
+- *Alongside `stream.state`:* those are capped at one per 5 s (§6.12), ~120 bytes ≈ 8
+  chunks ≈ 80 ms. Negligible against the above.
+
+Total steady-state TX while a button is held is around 15%. There is headroom, and this is
+at the pessimistic 23-byte MTU — `AcquireNotify` would make it irrelevant.
+
+#### Presets
+
+`camera.home` maps to `applyStartupPosition()`, which exists: one saved position per camera
+in `camera-startup-config{N}.json`, already applied at boot.
+
+```
+camera.home        { camera }          → { camera, pan, tilt, zoom }
+camera.home.save   { camera }          → saves the current position as home
+```
+
+**Slots 1–3 do not exist and are new storage.** The box has exactly one saved position per
+camera today. Adding numbered slots is a small file and a lookup; worth doing only if
+somebody actually wants more than Home, which nobody has asked for yet.
+
+#### Authorization
+
+Everything that moves a camera is `scopes: GRANTED`. The capability block rides on
+`stream.status`, which stays public — knowing a camera *can* pan reveals nothing, and the
+app needs it to decide what to draw before anyone has a grant.
+
 ## 7. Authentication
 
 ### 7.1 Threat model
