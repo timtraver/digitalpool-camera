@@ -1320,6 +1320,83 @@ Everything that moves a camera is `scopes: GRANTED`. The capability block rides 
 `stream.status`, which stays public — knowing a camera *can* pan reveals nothing, and the
 app needs it to decide what to draw before anyone has a grant.
 
+### 6.15 `overlay.*` — choosing a camera's overlay (PROPOSED)
+
+Design only, 2026-11-17. The size question was settled by measuring a real account, not by
+estimating.
+
+#### The list does not fit, and that decides the shape
+
+Called `listOverlays` for 85E4's registered account (`venueId` 39332) on 2026-11-17:
+
+| | |
+|---|---|
+| overlays returned | **55** — 24 `mine`, 31 `public` |
+| fields the backend sends | `id`, `name`, `description`, `thumbnail_url`, `scope`, `url` |
+| full JSON | **10,564 bytes** |
+| trimmed to `{id, name, scope}` | **3,226 bytes** |
+
+§6.2's 255-chunk ceiling caps one message at **4,335 bytes**, so the full list is **refused
+outright** — it is not slow, it does not send. Even trimmed it is 3.2 KB, which is 190
+chunks and about **1.9 seconds** on the wire at `TX_PACING_MS = 10`, and within 25% of the
+cap. That account is one venue. The next one is bigger.
+
+So: **the box sends `mine` + `builtin` + `none` only, and the app fetches `public` itself.**
+The app already has the GraphQL query and the Skia preview, and public overlays are public
+— there is nothing the box knows about them that the app cannot read directly.
+
+`offset`/`limit` are accepted anyway, because `mine` is unbounded too. 24 of them trim to
+roughly 1.4 KB, comfortable today, but nothing stops a venue having 200.
+
+#### Commands
+
+```
+overlay.list { camera, offset?, limit? }
+  → { items: [ { id, name, description?, thumbnail_url?, scope } ],
+      current: id|null, customAllowed: true, total, offset, limit }
+
+overlay.set { camera, id|null }
+  → { camera, current: { id, name }|null }
+```
+
+`scope` is `mine`, `builtin` or `none`. **No `url`** — the app does not need it and it is
+the longest field on a 17-byte link. The box keeps the id→url mapping internally.
+
+**The box validates, and must.** The app chooses public overlays from its own query, so
+`overlay.set` can arrive with any id. It is checked against the full `listOverlays` answer
+for this camera — the one that includes `public` — and refused with `OVERLAY_NOT_ALLOWED`
+otherwise. Nothing stops a phone naming an overlay belonging to another account except
+this check.
+
+Applying goes through the same path the web UI's panel does — `sc.updateOverlay()` then
+`applyEffectiveOverlay()` — so the two cannot drift, and it hot-swaps: the composited PNG
+is picked up by mtime and no pipeline is rebuilt.
+
+#### `customAllowed` is currently always true, and that is not a stub
+
+It reports `effectiveOverlay()`'s answer: whether this account's own overlay will actually
+be drawn, or replaced by the DigitalPool branded one. **Since 2026-11-14 nothing is gated
+on a subscription** (`ENFORCE_PACKAGES` in subscriptionManager.js), so it is `true` on every
+box. It is in the contract because the flag becomes meaningful the moment enforcement is
+turned back on, and the app must not offer an overlay the box would then replace. Do not
+remove it; do not expect to see `false` today.
+
+#### In `stream.status`
+
+```json
+"overlay": { "id": "…", "name": "Duocast Scoreboard" }
+```
+
+`null` when no remote overlay is set. `name` is best-effort — it comes from the cached
+`listOverlays` answer, and is `null` when the box has not fetched one since boot. The app
+has the list and can fill it in.
+
+#### Authorization
+
+`overlay.list` and `overlay.set` are both **`scopes: GRANTED`**. `list` names the account's
+own overlays, which is more than a stranger in range should learn, and this is the same
+reasoning as `dest.status` (§6.13) rather than `stream.status` (§6.12).
+
 ## 7. Authentication
 
 ### 7.1 Threat model
