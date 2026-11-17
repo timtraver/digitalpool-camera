@@ -988,6 +988,50 @@ async function bleOverlayList(camIdx, args = {}) {
   };
 }
 
+// A 1x1 fully transparent PNG, 68 bytes.
+//
+// Written in place of a deleted overlay so the running pipeline can simply
+// hot-swap to "nothing" instead of being respawned. That matters more than it
+// sounds: restarting the publisher makes MediaMTX start a NEW low-latency HLS
+// muxer — a new EXT-X-MAP init segment and a window of #EXT-X-GAP entries —
+// and a player that does not fully re-initialise sits on its last frame. Which
+// looks exactly like "the overlay did not go away".
+//
+// Deliberately under 100 bytes: startPersistentIdlePreview() only includes
+// gdkpixbufoverlay when the PNG exists AND is larger than that, so a later
+// rebuild for any other reason correctly drops the element.
+const TRANSPARENT_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+  "base64"
+);
+
+/**
+ * Wait for a real overlay PNG to land, then rebuild the idle preview.
+ *
+ * Rebuilding the moment an overlay is SET is too early and silently produces a
+ * pipeline with no overlay element: startPersistentIdlePreview() only includes
+ * gdkpixbufoverlay when the PNG already exists and is over 100 bytes, and the
+ * renderer needs a second or two — longer for a slow remote page — to produce
+ * its first screenshot. The web UI's handler solves this by waiting for the
+ * first real screenshot event; this waits for the file, which needs no
+ * coupling to the producer and covers the Skia renderer too.
+ */
+async function rebuildIdlePreviewWhenOverlayReady(camIdx, reason, timeoutMs = 30000) {
+  const sc = getSC(camIdx);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const st = fsSync.statSync(sc.pngOverlayPath);
+      if (st.size > 100) break;
+    } catch { /* not there yet */ }
+    await new Promise((r) => setTimeout(r, 500));
+    // The overlay may have been changed again, or turned off, while waiting.
+    if (!sc.streamConfig.remoteOverlayEnabled || !sc.streamConfig.overlayUrl) return;
+    if (sc.isStreaming) return;          // a stream took over; its pipeline composites
+  }
+  await rebuildIdlePreview(camIdx, reason);
+}
+
 /**
  * Rebuild a camera's idle preview so it picks up an overlay change.
  *
@@ -1081,14 +1125,27 @@ async function bleOverlaySet(camIdx, args = {}) {
   const sc = getSC(camIdx);
   sc.updateOverlay({ remoteOverlayEnabled: !!url, overlayUrl: url });
 
+  let hotSwapped = false;
   if (!url) {
     // Clearing is NOT the same path as setting, and treating it as one was the
     // bug: applyEffectiveOverlay() stops the refresh timer and nothing else, so
-    // the last PNG stayed on disk and the pipeline kept drawing it. The
-    // producer has to be stopped — that deletes the files — and the idle
-    // preview rebuilt, because it bakes gdkpixbufoverlay in at build time and
-    // cannot drop the element by itself.
+    // the last PNG stayed on disk and the pipeline kept drawing it. Stopping
+    // the producer is what removes it, because that deletes the file.
     await stopOverlayProducer(camIdx, "Overlay set to None over BLE");
+    // Then put a transparent frame back, so a pipeline that already has the
+    // overlay element can hot-swap to nothing rather than being respawned.
+    // gst-idle-preview.py reloads on mtime, so this lands within its poll —
+    // and the publisher keeps running, which is the whole point: a restart
+    // resets MediaMTX's HLS muxer and leaves a player on its last frame.
+    if (!sc.isStreaming && _idlePreviewHasOverlay[camIdx]) {
+      try {
+        fsSync.writeFileSync(sc.pngOverlayPath, TRANSPARENT_PNG);
+        hotSwapped = true;
+        console.log(`♻️  [Cam${camIdx}] Overlay cleared by hot-swap — no preview restart`);
+      } catch (e) {
+        console.warn(`⚠️  [Cam${camIdx}] transparent overlay write failed: ${e.message}`);
+      }
+    }
   } else {
     await applyEffectiveOverlay(camIdx);
   }
@@ -1101,9 +1158,20 @@ async function bleOverlaySet(camIdx, args = {}) {
   // that carries 1,700 bytes a second. The reply says the overlay was set,
   // which is true the moment the config is written; the preview catches up a
   // second or two later, which is what the app asked for.
-  if (!sc.isStreaming) {
-    rebuildIdlePreview(camIdx, `Overlay set to ${id || "none"} over BLE`)
-      .catch((e) => console.warn(`⚠️  [Cam${camIdx}] idle preview rebuild: ${e.message}`));
+  if (!sc.isStreaming && !hotSwapped) {
+    const reason = `Overlay set to ${id || "none"} over BLE`;
+    const warn = (e) => console.warn(`⚠️  [Cam${camIdx}] idle preview rebuild: ${e.message}`);
+    if (url && _idlePreviewHasOverlay[camIdx]) {
+      // The element is already in the running pipeline, which reloads the PNG
+      // on mtime. Switching between overlays therefore needs no restart at all
+      // — and not restarting is what keeps the HLS muxer, and the app's
+      // player, from having to start over.
+      console.log(`♻️  [Cam${camIdx}] Overlay switch — hot-swapping PNG in place (no rebuild)`);
+    } else if (url) {
+      rebuildIdlePreviewWhenOverlayReady(camIdx, reason).catch(warn);
+    } else {
+      rebuildIdlePreview(camIdx, reason).catch(warn);
+    }
   }
 
   // Setting the SAME overlay again is a refresh, deliberately: it re-reads the
