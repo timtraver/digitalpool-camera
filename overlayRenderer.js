@@ -467,18 +467,41 @@ function gameTypeImagePath(gameType, assets) {
 }
 
 // Which binding field (if any) supplies an element's image.
+// Where a root-relative media URL points.
+//
+// An overlay saved in the builder can carry "/images/overlays/dp-circle.png".
+// A browser resolves that against the page it is on; this renderer is not on a
+// page, so it handed the path straight to the filesystem and got ENOENT —
+// "Overlay image unavailable (/images/overlays/digitalpool-circle-white.png)".
+// The DigitalPool logo simply did not draw, on every box, silently.
+//
+// Only values that came from the CANVAS go through this. The bundled flag
+// assets are absolute filesystem paths built with path.join() and must not be
+// turned into URLs.
+const MEDIA_ORIGIN = (process.env.DIGITALPOOL_ORIGIN || "https://digitalpool.com").replace(/\/+$/, "");
+
+function webMediaUrl(value) {
+  if (!value) return null;
+  const u = String(value).trim();
+  if (!u) return null;
+  if (/^(https?:|data:|file:)/i.test(u)) return u;
+  if (u.startsWith("//")) return `https:${u}`;
+  if (u.startsWith("/")) return `${MEDIA_ORIGIN}${u}`;
+  return u;
+}
+
 function imageUrlFor(element, binding, assets) {
   const player = element.player === 2 ? "challenger2" : "challenger1";
   const m = (binding && binding.match) || {};
   const t = (binding && binding.tournament) || {};
   switch (element.type) {
     case "player_flag":     return flagSourceFor(m[`${player}_country`], assets);
-    case "static_image":    return element.imageUrl || null;
+    case "static_image":    return webMediaUrl(element.imageUrl);
     // Only so the picture is preloaded; drawBreakIndicator() paints it, since
     // it also has to decide whether this player's indicator shows at all.
-    case "break_indicator": return element.indicatorStyle === "image" ? element.imageUrl || null : null;
-    case "player_avatar":   return m[`${player}_avatarImg`] || null;
-    case "tournament_logo": return t.logo || null;
+    case "break_indicator": return element.indicatorStyle === "image" ? webMediaUrl(element.imageUrl) : null;
+    case "player_avatar":   return webMediaUrl(m[`${player}_avatarImg`]);
+    case "tournament_logo": return webMediaUrl(t.logo);
     case "tournament_game_type_image":
       return gameTypeImagePath(t.game_type, assets);
     default: return null;
@@ -506,7 +529,9 @@ const CAROUSEL_FADE_MS = 600; // transition: opacity 0.6s ease-in-out
 const CAROUSEL_FADE_ENABLED = process.env.OVERLAY_CAROUSEL_FADE === "1";
 
 function carouselImages(element) {
-  return (element.images || []).filter(Boolean);
+  // Same resolution as every other canvas-sourced picture — a carousel can
+  // hold a root-relative path just as a static_image can.
+  return (element.images || []).map(webMediaUrl).filter(Boolean);
 }
 
 function carouselIntervalMs(element) {
