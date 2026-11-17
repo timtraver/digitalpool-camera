@@ -728,7 +728,13 @@ function bleHlsPreview(camIdx) {
 /** §6.12 `stream.status`. One entry per camera slot. */
 function bleStreamStatus() {
   const cfg = loadRemoteConfig();
+  // Two shapes in the field. A box registered through the newer path gets a
+  // `devices[]` with a row per camera; one registered earlier has a single
+  // scalar `deviceId`, which is the box's own venue_devices row and therefore
+  // camera 1's. Seen on 85E4: { registered: true, deviceId: 1713 } and no
+  // array at all, which the array-only lookup read as "not registered yet".
   const devices = Array.isArray(cfg.devices) ? cfg.devices : [];
+  const scalarDeviceId = !devices.length && cfg.deviceId ? String(cfg.deviceId) : null;
   const cameras = [1, 2].map((camIdx) => {
     const sc = getSC(camIdx);
     const live = _bleStream[camIdx];
@@ -752,7 +758,12 @@ function bleStreamStatus() {
     const device = devices.find((d) => Number(d.camera) === camIdx) || null;
     return {
       camera: camIdx,
-      name: (sc.streamConfig && sc.streamConfig.name) || tableNames.get(camIdx) || null,
+      // An absent camera has no table. tableNames caches a label per slot for
+      // alert subject lines, and on a one-camera box both slots can hold the
+      // same one — 85E4 has {"1":"Table 1","2":"Table 1"}. Letting an empty
+      // slot inherit it puts two cameras called "Table 1" in the app's list,
+      // which reads as a bug in the app rather than an empty slot in the box.
+      name: present ? ((sc.streamConfig && sc.streamConfig.name) || tableNames.get(camIdx) || null) : null,
       present,
       state,
       // A camera with nothing configured and nothing running has no destination
@@ -764,7 +775,8 @@ function bleStreamStatus() {
       bitrateMbps: live.bitrateMbps,
       fps: live.fps,
       recording: recordingManager.isCameraRecording(camIdx),
-      deviceId: device ? String(device.id || device.device_id || "") || null : null,
+      deviceId: device ? String(device.id || device.device_id || "") || null
+                       : (camIdx === 1 ? scalarDeviceId : null),
       lastError: live.lastError,
       preview: bleHlsPreview(camIdx),
     };
