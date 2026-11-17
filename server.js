@@ -2279,15 +2279,28 @@ function netbirdApiRequest(method, apiPath, body = null) {
  * proceed in that case.
  */
 /**
- * Delete this box's peer from the NetBird server.
+ * REFUSES. A box never removes itself from NetBird.
  *
- * NO LONGER CALLED BY wipeDeviceLocally() as of 2026-11-17 — a deregistered
- * box now keeps its peer and its address on purpose. Kept because a genuine
- * factory reset, where the hardware is leaving DigitalPool entirely, is a
- * different question from "this box changed hands between venues", and that is
- * the call that would want it.
+ * Decided 2026-11-17: once a box has enrolled, it stays on NetBird
+ * permanently — through deregistration, a factory reset, a change of owner,
+ * anything. NetBird is DigitalPool's management network, and the box that most
+ * needs reaching is the one being moved or reset. If a box genuinely has to
+ * leave, an admin removes the peer on the NetBird server, where the decision
+ * can be seen and undone.
+ *
+ * Left in place as a refusal rather than deleted so that anyone who goes
+ * looking for "how do I remove the peer" finds this answer instead of writing
+ * the call again.
  */
 async function netbirdDeleteCurrentPeer() {
+  throw new Error(
+    "A box does not remove itself from NetBird. Remove the peer on the NetBird "
+    + "server if it genuinely has to leave."
+  );
+}
+
+/** The former body, kept only so the API shape is documented. @deprecated */
+async function _netbirdDeleteCurrentPeerDisabled() {
   let localIp;
   try {
     const st = await netbirdGetStatus();
@@ -2780,25 +2793,23 @@ app.post("/api/remote/enable", requireAdmin, express.json(), async (req, res) =>
     const setupKey      = process.env.NETBIRD_SETUP_KEY || "";
 
     if (force) {
-      // Re-register as a brand-new device (cloned SD card path).
+      // REFUSED since 2026-11-17. This used to stop the daemon, delete
+      // /var/lib/netbird/ and enrol a fresh peer — the "cloned SD card" case,
+      // where a box carries another box's identity.
       //
-      // Sequence:
-      //   1. Stop netbird daemon
-      //   2. Clear /var/lib/netbird/ (destroys node private key on disk)
-      //   3. Start daemon fresh (NeedsLogin state — will not auto-connect)
-      //   4. netbird up --setup-key=... → fresh peer registration in NetBird
-
-      console.log("🔄 Force re-register: stopping netbird daemon…");
-      await execAsync("sudo /usr/bin/systemctl stop netbird").catch(() => {});
-      await new Promise(r => setTimeout(r, 1000));
-
-      console.log("🔄 Force re-register: clearing node state…");
-      await execAsync("sudo rm -rf /var/lib/netbird/").catch(() => {});
-
-      console.log("🔄 Force re-register: starting fresh netbird daemon…");
-      await execAsync("sudo /usr/bin/systemctl start netbird").catch(() => {});
-      await new Promise(r => setTimeout(r, 2000));
-      console.log("🔄 Force re-register: daemon ready — running netbird up…");
+      // That case is real, but this is the wrong place to handle it: it is an
+      // admin endpoint that can be pointed at a perfectly healthy enrolled box,
+      // and the result is unrecoverable from the box itself. dp-firstboot.sh is
+      // where a cloned image sheds the identity it inherited, before the box has
+      // ever enrolled as itself. After that, the peer is permanent.
+      return res.status(409).json({
+        error:
+          "This camera will not re-enrol with a new NetBird peer. A box keeps its "
+          + "peer for life once enrolled. A cloned image sheds the identity it "
+          + "inherited on first boot (dp-firstboot.sh); if this box genuinely needs "
+          + "a new peer, remove the old one on the NetBird server first.",
+        code: "NETBIRD_PEER_IS_PERMANENT",
+      });
     }
 
     // Build the netbird up command.

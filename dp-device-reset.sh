@@ -47,7 +47,7 @@ echo "  App dir      : ${APP_DIR}"
 echo ""
 echo "  This will PERMANENTLY wipe:"
 echo "    • System hostname, machine-id, SSH host keys"
-echo "    • NetBird peer identity (/var/lib/netbird/)"
+echo "    • (NetBird peer identity is KEPT — see below)"
 echo "    • WiFi profiles — the hotspot is rebuilt under this unit's own SSID"
 echo "    • All app state (registration, users, camera/stream config)"
 echo ""
@@ -66,7 +66,7 @@ echo ""
 # ── 1. Stop services ──────────────────────────────────────────────────────────
 echo "⏹  Stopping services…"
 systemctl stop digitalpool-camera 2>/dev/null || true
-systemctl stop netbird             2>/dev/null || true
+# netbird is deliberately NOT stopped — see section 5.
 sleep 1
 info "Services stopped"
 
@@ -94,11 +94,28 @@ rm -f /etc/ssh/ssh_host_*
 ssh-keygen -A -q
 info "SSH host keys regenerated"
 
-# ── 5. NetBird peer identity ──────────────────────────────────────────────────
-echo "🌐  Wiping NetBird peer identity…"
-rm -rf /var/lib/netbird/
-systemctl start netbird 2>/dev/null || true   # restart daemon in NeedsLogin state
-info "NetBird identity cleared (device will re-register on next activation)"
+# ── 5. NetBird peer identity — KEPT ───────────────────────────────────────────
+#
+# DO NOT re-add `rm -rf /var/lib/netbird/` here.
+#
+# Decided 2026-11-17: once a box has enrolled, it stays on NetBird for life —
+# through a reset, a deregistration, a change of owner, all of it. NetBird is
+# DigitalPool's own management network, and a box being reset or moved is
+# precisely the one somebody needs to reach. Wiping the identity here meant a
+# reset box came back as a NEW peer on a NEW address, with nothing on our side
+# able to find it in between.
+#
+# This script wipes the DigitalPool side — registration, users, camera and
+# stream config — and leaves the VPN alone.
+#
+# The one place an identity is legitimately discarded is dp-firstboot.sh, where
+# a freshly imaged box sheds the identity it INHERITED from the golden image
+# and has never used as itself. That is not this.
+#
+# If a box genuinely has to leave the network, an admin removes its peer on the
+# NetBird server, where the decision is visible and reversible.
+echo "🌐  NetBird peer identity: KEPT (this box stays reachable at the same address)"
+info "NetBird left enrolled — remove the peer server-side if it must leave"
 
 # ── 6. App state files ────────────────────────────────────────────────────────
 echo "🗂  Clearing app state…"

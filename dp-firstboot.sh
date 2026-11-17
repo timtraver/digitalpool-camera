@@ -89,6 +89,21 @@ rm -f /etc/ssh/ssh_host_*
 ssh-keygen -A -q
 
 # ── 4. NetBird peer identity ────────────────────────────────────────────────────
+#
+# THIS IS THE ONE PLACE A NETBIRD IDENTITY IS LEGITIMATELY DISCARDED, and it is
+# not an exception to the rule — it is the rule's starting point.
+#
+# A box keeps its peer for life ONCE IT HAS ENROLLED AS ITSELF (decided
+# 2026-11-17; dp-device-reset.sh and the deregister path both leave it alone
+# now). What is on disk here is not that: it is the identity this box INHERITED
+# from the golden image it was written from, belonging to the machine the image
+# was captured on. Leaving it would put every box built from that image on the
+# network as the same peer.
+#
+# So this runs exactly once, before the box has ever enrolled. Nothing after
+# first boot may do the same — if a box genuinely has to leave the network, an
+# admin removes its peer on the NetBird server.
+#
 # Just remove the identity — do NOT `systemctl start/stop netbird` here. This unit
 # is ordered Before=netbird.service, so calling `systemctl start netbird` deadlocks
 # (systemd won't start netbird until we finish, and we'd be waiting on it) until the

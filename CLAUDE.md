@@ -154,6 +154,16 @@ serves SRT on **8891**, camera 2 on **8892**.
   and the WebRTC **WHEP** low-fps browser preview. The Node app proxies WHEP offers over
   Socket.IO (`whep-offer`) and manages MediaMTX paths per stream.
 - **NetBird** — the VPN behind the admin "Remote Access" toggle (`/api/remote/*`).
+  **A box keeps its peer for life once it has enrolled** (decided 2026-11-17). Nothing on
+  the box may delete the peer, stop the daemon or clear `/var/lib/netbird` — not
+  deregistration, not `dp-device-reset.sh`, not the old force-re-register endpoint (which
+  now answers 409 `NETBIRD_PEER_IS_PERMANENT`), and not `netbirdDeleteCurrentPeer()` (which
+  throws). NetBird is *our* management network, and a box being reset or moved between
+  venues is exactly the one that needs reaching. The single exception is
+  `dp-firstboot.sh`, where a freshly imaged box sheds the identity it **inherited** from
+  the golden image and has never used as itself. If a box genuinely has to leave, an admin
+  removes its peer on the NetBird server. Note `netbird down` (the Remote Access toggle and
+  the SSH flag changes) only disconnects — it keeps the identity — and is unaffected.
 - Config is `.env` (see `.env.example`: `PORT`, `CAMERA_DEVICE`, `CAMERA_DEVICE_2`, NetBird keys)
   plus JSON state files written into the repo dir (`users.json`, `camera-config*.json`,
   `camera-startup-config*.json`) — these are runtime state, not committed.
