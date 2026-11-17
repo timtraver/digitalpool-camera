@@ -1426,6 +1426,46 @@ box never cuts a broadcast on its own. An idle camera just applies it.
 `dest.assign` (§6.13) pointed the camera at. One destination per camera: otherwise the box
 holds two answers to "where does this go" and picks one at broadcast time.
 
+### 6.17 Advertising while connected — what the hardware actually allows
+
+Measured 2026-11-17, because "the box should advertise all the time" turns out to be a
+hardware question before it is a software one.
+
+| box | controller | HCI | advertises while connected? |
+|---|---|---|---|
+| **85E4** | Realtek RTL8821CE (N97) | 4.2 | **No. Proven.** |
+| **B1B5** | Intel Wireless 7265 (N100) | 4.2 | Unproven — the re-assert is not completing |
+
+**85E4 cannot, by three independent routes, and this is not a bug to fix:**
+
+1. *Direct test.* With one link held, `ActiveInstances` reads **0** and
+   `bluetoothctl advertise on` fails with `org.bluez.Error.Failed`.
+2. *The daemon's own attempt.* `register_advertisement()` while connected has failed twice
+   in the journal, setting `_adv_blocked_while_connected` — the learned-once flag exists
+   precisely because of this controller.
+3. *Extended advertising is not available.* That is a **Bluetooth 5.0** feature and this
+   controller is **HCI 4.2**. A second advertising set is not reachable either, for the same
+   reason: the controller drops the one it has when the link completes.
+
+The Realtek is also single-role in practice: while advertising it would not complete an
+outgoing central connection during testing.
+
+**So on an N97, a box that is in use is invisible.** Not slow to find — absent. That is the
+hardware, and no amount of daemon work changes it. The consequence for the app is that
+`IN_USE` (below) can never be read from an N97 that is busy, because nothing is on the air
+to carry it. B1B5 is HCI 4.2 as well, so extended advertising is out there too; whether its
+Intel part will advertise while connected by legacy means is still open.
+
+#### `IN_USE` — the state bit
+
+`1 << 5` in the §5.2 manufacturer data, set whenever a phone holds a session and cleared on
+`session.end`, disconnect or the idle kick. Implemented in `bleBridge.js` (`STATE.IN_USE`).
+
+**It is inert until advertising-while-connected works**, and saying so is the point: the
+bit is computed correctly, but the daemon only re-registers the advertisement while nothing
+is connected, so today the bits that reach the air always have it clear. The app may build
+against it; it will start being true on hardware that can carry it.
+
 ## 7. Authentication
 
 ### 7.1 Threat model

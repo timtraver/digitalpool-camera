@@ -51,6 +51,13 @@ const STATE = {
   WIFI_CONFIGURED: 1 << 2,
   RECOVERY_WINDOW: 1 << 3,
   HOTSPOT: 1 << 4,
+  // A phone holds a session right now, so the app can say "in use by another
+  // phone" BEFORE anyone tries to connect.
+  //
+  // Only visible on a controller that advertises while connected — on one that
+  // cannot, a box in use is not advertising at all, so nothing can read this.
+  // See BLUETOOTH_ONBOARDING.md §5.2.
+  IN_USE: 1 << 5,
 };
 
 /** §7.4 — hotspot.start needs no grant for this long after a cold boot. */
@@ -589,6 +596,7 @@ class BleBridge {
     if (this.isRegistered()) bits |= STATE.REGISTERED;
     if (await this.checkInternetCached()) bits |= STATE.INTERNET;
     if (this._inRecoveryWindow()) bits |= STATE.RECOVERY_WINDOW;
+    if (this.connections.size > 0) bits |= STATE.IN_USE;
 
     if (this.wifiManager) {
       try {
