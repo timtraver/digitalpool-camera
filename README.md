@@ -1646,6 +1646,7 @@ Sample output every 5 minutes:
 | `network-watchdog.timer` (every 10 min) | All uplinks unreachable for 20+ min (hotspot doesn't count) | Clean system reboot |
 | Hardware watchdog (`RuntimeWatchdogSec=60`) | Complete kernel freeze | Hardware-forced board reset |
 | Kernel panic-reboot sysctls (migration 0027) | Kernel crash, oops, or CPU soft/hard lockup | Kernel reboots itself after 10 s — independent of iTCO |
+| Freeze-cause removal (migration 0028) | Silent G5 freezes that nothing recovers: rtw88 ASPM/deep-LPS, deep C-states | Prevents them; also keeps the journal by size only (1G, no age limit) so a frozen boot's log survives |
 | `monitor-camera.timer` (every 5 min) | Per-process memory trend | Logs to `/var/log/digitalpool-monitor.log` |
 
 ---
