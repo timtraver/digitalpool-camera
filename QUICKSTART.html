@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>DigitalPool Camera — Quick Start Guide</title>
+<title>DuoCast Quick Start Guide</title>
 <style>
   @page { size: letter; margin: 0; }
 
@@ -58,7 +58,11 @@
     position: absolute; left: 0; right: 0; bottom: 0; height: 5px;
     background: linear-gradient(90deg, var(--cyan), var(--blue) 40%, var(--violet) 72%, var(--amber));
   }
-  .hero img { height: 34px; display: block; margin-bottom: 26px; }
+  .hero img.brand { height: 34px; display: block; margin-bottom: 26px; }
+  .hero img.product {
+    position: absolute; right: 0.55in; top: 0.95in; width: 1.55in;
+    filter: drop-shadow(0 10px 24px rgba(18,199,255,0.35));
+  }
   .hero .kicker {
     font-size: 8.5pt; letter-spacing: 0.19em; text-transform: uppercase;
     color: var(--cyan); font-weight: 700; margin-bottom: 8px;
@@ -141,6 +145,19 @@
     background: #f1f3f7; border: 1px solid #e0e4eb;
     border-radius: 4px; padding: 1px 6px; white-space: nowrap;
   }
+  /* Text the app shows on screen, as the user will see it */
+  .app {
+    font-weight: 700; color: #0b4f78;
+    background: #eaf5fd; border: 1px solid #cfe6f7;
+    border-radius: 4px; padding: 1px 6px; white-space: nowrap;
+  }
+  /* Where to go in the app: Home › Streaming › DuoCast */
+  .path {
+    margin-top: 9px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
+    font-size: 9pt; font-weight: 700; color: var(--ink-soft);
+  }
+  .path span.app { font-size: 9pt; }
+  .path i { font-style: normal; color: #9aabbd; }
 
   /* ─── Credential / callout blocks ──────────────────────────── */
 
@@ -234,25 +251,27 @@
 <!-- ═══════════════════════ PAGE 1 ═══════════════════════ -->
 <section class="page">
   <div class="hero">
-    <img src="__LOGO__" alt="DigitalPool">
-    <div class="kicker">Camera &amp; Streaming Appliance</div>
+    <img class="brand" src="quickstart-assets/logo-horiz-dark.png" alt="DigitalPool">
+    <img class="product" src="quickstart-assets/duocast-logo.png" alt="">
+    <div class="kicker">DuoCast Streaming Box</div>
     <h1>Quick Start<br><em>Guide</em></h1>
     <p>Six steps from a sealed box to a live, recording table stream.
-       No software to install — everything runs on the device and you drive it
-       from a browser on your laptop, tablet, or phone.</p>
+       You set it up from the DigitalPool app on your phone, over Bluetooth.
+       There's nothing to install on the box and no password to type into it.</p>
     <div class="chips">
       <span class="chip">⏱ About 15 minutes</span>
-      <span class="chip">🔌 Plug in &amp; go</span>
-      <span class="chip">📶 Built-in WiFi</span>
+      <span class="chip">📱 Set up from the app</span>
+      <span class="chip">🔵 Bluetooth</span>
     </div>
   </div>
 
   <div class="kitlabel">What you'll need</div>
   <div class="kit">
-    <div class="item"><span class="ico">📦</span><span class="nm">Camera Unit</span><div class="ds">The streaming computer</div></div>
+    <div class="item"><span class="ico">📦</span><span class="nm">DuoCast Box</span><div class="ds">The streaming computer</div></div>
     <div class="item"><span class="ico">🎥</span><span class="nm">PTZ Camera</span><div class="ds">USB pan / tilt / zoom</div></div>
-    <div class="item"><span class="ico">🔌</span><span class="nm">Power Supply</span><div class="ds">One per unit</div></div>
-    <div class="item byo"><span class="ico">🔗</span><span class="nm">Ethernet Cable</span><div class="ds">Not included</div></div>
+    <div class="item"><span class="ico">🔌</span><span class="nm">Power Supply</span><div class="ds">One per box</div></div>
+    <div class="item byo"><span class="ico">📱</span><span class="nm">Your Phone</span><div class="ds">With the DigitalPool app</div></div>
+    <div class="item byo"><span class="ico">🔗</span><span class="nm">Ethernet Cable</span><div class="ds">Optional, not included</div></div>
   </div>
 
   <div class="step c1">
@@ -261,27 +280,31 @@
       <div class="sub">Unpack &amp; power on</div>
       <h2>Set up the hardware</h2>
       <ul>
-        <li><b>Position each camera</b> so it sees the whole table. Set it on a shelf or mount it
-            using whatever mounting hardware came with the camera — whatever gives the cleanest
-            view of the playing surface.</li>
-        <li><b>If you are using USB cameras, connect their USB cables</b> to the USB ports on the
-            camera unit. Either port works, and a second camera goes into any free one.</li>
-        <li><b>Optional but recommended:</b> run an Ethernet cable from your router to the unit —
-            any standard network cable works. This is the easiest way to get it online.</li>
-        <li><b>Plug in the power supply last.</b> The unit powers on by itself —
-            there is no power button to press.</li>
-        <li><b>Wait about 60 seconds.</b> The device boots, starts its hotspot,
-            and brings the cameras up.</li>
+        <li><b>Place or mount each camera</b> where you expect it to cover the whole table. Use a
+            shelf, or the mounting hardware that came with the camera. You'll see the picture and
+            fine-tune the aim from your phone in Step 5.</li>
+        <li><b>Connect each camera's USB cable</b> to the USB ports on the box. Any port works,
+            and a second camera goes into any free one.</li>
+        <li><b>Optional but recommended:</b> run an Ethernet cable from your router to the box.
+            Any standard network cable works, and it's the easiest way to get the box online.</li>
+        <li><b>Plug in the power supply last.</b> The box powers on by itself. There's no power
+            button to press.</li>
+        <li><b>Wait about 60 seconds.</b> The box starts up, brings the cameras up, and begins
+            showing up over Bluetooth for your phone to find.</li>
       </ul>
+      <div class="note">
+        <b>Using your own cameras?</b> This guide covers the USB cameras that come with the box.
+        Network (IP) cameras or other models may need extra steps to connect to the stream, so
+        contact DigitalPool support first.
+      </div>
       <div class="note info">
-        <b>Leave it plugged in.</b> This device is designed to stay powered on around the clock
-        so streams and recordings are always available. To shut it down cleanly, use
-        <span class="ui">⚡ Power</span> in the admin interface rather than pulling the plug.
+        <b>Leave it plugged in.</b> The box is made to stay on around the clock. To shut it down,
+        use <span class="ui">⚡ Power</span> on its settings page (Step 5), not the plug.
       </div>
     </div>
   </div>
 
-  <div class="foot"><span>DigitalPool Camera — Quick Start Guide</span><span><b>digitalpool.com</b></span><span>Page 1 of 4</span></div>
+  <div class="foot"><span>DuoCast — Quick Start Guide</span><span><b>digitalpool.com</b></span><span class="pg">Page 1 of 5</span></div>
 </section>
 
 <!-- ═══════════════════════ PAGE 2 ═══════════════════════ -->
@@ -291,31 +314,34 @@
   <div class="step c2">
     <div class="num">2</div>
     <div class="body-col">
-      <div class="sub">Connect to the device</div>
-      <h2>Join the camera's WiFi hotspot</h2>
+      <div class="sub">Find it in the app</div>
+      <h2>Connect to the box from your phone</h2>
       <ul>
-        <li>On your laptop, tablet, or phone, open the WiFi list and look for a network
-            named <code>DigitalPool-XXXX</code>, where <code>XXXX</code> is four characters
-            unique to your unit. Join it.</li>
-        <li>Enter the hotspot password shown below.</li>
-        <li><b>The admin screen opens by itself</b> a moment after you connect — there is no
-            address to type in. If it doesn't appear, open a browser and go to
-            <code>http://192.168.50.1:3000</code></li>
-        <li>Sign in with the default administrator account.</li>
-        <li>You will be asked to <b>set a new password immediately</b>. Choose something
-            you will remember — this is now your admin login for this device.</li>
+        <li>Install the <b>DigitalPool app</b> and sign in with the account that manages your venue.</li>
+        <li>Turn on <b>Bluetooth</b> on your phone and stand within a few meters of the box.</li>
+        <li>On the home screen, tap <span class="app">Stream your matches</span>, then
+            <span class="app">DuoCast</span>. Allow Bluetooth when the app asks for it.</li>
+        <li>Under <span class="app">Nearby Unregistered Boxes</span>, your box appears as
+            <code>DP-DuoCast-XXXX</code> with a <span class="app">New</span> tag. <code>XXXX</code>
+            is four characters unique to the box.</li>
+        <li>Tap it. If your phone asks to pair with the box, tap <b>Pair</b>.</li>
       </ul>
 
-      <div class="cred">
-        <div><div class="lbl">Hotspot network</div><div class="val">DigitalPool-XXXX</div></div>
-        <div><div class="lbl">Hotspot password</div><div class="val">Digitalpool</div></div>
-        <div class="wide"><div class="lbl">Admin user / password</div><div class="val">admin / Digitalpool</div></div>
+      <div class="path">
+        <span>In the app:</span>
+        <span class="app">Stream your matches</span><i>›</i>
+        <span class="app">DuoCast</span><i>›</i>
+        <span class="app">DP-DuoCast-XXXX</span>
       </div>
 
-      <div class="note">
-        <b>No internet over the hotspot.</b> The hotspot connects you <i>to the device</i>, not to the
-        internet. Your laptop may warn that the network has no connection — that is normal and expected.
-        Step 3 is what gets the device itself online.
+      <div class="note info">
+        <b>Setting up more than one box?</b> The list puts the closest box first, with the most
+        signal bars. Hold your phone next to the box you mean and pick the top one.
+      </div>
+      <div class="note ok">
+        <b>No hotspot and no passwords.</b> The box doesn't make its own WiFi network, and you
+        don't type a password into it. Your sign-in to the DigitalPool app is what tells the box
+        who you are.
       </div>
     </div>
   </div>
@@ -323,40 +349,50 @@
   <div class="step c3">
     <div class="num">3</div>
     <div class="body-col">
-      <div class="sub">Get the device online</div>
-      <h2>Give it an internet connection</h2>
-      <p style="margin-top:8px">In the admin interface, open the <span class="ui">📶 Network &amp; WiFi Setup</span>
-         panel and choose one of these two routes.</p>
+      <div class="sub">Get the box online</div>
+      <h2>Set up an internet connection</h2>
+      <p style="margin-top:8px">The box's screen in the app shows its
+         <span class="app">Device Network</span>. Use one of these two routes.</p>
 
       <div class="split">
         <div class="opt best">
           <div class="oh">🔗 Ethernet <span class="tag">Easiest</span></div>
           <ul>
-            <li>Plug the cable from your router into the unit.</li>
-            <li>It picks up an address automatically — nothing to configure.</li>
-            <li>The panel shows the assigned <b>IP address</b>. Write it down.</li>
+            <li>Plug the cable from your router into the box.</li>
+            <li>There's nothing to set up: <span class="app">Ethernet</span> shows
+                <span class="app">Connected</span> on its own.</li>
+            <li>Wait for <span class="app">Internet</span> to show
+                <span class="app">Online</span>.</li>
           </ul>
         </div>
         <div class="opt">
           <div class="oh">📶 WiFi <span class="tag alt">No cable</span></div>
           <ul>
-            <li>Open <span class="ui">📶 Connect to WiFi Network</span>.</li>
-            <li>Pick your venue's network, type its password, connect.</li>
-            <li>Wait for it to report connected, then note the <b>IP address</b>.</li>
+            <li>Tap <span class="app">Set up WiFi</span> and choose your venue's network.</li>
+            <li>Type its password and tap <span class="app">Connect</span>.</li>
+            <li>Wait for <b>"The box is online on</b> <i>your network</i><b>."</b></li>
           </ul>
         </div>
       </div>
 
-      <div class="note ok">
-        <b>Switch to the venue network now.</b> Once the device has its own IP address, reconnect
-        your laptop to that same network and browse to <code>http://&lt;device-ip&gt;:3000</code>.
-        You will get a faster, more reliable connection than over the hotspot — and the hotspot
-        stays available as a permanent backup way in.
+      <div class="note">
+        <b>Use the venue's main network, not a guest network.</b> Many guest networks stop devices
+        from talking to each other, so your phone won't be able to open the box's preview or
+        settings. A network that makes you accept terms on a sign-in page won't work at all. Use
+        Ethernet there.
+      </div>
+      <div class="note stop">
+        <b>Upload speed is what makes or breaks a stream.</b> Each camera sends about
+        <b>2–5 Mbps</b> to the internet the whole time it streams, so two cameras need at least
+        <b>10–15 Mbps of upload</b>, all the time and not just at quiet moments. Run a speed test
+        on the venue's network and look at the <b>upload</b> number, not download; many
+        business connections have far less upload than download. If upload is too low, the
+        stream stutters or drops, and a recording can be cut short.
       </div>
     </div>
   </div>
 
-  <div class="foot"><span>DigitalPool Camera — Quick Start Guide</span><span><b>digitalpool.com</b></span><span>Page 2 of 4</span></div>
+  <div class="foot"><span>DuoCast — Quick Start Guide</span><span><b>digitalpool.com</b></span><span class="pg">Page 2 of 5</span></div>
 </section>
 
 <!-- ═══════════════════════ PAGE 3 ═══════════════════════ -->
@@ -366,29 +402,25 @@
   <div class="step c4">
     <div class="num">4</div>
     <div class="body-col">
-      <div class="sub">Claim the device</div>
-      <h2>Register it to your venue</h2>
+      <div class="sub">Claim the box</div>
+      <h2>Register it to your venue and table</h2>
       <ul>
-        <li>Scroll to the <span class="ui">Admin Settings</span> area and open
-            <span class="ui">📡 Device Registration</span>.</li>
-        <li>The <b>Device Name</b> is fixed to this unit — you do not need to change it.</li>
-        <li>Enter your <b>DigitalPool account email and password</b> — the same login you use
-            at digitalpool.com.</li>
-        <li>Press <span class="ui">🔗 Register Device</span>.</li>
-        <li>If your account has more than one venue, pick the venue this camera belongs to
-            and press <span class="ui">✅ Confirm Venue</span>.</li>
-        <li>Success looks like a green <span class="ui">✓ Registered</span> badge on the
-            section heading.</li>
+        <li>On the box's screen, tap <span class="app">Register this box</span>.</li>
+        <li>Choose <b>which venue</b> the box is at. If it isn't listed, tap
+            <span class="app">Create a new venue</span>.</li>
+        <li>Choose <b>which table</b> the box is filming, or tap
+            <span class="app">Add a new table</span>. This is what links a match on that table to
+            this box's cameras in Step 6.</li>
+        <li>Wait while it says <span class="app">Connecting the box to DigitalPool…</span>
+            This can take a minute.</li>
+        <li>You're done when it says <b>"The box is registered at</b> <i>your venue, your
+            table</i><b>."</b> From then on, the box is listed under
+            <span class="app">My DuoCast boxes</span>.</li>
       </ul>
       <div class="note stop">
-        <b>Streaming stays disabled until this step is finished.</b> Registration is what links the
-        camera to your venue and turns on secure remote access, so it must be completed before
-        anything will go live. It also needs a working internet connection — if you see
-        <span class="ui">🔴 No Internet Connection</span>, go back to Step 3.
-      </div>
-      <div class="note info">
-        Your DigitalPool password is used once to verify your account and is <b>never stored
-        on the device</b>.
+        <b>Streaming stays off until this step is finished.</b> Registering links the box to
+        your venue and turns on secure remote support. It needs the internet connection from
+        Step 3.
       </div>
     </div>
   </div>
@@ -399,108 +431,162 @@
       <div class="sub">Frame the shot</div>
       <h2>Aim the cameras and start streaming</h2>
       <ul>
-        <li>Use the <span class="ui">📷 Camera 1</span> / <span class="ui">📷 Camera 2</span> tabs at the
-            top to switch between cameras. The live preview appears on the left.</li>
-        <li>Open <span class="ui">🎮 PTZ Controls</span>. The outer arrows move in large steps,
-            the inner arrows in fine steps, and the slider sets zoom. Frame the full table with a
-            little room to spare.</li>
-        <li>Happy with the framing? Press <span class="ui">🏠 Set Home</span> so the camera returns to
-            this exact position every time it restarts.</li>
-        <li>If the picture needs work, open <span class="ui">⚙️ Camera Settings</span> for
-            exposure, white balance, and focus.</li>
-        <li>Open <span class="ui">🎥 Stream Server</span> and press <span class="ui">▶ Start</span>.</li>
-        <li>The status bar turns green and the live stats — FPS and bitrate — begin moving.
-            Repeat for your second camera.</li>
+        <li>Under <span class="app">Camera Streams</span>, tap
+            <span class="app">Camera 1 Preview</span> to see the live picture.
+            Your phone needs to be on the same WiFi as the box for the preview to play.</li>
+        <li>Use the arrows to pan and tilt, and the zoom buttons to frame the whole table with a
+            little room to spare. When you're happy, tap <span class="app">Set as Home</span> so
+            the camera returns to this spot every time the box starts.</li>
+        <li>Choose the camera's <b>overlay</b> and <b>where it streams</b>.</li>
+        <li>Tap <span class="app">Start stream</span>. The camera changes to
+            <span class="app">Streaming</span>. Repeat for Camera 2.</li>
       </ul>
+      <div class="note info">
+        <b>Everything else is on the box's settings page.</b> Tap
+        <span class="app">Full Device Management</span> to open it, already signed in. That's
+        where you'll find picture settings (exposure, white balance, focus), other stream
+        destinations, and <span class="ui">⚡ Power</span>. On a computer, type the address the
+        app shows into a browser. The computer needs to be on the same network as the box.
+      </div>
       <div class="note ok">
-        <b>Leave the streams running.</b> A running stream is what recording attaches to in Step 6.
-        The device restarts its streams automatically after a power cut, so this is normally a
-        one-time setup.
+        <b>Leave the streams running.</b> A running stream is what recording uses in Step 6. The
+        box restarts its streams by itself after a power cut, so this is normally a one-time
+        setup.
       </div>
     </div>
   </div>
 
-  <div class="foot"><span>DigitalPool Camera — Quick Start Guide</span><span><b>digitalpool.com</b></span><span>Page 3 of 4</span></div>
+  <div class="foot"><span>DuoCast — Quick Start Guide</span><span><b>digitalpool.com</b></span><span class="pg">Page 3 of 5</span></div>
 </section>
 
 <!-- ═══════════════════════ PAGE 4 ═══════════════════════ -->
 <section class="page">
-  <div class="runhead"><span class="t">Recording matches &amp; troubleshooting</span><span class="n">Step 6</span></div>
+  <div class="runhead"><span class="t">Recording matches</span><span class="n">Step 6</span></div>
 
   <div class="step c6">
     <div class="num">6</div>
     <div class="body-col">
       <div class="sub">You're live — now record</div>
-      <h2>Scan the table QR code to record a match</h2>
+      <h2>Start a match to start a recording</h2>
+      <p style="margin-top:8px">Starting a match on a table tells the box that films that table
+         (the one you chose in Step 4) to <b>start recording</b>. Nobody has to touch the box.
+         There are two ways to start a match:</p>
+
+      <div class="split">
+        <div class="opt">
+          <div class="oh">📱 Table QR code</div>
+          <ul>
+            <li>Sign in at <b>digitalpool.com</b> and open your <b>venue settings</b>, where
+                each table has its own <b>QR code</b>.</li>
+            <li>Print them and put one at each table. You only do this once.</li>
+            <li>Players scan the code at their table, which opens its scoring screen, and
+                create a match there.</li>
+          </ul>
+        </div>
+        <div class="opt">
+          <div class="oh">🖥 Scoring tablet</div>
+          <ul>
+            <li>If the table has a DigitalPool scoring tablet, start the match on the tablet
+                as usual.</li>
+            <li>Make sure the tablet is set to the same table the box films.</li>
+          </ul>
+        </div>
+      </div>
+
       <ul>
-        <li>Sign in at <b>digitalpool.com</b> and go to your <b>venue settings</b> area. This is
-            where each of your tables and its <b>QR code</b> lives.</li>
-        <li><b>Get the QR codes for your tables</b> from there — print them and put one at each
-            table so players can reach them easily. You only have to do this once.</li>
-        <li>Players <b>scan the QR code at their table</b> with their phone, which opens that
-            table's scoring screen and lets them <b>create a match on that table</b>.</li>
-        <li>Starting the match automatically tells the camera assigned to that table to
-            <b>begin recording the stream</b> — nobody has to touch the camera unit.</li>
-        <li>When the match is finished, the recording is saved and attached to the match on
+        <li>When the match is over, the recording is saved and attached to the match on
             digitalpool.com.</li>
       </ul>
       <div class="note ok">
         <b>That's the whole day-to-day workflow.</b> Steps 1 – 5 happen once, at install.
-        After that: scan, play, done.
+        After that: start a match, play, done.
       </div>
     </div>
   </div>
 
-  <h3 class="sec">If something isn't working</h3>
+  <h3 class="sec">Moving the box, or changing the venue's WiFi</h3>
+  <p style="margin-top:9px">If the box goes offline because it moved or the WiFi password
+     changed, you can fix it from the app over Bluetooth, even with no network. Stand near it,
+     open <span class="app">DuoCast</span>, and tap the box under
+     <span class="app">My DuoCast boxes</span>. Then, under
+     <span class="app">Device Network</span>, tap <span class="app">Change</span> and choose
+     the network again.</p>
+
+  <div class="note info" style="margin-top:14px">
+    <b>Need a hand?</b> Once the box is registered, support can connect to it remotely, with no
+    network changes needed on your side. Reach us through your venue dashboard at
+    <b>digitalpool.com</b> and have the box's name (<code>DP-DuoCast-XXXX</code>) ready.
+  </div>
+
+  <div class="foot"><span>DuoCast — Quick Start Guide</span><span><b>digitalpool.com</b></span><span class="pg">Page 4 of 5</span></div>
+</section>
+
+<!-- ═══════════════════════ PAGE 5 ═══════════════════════ -->
+<section class="page">
+  <div class="runhead"><span class="t">Troubleshooting</span><span class="n">If something isn't working</span></div>
+
   <table class="tbl">
     <tr><th>Symptom</th><th>What to try</th></tr>
     <tr>
-      <td>The <code>DigitalPool-XXXX</code> hotspot doesn't appear</td>
-      <td>Give it a full 60 seconds after power-up, then refresh your WiFi list. If it still doesn't
-          show, unplug the power for 10 seconds and try again.</td>
+      <td>The box doesn't appear under <span class="app">Nearby Unregistered Boxes</span></td>
+      <td>Give it a full 60 seconds after power-up, check that Bluetooth is on, move within a few
+          meters, and tap <span class="app">Search again</span>. A box that's already registered
+          to you is listed under <span class="app">My DuoCast boxes</span> instead.</td>
     </tr>
     <tr>
-      <td>The admin screen didn't open on its own</td>
-      <td>Open a browser and go to <code>http://192.168.50.1:3000</code> — include the <code>:3000</code>.
-          Also confirm you are joined to the camera's hotspot, not cellular data or the venue WiFi.</td>
+      <td>The box shows <span class="app">In use by another phone</span></td>
+      <td>Another phone has the box open in the app. Close the box's screen on that phone, then
+          try again.</td>
     </tr>
     <tr>
-      <td>Registration says <b>No Internet Connection</b></td>
-      <td>The device itself is offline. Plug in Ethernet or connect it to WiFi in
-          <span class="ui">📶 Network &amp; WiFi Setup</span>, then press <span class="ui">🔄 Check Again</span>.</td>
+      <td>The box is under <span class="app">Registered to Another Account</span></td>
+      <td>It belongs to a different DigitalPool account. Sign in with that account, or ask its
+          owner to remove the box so you can register it.</td>
     </tr>
     <tr>
-      <td>Registration is rejected</td>
-      <td>Confirm the email and password work at digitalpool.com, and that your account has a venue.
-          If it has none, create one there first, then register again.</td>
+      <td>iPhone says it has an <b>out-of-date copy</b> of the box's Bluetooth settings</td>
+      <td>Open <b>Settings › Bluetooth</b>, tap <b>ⓘ</b> next to the box, choose
+          <b>Forget This Device</b>, then try again.</td>
     </tr>
     <tr>
-      <td><b>Start</b> does nothing / streaming is disabled</td>
-      <td>The device is almost certainly not registered yet. Finish Step 4 and look for the green
-          <span class="ui">✓ Registered</span> badge.</td>
+      <td><b>Wrong password</b> when joining WiFi</td>
+      <td>Check the password and try again. The box keeps whatever connection it already had
+          until the new one works.</td>
     </tr>
     <tr>
-      <td>Camera 2 tab is empty</td>
-      <td>Check the second camera's USB cable, then reload the page in your browser.</td>
+      <td>The box joined WiFi but <b>can't reach the internet</b></td>
+      <td>The network probably needs a sign-in page, which the box can't get through. Use
+          Ethernet or a different network.</td>
     </tr>
     <tr>
-      <td>Preview is black but stats look healthy</td>
-      <td>Reload the page. If the preview stays black, check the camera's lens cap and USB cable —
-          the stream itself may be fine.</td>
+      <td>Registering says your <b>sign-in has expired</b></td>
+      <td>Sign out of the DigitalPool app and back in, then tap
+          <span class="app">Register this box</span> again.</td>
     </tr>
     <tr>
-      <td>Forgot the admin password</td>
-      <td>Contact DigitalPool support — the device can be reset without losing your venue registration.</td>
+      <td>The preview won't play, or <span class="app">Full Device Management</span> won't
+          open</td>
+      <td>Your phone must be on the <b>same network as the box</b>: not mobile data, and not a
+          separate guest network. On iPhone, also check <b>Settings › DigitalPool › Local
+          Network</b>. If it still won't open, the router is stopping devices from talking to
+          each other. The venue's router settings can change that.</td>
+    </tr>
+    <tr>
+      <td><span class="app">Start stream</span> does nothing</td>
+      <td>The box isn't registered yet (finish Step 4), or the camera has no destination set
+          (Step 5).</td>
+    </tr>
+    <tr>
+      <td>A camera says <span class="app">No camera connected</span></td>
+      <td>Check that camera's USB cable at both ends, then go back and open the box again.</td>
+    </tr>
+    <tr>
+      <td>Preview is black but the camera shows <span class="app">Streaming</span></td>
+      <td>Check the camera's lens cap and USB cable. The stream itself may be fine.</td>
     </tr>
   </table>
 
-  <div class="note info" style="margin-top:12px">
-    <b>Need a hand?</b> Support can connect to your device remotely once it is registered — no
-    network changes needed on your side. Reach us through your venue dashboard at
-    <b>digitalpool.com</b> and have your device name ready.
-  </div>
-
-  <div class="foot"><span>DigitalPool Camera — Quick Start Guide</span><span><b>digitalpool.com</b></span><span>Page 4 of 4</span></div>
+  <div class="foot"><span>DuoCast — Quick Start Guide</span><span><b>digitalpool.com</b></span><span class="pg">Page 5 of 5</span></div>
 </section>
 
 </body>
